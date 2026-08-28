@@ -17127,6 +17127,74 @@ async function canPortalSessionAccessPatient(patientId: string, user: any): Prom
   );
 }
 
+
+type PatientSelfTenantScope = {
+  patientId: string;
+  clinicId: string;
+  patientEmail: string | null;
+};
+
+async function resolvePatientSelfTenantScope(user: any): Promise<PatientSelfTenantScope | null> {
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  if (!isUuid(clinicId)) return null;
+
+  const sessionUserId = sanitizeString(user?.id, 120);
+  const sessionEmail = sanitizeEmail(user?.email);
+  const selectedPatientId = sanitizeString(
+    user?.patientPortalPatientId ||
+      (user?.activeAccessContext?.kind === 'patient_portal' ? user?.activeAccessContext?.patientId : ''),
+    120
+  );
+
+  const readCandidate = async (patientId: string) => {
+    if (!isUuid(patientId)) return null;
+    const result = await supabase
+      .from('patients')
+      .select('id,email,clinic_id,responsible_user_id,responsible_email')
+      .eq('id', patientId)
+      .eq('clinic_id', clinicId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (result.error) throw result.error;
+    if (!result.data?.id) return null;
+    if (!(await canPortalSessionAccessPatient(patientId, user))) return null;
+    return {
+      patientId: sanitizeString(result.data.id, 120),
+      clinicId,
+      patientEmail: sanitizeEmail(result.data.email) || sessionEmail || null,
+    } satisfies PatientSelfTenantScope;
+  };
+
+  // Canonical access context is the primary authority for the patient portal.
+  const selected = await readCandidate(selectedPatientId);
+  if (selected) return selected;
+
+  // Backward compatibility is intentionally restricted to the current clinic.
+  // Never expand a self-service request to another clinic merely because an email matches.
+  if (isUuid(sessionUserId)) {
+    const direct = await readCandidate(sessionUserId);
+    if (direct) return direct;
+  }
+  if (!sessionEmail) return null;
+
+  const emailLookup = await supabase
+    .from('patients')
+    .select('id,email,clinic_id,responsible_user_id,responsible_email')
+    .eq('clinic_id', clinicId)
+    .eq('email', sessionEmail)
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .order('updated_at', { ascending: false })
+    .limit(2);
+  if (emailLookup.error) throw emailLookup.error;
+  const candidates = Array.isArray(emailLookup.data) ? emailLookup.data : [];
+  // Ambiguity inside the same clinic also fails closed; the session must resolve a canonical patient.
+  if (candidates.length !== 1) return null;
+  return readCandidate(sanitizeString(candidates[0]?.id, 120));
+}
+
 function normalizeAnamnesisAnswers(input: any, depth = 0): any {
   if (depth > 4) return null;
   if (input === null || input === undefined) return null;
@@ -33572,74 +33640,41 @@ async function startServer() {
           180
         ) || null;
       const requestedPatientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
-      let linkedPatientForProfile: any = null;
-      const activeClinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      if (isUuid(requestedPatientId)) {
-        const readLinkedPatient = (columns: string) => {
-          let query = supabase
-            .from('patients')
-            .select(columns)
-            .eq('id', requestedPatientId)
-            .eq('is_active', true)
-            .is('deleted_at', null);
-          if (isUuid(activeClinicId)) query = query.eq('clinic_id', activeClinicId);
-          return query.maybeSingle();
-        };
-        let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id, metadata');
-        if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'responsible_user_id') {
-          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, metadata');
-        }
-        if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'metadata') {
-          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id');
-        }
-        if (
-          linkedPatientResult.error &&
-          ['metadata', 'responsible_user_id'].includes(String(extractMissingColumnName(linkedPatientResult.error) || ''))
-        ) {
-          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id');
-        }
-        if (!linkedPatientResult.error && linkedPatientResult.data?.id) {
-          const patientEmailMatches = email && sanitizeEmail(linkedPatientResult.data.email) === email;
-          const responsibleMatches = sanitizeString(linkedPatientResult.data.responsible_user_id, 120) === userId;
-          if (patientEmailMatches || responsibleMatches) {
-            linkedPatientForProfile = linkedPatientResult.data;
-          } else {
-            return res.status(403).json({ success: false, error: 'Paciente não pertence a este acesso do portal.' });
-          }
-        } else if (linkedPatientResult.error && !isMissingRelationError(linkedPatientResult.error)) {
-          console.warn('[PatientProfile] linked patient id lookup warning:', linkedPatientResult.error?.message || String(linkedPatientResult.error));
-        }
+      const tenantScope = await resolvePatientSelfTenantScope(req.session.user);
+      if (!tenantScope) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PORTAL_SCOPE_INVALID' });
       }
-      if (!linkedPatientForProfile && email) {
-        let linkedPatientQuery = supabase
-          .from('patients')
-          .select('id, name, email, clinic_id, metadata')
-          .eq('email', email)
-          .eq('is_active', true)
-          .is('deleted_at', null)
-          .order('updated_at', { ascending: false })
-          .limit(1);
-        if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
-        let linkedPatientLookup = await linkedPatientQuery.maybeSingle();
-        if (linkedPatientLookup.error && extractMissingColumnName(linkedPatientLookup.error) === 'metadata') {
-          linkedPatientQuery = supabase
-            .from('patients')
-            .select('id, name, email, clinic_id')
-            .eq('email', email)
-            .eq('is_active', true)
-            .is('deleted_at', null)
-            .order('updated_at', { ascending: false })
-            .limit(1);
-          if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
-          linkedPatientLookup = await linkedPatientQuery.maybeSingle();
-        }
-        const { data: linkedPatient, error: linkedPatientError } = linkedPatientLookup;
-        if (!linkedPatientError && linkedPatient?.id) {
-          linkedPatientForProfile = linkedPatient;
-        } else if (linkedPatientError && !isMissingRelationError(linkedPatientError)) {
-          console.warn('[PatientProfile] linked patient lookup warning:', linkedPatientError?.message || String(linkedPatientError));
-        }
+      if (isUuid(requestedPatientId) && requestedPatientId !== tenantScope.patientId) {
+        return res.status(403).json({ success: false, error: 'Paciente não pertence a este acesso do portal.' });
       }
+      const activeClinicId = tenantScope.clinicId;
+      const readLinkedPatient = (columns: string) => supabase
+        .from('patients')
+        .select(columns)
+        .eq('id', tenantScope.patientId)
+        .eq('clinic_id', activeClinicId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id, metadata');
+      if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'responsible_user_id') {
+        linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, metadata');
+      }
+      if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'metadata') {
+        linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id');
+      }
+      if (
+        linkedPatientResult.error &&
+        ['metadata', 'responsible_user_id'].includes(String(extractMissingColumnName(linkedPatientResult.error) || ''))
+      ) {
+        linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id');
+      }
+      if (linkedPatientResult.error) throw linkedPatientResult.error;
+      if (!linkedPatientResult.data?.id) {
+        return res.status(403).json({ success: false, error: 'Paciente canônico do portal não encontrado nesta clínica.' });
+      }
+      const linkedPatientForProfile: any = linkedPatientResult.data;
       const linkedPatientName = normalizeCanonicalPatientName(linkedPatientForProfile?.name);
       const preserveLinkedPatientName = shouldPreserveExistingPatientFullName(linkedPatientName, requestedName);
       const name =
@@ -33709,9 +33744,7 @@ async function startServer() {
         };
         await patchTableSafely(
           'patients',
-          linkedPatientForProfile?.id
-            ? { column: 'id', value: sanitizeString(linkedPatientForProfile.id, 120) }
-            : { column: 'email', value: email as string },
+          { column: 'id', value: tenantScope.patientId },
           patientProfilePatch
         );
       }
@@ -43131,56 +43164,24 @@ async function startServer() {
 
   app.get('/api/patient/self/history', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const tenantScope = await resolvePatientSelfTenantScope(req.session.user);
+      if (!tenantScope) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PORTAL_SCOPE_INVALID' });
       }
-
+      const { patientId, clinicId, patientEmail } = tenantScope;
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const sessionUserId = sanitizeString(req.session.user?.id, 120);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sessionUserId, currentClinicId(req.session.user));
-      const scopedPatientIds = Array.from(
-        new Set(
-          patientIds
-            .map((id) => sanitizeString(id, 120))
-            .filter((id) => isUuid(id))
-        )
-      );
-      if (scopedPatientIds.length === 0) {
-        console.warn('[PatientSelfHistory] skipped: missing resolvedPatientId', {
-          actorId: sessionUserId || null,
-          requestId: requestIdForLogs(req)
-        });
-        return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
-      }
 
-      const historyByEmailResult = await fetchHistoryWithSchemaFallback({
+      const historyResult = await fetchHistoryWithSchemaFallback({
         supabase,
-        patientEmail,
+        patientIds: [patientId],
         limit,
         route: '/api/patient/self/history',
         logger: console
       });
-      if (historyByEmailResult.error) throw historyByEmailResult.error;
-      const historyByEmail = historyByEmailResult.data;
-
-      let historyById: any[] = [];
-      if (scopedPatientIds.length > 0) {
-        const historyByIdResult = await fetchHistoryWithSchemaFallback({
-          supabase,
-          patientIds: scopedPatientIds,
-          limit,
-          route: '/api/patient/self/history',
-          logger: console
-        });
-        if (historyByIdResult.error) throw historyByIdResult.error;
-        historyById = Array.isArray(historyByIdResult.data) ? historyByIdResult.data : [];
-      }
-
-      const mergedHistory = [...(Array.isArray(historyByEmail) ? historyByEmail : []), ...historyById];
+      if (historyResult.error) throw historyResult.error;
       const dedupedHistory = Array.from(
         new Map(
-          mergedHistory.map((item: any) => {
+          (Array.isArray(historyResult.data) ? historyResult.data : []).map((item: any) => {
             const key = String(item?.id || `${item?.patient_id || ''}|${item?.type || ''}|${item?.title || ''}|${item?.created_at || ''}|${item?.score ?? ''}`);
             return [key, item];
           })
@@ -43188,31 +43189,18 @@ async function startServer() {
       );
 
       const assignedRows: any[] = [];
-      const { data: assignedByEmail, error: assignedByEmailError } = await supabase
+      const { data: assignedById, error: assignedByIdError } = await supabase
         .from('assigned_tasks')
         .select(ASSIGNED_TASK_SELECT)
         .eq('status', 'completed')
-        .eq('patient_email', patientEmail)
+        .eq('clinic_id', clinicId)
+        .eq('patient_id', patientId)
         .order('completed_at', { ascending: false })
         .limit(limit);
-      if (assignedByEmailError) {
-        console.warn('[PatientSelfHistory] assigned_tasks by email warning:', assignedByEmailError.message || String(assignedByEmailError));
-      } else if (Array.isArray(assignedByEmail)) {
-        assignedRows.push(...assignedByEmail);
-      }
-      if (scopedPatientIds.length > 0) {
-        const { data: assignedById, error: assignedByIdError } = await supabase
-          .from('assigned_tasks')
-          .select(ASSIGNED_TASK_SELECT)
-          .eq('status', 'completed')
-          .in('patient_id', scopedPatientIds)
-          .order('completed_at', { ascending: false })
-          .limit(limit);
-        if (assignedByIdError) {
-          console.warn('[PatientSelfHistory] assigned_tasks by id warning:', assignedByIdError.message || String(assignedByIdError));
-        } else if (Array.isArray(assignedById)) {
-          assignedRows.push(...assignedById);
-        }
+      if (assignedByIdError) {
+        console.warn('[PatientSelfHistory] assigned_tasks by canonical patient warning:', assignedByIdError.message || String(assignedByIdError));
+      } else if (Array.isArray(assignedById)) {
+        assignedRows.push(...assignedById);
       }
 
       const persistedAssignedTaskHistoryIds = new Set(
@@ -43223,77 +43211,49 @@ async function startServer() {
       const mappedAssignedHistory = Array.from(new Map(assignedRows.map((task: any) => [String(task?.id || crypto.randomUUID()), task])).values())
         .filter((task: any) => !persistedAssignedTaskHistoryIds.has(sanitizeString(task?.id, 120)))
         .map((task: any) => {
-        const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
-        return {
-          id: `assigned:${task.id}`,
-          patient_id: task.patient_id,
-          patient_email: task.patient_email,
-          type: task.task_type || 'task',
-          title: taskData.title || 'Tarefa concluída',
-          score: task.pro_score ?? null,
-          energy: task.patient_effort ?? null,
-          note: task.patient_comment || task.pro_review_note || '',
-          icon: taskData.icon || '📌',
-          created_at: task.completed_at || task.updated_at || task.created_at,
-          assigned_task_id: task.id,
-          source: 'assigned_task_completion',
-          task_data: cleanObject({
-            ...taskData,
-            patientEffort: task.patient_effort ?? taskData?.patientEffort ?? null,
-            patient_effort: task.patient_effort ?? taskData?.patient_effort ?? null,
-            patientEffortEmoji: task.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || effortEmojiForPercent(asSafeNumber(task.patient_effort, 0, 100)),
-            patient_effort_emoji: task.patient_effort_emoji || taskData?.patient_effort_emoji || taskData?.patientEffortEmoji || effortEmojiForPercent(asSafeNumber(task.patient_effort, 0, 100)),
-            patientEffortLabel: task.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || effortLabelForPercent(asSafeNumber(task.patient_effort, 0, 100)),
-            patient_effort_label: task.patient_effort_label || taskData?.patient_effort_label || taskData?.patientEffortLabel || effortLabelForPercent(asSafeNumber(task.patient_effort, 0, 100))
-          })
-        };
-      });
+          const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+          return {
+            id: `assigned:${task.id}`,
+            patient_id: task.patient_id,
+            patient_email: task.patient_email || patientEmail,
+            type: task.task_type || 'task',
+            title: taskData.title || 'Tarefa concluída',
+            score: task.pro_score ?? null,
+            energy: task.patient_effort ?? null,
+            note: task.patient_comment || task.pro_review_note || '',
+            icon: taskData.icon || '📌',
+            created_at: task.completed_at || task.updated_at || task.created_at,
+            assigned_task_id: task.id,
+            source: 'assigned_task_completion',
+            task_data: cleanObject({
+              ...taskData,
+              patientEffort: task.patient_effort ?? taskData?.patientEffort ?? null,
+              patient_effort: task.patient_effort ?? taskData?.patient_effort ?? null,
+              patientEffortEmoji: task.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || effortEmojiForPercent(asSafeNumber(task.patient_effort, 0, 100)),
+              patient_effort_emoji: task.patient_effort_emoji || taskData?.patient_effort_emoji || taskData?.patientEffortEmoji || effortEmojiForPercent(asSafeNumber(task.patient_effort, 0, 100)),
+              patientEffortLabel: task.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || effortLabelForPercent(asSafeNumber(task.patient_effort, 0, 100)),
+              patient_effort_label: task.patient_effort_label || taskData?.patient_effort_label || taskData?.patientEffortLabel || effortLabelForPercent(asSafeNumber(task.patient_effort, 0, 100))
+            })
+          };
+        });
 
-      const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+      const tasksResult = await fetchTasksWithSchemaFallback({
         supabase,
-        patientEmail,
-        emailMatch: 'ilike',
+        patientIds: [patientId],
         limit,
         route: '/api/patient/self/history',
         requestId: requestIdForLogs(req),
         logger: console
       });
-      const tasksByEmail = tasksByEmailResult.data;
-      if (tasksByEmailResult.error) {
-        console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailResult.error.message || String(tasksByEmailResult.error));
+      if (tasksResult.error) {
+        console.warn('[PatientSelfHistory] legacy tasks by canonical patient warning:', tasksResult.error.message || String(tasksResult.error));
       }
-
-      let tasksById: any[] = [];
-      if (scopedPatientIds.length > 0) {
-        const tasksByIdResult = await fetchTasksWithSchemaFallback({
-          supabase,
-          patientIds: scopedPatientIds,
-          limit,
-          route: '/api/patient/self/history',
-          requestId: requestIdForLogs(req),
-          logger: console
-        });
-        if (tasksByIdResult.error) {
-          console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdResult.error.message || String(tasksByIdResult.error));
-        } else {
-          tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
-        }
-      }
-
-      const taskRows = [
-        ...(Array.isArray(tasksByEmail) ? tasksByEmail : []),
-        ...tasksById
-      ];
-      const mappedTaskScoreHistory = Array.from(
-        new Map(
-          taskRows.map((t: any) => [String(t?.id || crypto.randomUUID()), t])
-        ).values()
-      )
+      const mappedTaskScoreHistory = (Array.isArray(tasksResult.data) ? tasksResult.data : [])
         .filter((t: any) => t?.pro_score !== null && t?.pro_score !== undefined)
         .map((t: any) => ({
           id: `taskscore:${t.id}`,
           patient_id: t.patient_id,
-          patient_email: t.patient_email,
+          patient_email: t.patient_email || patientEmail,
           type: String(t.type || 'task'),
           title: sanitizeTextField(t.title || 'Tarefa avaliada', 180),
           score: asSafeNumber(t.pro_score, 0, 100),
@@ -43304,6 +43264,7 @@ async function startServer() {
         }));
 
       const patientVisibleHistory = [...dedupedHistory, ...mappedAssignedHistory, ...mappedTaskScoreHistory].filter((row: any) => {
+        if (sanitizeString(row?.patient_id, 120) !== patientId) return false;
         const type = sanitizeString(row?.type, 80).toLowerCase();
         const source = sanitizeString(row?.source, 120).toLowerCase();
         if (['audit', 'system', 'internal', 'supervision', 'professional_private'].includes(type)) return false;
@@ -43325,99 +43286,61 @@ async function startServer() {
       void req.session.save(() => {});
 
       res.json({ success: true, data: enrichedHistory, treatmentStatus });
-    } catch (error) {
-      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/history [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
   app.get('/api/patient/self/protocols', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const tenantScope = await resolvePatientSelfTenantScope(req.session.user);
+      if (!tenantScope) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PORTAL_SCOPE_INVALID' });
       }
+      const clinicId = tenantScope.clinicId;
 
-      const { data: patientLinks, error: patientLinksError } = await supabase
-        .from('patients')
-        .select('clinic_id, status, created_at')
-        .eq('email', patientEmail)
-        .eq('is_active', true)
-        .is('deleted_at', null);
-
-      if (patientLinksError) throw patientLinksError;
-
-      const links = Array.isArray(patientLinks) ? patientLinks : [];
-      const activeClinicIds = links
-        .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() === 'active')
-        .map((row: any) => sanitizeString(row?.clinic_id, 120))
-        .filter((id: string) => isUuid(id));
-      const fallbackClinicIds = links
-        .map((row: any) => sanitizeString(row?.clinic_id, 120))
-        .filter((id: string) => isUuid(id));
-
-      const clinicIds = (activeClinicIds.length > 0 ? activeClinicIds : fallbackClinicIds);
-      if (clinicIds.length === 0) {
-        return res.json({ success: true, data: [] });
-      }
-
-      let { data: states, error: statesError } = await supabase
+      let stateRead = await supabase
         .from('clinic_state')
         .select('clinic_id, protocols, updated_at')
-        .in('clinic_id', clinicIds);
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (stateRead.error) throw stateRead.error;
 
-      if (statesError) throw statesError;
-
-      const stateByClinicId = new Map((Array.isArray(states) ? states : []).map((state: any) => [
-        sanitizeString(state?.clinic_id, 120),
-        state
-      ]));
-      const clinicsNeedingProtocolSync: string[] = [];
-      for (const clinicId of clinicIds) {
-        const state = stateByClinicId.get(clinicId);
-        const { missingApprovedProtocolKeys } = await findMissingApprovedProtocolKeysForClinicState(
+      const { missingApprovedProtocolKeys } = await findMissingApprovedProtocolKeysForClinicState(
+        clinicId,
+        normalizeProtocolArrayForRoute(stateRead.data?.protocols)
+      );
+      if (missingApprovedProtocolKeys.length > 0) {
+        await syncApprovedProtocolsToClinicState({
           clinicId,
-          normalizeProtocolArrayForRoute(state?.protocols)
-        );
-        if (missingApprovedProtocolKeys.length > 0) clinicsNeedingProtocolSync.push(clinicId);
-      }
-
-      if (clinicsNeedingProtocolSync.length > 0) {
-        await Promise.all(clinicsNeedingProtocolSync.map((clinicId) =>
-          syncApprovedProtocolsToClinicState({
+          performedBy: sanitizeString(req.session.user?.id, 120),
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Paciente', 180),
+          auditAction: 'restore_clinic_protocols_from_import_requests'
+        }).catch((syncError: any) => {
+          console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/patient/self/protocols:', {
             clinicId,
-            performedBy: sanitizeString(req.session.user?.id, 120),
-            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Paciente', 180),
-            auditAction: 'restore_clinic_protocols_from_import_requests'
-          }).catch((syncError: any) => {
-            console.warn('[Protocol Sync] Nao foi possivel restaurar protocolos aprovados durante GET /api/patient/self/protocols:', {
-              clinicId,
-              message: syncError?.message || String(syncError)
-            });
-            return null;
-          })
-        ));
-
-        const refreshedStates = await supabase
+            message: syncError?.message || String(syncError)
+          });
+          return null;
+        });
+        stateRead = await supabase
           .from('clinic_state')
           .select('clinic_id, protocols, updated_at')
-          .in('clinic_id', clinicIds);
-        if (refreshedStates.error) throw refreshedStates.error;
-        states = refreshedStates.data;
+          .eq('clinic_id', clinicId)
+          .limit(1)
+          .maybeSingle();
+        if (stateRead.error) throw stateRead.error;
       }
 
-      const orderedStates = (Array.isArray(states) ? states : [])
-        .sort((a: any, b: any) => {
-          const aTs = new Date(a?.updated_at || 0).getTime() || 0;
-          const bTs = new Date(b?.updated_at || 0).getTime() || 0;
-          return bTs - aTs;
-        });
-
-      const selectedState =
-        orderedStates.find((s: any) => normalizeProtocolArrayForRoute(s?.protocols).length > 0) || orderedStates[0];
-      const protocols = normalizeProtocolArrayForRoute(selectedState?.protocols);
+      const protocols = normalizeProtocolArrayForRoute(stateRead.data?.protocols);
       return res.json({ success: true, data: protocols });
-    } catch (error) {
-      return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/protocols [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
     }
   });
 
@@ -45217,61 +45140,33 @@ async function startServer() {
 
   app.get('/api/patient/self/tasks', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const tenantScope = await resolvePatientSelfTenantScope(req.session.user);
+      if (!tenantScope) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PORTAL_SCOPE_INVALID' });
       }
-
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
-      if (patientIds.length === 0) {
-        console.warn('[PatientSelfTasks] skipped: missing resolvedPatientId', {
-          actorId: sanitizeString(req.session.user?.id, 120) || null,
-          requestId: requestIdForLogs(req)
-        });
-        return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
-      }
-      const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+      const tasksResult = await fetchTasksWithSchemaFallback({
         supabase,
-        patientEmail,
+        patientIds: [tenantScope.patientId],
         limit,
         route: '/api/patient/self/tasks',
         requestId: requestIdForLogs(req),
         logger: console
       });
-      if (tasksByEmailResult.error) throw tasksByEmailResult.error;
-      const tasksByEmail = tasksByEmailResult.data;
-
-      let tasksById: any[] = [];
-      if (patientIds.length > 0) {
-        const tasksByIdResult = await fetchTasksWithSchemaFallback({
-          supabase,
-          patientIds,
-          limit,
-          route: '/api/patient/self/tasks',
-          requestId: requestIdForLogs(req),
-          logger: console
-        });
-        if (tasksByIdResult.error) throw tasksByIdResult.error;
-        tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
-      }
-
-      const merged = Array.from(
-        new Map(
-          [...(Array.isArray(tasksByEmail) ? tasksByEmail : []), ...tasksById].map((row: any) => [
-            String(row?.id || crypto.randomUUID()),
-            row
-          ])
-        ).values()
-      ).sort((a: any, b: any) => {
-        const aTs = new Date(a?.created_at || 0).getTime();
-        const bTs = new Date(b?.created_at || 0).getTime();
-        return bTs - aTs;
-      }).slice(0, limit);
-
-      res.json({ success: true, data: merged });
-    } catch (error) {
-      res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      if (tasksResult.error) throw tasksResult.error;
+      const data = (Array.isArray(tasksResult.data) ? tasksResult.data : [])
+        .filter((row: any) => sanitizeString(row?.patient_id, 120) === tenantScope.patientId)
+        .sort((a: any, b: any) => {
+          const aTs = new Date(a?.created_at || 0).getTime();
+          const bTs = new Date(b?.created_at || 0).getTime();
+          return bTs - aTs;
+        })
+        .slice(0, limit);
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/tasks [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
     }
   });
   app.post('/api/tasks', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
@@ -45706,52 +45601,30 @@ async function startServer() {
 
   app.get('/api/patient/self/assigned-tasks', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const tenantScope = await resolvePatientSelfTenantScope(req.session.user);
+      if (!tenantScope) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PORTAL_SCOPE_INVALID' });
       }
-
+      const patientEmail = tenantScope.patientEmail;
+      const patientIds = [tenantScope.patientId];
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
-      const { data: byEmail, error: byEmailError } = await supabase
+      const { data: byIdData, error: byIdError } = await supabase
         .from('assigned_tasks')
         .select(ASSIGNED_TASK_SELECT)
-        .ilike('patient_email', patientEmail)
+        .eq('clinic_id', tenantScope.clinicId)
+        .eq('patient_id', tenantScope.patientId)
         .order('scheduled_at', { ascending: false })
         .limit(limit);
-      if (byEmailError) {
-        if (/assigned_tasks/i.test(String(byEmailError?.message || ''))) {
+      if (byIdError) {
+        if (/assigned_tasks/i.test(String(byIdError?.message || ''))) {
           return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
         }
-        throw byEmailError;
+        throw byIdError;
       }
 
       const nowIso = new Date().toISOString();
-      let byId: any[] = [];
-      if (patientIds.length > 0) {
-        const { data: byIdData, error: byIdError } = await supabase
-          .from('assigned_tasks')
-          .select(ASSIGNED_TASK_SELECT)
-          .in('patient_id', patientIds)
-          .order('scheduled_at', { ascending: false })
-          .limit(limit);
-        if (byIdError) {
-          if (/assigned_tasks/i.test(String(byIdError?.message || ''))) {
-            return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
-          }
-          throw byIdError;
-        }
-        byId = Array.isArray(byIdData) ? byIdData : [];
-      }
-
-      const mergedAssigned = Array.from(
-        new Map(
-          [...(Array.isArray(byEmail) ? byEmail : []), ...byId].map((row: any) => [
-            String(row?.id || crypto.randomUUID()),
-            row
-          ])
-        ).values()
-      );
+      const mergedAssigned = (Array.isArray(byIdData) ? byIdData : [])
+        .filter((row: any) => sanitizeString(row?.patient_id, 120) === tenantScope.patientId);
 
       // Fallback robusto: caso assigned_tasks esteja vazio/indisponível para este paciente,
       // também lemos tarefas pendentes da tabela legacy `tasks` com scheduled_at.
@@ -45763,48 +45636,29 @@ async function startServer() {
         if (typeof task?.completed === 'boolean') return !task.completed;
         return true;
       };
-      const legacyTasksByEmailResult = await fetchTasksWithSchemaFallback({
+      const legacyTasksByIdResult = await fetchTasksWithSchemaFallback({
         supabase,
-        patientEmail,
-        emailMatch: 'ilike',
+        patientIds,
         limit,
         route: '/api/patient/self/assigned-tasks',
         requestId: requestIdForLogs(req),
         logger: console
       });
-      const legacyTasksByEmail = legacyTasksByEmailResult.data;
-      const legacyTasksByEmailError = legacyTasksByEmailResult.error;
-      if (legacyTasksByEmailError) {
-        console.warn('[PatientSelfAssignedTasks] fallback tasks by email warning:', legacyTasksByEmailError.message || String(legacyTasksByEmailError));
+      const legacyTasksByIdError = legacyTasksByIdResult.error;
+      if (legacyTasksByIdError) {
+        console.warn('[PatientSelfAssignedTasks] fallback tasks by canonical patient warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
       }
-
-      let legacyTasksById: any[] = [];
-      if (patientIds.length > 0) {
-        const legacyTasksByIdResult = await fetchTasksWithSchemaFallback({
-          supabase,
-          patientIds,
-          limit,
-          route: '/api/patient/self/assigned-tasks',
-          requestId: requestIdForLogs(req),
-          logger: console
-        });
-        const legacyTasksByIdData = legacyTasksByIdResult.data;
-        const legacyTasksByIdError = legacyTasksByIdResult.error;
-        if (legacyTasksByIdError) {
-          console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
-        } else {
-          legacyTasksById = Array.isArray(legacyTasksByIdData) ? legacyTasksByIdData : [];
-        }
-      }
+      const legacyTasksById = Array.isArray(legacyTasksByIdResult.data) ? legacyTasksByIdResult.data : [];
 
       const mergedLegacyTasks = Array.from(
         new Map(
-          [...(Array.isArray(legacyTasksByEmail) ? legacyTasksByEmail : []), ...legacyTasksById].map((row: any) => [
+          legacyTasksById.map((row: any) => [
             String(row?.id || crypto.randomUUID()),
             row
           ])
         ).values()
       )
+        .filter((task: any) => sanitizeString(task?.patient_id, 120) === tenantScope.patientId)
         .filter(isPendingLegacyTask)
         .map((task: any) => ({
         id: String(task?.id || crypto.randomUUID()),
