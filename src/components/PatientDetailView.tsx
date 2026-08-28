@@ -408,37 +408,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   };
   const anamnesisInitialData = useMemo(() => buildAnamnesisInitialData(patient), [patient]);
-  const rawProfileType = String(
-    patient?.type ||
-    patient?.profileType ||
-    patient?.patient_type ||
-    patient?.anamnesisData?.formType ||
-    ''
-  ).toLowerCase();
-  const isExplicitKidsType = ['kids_tea', 'kids', 'child', 'infantil', 'crianca', 'criança'].includes(rawProfileType);
-  const isExplicitAdultType = ['adult', 'adulto', 'conventional', 'adult_conventional'].includes(rawProfileType);
-  const rawPatientAge = patient?.age;
-  const hasExplicitAge =
-    rawPatientAge !== null &&
-    rawPatientAge !== undefined &&
-    String(rawPatientAge).trim() !== '';
-  const normalizedPatientAge = hasExplicitAge ? Number(rawPatientAge) : Number.NaN;
-  const hasNumericAge = Number.isFinite(normalizedPatientAge) && normalizedPatientAge >= 0;
-  const isKidsProfile =
-    isExplicitKidsType ||
-    (!isExplicitAdultType && (
-      patient?.anamnesisData?.formType === 'child' ||
-      (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
-    ));
+  const patientPortalKind = useMemo(() => resolvePatientPortalKind(patient), [patient]);
+  const isKidsProfile = patientPortalKind === 'KIDS';
+  const isAdultAbaProfile = patientPortalKind === 'ADULT_ABA';
+  const hasAbaClinicalProfile = isKidsProfile || isAdultAbaProfile;
   const abaV2Enabled = isAbaV2Enabled();
   const abaV3UiEnabled = isAbaV3UiEnabled();
-  const patientApproachKey = String(patient?.approach || patient?.abordagem || patient?.treatmentApproach || '').toLowerCase();
-  const useCanonicalMasteryGrowth = abaV2Enabled && (
-    isKidsProfile ||
-    rawProfileType.includes('aba') ||
-    rawProfileType.includes('tea') ||
-    patientApproachKey.includes('aba')
-  );
+  const hasAbaSessionSurface = hasAbaClinicalProfile && (abaV2Enabled || abaV3UiEnabled);
+  const useCanonicalMasteryGrowth = abaV2Enabled && hasAbaClinicalProfile;
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -735,12 +712,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             allTabs.includes(tab as PatientDetailTab),
           );
 
-    const filteredByProfile = isKidsProfile
-      ? tabsFromProps
-      : tabsFromProps.filter((tab: string) => tab !== 'session' && tab !== 'aba-charts');
+    const filteredByProfile = tabsFromProps.filter((tab: string) => {
+      if (tab === 'session' || tab === 'aba-charts') return hasAbaSessionSurface;
+      return true;
+    });
 
     return new Set(filteredByProfile as PatientDetailTab[]);
-  }, [allowedTabs, isKidsProfile]);
+  }, [allowedTabs, hasAbaSessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
   const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
@@ -1809,7 +1787,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     const patientId = String(patient?.id || '').trim();
-    if (!patientId || !isKidsProfile || !(abaV2Enabled || abaV3UiEnabled) || activeTab !== 'history') return;
+    if (!patientId || !hasAbaSessionSurface || activeTab !== 'history') return;
     if (completedSessionReportsLoadedForRef.current === patientId) return;
     let cancelled = false;
     setCompletedSessionReportsLoading(true);
@@ -1836,7 +1814,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [activeTab, abaV2Enabled, abaV3UiEnabled, isKidsProfile, patient?.id]);
+  }, [activeTab, hasAbaSessionSurface, patient?.id]);
 
   const openCompletedSessionReport = (sessionId: any) => {
     const nextSessionId = String(sessionId || '').trim();
@@ -2047,7 +2025,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     planContext?: { therapeuticPlanId?: string | null; specialty?: string | null } | null,
   ) => {
     const resolvedAction = nextAction === 'tab' ? 'fullscreen' : nextAction;
-    if (!abaV2Enabled) {
+    if (!hasAbaSessionSurface) {
       setActiveTab(getSessionFallbackTab());
       return;
     }
@@ -2654,7 +2632,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     const startKey = String(startScheduledSessionKey || '').trim();
     if (!startKey || consumedScheduledSessionStartKeyRef.current === startKey) return;
-    if (!abaV2Enabled || !scheduledSessionForPatient || !patient?.id) return;
+    if (!hasAbaSessionSurface || !scheduledSessionForPatient || !patient?.id) return;
 
     consumedScheduledSessionStartKeyRef.current = startKey;
     setSessionDurationInput(String(scheduledSessionDurationMinutes));
@@ -2740,7 +2718,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     void handleConfirmSessionStart({ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true });
   }, [
-    abaV2Enabled,
+    hasAbaSessionSurface,
     activeSession,
     patient?.id,
     scheduledSessionDurationMinutes,
@@ -2929,7 +2907,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { min: 0, max: null };
   };
 
-  const patientPortalKind = useMemo(() => resolvePatientPortalKind(patient), [patient]);
 
   useEffect(() => {
     const patientId = String(patient?.id || '');
@@ -9422,7 +9399,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           />
         </div>
       </div>
-      {(abaV2Enabled || abaV3UiEnabled) && isSessionModeOpen && (
+      {hasAbaSessionSurface && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
           onClose={closeSessionMode} 
@@ -10506,7 +10483,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
-          {canAccessTab('session') && isKidsProfile && (
+          {canAccessTab('session') && hasAbaSessionSurface && (
             <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
@@ -10752,7 +10729,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
               </div>
             )}
-            {isKidsProfile ? (
+            {hasAbaClinicalProfile ? (
               <React.Fragment>
                 <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -10792,17 +10769,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className={`rounded-xl border border-dashed px-4 py-4 text-sm ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma sessão finalizada encontrada para este paciente.</div>
                   )}
                 </section>
-                <section className="space-y-4" aria-labelledby="patient-timeline-heading">
-                  <div>
-                    <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                      Linha do tempo
-                    </h2>
-                    <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Registros da família e das sessões, organizados por data.
-                    </p>
-                  </div>
-                  {renderHistoryTimelineControls()}
-                </section>
+                {isKidsProfile && (
+                  <section className="space-y-4" aria-labelledby="patient-timeline-heading">
+                    <div>
+                      <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                        Linha do tempo
+                      </h2>
+                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Registros da família e das sessões, organizados por data.
+                      </p>
+                    </div>
+                    {renderHistoryTimelineControls()}
+                  </section>
+                )}
               </React.Fragment>
             ) : null}
             {isKidsProfile && historyPagination.loading && (sortedDateKeys?.length || 0) === 0 ? (
@@ -11857,36 +11836,36 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
                         </div> 
                         {isCreatingNewTask ? ( 
-                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}>
-                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
+                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? (isPanelDark ? 'bg-green-500/10 border-green-400/20' : 'bg-green-50/30 border-green-100') : (isPanelDark ? 'bg-slate-900/70 border-slate-700' : 'bg-[#F4F7FE] border-blue-100')}`}>
+                            <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className={`w-full rounded-xl p-3 text-sm outline-none border transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
                               <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Código/Tag da atividade (opcional)</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
+                                <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Código/Tag da atividade (opcional)</label><input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
                               </div> 
                             )}
-                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
+                            <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
                             {planType === 'task' && (
                               <>
-                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Exemplos</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Orientação de execução</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
+                                <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Exemplos</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
+                                <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Orientação de execução</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
                               </>
                             )}
-                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
-                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}>
-                              <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-2">Salvar no Protocolo:</label> 
+                            <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Anotações do Profissional</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
+                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? (isPanelDark ? 'border-green-400/20' : 'border-green-100') : (isPanelDark ? 'border-slate-700' : 'border-blue-100')}`}>
+                              <label className={`block text-[10px] font-semibold uppercase mb-2 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Salvar no Protocolo:</label> 
                               <div className="flex gap-2 mb-3"> 
-                                <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Existente</button> 
-                                <button onClick={() => setAddToProtocolMode('new')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'new' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Novo</button> 
+                                <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? (isPanelDark ? 'bg-slate-800 border-[#7551FF] text-violet-200' : 'bg-white border-[#7551FF] text-[#7551FF]') : (isPanelDark ? 'border-transparent bg-slate-800 text-slate-300' : 'border-transparent bg-slate-100 text-slate-500')}`}>Existente</button> 
+                                <button onClick={() => setAddToProtocolMode('new')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'new' ? (isPanelDark ? 'bg-slate-800 border-[#7551FF] text-violet-200' : 'bg-white border-[#7551FF] text-[#7551FF]') : (isPanelDark ? 'border-transparent bg-slate-800 text-slate-300' : 'border-transparent bg-slate-100 text-slate-500')}`}>Novo</button> 
                               </div> 
                               {addToProtocolMode === 'existing' ? ( 
                                 <div className="space-y-2"> 
-                                  <select className="w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
-                                  {targetProtocol && (<select className="w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none" value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
+                                  <select className={`w-full border rounded-xl p-2 text-xs outline-none transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
+                                  {targetProtocol && (<select className={`w-full border rounded-xl p-2 text-xs outline-none transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
                                 </div> 
                               ) : ( 
                                 <div className="space-y-2"> 
-                                  <input type="text" className="w-full bg-white dark:bg-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none border border-gray-200 dark:border-slate-700" placeholder="Nome do Novo Protocolo" value={newProtocolName} onChange={e => setNewProtocolName(e.target.value)} /> 
-                                  <input type="text" className="w-full bg-white dark:bg-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none border border-gray-200 dark:border-slate-700" placeholder="Nome do Domínio (Categoria)" value={newDomainName} onChange={e => setNewDomainName(e.target.value)} /> 
+                                  <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder="Nome do Novo Protocolo" value={newProtocolName} onChange={e => setNewProtocolName(e.target.value)} /> 
+                                  <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder="Nome do Domínio (Categoria)" value={newDomainName} onChange={e => setNewDomainName(e.target.value)} /> 
                                 </div> 
                               )} 
                             </div> 
@@ -12139,7 +12118,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     </div> 
                   ))) : <p className="text-center text-gray-400 text-sm py-4 italic">Nada agendado ainda.</p>} 
                 </div>
-                {patientAgeYears !== null && patientAgeYears > 12 && (
+                {!isKidsProfile && (
                   <div className="space-y-3 mt-4">
                     <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">
                       Revisão Profissional (Tarefas Adulto)
@@ -12264,8 +12243,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
-        ) : activeTab === 'session' && isKidsProfile ? (
+          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
+        ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
         ) : activeTab === 'school' ? (
           <PatientSchoolInformation patientId={String(patient.id)} canManage={canManageSchool} isPanelDark={isPanelDark} />
