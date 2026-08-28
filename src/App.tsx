@@ -210,6 +210,9 @@ const ClinicInvitationAcceptance = React.lazy(() =>
 const PortalRelationshipConfirmation = React.lazy(() =>
   import('./components/PortalRelationshipConfirmation').then((m) => ({ default: m.PortalRelationshipConfirmation }))
 );
+const ExternalEvolutionShare = React.lazy(() =>
+  import('./components/ExternalEvolutionShare').then((m) => ({ default: m.ExternalEvolutionShare }))
+);
 const PublicSalesOffer = React.lazy(() =>
   import('./components/PublicSalesOffer').then((m) => ({ default: m.PublicSalesOffer }))
 );
@@ -420,6 +423,19 @@ export default function App() {
   const isPortalRelationshipRoute =
     typeof window !== 'undefined' &&
     /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
+  const externalEvolutionRouteMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/evolucao-compartilhada\/([^/]+)\/?$/i)
+      : null;
+  const isExternalEvolutionRoute = Boolean(externalEvolutionRouteMatch);
+  const externalEvolutionPublicId = (() => {
+    if (!externalEvolutionRouteMatch) return '';
+    try {
+      return decodeURIComponent(externalEvolutionRouteMatch[1]);
+    } catch {
+      return '';
+    }
+  })();
   const salesOfferRouteMatch =
     typeof window !== 'undefined'
       ? window.location.pathname.match(/^\/oferta\/([^/]+)\/?$/i)
@@ -8230,7 +8246,9 @@ export default function App() {
       )}
       <LazyImportBoundary fallback={lazyFallback}>
         <Suspense fallback={lazyFallback}>
-        {isSalesOfferRoute ? (
+        {isExternalEvolutionRoute ? (
+          <ExternalEvolutionShare publicId={externalEvolutionPublicId} />
+        ) : isSalesOfferRoute ? (
           <PublicSalesOffer token={salesOfferToken} />
         ) : isSalesActivationRoute && !user ? (
           <SalesActivationAccess token={salesActivationToken} onLogin={handleLoginSuccess} />

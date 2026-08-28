@@ -14,6 +14,7 @@ import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
+import { PatientEvolutionTimelinePanel } from './PatientEvolutionTimelinePanel';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -11023,6 +11024,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </div>
         ) : activeTab === 'report' ? (
           <div className="space-y-6 animate-fade-in">
+            <PatientEvolutionTimelinePanel
+              patientId={String(patient?.id || '')}
+              dark={isPanelDark}
+              canCreate={hasCapability('reports.generate')}
+              canShare={hasCapability('reports.generate') && hasCapability('documents.patient_share')}
+            />
             <div id="report-config-card" className={`border p-6 rounded-[32px] shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
               <div className="flex items-center gap-3 mb-6">
                 <div className={`p-3 rounded-2xl text-[#7a32fc] ${isPanelDark ? 'bg-violet-500/10' : 'bg-indigo-50'}`}>

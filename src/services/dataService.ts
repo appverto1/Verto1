@@ -2995,6 +2995,119 @@ export const dataService = {
     }
   },
 
+
+  async getPatientEvolutionTimeline(patientId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.', data: [] };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient evolution timeline:', error);
+      return { success: false, error: 'Não foi possível carregar a timeline de evolução agora.', data: [] };
+    }
+  },
+
+  async createPatientEvolutionTimelineItem(patientId: string, payload: {
+    monthKey: string;
+    subject: string;
+    content?: string;
+    patientFileId?: string | null;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating patient evolution timeline item:', error);
+      return { success: false, error: 'Não foi possível criar este registro da timeline.' };
+    }
+  },
+
+  async archivePatientEvolutionTimelineItem(patientId: string, itemId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      if (!safePatientId || !safeItemId) return { success: false, error: 'Registro inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error archiving patient evolution timeline item:', error);
+      return { success: false, error: 'Não foi possível remover este registro.' };
+    }
+  },
+
+  async grantPatientEvolutionTimelineAccess(patientId: string, itemId: string, payload: {
+    recipientEmail: string;
+    authorizationConfirmed: boolean;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      if (!safePatientId || !safeItemId) return { success: false, error: 'Registro inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error granting patient evolution timeline access:', error);
+      return { success: false, error: 'Não foi possível criar o compartilhamento.' };
+    }
+  },
+
+  async revokePatientEvolutionTimelineAccess(patientId: string, itemId: string, grantId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      const safeGrantId = encodeURIComponent(String(grantId || '').trim());
+      if (!safePatientId || !safeItemId || !safeGrantId) return { success: false, error: 'Compartilhamento inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants/${safeGrantId}/revoke`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error revoking patient evolution timeline access:', error);
+      return { success: false, error: 'Não foi possível revogar o acesso.' };
+    }
+  },
+
+  async resendPatientEvolutionTimelineAccess(patientId: string, itemId: string, grantId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      const safeGrantId = encodeURIComponent(String(grantId || '').trim());
+      if (!safePatientId || !safeItemId || !safeGrantId) return { success: false, error: 'Compartilhamento inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants/${safeGrantId}/resend`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error resending patient evolution timeline access:', error);
+      return { success: false, error: 'Não foi possível reenviar o acesso.' };
+    }
+  },
+
   async getPortalContext() {
     try {
       const response = await fetchClinical('/api/portal/context', {
