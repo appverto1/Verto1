@@ -1,5 +1,6 @@
 import React from 'react';
 import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts';
+import type { ClinicalProgressReportSection, ClinicalProgressReportMetric } from '../utils/clinicalProgressReport';
 
 type ProgressReportObservation = {
   id: string | number;
@@ -7,6 +8,9 @@ type ProgressReportObservation = {
   type: string;
   activity: string;
   score: string;
+  plan?: string;
+  domain?: string;
+  program?: string;
   notes: string;
 };
 
@@ -34,6 +38,7 @@ type ProgressReportPDFLayoutProps = {
     comparisonKeys?: string[];
   };
   chartData: Array<Record<string, any>>;
+  clinicalSections?: ClinicalProgressReportSection[];
   observations: ProgressReportObservation[];
   additionalNote?: string;
 };
@@ -116,6 +121,71 @@ const chunkObservations = (observations: ProgressReportObservation[]) => {
   return pages;
 };
 
+type ClinicalProgramPageItem = {
+  key: string;
+  planLabel: string;
+  planKind: 'PTS' | 'SPECIALTY';
+  domainName: string;
+  programName: string;
+  continuation: boolean;
+  metrics: ClinicalProgressReportMetric[];
+};
+
+const chunkArray = <T,>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) chunks.push(items.slice(index, index + size));
+  return chunks;
+};
+
+const flattenClinicalProgramItems = (sections: ClinicalProgressReportSection[]) => {
+  const items: ClinicalProgramPageItem[] = [];
+  for (const section of sections) {
+    for (const domain of section.domains) {
+      for (const program of domain.programs) {
+        const metricChunks = chunkArray(program.metrics, 5);
+        if (!metricChunks.length) metricChunks.push([]);
+        metricChunks.forEach((metrics, index) => {
+          items.push({
+            key: `${program.key}::${index}`,
+            planLabel: section.planLabel,
+            planKind: section.planKind,
+            domainName: domain.name,
+            programName: program.name,
+            continuation: index > 0,
+            metrics,
+          });
+        });
+      }
+    }
+  }
+  return items;
+};
+
+const chunkClinicalProgramPages = (items: ClinicalProgramPageItem[]) => {
+  const pages: ClinicalProgramPageItem[][] = [];
+  let current: ClinicalProgramPageItem[] = [];
+  let metricWeight = 0;
+  for (const item of items) {
+    const nextWeight = Math.max(1, item.metrics.length);
+    if (current.length > 0 && (current.length >= 3 || metricWeight + nextWeight > 10)) {
+      pages.push(current);
+      current = [];
+      metricWeight = 0;
+    }
+    current.push(item);
+    metricWeight += nextWeight;
+  }
+  if (current.length) pages.push(current);
+  return pages;
+};
+
+const trendColor = (trend: ClinicalProgressReportMetric['trend']) => {
+  if (trend === 'favorable') return '#059669';
+  if (trend === 'attention') return '#E11D48';
+  if (trend === 'descriptive') return '#0369A1';
+  return '#64748B';
+};
+
 const PageFooter = ({ professional, report }: Pick<ProgressReportPDFLayoutProps, 'professional' | 'report'>) => (
   <footer style={{ marginTop: 44, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 24, pageBreakInside: 'avoid' }}>
     <p style={{ margin: 0, fontSize: 9.5, color: '#94A3B8', maxWidth: 360 }}>
@@ -153,6 +223,13 @@ const ObservationCard = ({ item }: { item: ProgressReportObservation }) => (
     <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>
       {item.date || '-'} | Tipo: {item.type || 'NOVO REGISTRO'} | Atividade: {item.activity || '-'} | Pontuação: {item.score || '-'}
     </p>
+    {(item.plan || item.domain || item.program) && (
+      <p style={{ margin: '0 0 7px', fontSize: 10.5, lineHeight: 1.45, color: '#475569' }}>
+        {item.plan ? <><strong>Plano:</strong> {item.plan}</> : null}
+        {item.domain ? <>{item.plan ? ' · ' : ''}<strong>Domínio:</strong> {item.domain}</> : null}
+        {item.program ? <>{item.plan || item.domain ? ' · ' : ''}<strong>Programa:</strong> {item.program}</> : null}
+      </p>
+    )}
     <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, color: '#1E293B', whiteSpace: 'pre-wrap' }}>
       <strong>Anotações do Profissional:</strong>{'\n'}{item.notes || 'Sem anotação textual selecionada.'}
     </p>
@@ -165,6 +242,7 @@ export const ProgressReportPDFLayout = ({
   professional,
   report,
   chartData,
+  clinicalSections = [],
   observations,
   additionalNote,
 }: ProgressReportPDFLayoutProps) => {
@@ -173,6 +251,8 @@ export const ProgressReportPDFLayout = ({
     : Object.keys(chartData?.[0] || {}).filter((key) => key !== 'name');
   const chartHeight = Math.max(320, (chartData?.length || 1) * 52);
   const hasChartData = Array.isArray(chartData) && chartData.length > 0 && comparisonKeys.length > 0;
+  const clinicalProgramItems = flattenClinicalProgramItems(clinicalSections);
+  const clinicalPages = chunkClinicalProgramPages(clinicalProgramItems);
   const observationPages = chunkObservations(observations);
   const pageStyle: React.CSSProperties = {
     width: 794,
@@ -279,7 +359,16 @@ export const ProgressReportPDFLayout = ({
         </section>
 
         <section style={{ marginTop: 26 }}>
-          <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
+          <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Planos Terapêuticos e Evolução</h2>
+          <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
+            {clinicalSections.length > 0
+              ? `${clinicalSections.length} plano(s) com evidência clínica no período. PTS e planos individuais são detalhados nas páginas seguintes por domínio, programa e métrica, preservando a unidade original.`
+              : 'Nenhuma evidência vinculada a PTS ou plano individual foi encontrada no período.'}
+          </p>
+        </section>
+
+        <section style={{ marginTop: 20 }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>3. Observações Selecionadas para o Relatório</h2>
           <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
             {observations.length > 0
               ? `${observations.length} registro(s) selecionado(s). As observações são apresentadas nas páginas seguintes sem dividir um card entre páginas.`
@@ -287,23 +376,78 @@ export const ProgressReportPDFLayout = ({
           </p>
         </section>
 
-        {observations.length === 0 && additionalNote?.trim() && (
+        {clinicalPages.length === 0 && observations.length === 0 && additionalNote?.trim() && (
           <div style={{ marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 12, padding: 14, background: '#F8FAFC', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
             <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>Observação adicional</p>
             <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{additionalNote}</p>
           </div>
         )}
 
-        {observations.length === 0 && <PageFooter professional={professional} report={report} />}
+        {clinicalPages.length === 0 && observations.length === 0 && <PageFooter professional={professional} report={report} />}
       </div>
+
+      {clinicalPages.map((pageItems, pageIndex) => {
+        const isLastClinicalPage = pageIndex === clinicalPages.length - 1;
+        const isLastDocumentPage = isLastClinicalPage && observationPages.length === 0;
+        return (
+          <div key={`clinical-page-${pageIndex}`} className="progress-report-pdf-page" style={pageStyle}>
+            <CompactPageHeader clinic={clinic} patient={patient} pageNumber={pageIndex + 2} />
+            <section>
+              <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Planos Terapêuticos e Evolução</h2>
+              <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
+                Hierarquia clínica: plano → domínio → programa → métrica. Não há média entre unidades incompatíveis.
+              </p>
+              <div style={{ display: 'grid', gap: 12 }}>
+                {pageItems.map((item) => (
+                  <article key={item.key} style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: '12px 14px', background: '#FFFFFF', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+                      <span style={{ borderRadius: 999, padding: '3px 7px', fontSize: 9, fontWeight: 700, background: item.planKind === 'PTS' ? '#F3E8FF' : '#E0F2FE', color: item.planKind === 'PTS' ? '#7E22CE' : '#0369A1' }}>
+                        {item.planKind === 'PTS' ? 'PTS' : 'PLANO INDIVIDUAL'}
+                      </span>
+                      <p style={{ margin: 0, fontSize: 11, fontWeight: 700, color: '#0F172A' }}>{item.planLabel}</p>
+                    </div>
+                    <p style={{ margin: '0 0 3px', fontSize: 10.5, color: '#475569' }}><strong>Domínio:</strong> {item.domainName}</p>
+                    <p style={{ margin: '0 0 8px', fontSize: 10.5, color: '#475569' }}><strong>Programa:</strong> {item.programName}{item.continuation ? ' · continuação' : ''}</p>
+                    {item.metrics.length > 0 ? (
+                      <div style={{ display: 'grid', gap: 6 }}>
+                        {item.metrics.map((metric) => (
+                          <div key={metric.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, borderTop: '1px solid #F1F5F9', paddingTop: 6 }}>
+                            <div style={{ minWidth: 0 }}>
+                              <p style={{ margin: 0, fontSize: 10.2, color: '#334155' }}>{metric.itemLabel !== item.programName ? `${metric.itemLabel} · ` : ''}{metric.label}</p>
+                              <p style={{ margin: '2px 0 0', fontSize: 9.2, color: '#94A3B8' }}>{metric.pointCount} ponto(s) comparável(is)</p>
+                            </div>
+                            <div style={{ flexShrink: 0, textAlign: 'right' }}>
+                              <p style={{ margin: 0, fontSize: 10.2, fontWeight: 700, color: '#0F172A' }}>{metric.evolutionDisplay}</p>
+                              <p style={{ margin: '2px 0 0', fontSize: 9.2, color: trendColor(metric.trend) }}>{metric.trendLabel}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p style={{ margin: 0, fontSize: 10, color: '#94A3B8' }}>Sem métricas comparáveis neste programa.</p>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+            {isLastDocumentPage && additionalNote?.trim() && (
+              <div style={{ marginTop: 12, border: '1px solid #E2E8F0', borderRadius: 12, padding: 14, background: '#F8FAFC', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                <p style={{ margin: '0 0 6px', fontSize: 10, fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: 1 }}>Observação adicional</p>
+                <p style={{ margin: 0, fontSize: 11, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{additionalNote}</p>
+              </div>
+            )}
+            {isLastDocumentPage && <PageFooter professional={professional} report={report} />}
+          </div>
+        );
+      })}
 
       {observationPages.map((pageItems, pageIndex) => {
         const isLastPage = pageIndex === observationPages.length - 1;
         return (
           <div key={`observations-page-${pageIndex}`} className="progress-report-pdf-page" style={pageStyle}>
-            <CompactPageHeader clinic={clinic} patient={patient} pageNumber={pageIndex + 2} />
+            <CompactPageHeader clinic={clinic} patient={patient} pageNumber={clinicalPages.length + pageIndex + 2} />
             <section>
-              <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>2. Observações Selecionadas para o Relatório</h2>
+              <h2 style={{ margin: '0 0 4px', fontSize: 14, textTransform: 'uppercase', letterSpacing: 1.2 }}>3. Observações Selecionadas para o Relatório</h2>
               <p style={{ margin: '0 0 14px', fontSize: 10.5, lineHeight: 1.5, color: '#64748B' }}>
                 Continuação dos registros clínicos selecionados pelo profissional.
               </p>

@@ -18,6 +18,8 @@ import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
 import { prepareElementForPdfCapture } from '../utils/pdfCapture';
+import { useClinicalAnalyticsQuery } from '../services/clinicalAnalyticsQueryCache';
+import { buildClinicalProgressReportSections } from '../utils/clinicalProgressReport';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
@@ -3043,6 +3045,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           baseContext?.logoUrl ||
           baseContext?.clinicLogoUrl ||
           null,
+        clinicLogoUrl:
+          String(media?.clinicLogoUrl || baseContext?.clinicLogoUrl || baseContext?.logoUrl || "").trim() ||
+          baseContext?.clinicLogoUrl ||
+          baseContext?.logoUrl ||
+          null,
         signatureUrl:
           String(media?.signatureUrl || baseContext?.signatureUrl || "").trim() ||
           baseContext?.signatureUrl ||
@@ -5213,6 +5220,49 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return date.toISOString().slice(0, 10);
   };
 
+  const clinicalReportDateRange = useMemo(() => {
+    const dateFrom = resolvePeriodStart(reportPeriod);
+    const dateTo = new Date();
+    const dateFromKey = toDateKey(dateFrom);
+    const dateToKey = toDateKey(dateTo);
+    const days = Math.max(1, Math.ceil((dateTo.getTime() - dateFrom.getTime()) / 86_400_000) + 1);
+    return { dateFrom: dateFromKey, dateTo: dateToKey, days };
+  }, [reportPeriod]);
+
+  const clinicalReportOrganizationId = String(
+    resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || ''
+  ).trim();
+  const clinicalReportQuery = useClinicalAnalyticsQuery<any>({
+    organizationId: clinicalReportOrganizationId || null,
+    patientId: String(patient?.id || ''),
+    family: 'clinical-outcomes-dashboard',
+    params: {
+      dateFrom: clinicalReportDateRange.dateFrom,
+      dateTo: clinicalReportDateRange.dateTo,
+      days: clinicalReportDateRange.days,
+    },
+  }, async () => {
+    const response = await dataService.getClinicalOutcomesDashboard(String(patient?.id || ''), {
+      dateFrom: clinicalReportDateRange.dateFrom,
+      dateTo: clinicalReportDateRange.dateTo,
+      days: clinicalReportDateRange.days,
+    });
+    if (!response?.success) {
+      throw new Error(response?.message || response?.error || 'Não foi possível carregar a evolução dos planos terapêuticos.');
+    }
+    return response;
+  }, {
+    enabled: activeTab === 'report' && Boolean(patient?.id) && Boolean(clinicalReportOrganizationId),
+    staleMs: 30_000,
+    keepPreviousData: true,
+  });
+  const clinicalReportPayload = clinicalReportQuery.data?.success ? clinicalReportQuery.data.data || {} : {};
+  const progressReportClinicalSections = useMemo(
+    () => buildClinicalProgressReportSections(clinicalReportPayload),
+    [clinicalReportPayload]
+  );
+  const clinicalReportDataPending = clinicalReportQuery.isLoading || clinicalReportQuery.isRefreshing || clinicalReportQuery.isPreviousData;
+
   const adultProtocolSnapshotDates = useMemo(() => {
     if (isKidsProfile) return [];
     const unique = Array.from(
@@ -5395,25 +5445,37 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (isKidsProfile) {
       return kidsReportSelectableNotes
         .filter((note: any) => selectedReportNotes.map(String).includes(String(note.id)))
-        .map((note: any) => ({
-          id: note.id,
-          date: String(note?.date || '-'),
-          type: 'NOVO REGISTRO',
-          activity: String(note?.subject || 'Observação clínica'),
-          score: '-',
-          notes: normalizeNoteText(note?.text || '')
-        }));
+        .map((note: any) => {
+          const metadata = note?.metadata && typeof note.metadata === 'object' ? note.metadata : {};
+          return {
+            id: note.id,
+            date: String(note?.date || '-'),
+            type: 'NOVO REGISTRO',
+            activity: String(note?.subject || 'Observação clínica'),
+            score: '-',
+            plan: String(note?.planName || metadata?.planName || metadata?.plan_name || '').trim() || undefined,
+            domain: String(note?.domainName || metadata?.domainName || metadata?.domain_name || '').trim() || undefined,
+            program: String(note?.programName || metadata?.programName || metadata?.program_name || '').trim() || undefined,
+            notes: normalizeNoteText(note?.text || '')
+          };
+        });
     }
 
-    return adultEvolutionSelectedTasks.map((task: any) => ({
-      id: task.id,
-      date: task.eventDate?.toLocaleString?.('pt-BR') || '-',
-      type: 'NOVO REGISTRO',
-      activity: task.taskTitle || 'Atividade clínica',
-      score: `${task.professionalScore ?? '-'} de ${task.maxScore ?? '-'} PTS`,
-      notes: task.evolutionNote || 'Sem anotação técnica registrada.'
-    }));
-  }, [isKidsProfile, kidsReportSelectableNotesInPeriod, selectedReportNotes, adultEvolutionSelectedTasks]);
+    return adultEvolutionSelectedTasks.map((task: any) => {
+      const taskData = getAssignedTaskData(task);
+      return {
+        id: task.id,
+        date: task.eventDate?.toLocaleString?.('pt-BR') || '-',
+        type: 'NOVO REGISTRO',
+        activity: task.taskTitle || 'Atividade clínica',
+        score: `${task.professionalScore ?? '-'} de ${task.maxScore ?? '-'} PTS`,
+        plan: String(taskData?.therapeuticPlanName || taskData?.therapeutic_plan_name || taskData?.planName || taskData?.plan_name || taskData?.protocolTitle || taskData?.protocol_name || '').trim() || undefined,
+        domain: String(taskData?.domainName || taskData?.domain_name || taskData?.sourceDomain || taskData?.source_domain || '').trim() || undefined,
+        program: String(taskData?.programName || taskData?.program_name || taskData?.skillName || taskData?.skill_name || '').trim() || undefined,
+        notes: task.evolutionNote || 'Sem anotação técnica registrada.'
+      };
+    });
+  }, [isKidsProfile, kidsReportSelectableNotes, selectedReportNotes, adultEvolutionSelectedTasks]);
 
   const progressReportPeriodLabel = isKidsProfile
     ? `${formatReportDateLabel(progressReportComparisonKeys[0] || comparisonDate1 || '') || 'Base'} VS ${formatReportDateLabel(progressReportComparisonKeys[1] || comparisonDate2 || '') || 'Final'}`
@@ -5453,55 +5515,60 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '');
 
+  const buildProgressReportPdfDocument = async () => {
+    if (!progressReportPdfRef.current) {
+      throw new Error('REPORT_PDF_LAYOUT_UNAVAILABLE');
+    }
+    await refreshClinicDocumentMedia();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+    if (!progressReportPdfRef.current) throw new Error('REPORT_PDF_LAYOUT_UNAVAILABLE');
+
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const pages = Array.from(progressReportPdfRef.current.querySelectorAll('.progress-report-pdf-page')) as HTMLElement[];
+    const captureTargets = pages.length ? pages : [progressReportPdfRef.current];
+
+    for (let index = 0; index < captureTargets.length; index += 1) {
+      const captureNode = await prepareElementForPdfCapture(captureTargets[index]);
+      try {
+        const canvas = await html2canvas(captureNode, {
+          backgroundColor: '#ffffff',
+          scale: 2,
+          useCORS: true,
+          allowTaint: false,
+          logging: false,
+          windowWidth: captureNode.scrollWidth || 794,
+          windowHeight: captureNode.scrollHeight || 1123
+        });
+        const imgData = canvas.toDataURL('image/png', 1.0);
+        if (index > 0) pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
+      } finally {
+        captureNode.parentNode?.removeChild(captureNode);
+      }
+    }
+    return pdf;
+  };
+
   const handlePDFAction = async (action: 'view' | 'download') => {
-    if (!progressReportChartData.length) {
-      alert('Selecione períodos com dados suficientes para gerar o PDF.');
+    if (clinicalReportDataPending) {
+      alert('A evolução dos planos ainda está sendo atualizada. Tente gerar o PDF novamente assim que a atualização terminar.');
       return;
     }
-    if (!progressReportPdfRef.current) {
-      alert('Não foi possível preparar o layout do PDF. Tente novamente.');
+    if (!progressReportChartData.length && !progressReportClinicalSections.length && !progressReportObservations.length) {
+      alert('Não há dados clínicos suficientes no período selecionado para gerar o PDF.');
       return;
     }
 
     setIsGeneratingProgressPdf(true);
     try {
-      await refreshClinicDocumentMedia();
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const { jsPDF } = await import('jspdf');
-      const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const pages = Array.from(progressReportPdfRef.current.querySelectorAll('.progress-report-pdf-page')) as HTMLElement[];
-      const captureTargets = pages.length ? pages : [progressReportPdfRef.current];
-
-      for (let index = 0; index < captureTargets.length; index += 1) {
-        const page = captureTargets[index];
-        const captureNode = await prepareElementForPdfCapture(page);
-        try {
-          const canvas = await html2canvas(captureNode, {
-            backgroundColor: '#ffffff',
-            scale: 2,
-            useCORS: true,
-            allowTaint: true,
-            logging: false,
-            windowWidth: captureNode.scrollWidth || 794,
-            windowHeight: captureNode.scrollHeight || 1123
-          });
-          const imgData = canvas.toDataURL('image/png', 1.0);
-          if (index > 0) pdf.addPage();
-          pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
-        } finally {
-          if (captureNode.parentNode) {
-            captureNode.parentNode.removeChild(captureNode);
-          }
-        }
-      }
-
+      const pdf = await buildProgressReportPdfDocument();
       if (action === 'view') {
         window.open(pdf.output('bloburl'), '_blank', 'noopener,noreferrer');
         return;
       }
-
       const generatedAt = new Date().toISOString().slice(0, 10);
       pdf.save(`Relatorio_Progresso_Verto_${sanitizePdfFileName(patient?.name)}_${generatedAt}.pdf`);
     } catch (error) {
@@ -6464,40 +6531,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handleGenerateAdultEvolutionReport = async () => {
     if (isKidsProfile) return;
-    if (!adultDomainComparisonData.length) {
-      alert('Não há dados suficientes no período para gerar o relatório adulto.');
+    if (clinicalReportDataPending) {
+      alert('A evolução dos planos ainda está sendo atualizada. Gere o PDF assim que a atualização terminar.');
+      return;
+    }
+    if (!progressReportChartData.length && !progressReportClinicalSections.length && !progressReportObservations.length) {
+      alert('Não há dados clínicos suficientes no período para gerar o relatório adulto.');
       return;
     }
     setIsGeneratingAdultReport(true);
     try {
-      const periodStart = adultPeriodStart.toLocaleDateString('pt-BR');
-      const periodEnd = new Date().toLocaleDateString('pt-BR');
-      const selectedNotes = adultEvolutionSelectedTasks;
-      const plainTextLines = [
-        `Relatório de Evolução Adulto - ${patient?.name || 'Paciente'}`,
-        `Período: ${periodStart} até ${periodEnd}`,
-        '',
-        'Comparativo por domínio (% Proficiência - Avaliação Inicial x Intervenção Atual):',
-        ...adultDomainComparisonData.map((item: any) =>
-          `${item.name}: Inicial ${item['Avaliação Inicial']}% | Atual ${item['Intervenção Atual']}%`
-        ),
-        '',
-        'Anotações de evolução selecionadas:',
-        ...(selectedNotes.length
-          ? selectedNotes.map((task: any) =>
-              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | energia ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} / ${task.maxScore} (${normalizeScoreToPercent(task.professionalScore ?? 0, task.maxScore).toFixed(1)}%) | ${task.evolutionNote || 'Sem anotação'}`
-            )
-          : ['- Nenhuma anotação selecionada']),
-        '',
-        `Anotação adicional do relatório: ${reportAdditionalNote || 'Sem observação adicional.'}`
-      ];
-
-      const { jsPDF } = await import('jspdf');
-      const pdfDoc = new jsPDF({ unit: 'pt', format: 'a4' });
-      const lines = pdfDoc.splitTextToSize(plainTextLines.join('\n'), 520);
-      pdfDoc.text(lines, 36, 48);
+      const pdfDoc = await buildProgressReportPdfDocument();
       const pdfBlob = new Blob([pdfDoc.output('arraybuffer')], { type: 'application/pdf' });
-      const fileName = `Relatorio_Evolucao_Adulto_${String(patient?.name || 'paciente').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      const fileName = `Relatorio_Evolucao_Adulto_${sanitizePdfFileName(String(patient?.name || 'paciente'))}_${new Date().toISOString().slice(0, 10)}.pdf`;
 
       const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
         fileName,
@@ -9352,6 +9398,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               comparisonKeys: progressReportComparisonKeys
             }}
             chartData={progressReportChartData}
+            clinicalSections={progressReportClinicalSections}
             observations={progressReportObservations}
             additionalNote={reportAdditionalNote}
           />
@@ -10967,7 +11014,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
                 <div>
                   <h3 className={`text-lg font-semibold tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>Relatório de Progresso</h3>
-                  <p className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Análise Comparativa para Clínicas e Operadores</p>
+                  <p className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Planos, domínios, programas e evolução clínica</p>
                 </div>
               </div>
 
@@ -11076,10 +11123,80 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
               </div>
 
+              <div className={`mt-8 rounded-[28px] border p-5 sm:p-6 ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`} data-testid="clinical-progress-report-hierarchy">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Planos terapêuticos e evolução</h4>
+                    <p className={`mt-1 max-w-3xl text-xs leading-relaxed ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      PTS e planos individuais são apresentados por domínio, programa e métrica clínica. Unidades diferentes permanecem separadas, sem criar média ou score artificial.
+                    </p>
+                  </div>
+                  {(clinicalReportQuery.isLoading || clinicalReportQuery.isRefreshing) && (
+                    <span className={`text-[10px] font-medium ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Atualizando evolução…</span>
+                  )}
+                </div>
+
+                {clinicalReportQuery.error && progressReportClinicalSections.length === 0 && (
+                  <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs ${isPanelDark ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                    A evolução estruturada dos planos não pôde ser carregada agora. O relatório legado abaixo continua disponível sem perda dos registros existentes.
+                  </div>
+                )}
+
+                {!clinicalReportQuery.isLoading && !clinicalReportQuery.error && progressReportClinicalSections.length === 0 && (
+                  <div className={`mt-4 rounded-2xl border border-dashed px-4 py-5 text-center text-xs ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-300 text-slate-500'}`}>
+                    Nenhuma evidência vinculada a PTS ou plano individual foi registrada neste período.
+                  </div>
+                )}
+
+                <div className="mt-5 space-y-5">
+                  {progressReportClinicalSections.map((planSection) => (
+                    <section key={planSection.planId} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/55' : 'border-slate-200 bg-white'}`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${planSection.planKind === 'PTS' ? (isPanelDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-50 text-violet-700') : (isPanelDark ? 'bg-sky-500/15 text-sky-200' : 'bg-sky-50 text-sky-700')}`}>
+                          {planSection.planKind === 'PTS' ? 'PTS' : 'Plano individual'}
+                        </span>
+                        <h5 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>{planSection.planLabel}</h5>
+                        <span className={`text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>{planSection.observationCount} registro(s) no período</span>
+                      </div>
+
+                      <div className="mt-4 space-y-4">
+                        {planSection.domains.map((domain) => (
+                          <div key={domain.key}>
+                            <p className={`text-[11px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{domain.name}</p>
+                            <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                              {domain.programs.map((program) => (
+                                <article key={program.key} className={`rounded-xl border px-3.5 py-3 ${isPanelDark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-100 bg-slate-50'}`}>
+                                  <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{program.name}</p>
+                                  <div className="mt-2 space-y-2">
+                                    {program.metrics.map((metric) => (
+                                      <div key={metric.key} className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <p className={`text-[11px] ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{metric.itemLabel !== program.name ? `${metric.itemLabel} · ` : ''}{metric.label}</p>
+                                          <p className={`mt-0.5 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>{metric.pointCount} ponto(s) comparável(is)</p>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                          <p className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{metric.evolutionDisplay}</p>
+                                          <p className={`mt-0.5 text-[10px] ${metric.trend === 'favorable' ? 'text-emerald-600' : metric.trend === 'attention' ? 'text-rose-600' : metric.trend === 'stable' ? (isPanelDark ? 'text-slate-400' : 'text-slate-500') : (isPanelDark ? 'text-sky-300' : 'text-sky-600')}`}>{metric.trendLabel}</p>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </div>
+
+
               {isKidsProfile ? (
                 <ComparisonBarChart 
                   data={comparisonChartData} 
-                  title={`Comparativo de Domínios (%): ${formatReportDateLabel(comparisonDate1) || 'Base'} vs ${formatReportDateLabel(comparisonDate2) || 'Atual'}`} 
+                  title={`Comparativo complementar por domínio (%): ${formatReportDateLabel(comparisonDate1) || 'Base'} vs ${formatReportDateLabel(comparisonDate2) || 'Atual'}`}
                   maxScore={100}
                   emptyMessage={comparisonDate1 && comparisonDate2
                     ? 'Não há medições comparáveis para as datas e o período selecionados.'
@@ -11088,11 +11205,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ) : (
                 <ComparisonBarChart
                   data={adultReportDomainComparisonData}
-                  title={`Relatório por Domínio (${selectedChartProtocol?.title || 'Protocolo'}) - ${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}`}
+                  title={`Comparativo complementar por domínio (${selectedChartProtocol?.title || 'Protocolo'}) - ${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}`}
                   maxScore={100}
                 />
               )}
-
 
               <div className="mt-8">
                 <div className="flex items-center justify-between mb-4">
@@ -11217,14 +11333,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <button
                   className={`px-6 py-3 font-semibold rounded-xl text-xs transition-all ${isPanelDark ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   onClick={isKidsProfile ? () => void handlePDFAction('view') : () => setActiveTab('history')}
-                  disabled={isKidsProfile && isGeneratingProgressPdf}
+                  disabled={isKidsProfile && (isGeneratingProgressPdf || clinicalReportDataPending)}
                 >
                   {isKidsProfile ? 'Visualizar PDF' : 'Ver Histórico'}
                 </button>
                 <button
                   id="report-download-btn"
                   onClick={isKidsProfile ? () => void handlePDFAction('download') : () => void handleGenerateAdultEvolutionReport()}
-                  disabled={isKidsProfile ? isGeneratingProgressPdf : isGeneratingAdultReport}
+                  disabled={isKidsProfile ? (isGeneratingProgressPdf || clinicalReportDataPending) : (isGeneratingAdultReport || clinicalReportDataPending)}
                   className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Download size={16} /> {isKidsProfile ? (isGeneratingProgressPdf ? 'Gerando PDF...' : 'Gerar Relatório Final') : (isGeneratingAdultReport ? 'Gerando...' : 'Gerar PDF Adulto')}

@@ -79881,7 +79881,7 @@ async function startServer() {
           .limit(20),
         supabase
           .from('aba_programs')
-          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
+          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,domain_id,domain_name,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .limit(300),
@@ -80140,6 +80140,8 @@ async function startServer() {
             status: program.status,
             therapeuticPlanId: program.therapeutic_plan_id || null,
             therapeuticObjectiveId: program.therapeutic_objective_id || null,
+            domainId: program.domain_id || null,
+            domainName: program.domain_name || null,
             measurementType: program.measurement_type || null,
             masteryCriteria: program.mastery_criteria || null
           })),
