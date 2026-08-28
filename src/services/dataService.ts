@@ -3034,6 +3034,22 @@ export const dataService = {
     }
   },
 
+  async upgradePatientEvolutionTimelinePlus3(patientId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/upgrade-plus3`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error upgrading patient evolution timeline:', error);
+      return { success: false, error: 'Não foi possível ativar o adicional da timeline.' };
+    }
+  },
+
   async archivePatientEvolutionTimelineItem(patientId: string, itemId: string) {
     try {
       const safePatientId = encodeURIComponent(String(patientId || '').trim());

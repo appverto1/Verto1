@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays,
   CheckCircle2,
+  CreditCard,
   Clipboard,
   ExternalLink,
   FileText,
@@ -45,11 +46,21 @@ type EvolutionTimelineItem = {
   grants?: EvolutionGrant[];
 };
 
+type TimelineEntitlement = {
+  tier: 'STANDARD' | 'PLUS3';
+  billingStatus?: string;
+  monthlyLimit: 1 | 3;
+  unitAmountCents: number;
+  currency?: string;
+  canUseThreeItems: boolean;
+};
+
 type Props = {
   patientId: string;
   dark?: boolean;
   canCreate?: boolean;
   canShare?: boolean;
+  canManageBilling?: boolean;
 };
 
 const currentMonthKey = () => new Date().toISOString().slice(0, 7);
@@ -110,8 +121,16 @@ const copyText = async (value: string) => {
   }
 };
 
-export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCreate = false, canShare = false }: Props) => {
+export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCreate = false, canShare = false, canManageBilling = false }: Props) => {
   const [items, setItems] = useState<EvolutionTimelineItem[]>([]);
+  const [entitlement, setEntitlement] = useState<TimelineEntitlement>({
+    tier: 'STANDARD',
+    billingStatus: 'INCLUDED',
+    monthlyLimit: 1,
+    unitAmountCents: 200,
+    currency: 'BRL',
+    canUseThreeItems: false,
+  });
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey());
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -136,10 +155,20 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
       return;
     }
     setItems(Array.isArray(result?.data) ? result.data : []);
+    const nextEntitlement = result?.entitlement;
+    setEntitlement({
+      tier: nextEntitlement?.canUseThreeItems ? 'PLUS3' : 'STANDARD',
+      billingStatus: String(nextEntitlement?.billingStatus || (nextEntitlement?.canUseThreeItems ? 'ACTIVE' : 'INCLUDED')),
+      monthlyLimit: nextEntitlement?.canUseThreeItems ? 3 : 1,
+      unitAmountCents: Number(nextEntitlement?.unitAmountCents || 200),
+      currency: String(nextEntitlement?.currency || 'BRL'),
+      canUseThreeItems: nextEntitlement?.canUseThreeItems === true,
+    });
   };
 
   useEffect(() => {
     setItems([]);
+    setEntitlement({ tier: 'STANDARD', billingStatus: 'INCLUDED', monthlyLimit: 1, unitAmountCents: 200, currency: 'BRL', canUseThreeItems: false });
     setSelectedMonth(currentMonthKey());
     setSubject('');
     setContent('');
@@ -190,8 +219,10 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
       setError('Escreva o conteúdo ou anexe um documento.');
       return;
     }
-    if (selectedItems.length >= 3) {
-      setError('Este mês já possui três registros na timeline.');
+    if (selectedItems.length >= entitlement.monthlyLimit) {
+      setError(entitlement.monthlyLimit === 1
+        ? 'O limite incluído é de um registro por paciente/mês. Ative até três por R$ 2,00 por paciente/mês.'
+        : 'Este mês já possui três registros na timeline.');
       return;
     }
 
@@ -225,6 +256,16 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
       });
       if (!result?.success) throw new Error(result?.error || 'Não foi possível salvar o registro.');
       setItems(Array.isArray(result?.timeline) ? result.timeline : items);
+      if (result?.entitlement) {
+        setEntitlement({
+          tier: result.entitlement?.canUseThreeItems ? 'PLUS3' : 'STANDARD',
+          billingStatus: String(result.entitlement?.billingStatus || (result.entitlement?.canUseThreeItems ? 'ACTIVE' : 'INCLUDED')),
+          monthlyLimit: result.entitlement?.canUseThreeItems ? 3 : 1,
+          unitAmountCents: Number(result.entitlement?.unitAmountCents || 200),
+          currency: String(result.entitlement?.currency || 'BRL'),
+          canUseThreeItems: result.entitlement?.canUseThreeItems === true,
+        });
+      }
       setSubject('');
       setContent('');
       setFile(null);
@@ -232,6 +273,35 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
       if (!Array.isArray(result?.timeline)) await load();
     } catch (saveError: any) {
       setError(saveError?.message || 'Não foi possível salvar o registro.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const upgradeToPlus3 = async () => {
+    resetMessages();
+    if (!canManageBilling) {
+      setError('A ativação do adicional deve ser feita por um perfil com permissão financeira.');
+      return;
+    }
+    if (!window.confirm('Ativar até 3 registros por paciente/mês por R$ 2,00 adicionais ao mês para este paciente?')) return;
+    setSaving(true);
+    try {
+      const result = await dataService.upgradePatientEvolutionTimelinePlus3(patientId);
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível ativar o adicional.');
+      const nextEntitlement = result?.entitlement;
+      setEntitlement({
+        tier: nextEntitlement?.canUseThreeItems ? 'PLUS3' : 'STANDARD',
+        billingStatus: String(nextEntitlement?.billingStatus || (nextEntitlement?.canUseThreeItems ? 'ACTIVE' : 'INCLUDED')),
+        monthlyLimit: nextEntitlement?.canUseThreeItems ? 3 : 1,
+        unitAmountCents: Number(nextEntitlement?.unitAmountCents || 200),
+        currency: String(nextEntitlement?.currency || 'BRL'),
+        canUseThreeItems: nextEntitlement?.canUseThreeItems === true,
+      });
+      setSuccess('Até 3 registros por mês foram ativados para este paciente.');
+      await load();
+    } catch (upgradeError: any) {
+      setError(upgradeError?.message || 'Não foi possível ativar o adicional da timeline.');
     } finally {
       setSaving(false);
     }
@@ -336,7 +406,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
             </div>
             <div>
               <h3 className={`text-base font-semibold ${textClass}`}>Timeline de evolução compartilhável</h3>
-              <p className={`mt-0.5 text-xs ${subtleClass}`}>Até três registros independentes por mês, cada um com seus próprios destinatários.</p>
+              <p className={`mt-0.5 text-xs ${subtleClass}`}>Resumos mensais com destinatários independentes e acesso externo somente leitura.</p>
             </div>
           </div>
         </div>
@@ -352,15 +422,28 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
             const count = countByMonth.get(month) || 0;
             return (
               <React.Fragment key={month}>
-                {index > 0 && <div className={`mt-[18px] h-px w-5 ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} aria-hidden="true" />}
+                {index > 0 && <div className={`mt-[24px] h-px w-5 ${dark ? 'bg-slate-700' : 'bg-slate-200'}`} aria-hidden="true" />}
                 <button
                   type="button"
                   onClick={() => { setSelectedMonth(month); resetMessages(); }}
                   className="group flex min-w-[74px] flex-col items-center"
                   aria-current={selected ? 'date' : undefined}
                 >
-                  <span className={`flex h-9 w-9 items-center justify-center rounded-full border text-[10px] font-semibold transition ${selected ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-md shadow-violet-500/20' : dark ? 'border-slate-600 bg-slate-800 text-slate-300 group-hover:border-violet-400' : 'border-slate-200 bg-white text-slate-500 group-hover:border-violet-300'}`}>{count}/3</span>
-                  <span className={`mt-1.5 text-[10px] font-medium uppercase ${selected ? dark ? 'text-violet-300' : 'text-violet-700' : subtleClass}`}>{compactMonthLabel(month)}</span>
+                  <span className={`flex h-12 w-12 flex-col items-center justify-center rounded-full border text-[9px] font-semibold uppercase leading-tight transition ${selected ? 'border-[#7a32fc] bg-[#7a32fc] text-white shadow-md shadow-violet-500/20' : dark ? 'border-slate-600 bg-slate-800 text-slate-300 group-hover:border-violet-400' : 'border-slate-200 bg-white text-slate-600 group-hover:border-violet-300'}`}>
+                    <span>{compactMonthLabel(month).split(' ')[0]}</span>
+                    <span className="text-[8px] opacity-80">{compactMonthLabel(month).split(' ')[1]}</span>
+                  </span>
+                  {canCreate ? (
+                    <span className="mt-1.5 flex items-center justify-center gap-1" aria-label={`${count} de ${entitlement.monthlyLimit} registros usados`}>
+                      {Array.from({ length: entitlement.monthlyLimit }).map((_, dotIndex) => (
+                        <span key={`${month}-capacity-${dotIndex}`} className={`h-1.5 w-1.5 rounded-full ${dotIndex < count ? selected ? 'bg-[#7a32fc]' : dark ? 'bg-violet-300' : 'bg-violet-500' : dark ? 'bg-slate-700' : 'bg-slate-200'}`} />
+                      ))}
+                    </span>
+                  ) : count > 0 ? (
+                    <span className="mt-1.5 flex items-center justify-center gap-1" aria-label={`${count} registros neste mês`}>
+                      {Array.from({ length: Math.min(count, 3) }).map((_, dotIndex) => <span key={`${month}-visible-${dotIndex}`} className={`h-1.5 w-1.5 rounded-full ${dark ? 'bg-violet-300' : 'bg-violet-500'}`} />)}
+                    </span>
+                  ) : null}
                 </button>
               </React.Fragment>
             );
@@ -371,15 +454,35 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
       <div className="mt-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className={`text-sm font-semibold capitalize ${textClass}`}>{monthLabel(selectedMonth)}</p>
-          <p className={`text-xs ${subtleClass}`}>{selectedItems.length} de 3 registros utilizados neste mês.</p>
+          <p className={`text-xs ${subtleClass}`}>{selectedItems.length} de {entitlement.monthlyLimit} registro{entitlement.monthlyLimit === 1 ? '' : 's'} utilizado{selectedItems.length === 1 ? '' : 's'} neste mês.</p>
         </div>
         <input type="month" value={selectedMonth} onChange={(event) => setSelectedMonth(event.target.value)} className={`min-h-10 rounded-xl border px-3 text-xs outline-none focus:border-[#7a32fc] ${inputClass}`} aria-label="Selecionar mês da timeline" />
       </div>
 
+      {canCreate && (
+        <div className={`mt-4 flex flex-col gap-3 rounded-2xl border px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${dark ? 'border-violet-500/20 bg-violet-500/5' : 'border-violet-100 bg-violet-50/60'}`} data-testid="evolution-timeline-capacity">
+          <div className="flex items-start gap-2.5">
+            <CreditCard size={16} className="mt-0.5 shrink-0 text-[#7a32fc]" />
+            <div>
+              <p className={`text-xs font-semibold ${textClass}`}>{entitlement.canUseThreeItems ? 'Até 3 registros por paciente/mês' : '1 registro por paciente/mês incluído'}</p>
+              <p className={`mt-1 text-[11px] leading-5 ${subtleClass}`}>{entitlement.canUseThreeItems ? 'Adicional ativo para este paciente.' : 'Para usar até 3 registros no mesmo mês, o adicional é de R$ 2,00 por paciente/mês.'}</p>
+            </div>
+          </div>
+          {!entitlement.canUseThreeItems && canManageBilling && (
+            <button type="button" onClick={() => void upgradeToPlus3()} disabled={saving} className="inline-flex min-h-9 shrink-0 items-center justify-center rounded-xl bg-[#7a32fc] px-3 text-[11px] font-semibold text-white disabled:opacity-60">
+              {saving ? 'Ativando...' : 'Ativar até 3 · +R$ 2/mês'}
+            </button>
+          )}
+          {!entitlement.canUseThreeItems && !canManageBilling && (
+            <span className={`text-[10px] ${subtleClass}`}>Ativação disponível ao responsável financeiro.</span>
+          )}
+        </div>
+      )}
+
       {error && <div className={`mt-4 rounded-xl border px-4 py-3 text-xs font-medium ${dark ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : 'border-rose-100 bg-rose-50 text-rose-700'}`}>{error}</div>}
       {success && <div className={`mt-4 rounded-xl border px-4 py-3 text-xs font-medium ${dark ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200' : 'border-emerald-100 bg-emerald-50 text-emerald-700'}`}>{success}</div>}
 
-      {canCreate && selectedItems.length < 3 && (
+      {canCreate && selectedItems.length < entitlement.monthlyLimit && (
         <div className={`mt-5 rounded-2xl border p-4 ${dark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-100 bg-slate-50/70'}`}>
           <div className="flex items-center gap-2">
             <Plus size={15} className="text-[#7a32fc]" />
@@ -520,7 +623,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
 
       <div className={`mt-5 flex items-start gap-2 rounded-xl border px-3 py-3 text-[11px] leading-5 ${dark ? 'border-sky-500/20 bg-sky-500/5 text-sky-200' : 'border-sky-100 bg-sky-50 text-sky-800'}`}>
         <Link2 size={14} className="mt-0.5 shrink-0" />
-        <span>Compartilhamentos são independentes por registro. Três documentos no mesmo mês podem ter três grupos de destinatários diferentes, e um único registro pode ser liberado para vários e-mails.</span>
+        <span>Compartilhamentos são independentes por registro. Um mesmo mês pode ter destinatários diferentes por item, e um único registro pode ser liberado para vários e-mails. O profissional externo vê somente os meses e registros concedidos ao e-mail dele.</span>
       </div>
     </section>
   );

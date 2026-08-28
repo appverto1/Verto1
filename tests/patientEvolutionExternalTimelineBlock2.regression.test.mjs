@@ -14,11 +14,11 @@ assert.match(detail, /canCreate=\{hasCapability\('reports\.generate'\)\}/);
 assert.match(detail, /canShare=\{hasCapability\('reports\.generate'\) && hasCapability\('documents\.patient_share'\)\}/);
 
 assert.match(panel, /Timeline de evolução compartilhável/);
-assert.match(panel, /Até três registros independentes por mês/);
+assert.match(panel, /Resumos mensais com destinatários independentes e acesso externo somente leitura/);
 assert.match(panel, /Assunto \/ tema/);
 assert.match(panel, />Conteúdo</);
 assert.match(panel, /Documento opcional/);
-assert.match(panel, /selectedItems\.length >= 3/);
+assert.match(panel, /selectedItems\.length >= entitlement\.monthlyLimit/);
 assert.match(panel, /authorizationConfirmed: true/);
 assert.match(panel, /Declaro que existe autorização válida do paciente ou responsável legal/);
 assert.match(panel, /Copiar link/);
@@ -32,7 +32,7 @@ assert.match(data, /grantPatientEvolutionTimelineAccess/);
 assert.match(data, /revokePatientEvolutionTimelineAccess/);
 assert.match(data, /resendPatientEvolutionTimelineAccess/);
 
-assert.match(server, /create_patient_evolution_timeline_item_v1/);
+assert.match(server, /create_patient_evolution_timeline_item_v2/);
 assert.match(server, /upsert_patient_evolution_share_grant_v1/);
 assert.match(server, /revoke_patient_evolution_share_grant_v1/);
 assert.match(server, /requireClinicCapability\('reports\.generate'\)/);
