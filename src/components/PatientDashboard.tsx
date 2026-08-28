@@ -2806,6 +2806,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           {visiblePatientTasks.map((task: any) => {
             const scheduledAt = parseScheduledTaskDate(task?.scheduledAt || task?.scheduled_at);
             const overdue = Boolean(scheduledAt && scheduledAt.getTime() < currentTime.getTime() - 60_000);
+            const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+            const clinicalPath = [
+              taskData?.planName || taskData?.therapeuticPlanName,
+              taskData?.domainName,
+              taskData?.programName,
+              taskData?.targetName || taskData?.clinicalTargetName,
+            ].map((value: any) => String(value || '').trim()).filter(Boolean);
             return (
               <button
                 key={String(task?.id || task?.assignedTaskId || task?.title)}
@@ -2817,6 +2824,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-black text-slate-900">{task?.title || task?.task_data?.title || 'Tarefa'}</p>
+                    {clinicalPath.length > 0 && <p className="mt-1 line-clamp-2 text-[10px] font-bold text-violet-600">{clinicalPath.join(' → ')}</p>}
                     <p className="mt-1 text-xs font-medium text-slate-500">{scheduledAt ? scheduledAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Disponível agora'}</p>
                   </div>
                   {overdue && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black uppercase text-amber-700">Atrasada</span>}

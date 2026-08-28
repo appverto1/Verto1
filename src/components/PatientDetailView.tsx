@@ -491,6 +491,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isDailyReminder, setIsDailyReminder] = useState(false);
   const [linkedTask, setLinkedTask] = useState("");
   const [linkedInterventionProtocolId, setLinkedInterventionProtocolId] = useState("");
+  const [pendingAdultClinicalTaskContext, setPendingAdultClinicalTaskContext] = useState<any>(null);
   const [showConfirmation, setShowConfirmation] = useState(false); 
   const [editingTask, setEditingTask] = useState<any>(null); 
   const [isPlanFilterOpen, setIsPlanFilterOpen] = useState(false);
@@ -3845,6 +3846,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const selectedPEIProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedPEIProtocolId));
   const selectedPEIDomain = selectedPEIProtocol?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId));
 
+  const handleAssignAdultClinicalActivity = (context: any) => {
+    if (isKidsProfile) return;
+    const planId = String(context?.therapeuticPlanId || '').trim();
+    const programId = String(context?.therapeuticProgramId || '').trim();
+    const targetId = String(context?.clinicalTargetId || '').trim();
+    if (!planId || !programId || !targetId) {
+      alert('Este alvo ainda não possui vínculo clínico completo para envio ao portal.');
+      return;
+    }
+    setPendingAdultClinicalTaskContext(context);
+    setPlanType('intervention');
+    setIsCreatingNewTask(true);
+    setSelectedProtocolId('');
+    setSelectedDomainId('');
+    setSelectedSkillId('');
+    setNewTaskName(String(context?.targetName || context?.programName || 'Atividade clínica').trim());
+    setNewTaskObjective(String(context?.targetDescription || '').trim());
+    setNewTaskExample('');
+    setNewTaskCriteria('');
+    setNewTaskComment('');
+    setFinalTaskTitle(String(context?.targetName || context?.programName || 'Atividade clínica').trim());
+    setFinalTaskSubtitle(String(context?.targetDescription || '').trim());
+    window.setTimeout(() => document.getElementById('new-schedule-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+
   useEffect(() => { 
     if (!isCreatingNewTask && selectedSkillId && selectedDomain) { 
       const skill = selectedDomain.skills.find((s: any) => String(s.id) === String(selectedSkillId)); 
@@ -5586,7 +5612,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const selectedSkillMasteryTarget = Number(
         selectedSkill?.meta_sucessos ?? selectedSkill?.metaSucessos ?? selectedSkill?.masteryTarget ?? selectedSkill?.mastery_target
       );
-      const resolvedTaskMaxScore = isCreatingNewTask
+      const resolvedTaskMaxScore = (isCreatingNewTask || pendingAdultClinicalTaskContext)
         ? Math.max(1, Number(newTaskMaxScore || 4) || 4)
         : Math.max(1, Number(selectedSkillMaxScore) || 4);
       const taskPayload = { 
@@ -5619,7 +5645,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         isDailyReminder: planType === 'intervention' ? isDailyReminder : false,
         is_daily_reminder: planType === 'intervention' ? isDailyReminder : false,
         linkedTask: planType === 'intervention' ? linkedTask : undefined,
-        linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId : undefined
+        linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId : undefined,
+        therapeuticPlanId: pendingAdultClinicalTaskContext?.therapeuticPlanId || null,
+        therapeuticObjectiveId: pendingAdultClinicalTaskContext?.therapeuticObjectiveId || null,
+        therapeuticProgramId: pendingAdultClinicalTaskContext?.therapeuticProgramId || null,
+        clinicalTargetId: pendingAdultClinicalTaskContext?.clinicalTargetId || null,
+        therapeuticPlanName: pendingAdultClinicalTaskContext?.planLabel || null,
+        clinicalDomainName: pendingAdultClinicalTaskContext?.domainName || null,
+        clinicalProgramName: pendingAdultClinicalTaskContext?.programName || null,
+        clinicalTargetName: pendingAdultClinicalTaskContext?.targetName || null
       }; 
       if (planType === 'task' && linkedInterventionProtocolId) {
         const updatedPatient = {
@@ -5641,7 +5675,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         };
         onUpdatePatient(updatedPatient);
       }
-      if (isCreatingNewTask) { 
+      if (isCreatingNewTask && !pendingAdultClinicalTaskContext) {
         if (!newTaskName) { alert("Digite o nome da tarefa."); return; } 
         let finalSkill = {
           id: Date.now(),
@@ -5694,7 +5728,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }; 
           safeSetProtocols?.([...protocols, newProtocol]); 
         } 
-      } else { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } } 
+      } else if (!pendingAdultClinicalTaskContext) { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } }
       if (isKidsProfile) {
         const saved = (await onAddTask(taskPayload)) !== false;
         if (!saved) return;
@@ -5716,8 +5750,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             protocolId: taskPayload.protocolId || undefined,
             protocolTitle: taskPayload.protocolTitle || undefined,
             protocolCategory: selectedProtocolCategory,
-            domainId: taskPayload.domainId || undefined,
-            domainName: taskPayload.domainName || undefined,
+            domainId: pendingAdultClinicalTaskContext?.domainId || taskPayload.domainId || undefined,
+            domainName: pendingAdultClinicalTaskContext?.domainName || taskPayload.domainName || undefined,
             skillId: selectedSkill?.id || undefined,
             skillName: selectedSkill?.name || taskPayload.title || undefined,
             skillCode: taskPayload.code || undefined,
@@ -5731,8 +5765,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             maxScore: resolvedTaskMaxScore,
             max_score: resolvedTaskMaxScore,
             meta_sucessos: taskPayload.meta_sucessos,
+            therapeuticPlanId: pendingAdultClinicalTaskContext?.therapeuticPlanId || undefined,
+            therapeuticObjectiveId: pendingAdultClinicalTaskContext?.therapeuticObjectiveId || undefined,
+            therapeuticProgramId: pendingAdultClinicalTaskContext?.therapeuticProgramId || undefined,
+            programId: pendingAdultClinicalTaskContext?.therapeuticProgramId || undefined,
+            clinicalTargetId: pendingAdultClinicalTaskContext?.clinicalTargetId || undefined,
+            targetId: pendingAdultClinicalTaskContext?.clinicalTargetId || undefined,
+            planName: pendingAdultClinicalTaskContext?.planLabel || undefined,
+            planMode: pendingAdultClinicalTaskContext?.planMode || undefined,
+            planSpecialty: pendingAdultClinicalTaskContext?.planSpecialty || undefined,
+            programName: pendingAdultClinicalTaskContext?.programName || undefined,
+            targetName: pendingAdultClinicalTaskContext?.targetName || undefined,
+            clinicalLinkVersion: pendingAdultClinicalTaskContext ? 1 : undefined,
             noRealtimeScoring: true
-          }
+          },
+          therapeutic_plan_id: pendingAdultClinicalTaskContext?.therapeuticPlanId || undefined,
+          therapeutic_objective_id: pendingAdultClinicalTaskContext?.therapeuticObjectiveId || undefined,
+          therapeutic_program_id: pendingAdultClinicalTaskContext?.therapeuticProgramId || undefined,
+          clinical_target_id: pendingAdultClinicalTaskContext?.clinicalTargetId || undefined
         };
         const saved = await dataService.addAssignedTask(assignedPayload);
         if (!saved?.success || !saved?.data) {
@@ -5769,7 +5819,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setAssignedTasks((prev) => [saved.data, ...(prev || [])]);
       }
     } 
-    setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
+    setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId(''); setPendingAdultClinicalTaskContext(null);
   }; 
 
   const resolveAssignedTaskEvaluationContext = (task: any) => {
@@ -5816,7 +5866,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { protocol: matchedProtocol, domain: matchedDomain, skill: matchedSkill };
   };
 
-  const isAssignedTaskReviewable = (task: any) => Boolean(resolveAssignedTaskEvaluationContext(task));
+  const isAssignedTaskReviewable = (task: any) => {
+    const taskData = getAssignedTaskData(task);
+    const hasCanonicalClinicalLink = Boolean(
+      task?.therapeutic_plan_id ||
+      taskData?.therapeuticPlanId ||
+      taskData?.therapeutic_plan_id
+    );
+    return hasCanonicalClinicalLink || Boolean(resolveAssignedTaskEvaluationContext(task));
+  };
 
   const resolveAssignedTaskMaxScore = (task: any) => {
     const taskData = getAssignedTaskData(task);
@@ -5838,9 +5896,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const domain = context?.domain || {};
     const protocol = context?.protocol || {};
     const clean = (value: any) => normalizeNoteText(String(value || ''));
+    const clinicalSnapshot = task?.clinical_link_snapshot && typeof task.clinical_link_snapshot === 'object'
+      ? task.clinical_link_snapshot
+      : {};
     return {
+      planName: clean(clinicalSnapshot?.planLabel || taskData?.planName || taskData?.therapeuticPlanName),
+      programName: clean(clinicalSnapshot?.programName || taskData?.programName),
+      targetName: clean(clinicalSnapshot?.targetName || taskData?.targetName || taskData?.clinicalTargetName),
       protocolTitle: clean(taskData?.protocolTitle || taskData?.protocol_name || protocol?.title || protocol?.name),
-      domainName: clean(taskData?.domainName || taskData?.domain_name || domain?.name || skill?.sourceDomain || skill?.source_domain),
+      domainName: clean(clinicalSnapshot?.domainName || taskData?.domainName || taskData?.domain_name || domain?.name || skill?.sourceDomain || skill?.source_domain),
       code: clean(taskData?.skillCode || taskData?.code || skill?.code),
       objective: clean(taskData?.objective || skill?.objective || taskData?.description),
       question: clean(taskData?.question || skill?.question),
@@ -5854,8 +5918,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const renderAssignedReviewCriteriaPanel = (task: any, context?: any) => {
     const details = resolveAssignedReviewDetails(task, context);
     const meta = [
-      details.protocolTitle,
+      details.planName,
       details.domainName,
+      details.programName,
+      details.targetName,
+      !details.planName ? details.protocolTitle : '',
       details.code ? `Código ${details.code}` : '',
       details.sourcePage ? `p. ${details.sourcePage}` : ''
     ].filter(Boolean).join(' • ');
@@ -5977,12 +6044,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       text: [
         'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
         `Tarefa: ${String(reviewedTask?.task_data?.title || reviewedTask?.title || 'Tarefa adulta')}`,
+        reviewedTask?.clinical_link_snapshot?.planLabel ? `Plano: ${reviewedTask.clinical_link_snapshot.planLabel}` : '',
+        reviewedTask?.clinical_link_snapshot?.domainName ? `Domínio: ${reviewedTask.clinical_link_snapshot.domainName}` : '',
+        reviewedTask?.clinical_link_snapshot?.programName ? `Programa: ${reviewedTask.clinical_link_snapshot.programName}` : '',
+        reviewedTask?.clinical_link_snapshot?.targetName ? `Alvo clínico: ${reviewedTask.clinical_link_snapshot.targetName}` : '',
         `Pontuação profissional: ${numericScore} / ${dynamicMaxScore}`,
         hasCanonicalAdultEffortSemantics(reviewedTask, reviewedTask?.task_data)
           ? `Esforço percebido após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`
           : `Valor histórico de esforço (semântica anterior não padronizada): ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
         draft.note ? `Anotação técnica: ${draft.note}` : 'Anotação técnica: Sem anotação técnica registrada.'
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
       content: '',
       created_at: reviewedTask?.reviewed_at || new Date().toISOString(),
       visibility: 'private',
@@ -6033,6 +6104,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const isFormValid = () => { 
     if (planType === 'task' || planType === 'intervention') { 
+      if (pendingAdultClinicalTaskContext) return newTaskName && scheduleDate && scheduleTime;
       if (isCreatingNewTask) return newTaskName && scheduleDate && scheduleTime; 
       return selectedSkillId && scheduleDate && scheduleTime; 
     } 
@@ -11151,7 +11223,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <div>
                     <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Planos terapêuticos e evolução</h4>
                     <p className={`mt-1 max-w-3xl text-xs leading-relaxed ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      PTS e planos individuais são apresentados por domínio, programa e métrica clínica. Unidades diferentes permanecem separadas, sem criar média ou score artificial.
+                      PTS e planos individuais são apresentados por domínio, programa, métrica clínica e atividades vinculadas. Revisões de tarefa permanecem como evidência contextual e não são convertidas em score clínico artificial.
                     </p>
                   </div>
                   {(clinicalReportQuery.isLoading || clinicalReportQuery.isRefreshing) && (
@@ -11179,7 +11251,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           {planSection.planKind === 'PTS' ? 'PTS' : 'Plano individual'}
                         </span>
                         <h5 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>{planSection.planLabel}</h5>
-                        <span className={`text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>{planSection.observationCount} registro(s) no período</span>
+                        <span className={`text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>{planSection.observationCount} medida(s) · {planSection.activityEvidenceCount || 0} atividade(s) vinculada(s)</span>
                       </div>
 
                       <div className="mt-4 space-y-4">
@@ -11203,6 +11275,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         </div>
                                       </div>
                                     ))}
+                                    {(program.activities || []).length > 0 && (
+                                      <div className={`mt-3 border-t pt-3 ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                                        <p className={`text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Atividades vinculadas · evidência contextual</p>
+                                        <div className="mt-2 space-y-2">
+                                          {(program.activities || []).map((activity) => (
+                                            <div key={activity.key} className={`rounded-lg px-3 py-2 ${isPanelDark ? 'bg-slate-900/55' : 'bg-white'}`}>
+                                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <p className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>{activity.title}</p>
+                                                {activity.professionalReviewDisplay && <span className={`text-[10px] ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Revisão {activity.professionalReviewDisplay}</span>}
+                                              </div>
+                                              {activity.targetLabel && <p className={`mt-1 text-[10px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Alvo: {activity.targetLabel}</p>}
+                                              {activity.patientEffortDisplay && <p className={`mt-1 text-[10px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Esforço informado: {activity.patientEffortDisplay}</p>}
+                                              {activity.professionalReviewNote && <p className={`mt-1 text-[10px] leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{activity.professionalReviewNote}</p>}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
                                 </article>
                               ))}
@@ -11832,6 +11922,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     clinicTimeZone={resolvedClinicContext?.clinicTimeZone || resolvedClinicContext?.clinic_timezone || clinicContext?.clinicTimeZone || clinicContext?.clinic_timezone || null}
                     isDark={isPanelDark}
+                    onAssignActivity={handleAssignAdultClinicalActivity}
                   />
                 </div>
                 <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -11842,15 +11933,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}>
                     <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
                     <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Intervenção</button> 
-                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button> 
+                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); setPendingAdultClinicalTaskContext(null); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button>
                   </div> 
                   <div className="space-y-4"> 
                     {(planType === 'task' || planType === 'intervention') ? ( 
                       <React.Fragment> 
                         <div className="flex items-center justify-between mb-2"> 
                           <span className={`text-xs font-semibold uppercase tracking-wider ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Modo</span> 
-                          <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
-                        </div> 
+                          <button onClick={() => { if (pendingAdultClinicalTaskContext) { setPendingAdultClinicalTaskContext(null); setIsCreatingNewTask(false); } else { setIsCreatingNewTask(!isCreatingNewTask); } }} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{pendingAdultClinicalTaskContext ? "Desvincular do plano" : isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button>
+                        </div>
+                        {pendingAdultClinicalTaskContext && (
+                          <div className={`rounded-2xl border p-4 ${isPanelDark ? 'border-violet-400/20 bg-violet-500/10' : 'border-violet-200 bg-violet-50/70'}`} data-testid="adult-canonical-clinical-task-context">
+                            <p className={`text-[10px] font-semibold uppercase tracking-wider ${isPanelDark ? 'text-violet-200' : 'text-violet-700'}`}>Vínculo clínico canônico</p>
+                            <p className={`mt-2 text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{pendingAdultClinicalTaskContext.planLabel || 'Plano terapêutico'}</p>
+                            <p className={`mt-1 text-xs leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                              {[pendingAdultClinicalTaskContext.domainName, pendingAdultClinicalTaskContext.programName, pendingAdultClinicalTaskContext.targetName].filter(Boolean).join(' → ')}
+                            </p>
+                            <p className={`mt-2 text-[11px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>A atividade e sua revisão permanecerão vinculadas a este plano, programa e alvo. A revisão da tarefa será evidência contextual, sem virar uma métrica clínica artificial.</p>
+                          </div>
+                        )}
                         {isCreatingNewTask ? ( 
                           <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? (isPanelDark ? 'bg-green-500/10 border-green-400/20' : 'bg-green-50/30 border-green-100') : (isPanelDark ? 'bg-slate-900/70 border-slate-700' : 'bg-[#F4F7FE] border-blue-100')}`}>
                             <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className={`w-full rounded-xl p-3 text-sm outline-none border transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
@@ -11867,7 +11968,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                               </>
                             )}
                             <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Anotações do Profissional</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
-                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? (isPanelDark ? 'border-green-400/20' : 'border-green-100') : (isPanelDark ? 'border-slate-700' : 'border-blue-100')}`}>
+                            <div className={`${pendingAdultClinicalTaskContext ? 'hidden' : ''} pt-2 border-t mt-2 ${planType === 'intervention' ? (isPanelDark ? 'border-green-400/20' : 'border-green-100') : (isPanelDark ? 'border-slate-700' : 'border-blue-100')}`}>
                               <label className={`block text-[10px] font-semibold uppercase mb-2 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Salvar no Protocolo:</label> 
                               <div className="flex gap-2 mb-3"> 
                                 <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? (isPanelDark ? 'bg-slate-800 border-[#7551FF] text-violet-200' : 'bg-white border-[#7551FF] text-[#7551FF]') : (isPanelDark ? 'border-transparent bg-slate-800 text-slate-300' : 'border-transparent bg-slate-100 text-slate-500')}`}>Existente</button> 
@@ -11983,7 +12084,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             </div> 
                           )} 
                         </div> 
-                        {planType === 'task' && !isKidsProfile && (
+                        {planType === 'task' && !isKidsProfile && !pendingAdultClinicalTaskContext && (
                           <div className="mt-4 space-y-4">
                             <div>
                               <label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Vincular Protocolo de Intervenção</label>
@@ -12001,7 +12102,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             </div>
                           </div>
                         )}
-                        {planType === 'intervention' && (
+                        {planType === 'intervention' && !pendingAdultClinicalTaskContext && (
                           <div className="space-y-4">
                             <div>
                               <label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Vincular a Habilidade de Avaliação</label>

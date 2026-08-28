@@ -363,6 +363,11 @@ export const HISTORY_SELECT_COLUMNS = [
   'domain_name',
   'skill_id',
   'skill_name',
+  'therapeutic_plan_id',
+  'therapeutic_objective_id',
+  'therapeutic_program_id',
+  'clinical_target_id',
+  'clinical_link_snapshot',
   'created_at',
   'updated_at',
   'is_active',
@@ -448,6 +453,12 @@ export const ASSIGNED_TASK_SELECT_COLUMNS = [
   'last_history_event_id',
   'last_private_note_id',
   'parent_assigned_task_id',
+  'therapeutic_plan_id',
+  'therapeutic_objective_id',
+  'therapeutic_program_id',
+  'clinical_target_id',
+  'clinical_link_snapshot',
+  'clinical_link_version',
   'created_at',
   'updated_at'
 ];
@@ -894,6 +905,11 @@ const HISTORY_OPTIONAL_COLUMNS = new Set([
   'domain_name',
   'skill_id',
   'skill_name',
+  'therapeutic_plan_id',
+  'therapeutic_objective_id',
+  'therapeutic_program_id',
+  'clinical_target_id',
+  'clinical_link_snapshot',
   'updated_at',
   'is_active',
   'deleted_at'
@@ -957,6 +973,12 @@ const ASSIGNED_TASK_OPTIONAL_COLUMNS = new Set([
   'last_history_event_id',
   'last_private_note_id',
   'parent_assigned_task_id',
+  'therapeutic_plan_id',
+  'therapeutic_objective_id',
+  'therapeutic_program_id',
+  'clinical_target_id',
+  'clinical_link_snapshot',
+  'clinical_link_version',
   'updated_at'
 ]);
 
