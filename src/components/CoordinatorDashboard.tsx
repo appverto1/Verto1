@@ -130,7 +130,11 @@ import {
   onlyDigits,
   parseDocumentForStorage,
 } from "../utils/brMasks";
-import { resolveClinicTimeZone } from "../utils/clinicTimeZone";
+import {
+  formatProfessionalCouncil,
+  formatProfessionalRegistry,
+  isProfessionalRegistryValid,
+} from "../utils/professionalRegistry";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -225,6 +229,8 @@ type NavigationNode = {
   newFeatureKey?: NewFeatureKey;
 };
 
+const COORDINATOR_SIDEBAR_PREFERENCE_KEY = "verto:coordinator-sidebar-expanded";
+
 const SESSION_SPECIALTY_OPTIONS = [
   "ABA",
   "Fonoaudiologia",
@@ -244,6 +250,23 @@ const createWeeklyScheduleSlotId = () =>
   `weekly-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 
+const readSidebarPreference = (key: string) => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(key) === "true";
+  } catch {
+    return false;
+  }
+};
+
+const writeSidebarPreference = (key: string, expanded: boolean) => {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, expanded ? "true" : "false");
+  } catch {
+    // Prefer stable navigation over failing when storage is unavailable.
+  }
+};
 import {
   PATIENT_FINANCIAL_BILLING_MODE_OPTIONS,
   PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
@@ -266,10 +289,8 @@ import {
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
   isPatientVisibleInMainList,
-  patientMatchesNameFilter,
   patientMatchesProfessionalFilter,
   resolvePatientProfessionalIds,
-  sortPatientsAlphabetically,
 } from "../utils/patientList";
 import {
   ABA_INDIVIDUAL_EXPECTED_TUSS_CODE,
@@ -900,7 +921,14 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [isSidebarExpanded, setIsSidebarExpanded] = useState(() => readSidebarPreference(COORDINATOR_SIDEBAR_PREFERENCE_KEY));
+  const toggleSidebarExpanded = useCallback(() => {
+    setIsSidebarExpanded((current) => {
+      const next = !current;
+      writeSidebarPreference(COORDINATOR_SIDEBAR_PREFERENCE_KEY, next);
+      return next;
+    });
+  }, []);
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
     "care-root": true,
     "tiss-root": true,
@@ -926,7 +954,6 @@ export function CoordinatorDashboard({
   const therapistMembersRequestSeqRef = useRef(0);
   const therapistMembersWorkspaceRef = useRef("");
   const [patientTherapistFilter, setPatientTherapistFilter] = useState<string>("all");
-  const [patientNameFilter, setPatientNameFilter] = useState<string>("");
   const [patientQuickFilter, setPatientQuickFilter] = useState<"all" | "birthdaysToday">("all");
   const [patientSchoolFilter, setPatientSchoolFilter] = useState("");
   const [patientSchoolUnitFilter, setPatientSchoolUnitFilter] = useState("");
@@ -1400,7 +1427,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     setPatientSchoolPage(1);
-  }, [patientNameFilter, patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientTherapistFilter]);
+  }, [patientSchoolFilter, patientSchoolUnitFilter, patientSchoolGradeFilter, patientSchoolClassFilter, patientSchoolShiftFilter, patientSchoolConsentFilter, patientSchoolIncludeHistorical, patientTherapistFilter]);
 
   useEffect(() => {
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
@@ -1519,49 +1546,41 @@ export function CoordinatorDashboard({
       }
     }
 
-    if (patientNameFilter.trim()) {
-      filteredPatients = filteredPatients.filter((patient: any) => patientMatchesNameFilter(patient, patientNameFilter));
-    }
-
     if (patientQuickFilter === "birthdaysToday") {
-      filteredPatients = filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient));
+      return filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient));
     }
 
-    return sortPatientsAlphabetically(filteredPatients);
-  }, [isTherapist, patientNameFilter, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows, therapistFilterOptions]);
+    return filteredPatients;
+  }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows, therapistFilterOptions]);
 
   const visiblePatientsWithoutQuickFilter = useMemo(() => {
-    let patientsForRole = roleScopedPatients;
-    if (patientTherapistFilter !== "all" && !isTherapist) {
-      if (patientTherapistFilter === "unassigned") {
-        patientsForRole = roleScopedPatients.filter((patient: any) => resolvePatientProfessionalIds(patient).length === 0);
-      } else {
-        const selectedProfessional = therapistFilterOptions.find(
-          (professional: any) => String(professional?.id || "") === patientTherapistFilter,
-        );
-        const selectedProfessionalIds = Array.from(
-          new Set(
-            [
-              patientTherapistFilter,
-              ...(Array.isArray((selectedProfessional as any)?.matchIds)
-                ? (selectedProfessional as any).matchIds
-                : []),
-            ]
-              .map((id) => String(id || "").trim())
-              .filter(Boolean),
-          ),
-        );
-        patientsForRole = roleScopedPatients.filter((patient: any) =>
-          selectedProfessionalIds.some((professionalId) => patientMatchesProfessionalFilter(patient, professionalId)),
-        );
-      }
+    if (patientTherapistFilter === "all" || isTherapist) return roleScopedPatients;
+    if (patientTherapistFilter === "unassigned") {
+      return roleScopedPatients.filter((patient: any) => {
+        return resolvePatientProfessionalIds(patient).length === 0;
+      });
     }
-    if (patientNameFilter.trim()) {
-      patientsForRole = patientsForRole.filter((patient: any) => patientMatchesNameFilter(patient, patientNameFilter));
-    }
-    return sortPatientsAlphabetically(patientsForRole);
-  }, [isTherapist, patientNameFilter, patientTherapistFilter, roleScopedPatients, therapistFilterOptions]);
-
+    const selectedProfessional = therapistFilterOptions.find(
+      (professional: any) => String(professional?.id || "") === patientTherapistFilter,
+    );
+    const selectedProfessionalIds = Array.from(
+      new Set(
+        [
+          patientTherapistFilter,
+          ...(Array.isArray((selectedProfessional as any)?.matchIds)
+            ? (selectedProfessional as any).matchIds
+            : []),
+        ]
+          .map((id) => String(id || "").trim())
+          .filter(Boolean),
+      ),
+    );
+    return roleScopedPatients.filter((patient: any) => {
+      return selectedProfessionalIds.some((professionalId) =>
+        patientMatchesProfessionalFilter(patient, professionalId),
+      );
+    });
+  }, [isTherapist, patientTherapistFilter, roleScopedPatients, therapistFilterOptions]);
 
   const billingHistory = [
     {
@@ -2086,7 +2105,7 @@ export function CoordinatorDashboard({
   };
   const coordinatorAvatarUrl = user?.profilePicture || user?.profile_picture || null;
   const [therapistCrp, setTherapistCrp] = useState<string>(
-    String(user?.crp || ""),
+    formatProfessionalRegistry(user?.crp || ""),
   );
   const [therapistDocumentType, setTherapistDocumentType] = useState<string>(
     String(user?.professionalProfile?.documentType || user?.professional_profile?.document_type || profileMetadata?.documentType || profileMetadata?.document_type || "CPF").toUpperCase(),
@@ -2134,7 +2153,7 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.clinicLogoUrl || null,
   );
   const [therapistCouncilType, setTherapistCouncilType] = useState<string>(
-    String(user?.professionalProfile?.council || user?.professional_profile?.council || profileMetadata?.council || profileMetadata?.councilType || ""),
+    formatProfessionalCouncil(user?.professionalProfile?.council || user?.professional_profile?.council || profileMetadata?.council || profileMetadata?.councilType || ""),
   );
   const [therapistCouncilState, setTherapistCouncilState] = useState<string>(
     String(user?.professionalProfile?.councilState || user?.professional_profile?.council_state || profileMetadata?.councilState || profileMetadata?.council_state || "").toUpperCase().slice(0, 2),
@@ -2192,10 +2211,6 @@ export function CoordinatorDashboard({
   const [clinicStateUf, setClinicStateUf] = useState<string>(
     String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2),
   );
-  const [clinicTimeZone, setClinicTimeZone] = useState<string>(() => resolveClinicTimeZone({
-    timeZone: user?.clinicTimeZone || user?.clinic_timezone || user?.clinicSettings?.clinicTimeZone || user?.clinicSettings?.timezone,
-    state: user?.clinicSettings?.clinicState || user?.clinicSettings?.state,
-  }));
   const [clinicPostalCode, setClinicPostalCode] = useState<string>(
     maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")),
   );
@@ -2207,7 +2222,7 @@ export function CoordinatorDashboard({
     profile: 0,
     logo: 0,
   });
-  const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
+  const therapistCanRegisterClinicalData = true;
   const isDemoAccount = Boolean(user?.isDemoUser);
   const canManageProtocolLibrary = hasCapability("aba.program.edit");
   const canManageClinicSettings = ["director", "coordinator"].includes(normalizedRole) && hasCapability("clinic.settings.edit");
@@ -2339,16 +2354,7 @@ export function CoordinatorDashboard({
     return Math.round((target.getTime() - today.getTime()) / 86400000);
   };
 
-  const ensureTherapistClinicalProfile = () => {
-    if (therapistCanRegisterClinicalData) return true;
-    const warning =
-      "Complete seu perfil com o CRP para habilitar registros clínicos";
-    alert(warning);
-    showToast(warning, "error");
-    setActiveTab("settings");
-    setTabHistory((prev) => (prev[prev.length - 1] === "settings" ? prev : [...prev, "settings"]));
-    return false;
-  };
+  const ensureTherapistClinicalProfile = () => true;
 
   const readImageAsDataUrl = (file: File, onDone: (result: string) => void) => {
     const reader = new FileReader();
@@ -3150,10 +3156,6 @@ export function CoordinatorDashboard({
     setClinicDistrict(String(user?.clinicSettings?.clinicDistrict || user?.clinicSettings?.district || ""));
     setClinicCity(String(user?.clinicSettings?.clinicCity || user?.clinicSettings?.city || ""));
     setClinicStateUf(String(user?.clinicSettings?.clinicState || user?.clinicSettings?.state || "").toUpperCase().slice(0, 2));
-    setClinicTimeZone(resolveClinicTimeZone({
-      timeZone: user?.clinicTimeZone || user?.clinic_timezone || user?.clinicSettings?.clinicTimeZone || user?.clinicSettings?.timezone,
-      state: user?.clinicSettings?.clinicState || user?.clinicSettings?.state,
-    }));
     setClinicPostalCode(maskCep(String(user?.clinicSettings?.clinicPostalCode || user?.clinicSettings?.postalCode || "")));
     setClinicPatientPhotoPolicy(String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL');
   }, [
@@ -3211,10 +3213,6 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.city,
     user?.clinicSettings?.clinicState,
     user?.clinicSettings?.state,
-    user?.clinicTimeZone,
-    user?.clinic_timezone,
-    user?.clinicSettings?.clinicTimeZone,
-    user?.clinicSettings?.timezone,
     user?.clinicSettings?.clinicPostalCode,
     user?.clinicSettings?.postalCode,
     user?.clinicSettings?.patientPhotoPolicy,
@@ -8502,19 +8500,19 @@ export function CoordinatorDashboard({
 
   const handleSaveClinicSettings = async (saveScope: "professional" | "clinic" = "clinic") => {
     const cleanFullName = therapistFullName.trim();
-    const cleanCrp = therapistCrp.trim();
+    const cleanCrp = formatProfessionalRegistry(therapistCrp, therapistCouncilType);
     const normalizedTherapistDocumentType = ["CPF", "CNPJ", "OTHER"].includes(String(therapistDocumentType || "").toUpperCase())
       ? String(therapistDocumentType || "").toUpperCase()
       : "CPF";
     const cleanProfessionalDocument = normalizedTherapistDocumentType === "OTHER"
-      ? therapistCpf.trim().replace(/[^A-Za-z0-9./-]/g, "").slice(0, 40)
+      ? formatProfessionalRegistry(therapistCpf)
       : onlyDigits(therapistCpf, normalizedTherapistDocumentType === "CNPJ" ? 14 : 11);
     const cleanPhone = onlyDigits(therapistPhone, 11);
     const cleanTherapistEmail = therapistEmail.trim();
     const cleanRoleTitle = therapistRoleTitle.trim();
     const cleanSpecialties = therapistSpecialties.trim();
     const cleanMiniCurriculum = therapistMiniCurriculum.trim();
-    const cleanCouncilType = therapistCouncilType.trim();
+    const cleanCouncilType = formatProfessionalCouncil(therapistCouncilType);
     const cleanCouncilState = therapistCouncilState.trim().toUpperCase().slice(0, 2);
     const cleanCboCode = onlyDigits(therapistCboCode, 12);
     const cleanSpecialtyName = therapistSpecialtyName.trim();
@@ -8533,7 +8531,6 @@ export function CoordinatorDashboard({
     const cleanClinicDistrict = clinicDistrict.trim();
     const cleanClinicCity = clinicCity.trim();
     const cleanClinicState = clinicStateUf.trim().toUpperCase().slice(0, 2);
-    const cleanClinicTimeZone = resolveClinicTimeZone({ timeZone: clinicTimeZone, state: cleanClinicState });
     const cleanClinicPostalCode = onlyDigits(clinicPostalCode, 8);
     const cleanClinicAddress =
       clinicAddress.trim() ||
@@ -8541,16 +8538,14 @@ export function CoordinatorDashboard({
         .filter(Boolean)
         .join(", ");
     const cleanClinicCnesCode = onlyDigits(clinicCnesCode, 12);
-    const isCrpValid =
-      !cleanCrp ||
-      /^[A-Za-z0-9À-ÿ .\/-]{2,80}$/u.test(cleanCrp);
+    const isCrpValid = isProfessionalRegistryValid(cleanCrp);
 
     if (saveScope === "professional" && (!cleanFullName || cleanFullName.length < 3)) {
       showToast("Informe o nome completo para salvar o perfil.", "error");
       return;
     }
     if (saveScope === "professional" && !isCrpValid) {
-      showToast("Registro profissional inválido. Revise o número do conselho.", "error");
+      showToast("Registro profissional inválido. Use até 80 caracteres, sem símbolos de controle.", "error");
       return;
     }
     if (saveScope === "professional" && cleanProfessionalDocument && normalizedTherapistDocumentType !== "OTHER") {
@@ -8605,8 +8600,6 @@ export function CoordinatorDashboard({
       clinicDistrict: cleanClinicDistrict || null,
       clinicCity: cleanClinicCity || null,
       clinicState: cleanClinicState || null,
-      clinicTimeZone: cleanClinicTimeZone,
-      timezone: cleanClinicTimeZone,
       clinicPostalCode: cleanClinicPostalCode || null,
       clinicCnesCode: cleanClinicCnesCode || null,
       patientPhotoPolicy: clinicPatientPhotoPolicy,
@@ -10695,19 +10688,22 @@ export function CoordinatorDashboard({
       <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
         {/* Sidebar */}
         <div
-          className={`${patientSidebarExpanded ? "w-64 -mr-44 shadow-xl shadow-slate-900/5" : "w-20"} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-40`}
-          onMouseEnter={() => setIsSidebarExpanded(true)}
-          onMouseLeave={() => setIsSidebarExpanded(false)}
-          onFocusCapture={() => setIsSidebarExpanded(true)}
-          onBlurCapture={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSidebarExpanded(false);
-          }}
+          className={`${patientSidebarExpanded ? "w-64" : "w-20"} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
         >
           <div
             className={`flex shrink-0 items-center ${patientSidebarExpanded ? "gap-2" : "flex-col justify-center gap-2"} mb-5 px-1 transition-all duration-300`}
           >
             <LogoVerto size={patientSidebarExpanded ? 30 : 38} showText={patientSidebarExpanded} />
             {patientSidebarExpanded && <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Gestão</span>}
+            <button
+              type="button"
+              onClick={toggleSidebarExpanded}
+              className={`${patientSidebarExpanded ? "ml-auto" : ""} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
+              aria-label={patientSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
+              title={patientSidebarExpanded ? "Recolher menu" : "Expandir menu"}
+            >
+              {patientSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+            </button>
           </div>
 
           <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
@@ -10858,13 +10854,6 @@ export function CoordinatorDashboard({
               clinicContext={{
                 userId: user?.id || "",
                 clinicId: user?.activeWorkspaceId || user?.clinicId || "",
-                clinicTimeZone:
-                  clinicTimeZone ||
-                  user?.clinicTimeZone ||
-                  user?.clinic_timezone ||
-                  user?.clinicSettings?.clinicTimeZone ||
-                  user?.clinicSettings?.timezone ||
-                  null,
                 clinicName:
                   user?.clinicSettings?.clinicName ||
                   user?.workspaceName ||
@@ -10985,17 +10974,20 @@ export function CoordinatorDashboard({
     <div className="h-screen overflow-hidden bg-[#F4F7FE] flex">
       {/* Sidebar */}
       <aside
-        className={`${isSidebarExpanded ? 'w-64 -mr-44 shadow-xl shadow-slate-900/5' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-40`}
-        onMouseEnter={() => setIsSidebarExpanded(true)}
-        onMouseLeave={() => setIsSidebarExpanded(false)}
-        onFocusCapture={() => setIsSidebarExpanded(true)}
-        onBlurCapture={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setIsSidebarExpanded(false);
-        }}
+        className={`${isSidebarExpanded ? 'w-64' : 'w-20'} h-screen shrink-0 overflow-hidden bg-white hidden lg:flex flex-col px-4 py-4 border-r border-slate-100 transition-all duration-300 ease-in-out z-20`}
       >
         <div className={`flex shrink-0 items-center ${isSidebarExpanded ? 'gap-2' : 'flex-col justify-center gap-2'} mb-5 px-1 transition-all duration-300`}>
           <LogoVerto size={isSidebarExpanded ? 30 : 38} showText={isSidebarExpanded} />
           {isSidebarExpanded && <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Gestão</span>}
+          <button
+            type="button"
+            onClick={toggleSidebarExpanded}
+            className={`${isSidebarExpanded ? "ml-auto" : ""} rounded-xl border border-slate-100 bg-white p-2 text-slate-400 shadow-sm transition-all hover:bg-violet-50 hover:text-[#7a32fc]`}
+            aria-label={isSidebarExpanded ? "Recolher menu lateral" : "Expandir menu lateral"}
+            title={isSidebarExpanded ? "Recolher menu" : "Expandir menu"}
+          >
+            {isSidebarExpanded ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+          </button>
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
@@ -13141,44 +13133,26 @@ export function CoordinatorDashboard({
                       )}
                     </div>
                   </div>
-                  <div className={`grid w-full gap-3 ${isReceptionist ? 'sm:max-w-[520px]' : 'sm:max-w-[760px] sm:grid-cols-2'}`}>
-                    <div>
+                  {!isReceptionist && (
+                    <div className="w-full sm:w-[360px]">
                       <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
-                        Buscar paciente
+                        Filtrar por profissional
                       </label>
-                      <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                        <input
-                          type="search"
-                          value={patientNameFilter}
-                          onChange={(e) => setPatientNameFilter(e.target.value)}
-                          placeholder="Digite o nome do paciente"
-                          autoComplete="off"
-                          className="w-full rounded-xl border border-slate-100 bg-slate-50 py-3 pl-10 pr-3 text-sm text-slate-700 outline-none transition-colors focus:border-violet-300 focus:bg-white"
-                        />
-                      </div>
+                      <select
+                        className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
+                        value={patientTherapistFilter}
+                        onChange={(e) => setPatientTherapistFilter(e.target.value)}
+                      >
+                        <option value="all">Todos os pacientes</option>
+                        <option value="unassigned">Não atribuídos</option>
+                        {therapistFilterOptions.map((therapist) => (
+                          <option key={`therapist-filter-${therapist.id}`} value={therapist.id}>
+                            {therapist.label}
+                          </option>
+                        ))}
+                      </select>
                     </div>
-                    {!isReceptionist && (
-                      <div>
-                        <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-widest mb-1.5 ml-1">
-                          Filtrar por profissional
-                        </label>
-                        <select
-                          className="w-full bg-slate-50 border border-slate-100 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
-                          value={patientTherapistFilter}
-                          onChange={(e) => setPatientTherapistFilter(e.target.value)}
-                        >
-                          <option value="all">Todos os pacientes</option>
-                          <option value="unassigned">Não atribuídos</option>
-                          {therapistFilterOptions.map((therapist) => (
-                            <option key={`therapist-filter-${therapist.id}`} value={therapist.id}>
-                              {therapist.label}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                  </div>
+                  )}
                   {canUseSchoolPatientFilters && (
                     <>
                       {patientSchoolOptionsLoadError && (
@@ -14178,7 +14152,6 @@ export function CoordinatorDashboard({
                     clinicDistrict,
                     clinicCity,
                     clinicStateUf,
-                    clinicTimeZone,
                     clinicPostalCode,
                     clinicPatientPhotoPolicy,
                     workStart,
@@ -14219,7 +14192,6 @@ export function CoordinatorDashboard({
                     setClinicDistrict,
                     setClinicCity,
                     setClinicStateUf,
-                    setClinicTimeZone,
                     setClinicPostalCode,
                     setClinicPatientPhotoPolicy,
                     setWorkStart,
@@ -14267,7 +14239,7 @@ export function CoordinatorDashboard({
                   <div className="space-y-8">
                     <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
                       <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">
-                        Dados obrigatórios para registros clínicos
+                        Identificação profissional
                       </h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="md:col-span-2">
@@ -14285,20 +14257,15 @@ export function CoordinatorDashboard({
 
                         <div className="md:col-span-2">
                           <label className="block text-xs font-bold text-slate-700 mb-2">
-                            CRP <span className="text-red-500">*</span>
+                            Registro profissional / identificação (opcional)
                           </label>
                           <input
                             type="text"
                             value={therapistCrp}
-                            onChange={(e) => setTherapistCrp(e.target.value)}
-                            placeholder="Ex: 06/123456"
+                            onChange={(e) => setTherapistCrp(formatProfessionalRegistry(e.target.value, therapistCouncilType))}
+                            placeholder="Ex.: 06/123456, 12345-TO ou registro livre"
                             className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                           />
-                          {!therapistCanRegisterClinicalData && (
-                            <p className="text-xs text-amber-700 font-semibold mt-2">
-                              Complete seu perfil com o CRP para habilitar registros clínicos
-                            </p>
-                          )}
                         </div>
 
                         <div>
@@ -14460,8 +14427,8 @@ export function CoordinatorDashboard({
                             <input
                               type="text"
                               value={therapistCrp}
-                              onChange={(e) => setTherapistCrp(e.target.value)}
-                              placeholder="Ex: CRP 06/123456"
+                              onChange={(e) => setTherapistCrp(formatProfessionalRegistry(e.target.value, therapistCouncilType))}
+                              placeholder="Ex.: CRP 06/123456, 12345-TO ou registro livre"
                               className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                             />
                           </div>

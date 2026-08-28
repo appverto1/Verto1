@@ -1963,6 +1963,19 @@ function sanitizePhone(value: unknown): string | null {
   return digits.slice(0, 20);
 }
 
+const PROFESSIONAL_IDENTIFIER_PATTERN = /^[\p{L}\p{M}\p{N} .,/\\_#:+()\-]*$/u;
+
+function isProfessionalIdentifierInputValid(value: unknown, maxLength: number): boolean {
+  if (value == null || String(value).trim() === '') return true;
+  const normalized = sanitizeString(value, maxLength + 1).replace(/\s+/g, ' ').trim();
+  return normalized.length <= maxLength && PROFESSIONAL_IDENTIFIER_PATTERN.test(normalized);
+}
+
+function sanitizeProfessionalIdentifier(value: unknown, maxLength: number): string {
+  const normalized = sanitizeString(value, maxLength).replace(/\s+/g, ' ').trim();
+  return PROFESSIONAL_IDENTIFIER_PATTERN.test(normalized) ? normalized : '';
+}
+
 const BRAZIL_STATE_CODES = new Set([
   "AC",
   "AL",
@@ -4001,16 +4014,15 @@ function sanitizePhoneE164(value: unknown): string | null {
 
 function resolveStoredCrp(input: any): string | null {
   const raw = (
-    sanitizeString(input?.crp, 80) ||
-    sanitizeString(input?.council_number, 80) ||
-    sanitizeString(input?.councilNumber, 80) ||
-    sanitizeString(input?.clinicSettings?.councilNumber, 80) ||
+    input?.crp ??
+    input?.council_number ??
+    input?.councilNumber ??
+    input?.clinicSettings?.councilNumber ??
     null
   );
-  if (!raw) return null;
-  const digits = raw.replace(/\D/g, '').slice(0, 7);
-  if (digits.length <= 2) return digits || null;
-  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  if (raw == null || String(raw).trim() === '') return null;
+  const normalized = sanitizeProfessionalIdentifier(raw, 80);
+  return normalized || null;
 }
 
 function resolveStoredCouncil(input: any): string | null {
@@ -45433,8 +45445,11 @@ async function startServer() {
         : ['supervisor', 'coordinator', 'director'].includes(String(role || '').toLowerCase())
           ? authoritativeSpecialty || requestedSpecialty
           : requestedSpecialty;
-      const council = sanitizeString(req.body?.council, 80);
-      const councilNumber = sanitizeString(req.body?.councilNumber, 80);
+      if (!isProfessionalIdentifierInputValid(req.body?.council, 48) || !isProfessionalIdentifierInputValid(req.body?.councilNumber, 80)) {
+        return res.status(400).json({ success: false, error: 'Conselho ou registro profissional contém caracteres inválidos.' });
+      }
+      const council = sanitizeProfessionalIdentifier(req.body?.council, 48);
+      const councilNumber = sanitizeProfessionalIdentifier(req.body?.councilNumber, 80);
       const signatureDataUrl = sanitizeUrl(req.body?.signatureDataUrl);
       const signaturePath = sanitizeString(req.body?.signaturePath, 260);
       const profilePicture = sanitizeUrl(req.body?.profilePicture);
@@ -45892,11 +45907,20 @@ async function startServer() {
         canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
           ? req.body.clinicSettings
           : {};
-      const resolvedCrp = sanitizeString(req.body?.crp, 80);
-      const resolvedCouncil = sanitizeString(req.body?.council || clinicSettingsInput?.council, 80);
+      const rawResolvedCrp = req.body?.crp;
+      const rawResolvedCouncil = req.body?.council || clinicSettingsInput?.council;
+      const rawResolvedCouncilNumber = req.body?.councilNumber || clinicSettingsInput?.councilNumber;
+      if (
+        !isProfessionalIdentifierInputValid(rawResolvedCrp, 80) ||
+        !isProfessionalIdentifierInputValid(rawResolvedCouncil, 48) ||
+        !isProfessionalIdentifierInputValid(rawResolvedCouncilNumber, 80)
+      ) {
+        return res.status(400).json({ success: false, error: 'Conselho ou registro profissional contém caracteres inválidos.' });
+      }
+      const resolvedCrp = sanitizeProfessionalIdentifier(rawResolvedCrp, 80);
+      const resolvedCouncil = sanitizeProfessionalIdentifier(rawResolvedCouncil, 48);
       const resolvedCouncilNumber =
-        sanitizeString(req.body?.councilNumber || clinicSettingsInput?.councilNumber, 80) ||
-        resolvedCrp;
+        sanitizeProfessionalIdentifier(rawResolvedCouncilNumber, 80) || resolvedCrp;
       const professionalCpf =
         normalizeCpf(req.body?.cpf) ||
         normalizeCpf(professionalProfileInput?.cpf || professionalProfileInput?.professionalCpf);
@@ -45938,10 +45962,13 @@ async function startServer() {
       const professionalDocumentType = ['CPF', 'CNPJ', 'OTHER'].includes(professionalDocumentTypeRaw)
         ? professionalDocumentTypeRaw
         : (professionalCpf ? 'CPF' : null);
-      const professionalDocumentNumber = sanitizeString(
-        professionalProfileInput?.documentNumber || professionalProfileInput?.document_number || professionalCpf,
-        40
-      ).replace(professionalDocumentType === 'OTHER' ? /[^A-Za-z0-9./-]/g : /\D/g, '');
+      const rawProfessionalDocumentNumber = professionalProfileInput?.documentNumber || professionalProfileInput?.document_number || professionalCpf;
+      if (professionalDocumentType === 'OTHER' && !isProfessionalIdentifierInputValid(rawProfessionalDocumentNumber, 80)) {
+        return res.status(400).json({ success: false, error: 'Identificação profissional contém caracteres inválidos.' });
+      }
+      const professionalDocumentNumber = professionalDocumentType === 'OTHER'
+        ? sanitizeProfessionalIdentifier(rawProfessionalDocumentNumber, 80)
+        : sanitizeString(rawProfessionalDocumentNumber, 40).replace(/\D/g, '');
       const professionalAddressInput = professionalProfileInput?.address && typeof professionalProfileInput.address === 'object'
         ? professionalProfileInput.address
         : {};
@@ -62816,15 +62843,27 @@ async function startServer() {
     );
     const now = new Date().toISOString();
     const documentType = sanitizeString(body?.documentType ?? body?.document_type, 20).toUpperCase();
+    const rawBillingDocument = body?.documentNumber ?? body?.document_number;
+    const rawBillingCouncilType = body?.councilType ?? body?.council_type;
+    const rawBillingCouncilNumber = body?.councilNumber ?? body?.council_number;
+    if (
+      (documentType === 'OTHER' && !isProfessionalIdentifierInputValid(rawBillingDocument, 80)) ||
+      !isProfessionalIdentifierInputValid(rawBillingCouncilType, 48) ||
+      !isProfessionalIdentifierInputValid(rawBillingCouncilNumber, 80)
+    ) {
+      throw Object.assign(new Error('PROFESSIONAL_IDENTIFIER_INVALID'), { code: 'PROFESSIONAL_IDENTIFIER_INVALID' });
+    }
     const payload = cleanObject({
       organization_id: organizationId,
       clinic_id: organizationId,
       professional_id: professionalId,
       display_name: sanitizeString(body?.displayName ?? body?.display_name, 180) || null,
       document_type: ['CPF', 'CNPJ', 'OTHER'].includes(documentType) ? documentType : null,
-      document_number: sanitizeString(body?.documentNumber ?? body?.document_number, 40).replace(/\D/g, '') || null,
-      council_type: sanitizeString(body?.councilType ?? body?.council_type, 40) || null,
-      council_number: sanitizeString(body?.councilNumber ?? body?.council_number, 80) || null,
+      document_number: documentType === 'OTHER'
+        ? sanitizeProfessionalIdentifier(rawBillingDocument, 80) || null
+        : sanitizeString(rawBillingDocument, 40).replace(/\D/g, '') || null,
+      council_type: sanitizeProfessionalIdentifier(rawBillingCouncilType, 48) || null,
+      council_number: sanitizeProfessionalIdentifier(rawBillingCouncilNumber, 80) || null,
       council_state: sanitizeString(body?.councilState ?? body?.council_state, 2).toUpperCase() || null,
       cbo_code: sanitizeString(body?.cboCode ?? body?.cbo_code, 40).replace(/\D/g, '') || null,
       specialty_name: sanitizeString(body?.specialtyName ?? body?.specialty_name, 120) || null,
@@ -62888,6 +62927,9 @@ async function startServer() {
       return sendNoStoreJson(res, { success: true, data: result.data, tissPipeline: result.tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] own professional profile update failed:', error?.message || String(error));
+      if (sanitizeString(error?.code || error?.message, 120) === 'PROFESSIONAL_IDENTIFIER_INVALID') {
+        return res.status(400).json({ success: false, error: 'Registro profissional contém caracteres inválidos.' });
+      }
       return res.status(500).json(payerSafeError(500));
     }
   });
@@ -62950,6 +62992,9 @@ async function startServer() {
       return sendNoStoreJson(res, { success: true, data: result.data, tissPipeline: result.tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] professional profile update failed:', error?.message || String(error));
+      if (sanitizeString(error?.code || error?.message, 120) === 'PROFESSIONAL_IDENTIFIER_INVALID') {
+        return res.status(400).json({ success: false, error: 'Registro profissional contém caracteres inválidos.' });
+      }
       return res.status(500).json(payerSafeError(500));
     }
   });
