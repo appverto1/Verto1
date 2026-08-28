@@ -8,6 +8,7 @@ import { HistoryCard } from './History';
 import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
+import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
@@ -19,7 +20,7 @@ import {
   resolveAppointmentPatientDisplayStatus,
 } from '../utils/appointmentConfirmationState';
 
-type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'profile';
+type PortalSection = 'home' | 'appointments' | 'anamnesis' | 'notes' | 'tasks' | 'reports' | 'documents' | 'care-network' | 'profile';
 
 const parsePortalMetadata = (value: unknown): Record<string, any> => {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
@@ -2504,6 +2505,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           { id: 'anamnesis', label: 'Anamnese', icon: FileSignature },
           { id: 'notes', label: 'Anotações', icon: MessageCircle },
           { id: 'documents', label: 'Documentos', icon: BookOpen },
+          { id: 'care-network', label: 'Rede de cuidado', icon: User },
           { id: 'reports', label: 'Relatório', icon: FileText },
         ]
       : []),
@@ -3077,6 +3079,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         </div>
       )}
     </div>
+  );
+
+  const portalCareNetworkPanel = (
+    <PatientCareNetworkPanel
+      mode="patient"
+      patientId={portalPatientId}
+      readOnly={isReadOnlyMode}
+    />
   );
 
   const portalReportPanel = (
@@ -3694,6 +3704,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {portalSection === 'tasks' && portalTasksPanel}
                 {portalSection === 'reports' && portalReportPanel}
                 {portalSection === 'documents' && portalDocumentsPanel}
+                {portalSection === 'care-network' && portalCareNetworkPanel}
                 {portalSection === 'profile' && portalProfilePanel}
 
                 {portalSection === 'home' && clinicalPortalEnabled && (
@@ -4168,6 +4179,7 @@ ${interventionImages.join('\n')}` : ''
       {portalSection === 'tasks' && portalTasksPanel}
       {portalSection === 'reports' && portalReportPanel}
       {portalSection === 'documents' && portalDocumentsPanel}
+      {portalSection === 'care-network' && portalCareNetworkPanel}
       {portalSection === 'profile' && portalProfilePanel}
       {portalSection === 'home' && clinicalPortalEnabled && (
         <React.Fragment>

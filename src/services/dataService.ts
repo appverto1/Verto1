@@ -2905,6 +2905,96 @@ export const dataService = {
     }
   },
 
+  async getPatientSelfCareNetwork() {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/care-network', {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient self care network:', error);
+      return { success: false, error: 'Não foi possível carregar a rede de cuidado agora.', data: [] };
+    }
+  },
+
+  async createPatientSelfCareNetworkContact(payload: {
+    clinicName?: string;
+    professionalName: string;
+    specialty?: string;
+    phone: string;
+    email?: string;
+  }) {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/care-network', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating patient care network contact:', error);
+      return { success: false, error: 'Não foi possível adicionar este profissional.' };
+    }
+  },
+
+  async updatePatientSelfCareNetworkContact(contactId: string, payload: {
+    clinicName?: string;
+    professionalName: string;
+    specialty?: string;
+    phone: string;
+    email?: string;
+  }) {
+    try {
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patient/self/care-network/${safeContactId}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating patient care network contact:', error);
+      return { success: false, error: 'Não foi possível atualizar este profissional.' };
+    }
+  },
+
+  async archivePatientSelfCareNetworkContact(contactId: string) {
+    try {
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patient/self/care-network/${safeContactId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error archiving patient care network contact:', error);
+      return { success: false, error: 'Não foi possível remover este profissional.' };
+    }
+  },
+
+  async getPatientCareNetwork(patientId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.', data: [] };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient care network:', error);
+      return { success: false, error: 'Não foi possível carregar a rede de cuidado agora.', data: [] };
+    }
+  },
+
   async getPortalContext() {
     try {
       const response = await fetchClinical('/api/portal/context', {
