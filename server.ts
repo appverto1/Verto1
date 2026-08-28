@@ -33619,6 +33619,226 @@ async function startServer() {
     },
   );
 
+  const normalizePatientCareNetworkPayload = (body: any) => {
+    const clinicName = sanitizeString(body?.clinicName || body?.clinic_name, 180) || null;
+    const professionalName = sanitizeString(body?.professionalName || body?.professional_name, 180);
+    const specialty = sanitizeString(body?.specialty, 120) || null;
+    const phone = sanitizeString(body?.phone || body?.telephone || body?.whatsapp, 60);
+    const rawEmail = sanitizeString(body?.email, 254);
+    const email = rawEmail ? sanitizeEmail(rawEmail) : '';
+    const phoneDigitCount = phone.replace(/\D/g, '').length;
+
+    if (!professionalName) {
+      return { ok: false as const, error: 'Informe o nome do profissional.' };
+    }
+    if (!phone || phoneDigitCount < 6) {
+      return { ok: false as const, error: 'Informe um telefone válido para o profissional.' };
+    }
+    if (rawEmail && !email) {
+      return { ok: false as const, error: 'Informe um e-mail válido ou deixe o campo em branco.' };
+    }
+
+    return {
+      ok: true as const,
+      value: {
+        clinic_name: clinicName,
+        professional_name: professionalName,
+        specialty,
+        phone,
+        email: email || null,
+      }
+    };
+  };
+
+  const patientCareNetworkColumns = 'id,clinic_id,patient_id,clinic_name,professional_name,specialty,phone,email,source,created_at,updated_at';
+
+  const sendPatientCareNetworkError = (res: any, error: any, route: string) => {
+    if (isMissingRelationError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: 'PATIENT_CARE_NETWORK_SCHEMA_UNAVAILABLE',
+        error: 'A estrutura da rede de cuidado ainda não foi aplicada.'
+      });
+    }
+    return sendRouteDbError(res, route, error);
+  };
+
+  app.get('/api/patient/self/care-network', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .select(patientCareNetworkColumns)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null)
+        .order('created_at', { ascending: true })
+        .limit(100);
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [GET]');
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [GET]');
+    }
+  });
+
+  app.post('/api/patient/self/care-network', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Cadastro da rede de cuidado')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const normalized = normalizePatientCareNetworkPayload(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
+
+      const countResult = await supabase
+        .from('patient_care_network_contacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null);
+      if (countResult.error) return sendPatientCareNetworkError(res, countResult.error, '/api/patient/self/care-network [POST count]');
+      if (Number(countResult.count || 0) >= 100) {
+        return res.status(409).json({ success: false, code: 'PATIENT_CARE_NETWORK_LIMIT_REACHED', error: 'O limite de profissionais cadastrados nesta rede de cuidado foi atingido.' });
+      }
+
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .insert({
+          id: crypto.randomUUID(),
+          clinic_id: portalScope.clinicId,
+          patient_id: portalScope.patientId,
+          ...normalized.value,
+          source: 'PATIENT_PORTAL',
+          created_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+          created_at: now,
+          updated_at: now,
+          archived_at: null,
+        })
+        .select(patientCareNetworkColumns)
+        .single();
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [POST]');
+      return res.status(201).json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [POST]');
+    }
+  });
+
+  app.patch('/api/patient/self/care-network/:contactId', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Atualização da rede de cuidado')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const contactId = sanitizeString(req.params?.contactId, 120);
+      if (!isUuid(contactId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      const normalized = normalizePatientCareNetworkPayload(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .update({
+          ...normalized.value,
+          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', contactId)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null)
+        .select(patientCareNetworkColumns)
+        .maybeSingle();
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [PATCH]');
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [PATCH]');
+    }
+  });
+
+  app.delete('/api/patient/self/care-network/:contactId', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const contactId = sanitizeString(req.params?.contactId, 120);
+      if (!isUuid(contactId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .update({
+          archived_at: now,
+          updated_at: now,
+          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+        })
+        .eq('id', contactId)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null)
+        .select('id')
+        .maybeSingle();
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [DELETE]');
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+      return res.json({ success: true, data: { id: data.id, archived: true } });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [DELETE]');
+    }
+  });
+
+  app.get(
+    '/api/patients/:patientId/care-network',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('clinical.record.view', 'clinical.history.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) {
+          return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        }
+        const { data, error } = await supabase
+          .from('patient_care_network_contacts')
+          .select(patientCareNetworkColumns)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .is('archived_at', null)
+          .order('created_at', { ascending: true })
+          .limit(100);
+        if (error) return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
+        return res.json({ success: true, data: data || [] });
+      } catch (error: any) {
+        return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
+      }
+    }
+  );
+
   app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const userId = sanitizeString(req.session.user?.id, 120);

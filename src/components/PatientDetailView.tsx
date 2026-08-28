@@ -13,6 +13,7 @@ import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
+import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -87,7 +88,7 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
-type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'school' | 'files';
+type PatientDetailTab = 'history' | 'notes' | 'care-network' | 'report' | 'plan' | 'session' | 'aba-charts' | 'school' | 'files';
 type PatientHistoryPeriod = 'all' | '30d' | '90d' | '180d' | '365d' | 'custom';
 type PatientHistoryPaginationState = {
   initialized: boolean;
@@ -697,6 +698,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const allTabs: PatientDetailTab[] = [
     'history',
     'notes',
+    'care-network',
     'report',
     'plan',
     'session',
@@ -10475,6 +10477,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           {canAccessTab('notes') && (
             <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
           )}
+          {canAccessTab('care-network') && (
+            <button id="tab-care-network" aria-current={activeTab === 'care-network' ? 'page' : undefined} onClick={() => setActiveTab('care-network')} className={`min-h-12 min-w-[8.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'care-network' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Rede de cuidado</button>
+          )}
           {canAccessTab('report') && (
             <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
           )}
@@ -11012,6 +11017,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ))) : (<p className="text-center text-gray-400 text-sm mt-10">Nenhuma anotação encontrada com os filtros atuais.</p>)} 
             </div> 
           </div> 
+        ) : activeTab === 'care-network' ? (
+          <div className="animate-fade-in">
+            <PatientCareNetworkPanel mode="professional" patientId={String(patient?.id || '')} dark={isPanelDark} />
+          </div>
         ) : activeTab === 'report' ? (
           <div className="space-y-6 animate-fade-in">
             <div id="report-config-card" className={`border p-6 rounded-[32px] shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
