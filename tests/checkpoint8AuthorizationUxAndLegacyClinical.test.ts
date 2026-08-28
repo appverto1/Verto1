@@ -36,8 +36,10 @@ for (const [route, capability] of [
 
 assert.match(server, /\/api\/tasks\/:patientId[^\n]*requireClinicCapabilityOrPatientPortal\('clinical\.history\.view'\)[^\n]*checkPatientAccess/);
 assert.match(server, /\/api\/assigned-tasks\/:patientId[^\n]*requireClinicCapabilityOrPatientPortal\('clinical\.history\.view'\)[^\n]*checkPatientAccess/);
-assert.match(server, /\/api\/patient-logs'[^\n]*requireClinicCapabilityOrPatientPortal\('clinical\.evolution\.create'\)/);
-assert.match(server, /canWritePatientLog[\s\S]{0,240}canPortalSessionAccessPatient[\s\S]{0,240}canAccessPatientInCurrentClinic/);
+assert.match(server, /\/api\/patient-logs'[^\n]*requireClinicCapability\('clinical\.evolution\.create'\)/);
+const patientLogsPost = server.slice(server.indexOf("app.post('/api/patient-logs'"), server.indexOf('// Activity Logs'));
+assert.match(patientLogsPost, /canAccessPatientInCurrentClinic/);
+assert.doesNotMatch(patientLogsPost, /canPortalSessionAccessPatient|requireClinicCapabilityOrPatientPortal/);
 assert.match(server, /app\.post\('\/api\/tasks'[\s\S]{0,4200}canAccessPatientInCurrentClinic\(payload\.patient_id, req\.session\.user, 'write'\)/);
 assert.match(server, /app\.post\('\/api\/assigned-tasks'[\s\S]{0,4200}canAccessPatientInCurrentClinic\(payload\.patient_id, req\.session\.user, 'write'\)/);
 

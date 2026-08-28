@@ -32,7 +32,7 @@ assert.match(dashboard, /Quanto esforço essa atividade exigiu/);
 assert.match(detail, /Esforço percebido após a atividade/);
 assert.match(detail, /is_daily_reminder: planType === 'intervention' \? isDailyReminder : false/);
 
-assert.match(server, /complete_patient_assigned_task_v1/);
+assert.match(server, /complete_patient_assigned_task_v2/);
 const assignedTaskCompletionRoute = server.slice(server.indexOf("app.post('/api/assigned-tasks/:taskId/complete'"), server.indexOf("app.post('/api/assigned-tasks/:taskId/review'"));
 assert.match(assignedTaskCompletionRoute, /canPortalSessionAccessPatient/, 'task completion must use the canonical clinic-scoped portal authorization');
 assert.match(assignedTaskCompletionRoute, /p_expected_patient_id: sanitizeString\(existing\.patient_id, 120\)/, 'atomic completion must bind the RPC to the patient scope that was authorized');
