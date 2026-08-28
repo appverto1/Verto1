@@ -8015,6 +8015,22 @@ export const dataService = {
     return { success: true, data: null };
   },
 
+  async cleanupPatientPhotoUpload(path: string) {
+    const safePath = String(path || '').trim();
+    if (!safePath) return { success: true, skipped: true };
+    try {
+      const response = await fetch('/api/storage/patient-photos/cleanup-upload', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ path: safePath })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+
   async uploadFile(bucket: string, path: string, file: File) {
     // Sensible uploads (patient photos) must always pass through backend auth checks.
     if (bucket === 'patient-photos') {

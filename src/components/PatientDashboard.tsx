@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, ChevronLeft, ChevronRight, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
 import { EvolutionBarChart } from './Charts';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
-import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS } from './Common';
+import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './Common';
 import { HistoryCard } from './History';
 import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
@@ -14,6 +14,7 @@ import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
+import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import {
   resolveAppointmentPatientDisplayStatus,
 } from '../utils/appointmentConfirmationState';
@@ -90,6 +91,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isMessagesOpen, setIsMessagesOpen] = useState(false); 
   const [selectedTag, setSelectedTag] = useState<any>(null); 
   const [dailyCheckinDone, setDailyCheckinDone] = useState(false);
+  const [isMoodSaving, setIsMoodSaving] = useState(false);
+  const [moodSaveError, setMoodSaveError] = useState('');
   const [familyNote, setFamilyNote] = useState("");
   const [familyImage, setFamilyImage] = useState<string | null>(null);
   const [familyImagePath, setFamilyImagePath] = useState<string | null>(null);
@@ -185,25 +188,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [latestProtocolReference, setLatestProtocolReference] = useState<any>(null);
   const milestoneCelebrationRequestRef = useRef('');
   const milestoneCelebrationSessionKeyRef = useRef('');
-  const userType = typeof user.type === 'string' ? user.type.toLowerCase() : '';
-  const hasExplicitPatientType = Boolean(userType);
-  const userAge =
-    typeof user.age === 'number'
-      ? user.age
-      : (user.age !== null && user.age !== undefined && Number.isFinite(Number(user.age)))
-        ? Number(user.age)
-        : null;
-  const isKidsProfile =
-    userType === 'kids_tea' ||
-    (!hasExplicitPatientType && ((userAge !== null && userAge <= 12) || user.anamnesisData?.formType === 'child'));
-  const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKidsProfile;
-  const taskReflectionLabel = isConventionalAdult ? 'Humor' : 'Energia';
+  const patientPortalKind = resolvePatientPortalKind(user);
+  const isKidsProfile = patientPortalKind === 'KIDS';
+  const isConventionalAdult = patientPortalKind === 'ADULT_CONVENTIONAL';
+  const taskReflectionLabel = isConventionalAdult ? 'Esforço percebido' : 'Energia';
   const taskReflectionPrompt = isConventionalAdult
-    ? 'Registre seu humor depois dessa tarefa'
+    ? 'Quanto esforço essa atividade exigiu?'
     : 'Registre sua energia depois dessa tarefa';
   const taskReflectionHelp = isConventionalAdult
-    ? 'Quanto mais alto o humor, mais fácil foi fazer essa tarefa'
-    : 'Quanto mais energia, mais fácil foi fazer essa tarefa';
+    ? '0% significa esforço mínimo e 100% esforço máximo.'
+    : 'Registre como ficou sua energia depois da atividade.';
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
   const portalContext = user?.portalContext && typeof user.portalContext === 'object' ? user.portalContext : {};
   const portalPatientId = String(patientPortalId || portalContext?.resolvedPatientId || user?.patientId || user?.patient_id || '').trim();
@@ -618,7 +612,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       if (event?.data?.type !== 'VERTO_PORTAL_NOTIFICATION') return;
       refreshNotifications(true);
     };
-    const interval = window.setInterval(() => refreshNotifications(false), 60_000);
+    const interval = window.setInterval(() => refreshNotifications(false), 15 * 60_000);
     window.addEventListener('focus', refreshWhenVisible);
     document.addEventListener('visibilitychange', refreshWhenVisible);
     navigator.serviceWorker?.addEventListener?.('message', refreshFromPush as EventListener);
@@ -1152,29 +1146,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const visiblePatientTasks = useMemo(() => {
     const list = Array.isArray(tasks) ? tasks : [];
     if (isKidsProfile) return list;
-    const startOfToday = new Date(currentTime);
-    startOfToday.setHours(0, 0, 0, 0);
-    const endOfToday = new Date(startOfToday);
-    endOfToday.setDate(endOfToday.getDate() + 1);
-
     return list.filter((task: any) => {
       if (task?.completed || String(task?.status || '').toLowerCase() === 'completed') return false;
       const scheduledRaw = task?.scheduledAt || task?.scheduled_at;
       if (!scheduledRaw) return false;
       const scheduledAt = parseScheduledTaskDate(scheduledRaw);
       if (!scheduledAt) return false;
-      return scheduledAt >= startOfToday && scheduledAt < endOfToday && scheduledAt <= currentTime;
+      return scheduledAt <= currentTime;
     });
   }, [tasks, isKidsProfile, currentTime]);
 
-  const conventionalMoodTags = [
-    { id: 'family', label: 'Família', icon: '👨‍👩‍👧‍👦', color: 'bg-blue-100 text-blue-600' },
-    { id: 'work', label: 'Trabalho', icon: '💼', color: 'bg-orange-100 text-orange-600' },
-    { id: 'relationships', label: 'Relacionamentos', icon: '❤️', color: 'bg-pink-100 text-pink-600' },
-    { id: 'money', label: 'Dinheiro', icon: '💰', color: 'bg-green-100 text-green-600' },
-    { id: 'thoughts', label: 'Pensamentos', icon: '🧠', color: 'bg-purple-100 text-purple-600' },
-    { id: 'others', label: 'Outros', icon: '🧩', color: 'bg-gray-100 text-gray-600' }
-  ];
+  const conventionalMoodTags = ADULT_CONVENTIONAL_TAGS;
   const moodInfluenceTags = isConventionalAdult ? conventionalMoodTags : (energyTags || []);
 
   const moodOptions = [ { value: 10, emoji: "😫", label: "Esgotado", color: "bg-red-100 border-red-200 hover:bg-red-200" }, { value: 30, emoji: "😕", label: "Baixo", color: "bg-orange-100 border-orange-200 hover:bg-orange-200" }, { value: 50, emoji: "😐", label: "Normal", color: "bg-yellow-100 border-yellow-200 hover:bg-yellow-200" }, { value: 70, emoji: "🙂", label: "Bem", color: "bg-blue-100 border-blue-200 hover:bg-blue-200" }, { value: 90, emoji: "🤩", label: "Ótimo!", color: "bg-green-100 border-green-200 hover:bg-green-200" } ];
@@ -1681,7 +1663,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
     const patientEmail = String(user?.email || '').trim().toLowerCase();
     return (Array.isArray(history) ? history : []).filter((item: any) => {
-      const isFamily = item.type === 'family_note' || item.type === 'photo';
+      const isFamily = ['family_note', 'patient_note', 'photo'].includes(String(item?.type || '').toLowerCase());
       if (!isFamily) return false;
       const itemPatientId = String(item?.patientId || item?.patient_id || '').trim();
       const itemPatientEmail = String(item?.patient_email || item?.patientEmail || item?.email || '').trim().toLowerCase();
@@ -1715,7 +1697,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return item.type === 'photo' && when >= weekAgo;
     }).length;
     const stars = portalFamilyHistory.filter((item: any) => {
-      const isFamily = item.type === 'family_note' || item.type === 'photo';
+      const isFamily = ['family_note', 'patient_note', 'photo'].includes(String(item?.type || '').toLowerCase());
       const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.note || item?.text || ''));
       return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
     }).length;
@@ -2073,15 +2055,36 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return () => { active = false; };
   }, [portalPatientId, user?.id]);
 
+  useEffect(() => {
+    if (isKidsProfile) return;
+    const metricKind = isConventionalAdult ? 'mood' : 'energy';
+    const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const todayCheckin = (Array.isArray(history) ? history : []).find((item: any) => {
+      if (String(item?.type || '').toLowerCase() !== 'checkin') return false;
+      const taskData = item?.task_data && typeof item.task_data === 'object' ? item.task_data : {};
+      const storedKind = String(taskData?.metricKind || taskData?.metric_kind || (item?.energy !== null && item?.energy !== undefined ? 'energy' : 'mood')).toLowerCase();
+      if (storedKind !== metricKind) return false;
+      const dateKey = String(item?.date_group || item?.dateGroup || '').slice(0, 10) || (() => {
+        const raw = item?.created_at || item?.date;
+        const parsed = raw ? new Date(raw) : null;
+        return parsed && !Number.isNaN(parsed.getTime())
+          ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(parsed)
+          : '';
+      })();
+      return dateKey === todayKey;
+    });
+    setDailyCheckinDone(Boolean(todayCheckin));
+  }, [history, isConventionalAdult, isKidsProfile]);
+
   const familyPhotoCountToday = useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     return portalFamilyHistory.filter((item: any) => {
       if (item?.type !== 'photo') return false;
       const raw = item.date || item.created_at;
       if (!raw) return false;
       const parsed = new Date(raw);
       if (Number.isNaN(parsed.getTime())) return false;
-      return parsed.toISOString().slice(0, 10) === todayStr;
+      return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(parsed) === todayStr;
     }).length;
   }, [portalFamilyHistory]);
   const hasReachedFamilyPhotoLimitToday = familyPhotoCountToday >= FAMILY_DAILY_PHOTO_LIMIT;
@@ -2090,40 +2093,45 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (isReadOnlyMode) return;
     if ((familyNote.trim() || familyImage) && !isFamilySaving) {
       setIsFamilySaving(true);
+      setFamilyUploadError('');
+      let uploadedPathThisAttempt: string | null = null;
       try {
         let persistedImage = familyImage || undefined;
         let persistedImagePath: string | undefined = familyImagePath || undefined;
         if (persistedImage && persistedImage.startsWith('data:image/')) {
           const extension = persistedImage.includes('image/jpeg') ? 'jpg' : persistedImage.includes('image/webp') ? 'webp' : 'png';
           const ownerPatientId = String(portalPatientId || user?.patientId || user?.patient_id || user?.id || '').trim();
-          if (!ownerPatientId) {
-            throw new Error('Não encontramos o paciente vinculado para salvar a foto.');
-          }
+          if (!ownerPatientId) throw new Error('Não encontramos o paciente vinculado para salvar a foto.');
           const fileName = `${ownerPatientId}/family/family-${Date.now()}.${extension}`;
           const uploadResult = await dataService.uploadDataUrl('patient-photos', fileName, persistedImage, `image/${extension === 'jpg' ? 'jpeg' : extension}`);
           if (uploadResult?.success && uploadResult.url) {
             persistedImage = uploadResult.url;
             persistedImagePath = uploadResult.path;
+            uploadedPathThisAttempt = String(uploadResult.path || '') || null;
           } else {
             throw new Error(`Não foi possível salvar a foto no armazenamento: ${uploadResult?.error || 'erro desconhecido'}`);
           }
         }
 
-        if (!portalPatientId) {
-          throw new Error('Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.');
-        }
+        if (!portalPatientId) throw new Error('Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.');
         const saveResult = await onAddFamilyNote(portalPatientId, familyNote, persistedImage, persistedImagePath);
         if (saveResult?.success === false) {
           throw new Error(saveResult?.error || 'Não foi possível persistir o registro no histórico.');
         }
-        setFamilyNote("");
+
+        setFamilyNote('');
         setFamilyImage(null);
         setFamilyImagePath(null);
         setIsFamilyLogOpen(false);
-        setShowFamilySuccess(true);
-        window.setTimeout(() => setShowFamilySuccess(false), 1600);
+        if (saveResult?.pending === true || saveResult?.offline === true) {
+          setFamilyUploadError(saveResult?.message || 'Registro salvo neste dispositivo e aguardando sincronização.');
+        } else {
+          setShowFamilySuccess(true);
+          window.setTimeout(() => setShowFamilySuccess(false), 1600);
+        }
       } catch (error: any) {
-        alert(error?.message || 'Não foi possível salvar o registro da família. Tente novamente.');
+        if (uploadedPathThisAttempt) void dataService.cleanupPatientPhotoUpload(uploadedPathThisAttempt);
+        setFamilyUploadError(error?.message || 'Não foi possível salvar o registro. Tente novamente.');
       } finally {
         setIsFamilySaving(false);
       }
@@ -2488,36 +2496,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           { id: 'notes', label: 'Anotações', icon: MessageCircle },
           { id: 'documents', label: 'Documentos', icon: BookOpen },
           { id: 'reports', label: 'Relatório', icon: FileText },
-          ...(!isKidsProfile ? [{ id: 'tasks', label: 'Tarefas', icon: Zap }] : []),
         ]
       : []),
     { id: 'profile', label: 'Perfil', icon: Settings }
   ] as Array<{ id: PortalSection; label: string; icon: any }>;
 
-  const portalMenu = isKidsProfile ? null : (
-    <div className={`${isKidsProfile ? 'mb-4' : 'mb-6'} overflow-x-auto no-scrollbar`}>
-      <div className="flex min-w-max gap-2 rounded-[24px] border border-white/70 bg-white/80 p-2 shadow-sm backdrop-blur">
-        {portalMenuItems.map((item) => {
-          const Icon = item.icon;
-          const active = portalSection === item.id;
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => {
-                setPortalSection(item.id);
-                setIsMenuOpen(false);
-              }}
-              className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-black transition ${active ? 'bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20' : 'text-slate-500 hover:bg-purple-50 hover:text-[#7a32fc]'}`}
-            >
-              <Icon size={15} />
-              {item.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
+  const portalMenu = null; // Kids e adultos usam o mesmo menu hambúrguer compartilhado.
+
 
   const portalAnamnesisTopNotice = (portalAnamnesisNeedsAction || (!portalAnamnesisChecked && hasPendingPortalAnamnesisHint)) ? (
     <button
@@ -2790,6 +2775,46 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const portalPlaceholderPanel = (label: string) => (
     <div className="mb-6 rounded-[28px] border border-dashed border-purple-100 bg-white/70 p-6 text-center text-sm font-semibold text-slate-500">
       {label}
+    </div>
+  );
+
+
+  const portalTasksPanel = (
+    <div className="mb-6 rounded-[28px] border border-emerald-100 bg-white p-4 shadow-sm sm:p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.22em] text-emerald-600">Tarefas</p>
+          <h2 className="text-lg font-black text-slate-900">Atividades pendentes</h2>
+        </div>
+        <span className="rounded-full bg-emerald-50 px-3 py-1 text-[10px] font-black text-emerald-700">{visiblePatientTasks.length}</span>
+      </div>
+      {visiblePatientTasks.length === 0 ? (
+        <p className="rounded-2xl bg-slate-50 px-4 py-5 text-center text-sm font-semibold text-slate-500">Nenhuma tarefa pendente no momento.</p>
+      ) : (
+        <div className="space-y-3">
+          {visiblePatientTasks.map((task: any) => {
+            const scheduledAt = parseScheduledTaskDate(task?.scheduledAt || task?.scheduled_at);
+            const overdue = Boolean(scheduledAt && scheduledAt.getTime() < currentTime.getTime() - 60_000);
+            return (
+              <button
+                key={String(task?.id || task?.assignedTaskId || task?.title)}
+                type="button"
+                disabled={isReadOnlyMode}
+                onClick={() => { openTaskModal(task); setPortalSection('home'); }}
+                className="w-full rounded-2xl border border-slate-100 bg-slate-50 p-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50 disabled:opacity-60"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-900">{task?.title || task?.task_data?.title || 'Tarefa'}</p>
+                    <p className="mt-1 text-xs font-medium text-slate-500">{scheduledAt ? scheduledAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Disponível agora'}</p>
+                  </div>
+                  {overdue && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black uppercase text-amber-700">Atrasada</span>}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 
@@ -3657,7 +3682,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 {portalSection === 'appointments' && portalAppointmentsPanel}
                 {portalSection === 'anamnesis' && portalAnamnesisPanel}
                 {portalSection === 'notes' && portalNotesPanel}
-                {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
+                {portalSection === 'tasks' && portalTasksPanel}
                 {portalSection === 'reports' && portalReportPanel}
                 {portalSection === 'documents' && portalDocumentsPanel}
                 {portalSection === 'profile' && portalProfilePanel}
@@ -3875,13 +3900,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setMoodNote("");
     setIsMoodModalOpen(true);
   }; 
-  const handleConfirmMood = () => { 
-    if (isReadOnlyMode) return;
-    if (selectedMood) { 
-      setShowMoodSuccess(true); 
-      const moodValue = selectedMood.value;
-      setTimeout(() => { onMoodCheckin(moodValue, moodNote, selectedMood.emoji, selectedTag); setIsMoodModalOpen(false); setShowMoodSuccess(false); setMoodNote(""); setSelectedMood(null); setSelectedTag(null); setDailyCheckinDone(true); }, 2000); 
-    } 
+  const handleConfirmMood = async () => { 
+    if (isReadOnlyMode || !selectedMood || isMoodSaving) return;
+    setIsMoodSaving(true);
+    setMoodSaveError('');
+    try {
+      const result = await onMoodCheckin(selectedMood.value, moodNote, selectedMood.emoji, selectedTag);
+      if (result?.success === false) {
+        setMoodSaveError(result?.error || 'Não foi possível salvar seu check-in.');
+        return;
+      }
+      setDailyCheckinDone(true);
+      setShowMoodSuccess(true);
+      setIsMoodModalOpen(false);
+      setMoodNote("");
+      setSelectedMood(null);
+      setSelectedTag(null);
+      window.setTimeout(() => setShowMoodSuccess(false), 1200);
+    } finally {
+      setIsMoodSaving(false);
+    }
   }; 
   const openTaskModal = (task: any) => {
     if (isReadOnlyMode) return;
@@ -3897,27 +3935,25 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
   };
   const handleEnergyCommit = () => { setTaskStep(2); }; 
-  const handleConfirmTask = () => { 
-    if (isReadOnlyMode) return;
-    if (selectedTask) { 
-      setShowTaskSuccess(true); 
-      const interventionDetails = [
-        interventionResponse?.trim() ? `Resposta:\n${interventionResponse.trim()}` : '',
-        taskNote?.trim() ? `Observação:\n${taskNote.trim()}` : '',
-        interventionImages.length > 0 ? `Anexos:\n${interventionImages.join('\n')}` : ''
-      ].filter(Boolean).join('\n\n');
-      const finalNote = selectedTask.type === 'intervention'
-        ? interventionDetails
-        : taskNote;
-      setTimeout(() => { 
-        onCompleteTask(selectedTask, taskEnergy, finalNote); 
-        setShowTaskSuccess(false); 
-        setSelectedTask(null); 
-        setInterventionResponse("");
-        setInterventionImages([]);
-        setTaskStep(1);
-      }, 2000); 
-    } 
+  const handleConfirmTask = async () => { 
+    if (isReadOnlyMode || !selectedTask) return;
+    const interventionDetails = [
+      interventionResponse?.trim() ? `Resposta:
+${interventionResponse.trim()}` : '',
+      taskNote?.trim() ? `Observação:
+${taskNote.trim()}` : '',
+      interventionImages.length > 0 ? `Anexos:
+${interventionImages.join('\n')}` : ''
+    ].filter(Boolean).join('\n\n');
+    const finalNote = selectedTask.type === 'intervention' ? interventionDetails : taskNote;
+    const result = await onCompleteTask(selectedTask, taskEnergy, finalNote);
+    if (result?.success === false) return;
+    setShowTaskSuccess(true);
+    window.setTimeout(() => setShowTaskSuccess(false), 1200);
+    setSelectedTask(null);
+    setInterventionResponse("");
+    setInterventionImages([]);
+    setTaskStep(1);
   }; 
 
   const dailyReviewTasks = useMemo(() => {
@@ -4120,7 +4156,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       {portalSection === 'appointments' && portalAppointmentsPanel}
       {portalSection === 'anamnesis' && portalAnamnesisPanel}
       {portalSection === 'notes' && portalNotesPanel}
-      {portalSection === 'tasks' && portalPlaceholderPanel('Tarefas enviadas pela clínica aparecerão aqui.')}
+      {portalSection === 'tasks' && portalTasksPanel}
       {portalSection === 'reports' && portalReportPanel}
       {portalSection === 'documents' && portalDocumentsPanel}
       {portalSection === 'profile' && portalProfilePanel}
@@ -4271,7 +4307,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               ))} 
             </div> 
             <textarea className="w-full h-20 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4" placeholder="Quer escrever algo sobre isso?" value={moodNote} onChange={(e) => setMoodNote(e.target.value)} ></textarea> 
-            <button onClick={handleConfirmMood} disabled={showMoodSuccess} className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showMoodSuccess ? 'bg-green-500 text-white' : 'bg-[#7a32fc] text-white shadow-[#7a32fc]/30 hover:opacity-90'}`} > {showMoodSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar</React.Fragment>} </button> 
+            {moodSaveError && <p className="mb-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{moodSaveError}</p>}
+                <button onClick={handleConfirmMood} disabled={showMoodSuccess || isMoodSaving} className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showMoodSuccess ? 'bg-green-500 text-white' : 'bg-[#7a32fc] text-white shadow-[#7a32fc]/30 hover:opacity-90'}`} > {showMoodSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : isMoodSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin" /> Salvando...</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar</React.Fragment>} </button> 
           </div> 
         </div> 
       )} 

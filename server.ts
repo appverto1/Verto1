@@ -38281,6 +38281,39 @@ async function startServer() {
     }
   });
 
+  app.post('/api/storage/patient-photos/cleanup-upload', checkAuth, requirePatientPortalModule('clinical_core'), async (req: any, res) => {
+    try {
+      const objectPath = extractPatientPhotosStoragePath(req.body?.path);
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (role !== 'patient' || !objectPath || objectPath.includes('..')) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const parts = objectPath.split('/').filter(Boolean);
+      const ownerPatientId = sanitizeString(parts[0], 120);
+      const scope = sanitizeString(parts[1], 80).toLowerCase();
+      if (!isUuid(ownerPatientId) || scope !== 'family' || !(await canPortalSessionAccessPatient(ownerPatientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const referenced = await supabase
+        .from('history')
+        .select('id')
+        .eq('patient_id', ownerPatientId)
+        .eq('image_path', objectPath)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (referenced.error && !extractMissingColumnName(referenced.error)) throw referenced.error;
+      if (referenced.data) return res.json({ success: true, skipped: true, reason: 'REFERENCED' });
+      const removal = await supabase.storage.from('patient-photos').remove([objectPath]);
+      if (removal.error) throw removal.error;
+      return res.json({ success: true, removed: true });
+    } catch (error: any) {
+      console.warn('[PatientPortalPhoto] orphan cleanup failed:', sanitizeString(error?.message || String(error), 240));
+      return res.status(500).json({ success: false, error: 'Não foi possível limpar o upload incompleto.' });
+    }
+  });
+
   const canAccessCanonicalClinicLogo = async (params: {
     objectPath: string;
     user: any;
@@ -43182,7 +43215,14 @@ async function startServer() {
         }
       }
 
-      const mappedAssignedHistory = Array.from(new Map(assignedRows.map((task: any) => [String(task?.id || crypto.randomUUID()), task])).values()).map((task: any) => {
+      const persistedAssignedTaskHistoryIds = new Set(
+        dedupedHistory
+          .map((item: any) => sanitizeString(item?.assigned_task_id || item?.assignedTaskId, 120))
+          .filter(Boolean)
+      );
+      const mappedAssignedHistory = Array.from(new Map(assignedRows.map((task: any) => [String(task?.id || crypto.randomUUID()), task])).values())
+        .filter((task: any) => !persistedAssignedTaskHistoryIds.has(sanitizeString(task?.id, 120)))
+        .map((task: any) => {
         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
         return {
           id: `assigned:${task.id}`,
@@ -43263,7 +43303,14 @@ async function startServer() {
           created_at: t.updated_at || t.created_at
         }));
 
-      const consolidatedHistory = [...dedupedHistory, ...mappedAssignedHistory, ...mappedTaskScoreHistory]
+      const patientVisibleHistory = [...dedupedHistory, ...mappedAssignedHistory, ...mappedTaskScoreHistory].filter((row: any) => {
+        const type = sanitizeString(row?.type, 80).toLowerCase();
+        const source = sanitizeString(row?.source, 120).toLowerCase();
+        if (['audit', 'system', 'internal', 'supervision', 'professional_private'].includes(type)) return false;
+        if (/^(closure_|internal_|supervision_|technical_)/.test(source)) return false;
+        return true;
+      });
+      const consolidatedHistory = patientVisibleHistory
         .sort((a: any, b: any) => {
           const aTs = new Date(a?.created_at || 0).getTime();
           const bTs = new Date(b?.created_at || 0).getTime();
@@ -43395,81 +43442,7 @@ async function startServer() {
           error: 'Este registro não pertence a um paciente vinculado ao seu acesso.'
         });
       }
-      if (role === 'patient' && safeType === 'photo') {
-        const safeEmail = sanitizeEmail(req.body?.patient_email || req.session.user?.email);
-        const incomingHistoryId = sanitizeString(req.body?.id || req.body?.clientRecordId || req.body?.localId, 120);
-        const incomingImagePath = sanitizeString(req.body?.image_path || req.body?.imagePath, 600);
-        const incomingImageUrl = sanitizeString(req.body?.image || req.body?.image_url || req.body?.imageUrl, 4000);
-        if (!safeEmail) {
-          return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível para validação de foto diária.' });
-        }
-        const now = new Date();
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString();
-        const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0).toISOString();
-        const selectTodayPhotos = async (field: 'patient_id' | 'patient_email', value: string) => {
-          let columns = ['id', 'patient_id', 'patient_email', 'type', 'title', 'score', 'note', 'icon', 'image', 'image_path', 'date_group', 'created_at', 'is_active', 'deleted_at'];
-          for (let attempt = 0; attempt < 4; attempt += 1) {
-            const { data, error } = await supabase
-              .from('history')
-              .select(columns.join(','))
-              .eq('type', 'photo')
-              .eq(field, value)
-              .eq('is_active', true)
-              .is('deleted_at', null)
-              .gte('created_at', startOfDay)
-              .lt('created_at', endOfDay)
-              .limit(FAMILY_DAILY_PHOTO_LIMIT);
-            if (!error) return Array.isArray(data) ? data : [];
-            const missingColumn = extractMissingColumnName(error);
-            if (missingColumn && columns.includes(missingColumn)) {
-              columns = columns.filter((column) => column !== missingColumn);
-              continue;
-            }
-            throw error;
-          }
-          return [];
-        };
-
-        const todayPhotosByPatient = await selectTodayPhotos('patient_id', resolvedPatientId);
-        const todayPhotosByEmail = await selectTodayPhotos('patient_email', safeEmail);
-
-        const todayPhotosById = new Map<string, any>();
-        [...(Array.isArray(todayPhotosByPatient) ? todayPhotosByPatient : []), ...(Array.isArray(todayPhotosByEmail) ? todayPhotosByEmail : [])]
-          .forEach((photo: any) => {
-            const photoId = sanitizeString(photo?.id, 120);
-            if (photoId) todayPhotosById.set(photoId, photo);
-          });
-        const todayPhotos = Array.from(todayPhotosById.values());
-        const sameRequestPhoto = todayPhotos.find((photo: any) =>
-          incomingHistoryId && String(photo?.id || '') === incomingHistoryId
-        );
-        const sameUploadedPhoto = todayPhotos.find((photo: any) => {
-          const storedPath = sanitizeString(photo?.image_path || photo?.imagePath, 600);
-          const storedImage = sanitizeString(photo?.image || photo?.image_url || photo?.imageUrl, 4000);
-          return (
-            (incomingImagePath && storedPath && incomingImagePath === storedPath) ||
-            (incomingImageUrl && storedImage && incomingImageUrl === storedImage)
-          );
-        });
-        if (sameUploadedPhoto && !sameRequestPhoto) {
-          return res.status(409).json({
-            success: true,
-            idempotent: true,
-            code: 'FAMILY_DAILY_PHOTO_ALREADY_SAVED',
-            status: 'RESOLVED_IDEMPOTENT',
-            message: 'Foto do diário já salva hoje.',
-            data: sameUploadedPhoto
-          });
-        }
-        const reachedDailyPhotoLimit = !sameRequestPhoto && todayPhotos.length >= FAMILY_DAILY_PHOTO_LIMIT;
-        if (reachedDailyPhotoLimit) {
-          return res.status(409).json({
-            success: false,
-            code: 'FAMILY_DAILY_PHOTO_LIMIT',
-            error: `Limite diário atingido: até ${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia podem ser enviadas no Portal da Família.`
-          });
-        }
-      }
+      // Patient-portal photo quota/idempotency is enforced atomically by create_patient_portal_history_entry_v1.
       const docCreatedAt = sanitizeString(req.body?.created_at || req.body?.createdAt, 40) || new Date().toISOString();
       const normalized = normalizeHistoryMutationPayload(req.body, {
         resolvedPatientId,
@@ -43491,15 +43464,67 @@ async function startServer() {
       if (!isUuid(docData.patient_id)) {
         return res.status(400).json({ success: false, error: 'patient_id inválido para salvar histórico.' });
       }
-      const { data, error } = await upsertHistoryWithSchemaFallback(docData, {
-        requestId,
-        userId: sanitizeString(req.session.user?.id, 120),
-        patientId: docData.patient_id,
-        payloadKeys: clinicalPayloadKeys(req.body),
-        table: 'history'
-      });
-      if (error) throw error;
-      if (sanitizeString(req.session.user?.role, 40).toLowerCase() !== 'patient') {
+      let data: any = null;
+      if (role === 'patient') {
+        let patientClinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientClinicId)) {
+          const patientScope = await supabase
+            .from('patients')
+            .select('clinic_id')
+            .eq('id', docData.patient_id)
+            .eq('is_active', true)
+            .is('deleted_at', null)
+            .limit(1)
+            .maybeSingle();
+          if (patientScope.error) throw patientScope.error;
+          patientClinicId = sanitizeString(patientScope.data?.clinic_id, 120);
+        }
+        if (!isUuid(patientClinicId) || !isUuid(docData.id)) {
+          return res.status(400).json({ success: false, error: 'Escopo persistente do registro do paciente inválido.' });
+        }
+        const portalWrite = await supabase.rpc('create_patient_portal_history_entry_v1', {
+          p_id: docData.id,
+          p_clinic_id: patientClinicId,
+          p_patient_id: docData.patient_id,
+          p_actor_user_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+          p_patient_email: docData.patient_email || sanitizeEmail(req.session.user?.email) || null,
+          p_type: docData.type,
+          p_title: docData.title,
+          p_score: docData.score ?? null,
+          p_energy: docData.energy ?? null,
+          p_note: docData.note || null,
+          p_icon: docData.icon || null,
+          p_image: docData.image || null,
+          p_image_path: docData.image_path || null,
+          p_date_group: docData.date_group || dateGroupForClinic(docData.created_at || new Date().toISOString(), req.session.user),
+          p_source: docData.source || 'patient_portal',
+          p_task_data: docData.task_data || {}
+        });
+        if (portalWrite.error) {
+          const portalMessage = String(portalWrite.error?.message || '');
+          if (portalMessage.includes('FAMILY_DAILY_PHOTO_LIMIT')) {
+            return res.status(409).json({
+              success: false,
+              code: 'FAMILY_DAILY_PHOTO_LIMIT',
+              error: `Limite diário atingido: até ${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia podem ser enviadas no Portal do Paciente.`
+            });
+          }
+          if (/create_patient_portal_history_entry_v1|42883|function .* does not exist/i.test(portalMessage)) {
+            return res.status(503).json({ success: false, code: 'PATIENT_PORTAL_PERSISTENCE_MIGRATION_REQUIRED', error: 'Atualização de persistência do portal ainda não aplicada no banco.' });
+          }
+          throw portalWrite.error;
+        }
+        data = Array.isArray(portalWrite.data) ? portalWrite.data[0] : portalWrite.data;
+      } else {
+        const writeResult = await upsertHistoryWithSchemaFallback(docData, {
+          requestId,
+          userId: sanitizeString(req.session.user?.id, 120),
+          patientId: docData.patient_id,
+          payloadKeys: clinicalPayloadKeys(req.body),
+          table: 'history'
+        });
+        if (writeResult.error) throw writeResult.error;
+        data = writeResult.data;
         void persistActivityLog({
           userId: sanitizeString(req.session.user?.id, 120),
           clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
@@ -45925,6 +45950,12 @@ async function startServer() {
             color: sanitizeString(incomingTaskData?.color, 80) || existingTaskData?.color || undefined,
             linkedTask: sanitizeString(incomingTaskData?.linkedTask, 120) || existingTaskData?.linkedTask || undefined,
             linkedProtocolId: sanitizeString(incomingTaskData?.linkedProtocolId, 120) || existingTaskData?.linkedProtocolId || undefined,
+            isDailyReminder: incomingTaskData?.isDailyReminder !== undefined || incomingTaskData?.is_daily_reminder !== undefined
+              ? Boolean(incomingTaskData?.isDailyReminder ?? incomingTaskData?.is_daily_reminder)
+              : Boolean(existingTaskData?.isDailyReminder ?? existingTaskData?.is_daily_reminder),
+            is_daily_reminder: incomingTaskData?.isDailyReminder !== undefined || incomingTaskData?.is_daily_reminder !== undefined
+              ? Boolean(incomingTaskData?.isDailyReminder ?? incomingTaskData?.is_daily_reminder)
+              : Boolean(existingTaskData?.isDailyReminder ?? existingTaskData?.is_daily_reminder),
             maxScore: asSafeNumber(incomingTaskData?.maxScore ?? incomingTaskData?.max_score, 1, 10) ?? existingTaskData?.maxScore ?? existingTaskData?.max_score
           }
         : undefined;
@@ -45972,13 +46003,7 @@ async function startServer() {
       if (fetchError) throw fetchError;
       if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
 
-      const sessionEmail = sanitizeEmail(req.session.user?.email);
-      const linkedPatientIds = sessionEmail
-        ? await getPatientIdsByEmailAcrossClinics(sessionEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user))
-        : [];
-      const canAccessByEmail = sessionEmail && sessionEmail === sanitizeEmail(existing.patient_email);
-      const canAccessByPatientId = linkedPatientIds.includes(String(existing.patient_id));
-      if (!canAccessByEmail && !canAccessByPatientId) {
+      if (!(await canPortalSessionAccessPatient(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
 
@@ -46006,86 +46031,42 @@ async function startServer() {
         effortLabelForPercent(submittedEffort) ||
         effortLabelForPercent(asSafeNumber(existing?.patient_effort, 0, 100));
       const completedAt = existing?.completed_at || new Date().toISOString();
-      const updatePayload = cleanObject({
-        patient_effort: submittedEffort,
-        patient_effort_emoji: effortEmoji || null,
-        patient_effort_label: effortLabel || null,
-        patient_comment: submittedComment,
-        task_data: {
-          ...existingTaskData,
-          patientEffort: submittedEffort,
-          patient_effort: submittedEffort,
-          patientEffortEmoji: effortEmoji || null,
-          patient_effort_emoji: effortEmoji || null,
-          patientEffortLabel: effortLabel || null,
-          patient_effort_label: effortLabel || null
-        },
-        status: 'completed',
-        completed_at: completedAt
+      const historyId = uuidFromStableString(`adult-assigned-task-completion-history:${taskId}`);
+      const completionResult = await supabase.rpc('complete_patient_assigned_task_v1', {
+        p_task_id: taskId,
+        p_actor_user_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        p_expected_patient_id: sanitizeString(existing.patient_id, 120),
+        p_patient_effort: submittedEffort,
+        p_patient_effort_emoji: effortEmoji || null,
+        p_patient_effort_label: effortLabel || null,
+        p_patient_comment: submittedComment,
+        p_completed_at: completedAt,
+        p_history_id: historyId,
+        p_date_group: dateGroupForClinic(completedAt, req.session.user)
       });
-
-      const { data, error } = await updateAssignedTaskWithSchemaFallback(taskId, updatePayload);
-      if (error) throw error;
-
-      const taskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : {};
-      let historyEntry: any = null;
-      try {
-        historyEntry = cleanObject({
-          id: uuidFromStableString(`adult-assigned-task-completion-history:${taskId}`),
-          patient_id: sanitizeString(data?.patient_id, 120),
-          patient_email: sanitizeEmail(data?.patient_email),
-          type: sanitizeString(data?.task_type, 80) || 'task',
-          title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
-          score: null,
-          energy: asSafeNumber(data?.patient_effort, 0, 100),
-          note: sanitizeTextField(data?.patient_comment, 12000),
-          icon: sanitizeString(taskData?.icon, 40) || '📌',
-          therapist_id: sanitizeString(data?.professional_id, 120),
-          created_at: data?.completed_at || new Date().toISOString(),
-          date_group: dateGroupForClinic(data?.completed_at || new Date().toISOString(), req.session.user),
-          assigned_task_id: sanitizeString(data?.id, 120),
-          source: 'assigned_task_completion',
-          task_data: cleanObject({
-            ...taskData,
-            patientEffortEmoji: effortEmoji || taskData?.patientEffortEmoji || null,
-            patient_effort_emoji: effortEmoji || taskData?.patient_effort_emoji || null,
-            patientEffortLabel: effortLabel || taskData?.patientEffortLabel || null,
-            patient_effort_label: effortLabel || taskData?.patient_effort_label || null
-          })
-        });
-        const historyResult = await upsertHistoryWithSchemaFallback(historyEntry);
-        if (historyResult.error) throw historyResult.error;
-        historyEntry = historyResult.data || historyEntry;
-      } catch (historyInsertError: any) {
-        console.warn('[AssignedTasks] Falha ao criar histórico automático:', historyInsertError?.message || String(historyInsertError));
+      if (completionResult.error) {
+        const completionMessage = String(completionResult.error?.message || completionResult.error?.details || '');
+        if (/complete_patient_assigned_task_v1|42883|function .* does not exist|schema cache/i.test(completionMessage)) {
+          return res.status(503).json({
+            success: false,
+            error: 'A persistência atômica de tarefas do portal ainda não foi aplicada no banco.',
+            code: 'PATIENT_TASK_COMPLETION_MIGRATION_REQUIRED'
+          });
+        }
+        if (/ASSIGNED_TASK_NOT_FOUND/.test(completionMessage)) {
+          return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+        }
+        if (/ASSIGNED_TASK_SCOPE_CHANGED|ASSIGNED_TASK_PATIENT_CLINIC_SCOPE_INVALID|ASSIGNED_TASK_CLINIC_INVALID/.test(completionMessage)) {
+          return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_SCOPE_CHANGED', error: 'A tarefa mudou de escopo. Atualize o portal antes de tentar novamente.' });
+        }
+        throw completionResult.error;
       }
-
-      let patientLogEntry: any = null;
-      try {
-        patientLogEntry = cleanObject({
-          id: crypto.randomUUID(),
-          patient_id: sanitizeString(data?.patient_id, 120),
-          professional_id: sanitizeString(data?.professional_id, 120),
-          type: sanitizeString(data?.task_type, 80) || 'task',
-          value: cleanObject({
-            task_id: sanitizeString(data?.id, 120),
-            title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
-            completed: true,
-            effort: asSafeNumber(data?.patient_effort, 0, 100),
-            energy: asSafeNumber(data?.patient_effort, 0, 100),
-            effortEmoji: effortEmoji || null,
-            effortLabel: effortLabel || null,
-            note: sanitizeTextField(data?.patient_comment, 4000),
-            icon: sanitizeString(taskData?.icon, 40) || '📌'
-          }),
-          timestamp: data?.completed_at || new Date().toISOString()
-        });
-        await supabase.from('patient_logs').insert([patientLogEntry]);
-      } catch (patientLogError: any) {
-        console.warn('[AssignedTasks] Falha ao criar log automático do paciente:', patientLogError?.message || String(patientLogError));
-      }
-
-      return res.json({ success: true, data, historyEntry, patientLogEntry });
+      const completionData = completionResult.data && typeof completionResult.data === 'object'
+        ? completionResult.data
+        : {};
+      const data = completionData?.task || existing;
+      const historyEntry = completionData?.history || null;
+      return res.json({ success: true, data, historyEntry });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
@@ -46229,7 +46210,7 @@ async function startServer() {
         reviewMetadata.protocolTitle ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
         reviewMetadata.domainName ? `Domínio: ${reviewMetadata.domainName}` : '',
         `Pontuação profissional: ${proScore} / ${maxScoreFromTask}`,
-        patientEffort !== null ? `Energia após a atividade: ${patientEffort}% ${patientEffortEmoji || ''}`.trim() : '',
+        patientEffort !== null ? `Esforço percebido após a atividade: ${patientEffort}% ${patientEffortEmoji || ''}`.trim() : '',
         sanitizeTextField(existing?.patient_comment, 4000) ? `Comentário do paciente: ${sanitizeTextField(existing?.patient_comment, 4000)}` : '',
         reviewNote ? `Anotação técnica: ${reviewNote}` : 'Anotação técnica: Sem anotação técnica registrada.'
       ].filter(Boolean);
@@ -49453,6 +49434,14 @@ async function startServer() {
     const userId = sanitizeString(user?.id, 120);
     const userEmail = sanitizeEmail(user?.email);
     const clinicId = sanitizeString(currentClinicId(user), 120);
+    // The selected patient-portal access context was already resolved and authorized at session bootstrap.
+    // Reuse it on hot polling/read paths instead of rediscovering the same patient through email/user lookups.
+    const scopedPatientId = sanitizeString(
+      user?.patientPortalPatientId ||
+      (user?.activeAccessContext?.kind === 'patient_portal' ? user?.activeAccessContext?.patientId : ''),
+      120
+    );
+    if (isUuid(scopedPatientId)) return [scopedPatientId];
     const ids = await resolvePatientIdsForPush({
       supabase,
       patientEmail: userEmail,
@@ -66812,13 +66801,11 @@ async function startServer() {
       const inferredOperationalPhase =
         data?.phase ||
         normalizedChecklist.find((item: any) => item?.operationalPhase)?.operationalPhase ||
-        (readinessStatus === 'NOT_BILLABLE'
-          ? 'cancelled'
-          : data?.actual_end || ['READY', 'PENDING', 'WARNING'].includes(readinessStatus)
-            ? 'completed_pending_closure'
-            : data?.actual_start
-              ? 'in_session'
-              : 'scheduled_pre_session');
+        (data?.actual_end || ['READY', 'PENDING', 'WARNING'].includes(readinessStatus)
+          ? 'completed_pending_closure'
+          : data?.actual_start
+            ? 'in_session'
+            : 'scheduled_pre_session');
       const operationalView = buildAppointmentClosureOperationalView(
         normalizedChecklist,
         inferredOperationalPhase

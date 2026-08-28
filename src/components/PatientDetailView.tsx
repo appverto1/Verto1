@@ -61,6 +61,7 @@ import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Prot
 import html2canvas from 'html2canvas';
 import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
+import { resolvePatientPortalKind } from '../utils/patientProfileType';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -2926,9 +2927,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { min: 0, max: null };
   };
 
+  const patientPortalKind = useMemo(() => resolvePatientPortalKind(patient), [patient]);
+
   useEffect(() => {
     const patientId = String(patient?.id || '');
-    if (!patientId || patientAgeYears === null || patientAgeYears <= 12) {
+    if (!patientId || patientPortalKind === 'KIDS') {
       assignedTasksLoadedForRef.current = '';
       setAssignedTasks([]);
       setIsLoadingAssignedTasks(false);
@@ -2975,7 +2978,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [assignedTasksReloadKey, patient?.id, patientAgeYears]);
+  }, [assignedTasksReloadKey, patient?.id, patientPortalKind]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -4049,8 +4052,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/famÃ­lia/gi, 'família')
       .replace(/sessÃ£o/gi, 'sessão')
       .replace(/avaliaÃ§Ã£o/gi, 'avaliação')
-      .replace(/Energia restante após a tarefa/gi, 'Energia após a atividade')
-      .replace(/Esforço informado/gi, 'Energia após a atividade')
+      .replace(/Energia restante após a tarefa/gi, 'Esforço percebido após a atividade')
+      .replace(/Esforço informado/gi, 'Esforço percebido após a atividade')
       .replace(/Ã¡/g, 'á')
       .replace(/Ã©/g, 'é')
       .replace(/Ã­/g, 'í')
@@ -5551,6 +5554,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         domainName: selectedDomain?.name || null,
         noRealtimeScoring: !isKidsProfile,
         isDailyReminder: planType === 'intervention' ? isDailyReminder : false,
+        is_daily_reminder: planType === 'intervention' ? isDailyReminder : false,
         linkedTask: planType === 'intervention' ? linkedTask : undefined,
         linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId : undefined
       }; 
@@ -5911,7 +5915,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
         `Tarefa: ${String(reviewedTask?.task_data?.title || reviewedTask?.title || 'Tarefa adulta')}`,
         `Pontuação profissional: ${numericScore} / ${dynamicMaxScore}`,
-        `Energia após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
+        `Esforço percebido após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
         draft.note ? `Anotação técnica: ${draft.note}` : 'Anotação técnica: Sem anotação técnica registrada.'
       ].join('\n'),
       content: '',
@@ -10598,7 +10602,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             <div className={`rounded-2xl border p-3 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white border-slate-200'}`}>
                               <div className="flex items-center justify-between gap-3 mb-2">
                                 <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                                  Energia após a atividade
+                                  Esforço percebido após a atividade
                                 </span>
                                 <span className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
                                   <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
@@ -11183,7 +11187,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         </div>
                         <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
                         <p className="text-xs text-gray-600 mt-1">
-                          Energia após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                          Esforço percebido após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
                         </p>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
                           {normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica registrada.'}
@@ -12021,7 +12025,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                 <p className="font-semibold text-gray-800 text-sm tracking-tight">{displayedTitle}</p>
                                 <div className="mt-2 w-full max-w-xs rounded-xl border border-slate-100 bg-slate-50 p-2">
                                   <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
-                                    <span>Energia após a atividade</span>
+                                    <span>Esforço percebido após a atividade</span>
                                     <span className="font-semibold text-slate-800 flex items-center gap-1">
                                       <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0))}</span>
                                       {normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%
