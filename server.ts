@@ -74304,8 +74304,11 @@ async function startServer() {
       const reviewDueDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedReviewDueDate)
         ? requestedReviewDueDate
         : null;
+      const derivedLastReviewedAt = isPts
+        ? ptsLastReviewedAt(ptsPayload)
+        : existing.last_reviewed_at;
       const requestedLastReviewedAt = sanitizeString(
-        req.body?.lastReviewedAt ?? req.body?.last_reviewed_at ?? ptsLastReviewedAt(ptsPayload) ?? existing.last_reviewed_at,
+        req.body?.lastReviewedAt ?? req.body?.last_reviewed_at ?? derivedLastReviewedAt,
         40,
       );
       const lastReviewedAt = requestedLastReviewedAt && !Number.isNaN(new Date(requestedLastReviewedAt).getTime())
