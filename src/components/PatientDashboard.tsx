@@ -61,7 +61,7 @@ const STAR_CONFETTI_PARTICLES = Array.from({ length: 84 }, (_, index) => ({
   shape: index % 4
 }));
 
-export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => { 
+export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompleteTask, history, energyTags, sharedNotes, protocols, onAddFamilyNote, isReadOnlyMode = false, patientPortalId = '' }: any) => {
   const FAMILY_DAILY_PHOTO_LIMIT = 5;
   const chartFiltersStorageKey = `verto.patient-dashboard-chart-filters:${String(user?.id || patientPortalId || 'unknown')}`;
   const readPersistedChartFilters = () => {
@@ -77,21 +77,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [selectedCompareDate, setSelectedCompareDate] = useState(() => String(initialChartFilters.selectedCompareDate || ""));
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState(() => String(initialChartFilters.selectedSnapshotDate || "all"));
   const [chartFiltersHydratedKey, setChartFiltersHydratedKey] = useState(chartFiltersStorageKey);
-  const [selectedTask, setSelectedTask] = useState<any>(null); 
+  const [selectedTask, setSelectedTask] = useState<any>(null);
   const [taskEnergy, setTaskEnergy] = useState<number | null>(null);
-  const [taskNote, setTaskNote] = useState(""); 
+  const [taskNote, setTaskNote] = useState("");
   const [interventionResponse, setInterventionResponse] = useState("");
   const [interventionImages, setInterventionImages] = useState<string[]>([]);
   const [isInterventionUploading, setIsInterventionUploading] = useState(false);
-  const [taskStep, setTaskStep] = useState(1); 
-  const [showTaskSuccess, setShowTaskSuccess] = useState(false); 
-  const [selectedMood, setSelectedMood] = useState<any>(null); 
-  const [hoveredMood, setHoveredMood] = useState<any>(null); 
-  const [isMoodModalOpen, setIsMoodModalOpen] = useState(false); 
-  const [moodNote, setMoodNote] = useState(""); 
-  const [showMoodSuccess, setShowMoodSuccess] = useState(false); 
-  const [isMessagesOpen, setIsMessagesOpen] = useState(false); 
-  const [selectedTag, setSelectedTag] = useState<any>(null); 
+  const [taskStep, setTaskStep] = useState(1);
+  const [showTaskSuccess, setShowTaskSuccess] = useState(false);
+  const [selectedMood, setSelectedMood] = useState<any>(null);
+  const [hoveredMood, setHoveredMood] = useState<any>(null);
+  const [isMoodModalOpen, setIsMoodModalOpen] = useState(false);
+  const [moodNote, setMoodNote] = useState("");
+  const [showMoodSuccess, setShowMoodSuccess] = useState(false);
+  const [isMessagesOpen, setIsMessagesOpen] = useState(false);
+  const [selectedTag, setSelectedTag] = useState<any>(null);
   const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
   const [wellbeingPeriod, setWellbeingPeriod] = useState<WellbeingPeriod>('month');
   const [readMessageIds, setReadMessageIds] = useState<Set<string>>(() => new Set());
@@ -195,13 +195,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const patientPortalKind = resolvePatientPortalKind(user);
   const isKidsProfile = patientPortalKind === 'KIDS';
   const isConventionalAdult = patientPortalKind === 'ADULT_CONVENTIONAL';
-  const taskReflectionLabel = isConventionalAdult ? 'Esforço percebido' : 'Energia';
-  const taskReflectionPrompt = isConventionalAdult
-    ? 'Quanto esforço essa atividade exigiu?'
-    : 'Registre sua energia depois dessa tarefa';
-  const taskReflectionHelp = isConventionalAdult
-    ? '0% significa esforço mínimo e 100% esforço máximo.'
-    : 'Registre como ficou sua energia depois da atividade.';
+  const taskReflectionLabel = 'Esforço percebido';
+  const taskReflectionPrompt = 'Quanto esforço essa atividade exigiu?';
+  const taskReflectionHelp = '0% significa esforço mínimo e 100% esforço máximo.';
+  const taskEffortProgressGradient = 'linear-gradient(90deg, #05CD99 0%, #FFB547 50%, #EE5D50 100%)';
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
   const portalContext = user?.portalContext && typeof user.portalContext === 'object' ? user.portalContext : {};
   const portalPatientId = String(patientPortalId || portalContext?.resolvedPatientId || user?.patientId || user?.patient_id || '').trim();
@@ -1208,8 +1205,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (val < 80) return "😕";
     return "😫";
   };
-  const getTaskReflectionEmoji = (val: number) =>
-    isConventionalAdult ? getTaskEffortEmoji(val) : getTaskEnergyEmoji(val);
+  const getTaskReflectionEmoji = (val: number) => getTaskEffortEmoji(val);
 
   const toLocalDateKey = (value: any) => {
     if (!value) return '';
@@ -2279,7 +2275,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         }
         const fileName = `${ownerPatientId}/family/family-${Date.now()}-${file.name}`;
         const result = await dataService.uploadFile('patient-photos', fileName, file);
-        
+
         if (result.success && result.url) {
           setFamilyImage(result.url);
           setFamilyImagePath(result.path || null);
@@ -3662,7 +3658,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   if (isKidsProfile) {
     return (
         <div className="min-h-screen bg-gradient-to-b from-[#F2FAFF] via-[#F6F2FF] to-[#FFF8EF] p-4 sm:p-6 flex flex-col items-center relative overflow-y-auto">
-            {(showFamilySuccess) && <SuccessOverlay />} 
+            {(showFamilySuccess) && <SuccessOverlay />}
             <AnimatePresence>{patientSettingsModal}</AnimatePresence>
             {portalAppointmentDetailModal}
             {portalActionModal}
@@ -3678,9 +3674,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                              <p className="text-[10px] sm:text-sm text-gray-400 font-medium">Vamos ver seus poderes?</p>
                          </div>
                     </div>
-                    
+
                     <div className="relative">
-                      <button 
+                      <button
                         onClick={() => setIsMenuOpen(!isMenuOpen)}
                         className="p-2.5 bg-white/80 backdrop-blur-md rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50"
                       >
@@ -3689,7 +3685,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
                     <AnimatePresence>
                         {isMenuOpen && (
-                          <motion.div 
+                          <motion.div
                             initial={{ opacity: 0, scale: 0.95, y: -10 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: -10 }}
@@ -3712,7 +3708,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                               })}
                             </div>
                             {!isReadOnlyMode && clinicalPortalEnabled && (
-                              <button 
+                              <button
                                 onClick={() => { setFamilyUploadError(''); setIsFamilyLogOpen(true); setIsMenuOpen(false); }}
                                 className="w-full flex items-center gap-3 p-3 text-sm font-medium text-blue-600 hover:bg-blue-50 rounded-xl transition-colors"
                               >
@@ -3725,7 +3721,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                             >
                               <Settings size={18} /> Configurações
                             </button>
-                            <button 
+                            <button
                               onClick={() => { onLogout(); setIsMenuOpen(false); }}
                               className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
                             >
@@ -3888,22 +3884,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </div>
 
             {isFamilyLogOpen && (
-              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
-                <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
-                  <button onClick={() => setIsFamilyLogOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
-                  <div className="text-center mb-6"> 
-                    <div className="w-16 h-16 mx-auto bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mb-3"> 🏠 </div> 
-                    <h3 className="text-xl font-bold text-gray-800 tracking-tight">Diário da Família</h3> 
-                    <p className="text-gray-500 text-sm mt-1">Como foi o dia do pequeno herói?</p> 
-                  </div> 
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+                <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative">
+                  <button onClick={() => setIsFamilyLogOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button>
+                  <div className="text-center mb-6">
+                    <div className="w-16 h-16 mx-auto bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mb-3"> 🏠 </div>
+                    <h3 className="text-xl font-bold text-gray-800 tracking-tight">Diário da Família</h3>
+                    <p className="text-gray-500 text-sm mt-1">Como foi o dia do pequeno herói?</p>
+                  </div>
                   <div className="mb-4">
-                    <textarea 
-                      className="w-full h-32 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-blue-500/50 transition-all resize-none font-medium mb-3" 
-                      placeholder="Conte-nos como foi o dia, comportamentos, alimentação ou qualquer observação importante..." 
-                      value={familyNote} 
-                      onChange={(e) => setFamilyNote(e.target.value)} 
-                      autoFocus 
-                    ></textarea> 
+                    <textarea
+                      className="w-full h-32 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-blue-500/50 transition-all resize-none font-medium mb-3"
+                      placeholder="Conte-nos como foi o dia, comportamentos, alimentação ou qualquer observação importante..."
+                      value={familyNote}
+                      onChange={(e) => setFamilyNote(e.target.value)}
+                      autoFocus
+                    ></textarea>
 
                     <div className="flex flex-wrap gap-2">
                       {familyImage ? (
@@ -3937,21 +3933,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       </p>
                     )}
                   </div>
-                  <button 
-                    onClick={handleConfirmFamilyNote} 
+                  <button
+                    onClick={handleConfirmFamilyNote}
                     disabled={isFamilySaving || isUploading || (!familyNote.trim() && !familyImage)}
                     className="w-full font-bold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-blue-600 text-white shadow-blue-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-                  > 
+                  >
                     {isFamilySaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin" /> Enviando...</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar no Histórico</React.Fragment>}
-                  </button> 
-                </div> 
+                  </button>
+                </div>
               </div>
             )}
             {isDrawingMode && familyImage && (
-              <DrawingCanvas 
-                image={familyImage} 
-                onSave={(edited) => { setFamilyImage(edited); setFamilyImagePath(null); setIsDrawingMode(false); }} 
-                onCancel={() => { setIsDrawingMode(false); }} 
+              <DrawingCanvas
+                image={familyImage}
+                onSave={(edited) => { setFamilyImage(edited); setFamilyImagePath(null); setIsDrawingMode(false); }}
+                onCancel={() => { setIsDrawingMode(false); }}
               />
             )}
         </div>
@@ -3964,8 +3960,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setSelectedTag(null);
     setMoodNote("");
     setIsMoodModalOpen(true);
-  }; 
-  const handleConfirmMood = async () => { 
+  };
+  const handleConfirmMood = async () => {
     if (isReadOnlyMode || !selectedMood || isMoodSaving) return;
     setIsMoodSaving(true);
     setMoodSaveError('');
@@ -3987,7 +3983,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     } finally {
       setIsMoodSaving(false);
     }
-  }; 
+  };
   const openTaskModal = (task: any) => {
     if (isReadOnlyMode) return;
     setSelectedTask(task);
@@ -4012,7 +4008,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setTaskEnergy(null);
     setTaskStep(2);
   };
-  const handleConfirmTask = async () => { 
+  const handleConfirmTask = async () => {
     if (isReadOnlyMode || !selectedTask) return;
     if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
     const interventionDetails = [
@@ -4032,7 +4028,7 @@ ${interventionImages.join('\n')}` : ''
     setInterventionResponse("");
     setInterventionImages([]);
     setTaskStep(1);
-  }; 
+  };
 
   const dailyReviewTasks = useMemo(() => {
     const interventions = history.filter((h: any) => h.type === 'intervention' && h.isDailyReminder);
@@ -4045,8 +4041,8 @@ ${interventionImages.join('\n')}` : ''
     return Object.values(latestByTitle);
   }, [history]);
 
-  return ( 
-    <div className={`min-h-screen w-full max-w-full p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}> 
+  return (
+    <div className={`min-h-screen w-full max-w-full p-6 flex flex-col overflow-x-hidden ${isConventionalAdult ? 'bg-gradient-to-b from-[#FFF9F3] to-[#F8F5FF]' : 'bg-[#F4F7FE]'}`}>
       <AnimatePresence>
         {showStarCelebration && (
           <motion.div
@@ -4123,28 +4119,28 @@ ${interventionImages.join('\n')}` : ''
           </motion.div>
         )}
       </AnimatePresence>
-      {(showTaskSuccess || showMoodSuccess) && <SuccessOverlay />} 
+      {(showTaskSuccess || showMoodSuccess) && <SuccessOverlay />}
       <AnimatePresence>{patientSettingsModal}</AnimatePresence>
       {portalAppointmentDetailModal}
       {portalActionModal}
-      {isMessagesOpen && ( 
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setIsMessagesOpen(false)}> 
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}> 
-            <button onClick={() => setIsMessagesOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button> 
-            <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 tracking-tight"><BookOpen className="text-[#7a32fc]"/> Mensagens do Terapeuta</h2> 
-            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar"> 
-              {portalSharedNotes.length > 0 ? portalSharedNotes.map((note: any) => ( 
-                <div key={note.id} className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl"> 
-                  <span className="text-[10px] font-bold text-blue-400 uppercase block mb-1">{note.date}</span> 
-                  <p className="text-sm text-gray-700">{firstPortalText(note.text, note.note, note.content, note.message)}</p> 
-                </div> 
-              )) : ( <p className="text-center text-gray-400 text-sm py-8 italic">Nenhuma mensagem por enquanto.</p> )} 
-            </div> 
-          </div> 
-        </div> 
-      )} 
-      <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6"> 
-        <div className="flex items-center gap-4"> 
+      {isMessagesOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setIsMessagesOpen(false)}>
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}>
+            <button onClick={() => setIsMessagesOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button>
+            <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 tracking-tight"><BookOpen className="text-[#7a32fc]"/> Mensagens do Terapeuta</h2>
+            <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
+              {portalSharedNotes.length > 0 ? portalSharedNotes.map((note: any) => (
+                <div key={note.id} className="bg-blue-50/50 border border-blue-100 p-4 rounded-xl">
+                  <span className="text-[10px] font-bold text-blue-400 uppercase block mb-1">{note.date}</span>
+                  <p className="text-sm text-gray-700">{firstPortalText(note.text, note.note, note.content, note.message)}</p>
+                </div>
+              )) : ( <p className="text-center text-gray-400 text-sm py-8 italic">Nenhuma mensagem por enquanto.</p> )}
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-4 mb-6">
+        <div className="flex items-center gap-4">
           {profilePicture ? (
             <div className="h-[50px] w-[50px] shrink-0 overflow-hidden rounded-2xl border border-purple-100 bg-white shadow-sm">
               <SecureImage src={profilePicture} alt="Foto do paciente" className="h-full w-full object-cover" />
@@ -4154,13 +4150,13 @@ ${interventionImages.join('\n')}` : ''
           )}
           <div className="w-px h-8 bg-gray-200 mx-2 hidden sm:block"></div>
           <div>
-            <h1 className="text-2xl font-semibold text-gray-800 tracking-tight leading-none"> Olá, <span className="text-[#7a32fc]">{displayName}</span>! </h1> 
-            <p className="text-gray-400 font-medium mt-1 text-xs"> Vamos cuidar de você hoje? </p> 
+            <h1 className="text-2xl font-semibold text-gray-800 tracking-tight leading-none"> Olá, <span className="text-[#7a32fc]">{displayName}</span>! </h1>
+            <p className="text-gray-400 font-medium mt-1 text-xs"> Vamos cuidar de você hoje? </p>
           </div>
-        </div> 
-        
-        <div className="relative self-end sm:self-auto"> 
-          <button 
+        </div>
+
+        <div className="relative self-end sm:self-auto">
+          <button
             onClick={() => setIsMenuOpen(!isMenuOpen)}
             className="p-3 bg-white rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50 relative"
           >
@@ -4170,7 +4166,7 @@ ${interventionImages.join('\n')}` : ''
 
           <AnimatePresence>
             {isMenuOpen && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: -10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: -10 }}
@@ -4193,7 +4189,7 @@ ${interventionImages.join('\n')}` : ''
                   })}
                 </div>
                 {!isReadOnlyMode && (
-                  <button 
+                  <button
                     onClick={openMessagesAndPersistRead}
                     className="w-full flex items-center justify-between p-3 text-sm font-medium text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-colors"
                   >
@@ -4213,7 +4209,7 @@ ${interventionImages.join('\n')}` : ''
                 >
                   <Settings size={18} /> Configurações
                 </button>
-                <button 
+                <button
                   onClick={() => { onLogout(); setIsMenuOpen(false); }}
                   className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
                 >
@@ -4222,8 +4218,8 @@ ${interventionImages.join('\n')}` : ''
               </motion.div>
             )}
           </AnimatePresence>
-        </div> 
-      </div> 
+        </div>
+      </div>
       {isReadOnlyMode && (
         <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {readOnlyNotice}
@@ -4242,33 +4238,33 @@ ${interventionImages.join('\n')}` : ''
       {portalSection === 'home' && clinicalPortalEnabled && (
         <React.Fragment>
       <div className="mb-8 animate-slide-up">
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {isConventionalAdult ? <Smile size={16} /> : <BatteryCharging size={16} />} {isConventionalAdult ? 'Como está se sentindo?' : 'Como se sente agora?'} </h2> 
-          <div className="flex overflow-x-auto pb-8 pt-4 -mx-6 px-6 gap-4 snap-x snap-mandatory no-scrollbar items-center"> 
-            {moodOptions.map((mood) => { 
-              const isHovered = hoveredMood === mood.value; 
-              const isDimmed = hoveredMood !== null && !isHovered; 
-              return ( 
-                <button key={mood.value} disabled={isReadOnlyMode} onClick={() => handleEmojiClick(mood)} onMouseEnter={() => setHoveredMood(mood.value)} onMouseLeave={() => setHoveredMood(null)} className={` snap-center shrink-0 w-40 h-56 sm:w-48 sm:h-64 rounded-[32px] flex flex-col items-center p-6 transition-all duration-500 border-4 shadow-lg ${mood.color} ${isHovered ? 'scale-110 -translate-y-4 shadow-2xl z-10 rotate-1' : 'scale-100'} ${isDimmed ? 'opacity-50 scale-95 blur-[1px]' : 'opacity-100'} group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed`} > 
-                  <div className="absolute top-[-20%] right-[-20%] w-24 h-24 rounded-full bg-white/20 blur-xl"></div> 
-                  <div className="absolute bottom-[-10%] left-[-10%] w-20 h-20 rounded-full bg-white/30 blur-lg"></div> 
-                  <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {!isConventionalAdult && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div> 
-                  <span className="text-7xl sm:text-8xl filter drop-shadow-md transform transition-transform duration-500 group-hover:scale-125 group-hover:rotate-12 z-10 my-auto"> {mood.emoji} </span> 
-                </button> 
-              ); 
-            })} 
-            <div className="w-2 shrink-0"></div> 
-          </div> 
-          <p className="text-center text-[10px] text-gray-400 font-medium animate-pulse mt-[-10px] italic"> Deslize para escolher ou clique </p> 
-        </div> 
-      <div className="flex-1 overflow-y-auto no-scrollbar"> 
-        <div className="mb-8"> 
-          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2"> <Zap size={16} /> Suas Atividades </h2> 
-          {visiblePatientTasks && visiblePatientTasks.length > 0 ? ( 
-            <div className="grid gap-3"> 
-              {visiblePatientTasks.map((task: any) => ( 
-                <div key={task.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between group hover:shadow-md transition-all"> 
-                  <div className="flex items-center gap-4"> 
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.completed ? 'bg-emerald-100 text-emerald-700' : (task.color || 'bg-[#7a32fc]/10 text-[#7a32fc]')}`}> {task.icon || '📋'} </div> 
+          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {isConventionalAdult ? <Smile size={16} /> : <BatteryCharging size={16} />} {isConventionalAdult ? 'Como está se sentindo?' : 'Como se sente agora?'} </h2>
+          <div className="flex overflow-x-auto pb-8 pt-4 -mx-6 px-6 gap-4 snap-x snap-mandatory no-scrollbar items-center">
+            {moodOptions.map((mood) => {
+              const isHovered = hoveredMood === mood.value;
+              const isDimmed = hoveredMood !== null && !isHovered;
+              return (
+                <button key={mood.value} disabled={isReadOnlyMode} onClick={() => handleEmojiClick(mood)} onMouseEnter={() => setHoveredMood(mood.value)} onMouseLeave={() => setHoveredMood(null)} className={` snap-center shrink-0 w-40 h-56 sm:w-48 sm:h-64 rounded-[32px] flex flex-col items-center p-6 transition-all duration-500 border-4 shadow-lg ${mood.color} ${isHovered ? 'scale-110 -translate-y-4 shadow-2xl z-10 rotate-1' : 'scale-100'} ${isDimmed ? 'opacity-50 scale-95 blur-[1px]' : 'opacity-100'} group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed`} >
+                  <div className="absolute top-[-20%] right-[-20%] w-24 h-24 rounded-full bg-white/20 blur-xl"></div>
+                  <div className="absolute bottom-[-10%] left-[-10%] w-20 h-20 rounded-full bg-white/30 blur-lg"></div>
+                  <div className="w-full flex justify-between items-center opacity-60 group-hover:opacity-100 transition-opacity z-10"> {!isConventionalAdult && <React.Fragment><BatteryFull size={20} className="text-gray-700" /> <span className="text-xs font-semibold text-gray-700">{mood.value}%</span></React.Fragment>} </div>
+                  <span className="text-7xl sm:text-8xl filter drop-shadow-md transform transition-transform duration-500 group-hover:scale-125 group-hover:rotate-12 z-10 my-auto"> {mood.emoji} </span>
+                </button>
+              );
+            })}
+            <div className="w-2 shrink-0"></div>
+          </div>
+          <p className="text-center text-[10px] text-gray-400 font-medium animate-pulse mt-[-10px] italic"> Deslize para escolher ou clique </p>
+        </div>
+      <div className="flex-1 overflow-y-auto no-scrollbar">
+        <div className="mb-8">
+          <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2"> <Zap size={16} /> Suas Atividades </h2>
+          {visiblePatientTasks && visiblePatientTasks.length > 0 ? (
+            <div className="grid gap-3">
+              {visiblePatientTasks.map((task: any) => (
+                <div key={task.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between group hover:shadow-md transition-all">
+                  <div className="flex items-center gap-4">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${task.completed ? 'bg-emerald-100 text-emerald-700' : (task.color || 'bg-[#7a32fc]/10 text-[#7a32fc]')}`}> {task.icon || '📋'} </div>
                     <div>
                       <h3 className="font-semibold text-gray-800 tracking-tight">{task.title}</h3>
                       {task.description && <p className="text-xs text-gray-400 line-clamp-1">{task.description}</p>}
@@ -4277,16 +4273,16 @@ ${interventionImages.join('\n')}` : ''
                           Hoje às {new Date(task.scheduledAt || task.scheduled_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                         </p>
                       )}
-                    </div> 
-                  </div> 
-                  <button disabled={isReadOnlyMode || task.completed || String(task.status || '').toLowerCase() === 'completed'} onClick={() => openTaskModal(task)} className={`p-3 rounded-xl transition-all active:scale-95 disabled:cursor-not-allowed ${task.completed || String(task.status || '').toLowerCase() === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-50 text-gray-400 hover:bg-green-500 hover:text-white disabled:opacity-50'}`} > <Check size={20} /> </button> 
-                </div> 
-              ))} 
-            </div> 
-          ) : ( 
-            <div className="flex flex-col items-center justify-center py-10 text-gray-400 bg-white/50 rounded-3xl border-2 border-dashed border-gray-200"> <Smile size={48} className="mb-2 opacity-50"/> <p className="font-medium">Nenhuma tarefa para agora.</p> </div> 
-          )} 
-        </div> 
+                    </div>
+                  </div>
+                  <button disabled={isReadOnlyMode || task.completed || String(task.status || '').toLowerCase() === 'completed'} onClick={() => openTaskModal(task)} className={`p-3 rounded-xl transition-all active:scale-95 disabled:cursor-not-allowed ${task.completed || String(task.status || '').toLowerCase() === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-50 text-gray-400 hover:bg-green-500 hover:text-white disabled:opacity-50'}`} > <Check size={20} /> </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-10 text-gray-400 bg-white/50 rounded-3xl border-2 border-dashed border-gray-200"> <Smile size={48} className="mb-2 opacity-50"/> <p className="font-medium">Nenhuma tarefa para agora.</p> </div>
+          )}
+        </div>
 
         {dailyReviewTasks.length > 0 && (
           <div className="mb-8 animate-fade-in">
@@ -4324,11 +4320,11 @@ ${interventionImages.join('\n')}` : ''
             />
           </div>
         ) : (
-        <div className="mt-8 mb-6"> 
+        <div className="mt-8 mb-6">
           <div className="flex items-center justify-between mb-4">
              <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
              <div className="relative w-48">
-                <select 
+                <select
                   className="w-full bg-white border border-gray-200 text-[10px] font-semibold text-gray-500 px-3 py-2 rounded-xl outline-none focus:border-[#4318FF] transition-all appearance-none uppercase tracking-widest"
                   value={selectedSnapshotDate}
                   onChange={(e) => setSelectedSnapshotDate(e.target.value)}
@@ -4341,70 +4337,70 @@ ${interventionImages.join('\n')}` : ''
                 <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={14} />
              </div>
           </div>
-          <div className="border-l-2 border-gray-100 ml-3 pb-4 pl-6 space-y-8"> 
-            {sortedDateKeys.length > 0 ? sortedDateKeys.map(dateKey => ( 
-              <div key={dateKey} className="relative animate-slide-up"> 
-                <div className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-[#4318FF] border-2 border-white ring-4 ring-blue-50"></div> 
-                <h3 className="text-[10px] font-semibold text-gray-400 tracking-widest mb-4 bg-gray-50 px-3 py-1 rounded-full w-fit">{dateKey}</h3> 
-                <div className="space-y-4"> 
-                  {groupedHistory[dateKey].map((item: any) => ( 
-                    <HistoryCard 
-                      key={item.id} 
-                      item={item} 
-                      energyTags={moodInfluenceTags} 
-                      isTherapist={false} 
+          <div className="border-l-2 border-gray-100 ml-3 pb-4 pl-6 space-y-8">
+            {sortedDateKeys.length > 0 ? sortedDateKeys.map(dateKey => (
+              <div key={dateKey} className="relative animate-slide-up">
+                <div className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-[#4318FF] border-2 border-white ring-4 ring-blue-50"></div>
+                <h3 className="text-[10px] font-semibold text-gray-400 tracking-widest mb-4 bg-gray-50 px-3 py-1 rounded-full w-fit">{dateKey}</h3>
+                <div className="space-y-4">
+                  {groupedHistory[dateKey].map((item: any) => (
+                    <HistoryCard
+                      key={item.id}
+                      item={item}
+                      energyTags={moodInfluenceTags}
+                      isTherapist={false}
                       isKid={isKidsProfile}
                       fullHistory={history}
                       peiGoals={user.pei || []}
                       protocols={protocols}
-                    /> 
-                  ))} 
-                </div> 
-              </div> 
-            )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade registrada para esta seleção.</p> )} 
-          </div> 
-        </div> 
+                    />
+                  ))}
+                </div>
+              </div>
+            )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade registrada para esta seleção.</p> )}
+          </div>
+        </div>
         )}
-      </div> 
+      </div>
         </React.Fragment>
       )}
-      {isMoodModalOpen && selectedMood && ( 
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
-          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
-            <button onClick={closeMoodModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
-            <div className="text-center mb-4"> 
+      {isMoodModalOpen && selectedMood && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative">
+            <button onClick={closeMoodModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button>
+            <div className="text-center mb-4">
               {!isConventionalAdult && (
-                <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div> 
+                <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div>
               )}
-              <div className="text-6xl mb-2 animate-bounce-slight">{selectedMood.emoji}</div> 
-              <h3 className="text-xl font-semibold text-gray-800 tracking-tight">O que influenciou?</h3> 
-            </div> 
-            <div className="grid grid-cols-2 gap-3 mb-4"> 
-              {moodInfluenceTags.map((tag: any) => ( 
-                <button key={tag.id} onClick={() => setSelectedTag(selectedTag === tag.id ? null : tag.id)} className={`p-3 rounded-2xl flex items-center gap-3 border-2 transition-all ${selectedTag === tag.id ? 'border-[#7a32fc] bg-[#7a32fc]/5 shadow-sm' : 'border-transparent bg-gray-100'}`} > 
-                  <div className={`p-2 rounded-xl ${tag.color} shrink-0`}>{typeof tag.icon === 'string' ? <span className="text-base">{tag.icon}</span> : tag.icon}</div> <span className={`text-xs font-semibold ${selectedTag === tag.id ? 'text-[#7a32fc]' : 'text-gray-500'}`}>{tag.label}</span> 
-                </button> 
-              ))} 
-            </div> 
-            <textarea className="w-full h-20 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4" placeholder="Quer escrever algo sobre isso?" value={moodNote} onChange={(e) => setMoodNote(e.target.value)} ></textarea> 
+              <div className="text-6xl mb-2 animate-bounce-slight">{selectedMood.emoji}</div>
+              <h3 className="text-xl font-semibold text-gray-800 tracking-tight">O que influenciou?</h3>
+            </div>
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {moodInfluenceTags.map((tag: any) => (
+                <button key={tag.id} onClick={() => setSelectedTag(selectedTag === tag.id ? null : tag.id)} className={`p-3 rounded-2xl flex items-center gap-3 border-2 transition-all ${selectedTag === tag.id ? 'border-[#7a32fc] bg-[#7a32fc]/5 shadow-sm' : 'border-transparent bg-gray-100'}`} >
+                  <div className={`p-2 rounded-xl ${tag.color} shrink-0`}>{typeof tag.icon === 'string' ? <span className="text-base">{tag.icon}</span> : tag.icon}</div> <span className={`text-xs font-semibold ${selectedTag === tag.id ? 'text-[#7a32fc]' : 'text-gray-500'}`}>{tag.label}</span>
+                </button>
+              ))}
+            </div>
+            <textarea className="w-full h-20 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4" placeholder="Quer escrever algo sobre isso?" value={moodNote} onChange={(e) => setMoodNote(e.target.value)} ></textarea>
             {moodSaveError && <p className="mb-2 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{moodSaveError}</p>}
-                <button onClick={handleConfirmMood} disabled={showMoodSuccess || isMoodSaving} className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showMoodSuccess ? 'bg-green-500 text-white' : 'bg-[#7a32fc] text-white shadow-[#7a32fc]/30 hover:opacity-90'}`} > {showMoodSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : isMoodSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin" /> Salvando...</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar</React.Fragment>} </button> 
-          </div> 
-        </div> 
-      )} 
-      {selectedTask && ( 
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
+                <button onClick={handleConfirmMood} disabled={showMoodSuccess || isMoodSaving} className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showMoodSuccess ? 'bg-green-500 text-white' : 'bg-[#7a32fc] text-white shadow-[#7a32fc]/30 hover:opacity-90'}`} > {showMoodSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : isMoodSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin" /> Salvando...</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Registrar</React.Fragment>} </button>
+          </div>
+        </div>
+      )}
+      {selectedTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white w-full max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-[32px] p-6 shadow-2xl animate-pop relative">
-            <button onClick={closeTaskModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
-            <div className="text-center mb-6"> 
-              <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div> 
-              <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{selectedTask.title}</h3> 
+            <button onClick={closeTaskModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button>
+            <div className="text-center mb-6">
+              <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div>
+              <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{selectedTask.title}</h3>
               <p className="text-gray-500 text-sm mt-1">
                 {selectedTask.type === 'intervention'
                   ? 'Instruções da tarefa de intervenção'
                   : taskReflectionPrompt}
-              </p> 
-            </div> 
+              </p>
+            </div>
             {selectedTask.type === 'intervention' ? (
               <div className="animate-slide-up space-y-4">
                 {isConventionalAdult && taskStep === 0 && (
@@ -4427,12 +4423,12 @@ ${interventionImages.join('\n')}` : ''
                     <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
                       <p className="text-sm text-gray-600 font-medium leading-relaxed italic">"{selectedTask.description}"</p>
                     </div>
-                    <textarea 
-                      className="w-full h-40 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-green-500/50 transition-all resize-none font-medium" 
-                      placeholder="Escreva sua resposta aqui..." 
-                      value={interventionResponse} 
-                      onChange={(e) => setInterventionResponse(e.target.value)} 
-                      autoFocus 
+                    <textarea
+                      className="w-full h-40 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-green-500/50 transition-all resize-none font-medium"
+                      placeholder="Escreva sua resposta aqui..."
+                      value={interventionResponse}
+                      onChange={(e) => setInterventionResponse(e.target.value)}
+                      autoFocus
                     ></textarea>
 
                     {isConventionalAdult && (
@@ -4477,12 +4473,12 @@ ${interventionImages.join('\n')}` : ''
                         <Check size={20} strokeWidth={3} /> Enviar Resposta
                       </button>
                     ) : (
-                      <button 
-                        onClick={handleConfirmTask} 
-                        disabled={showTaskSuccess || !interventionResponse.trim()} 
+                      <button
+                        onClick={handleConfirmTask}
+                        disabled={showTaskSuccess || !interventionResponse.trim()}
                         className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                      > 
-                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>} 
+                      >
+                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
                       </button>
                     )}
                   </React.Fragment>
@@ -4493,9 +4489,7 @@ ${interventionImages.join('\n')}` : ''
                     <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
                       <p className="mb-1 text-sm font-semibold text-slate-700">Como foi fazer essa tarefa?</p>
                       <p className="mb-4 text-xs text-slate-500">
-                        {isConventionalAdult
-                          ? 'Agora informe o esforço percebido após concluir a atividade.'
-                          : 'Agora informe como ficou sua energia após concluir a atividade.'}
+                        Agora informe o esforço percebido após concluir a atividade.
                       </p>
                       <BigEnergySlider
                         value={taskEnergy}
@@ -4504,9 +4498,10 @@ ${interventionImages.join('\n')}` : ''
                         onCommit={(value: number) => setTaskEnergy(value)}
                         label={taskReflectionLabel}
                         labelHelp={taskReflectionHelp}
-                        scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
-                        emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
-                        unselectedLabel={isConventionalAdult ? 'Toque na barra para informar seu esforço' : 'Toque na barra para informar sua energia'}
+                        scaleLabels={['Pouco esforço', 'Moderado', 'Muito esforço']}
+                        emojiForValue={getTaskEffortEmoji}
+                        progressGradient={taskEffortProgressGradient}
+                        unselectedLabel="Toque na barra para informar seu esforço"
                       />
                     </div>
                     <button
@@ -4527,8 +4522,8 @@ ${interventionImages.join('\n')}` : ''
                 )}
 
               </div>
-            ) : taskStep === 1 ? ( 
-              <div className="animate-slide-up"> 
+            ) : taskStep === 1 ? (
+              <div className="animate-slide-up">
                 {isKidsProfile ? (
                   <div className="space-y-6">
                     <p className="text-center text-sm font-semibold text-gray-600 mb-4">Como você se saiu nessa missão?</p>
@@ -4547,7 +4542,7 @@ ${interventionImages.join('\n')}` : ''
                               1: "Consegui!"
                             };
                             return (
-                              <button 
+                              <button
                                 key={score}
                                 onClick={() => handleEnergyCommit(score)}
                                 className={`${colors[score]} text-white h-20 rounded-2xl flex flex-col items-center justify-center shadow-lg hover:scale-[1.02] active:scale-95 transition-all`}
@@ -4569,9 +4564,9 @@ ${interventionImages.join('\n')}` : ''
                           ];
                           const labels = ["Não fiz", "Quase lá", "Consegui!", "Incrível!", "Mestre!"];
                           const colorClass = colors[score] || 'bg-gray-500';
-                          
+
                           return (
-                            <button 
+                            <button
                               key={score}
                               onClick={() => handleEnergyCommit(score)}
                               className={`${colorClass} text-white h-20 rounded-2xl flex flex-col items-center justify-center shadow-lg hover:scale-[1.02] active:scale-95 transition-all`}
@@ -4594,41 +4589,52 @@ ${interventionImages.join('\n')}` : ''
                         onCommit={handleEnergyCommit}
                         label={taskReflectionLabel}
                         labelHelp={taskReflectionHelp}
-                        scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
-                        emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
-                        unselectedLabel={isConventionalAdult ? 'Toque na barra para informar seu esforço' : 'Toque na barra para informar sua energia'}
-                      /> 
+                        scaleLabels={['Pouco esforço', 'Moderado', 'Muito esforço']}
+                        emojiForValue={getTaskEffortEmoji}
+                        progressGradient={taskEffortProgressGradient}
+                        unselectedLabel="Toque na barra para informar seu esforço"
+                      />
                       <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
                     </React.Fragment>
                   </React.Fragment>
                 )}
-              </div> 
-            ) : ( 
-              <div className="animate-slide-up"> 
-                <div className="mb-4"> 
-                  <div className="flex items-center justify-between mb-2"> 
+              </div>
+            ) : (
+              <div className="animate-slide-up">
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest">{isKidsProfile ? 'Sua Pontuação' : taskReflectionLabel}</span>
                     <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskReflectionEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span>
-                  </div> 
-                  <div className="w-full bg-gray-100 rounded-full h-2"> 
-                    <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${Number(taskEnergy || 0) * 100}%` : `${Number(taskEnergy || 0)}%` }}></div>
-                  </div> 
-                  {isConventionalAdult && (
+                  </div>
+                  <div className="relative h-2 w-full overflow-hidden rounded-full bg-gray-100">
+                    {isKidsProfile ? (
+                      <div className="h-2 rounded-full bg-[#7a32fc]" style={{ width: `${Number(taskEnergy || 0) * 100}%` }}></div>
+                    ) : (
+                      <div
+                        className="absolute inset-0 rounded-full"
+                        style={{
+                          background: taskEffortProgressGradient,
+                          clipPath: `inset(0 ${Math.max(0, 100 - Number(taskEnergy || 0))}% 0 0)`,
+                        }}
+                      ></div>
+                    )}
+                  </div>
+                  {!isKidsProfile && (
                     <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
                       <span>Pouco esforço 🙂</span>
                       <span>Muito esforço 😫</span>
                     </div>
                   )}
-                </div> 
-                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea> 
-                <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button> 
-              </div> 
-            )} 
-          </div> 
-        </div> 
-      )} 
-    </div> 
-  ); 
+                </div>
+                <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea>
+                <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 

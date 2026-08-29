@@ -287,7 +287,7 @@ export const GlobalStyles = () => (
     input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer; background: rgba(255, 255, 255, 0.3); border-radius: 10px; backdrop-filter: blur(4px); }
 
     .big-slider-container { position: relative; width: 100%; height: 60px; background: #F0F3FA; border-radius: 20px; overflow: hidden; box-shadow: inset 0 2px 6px rgba(0,0,0,0.05); }
-    .big-slider-fill { position: absolute; top: 0; left: 0; height: 100%; background: linear-gradient(90deg, #EE5D50 0%, #FFB547 50%, #05CD99 100%); border-radius: 20px; transition: width 0.1s linear; }
+    .big-slider-fill { position: absolute; top: 0; left: 0; height: 100%; background: linear-gradient(90deg, #EE5D50 0%, #FFB547 50%, #05CD99 100%); border-radius: 20px; transition: width 0.1s linear, clip-path 0.1s linear; }
     .big-slider-input { position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 20; }
     .slider-thumb-indicator { position: absolute; top: 50%; transform: translate(-50%, -50%); width: 40px; height: 40px; background: white; border-radius: 50%; box-shadow: 0 4px 15px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; font-size: 20px; pointer-events: none; z-index: 10; transition: left 0.1s linear; }
     
@@ -335,7 +335,7 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
   </div> 
 );
 
-export const BigEnergySlider = ({ value, onChange, onCommit, onInteract, showLabel = true, label = 'Energia', labelHelp, scaleLabels, emojiForValue, unselectedLabel = 'Toque na escala para responder' }: any) => {
+export const BigEnergySlider = ({ value, onChange, onCommit, onInteract, showLabel = true, label = 'Energia', labelHelp, scaleLabels, emojiForValue, unselectedLabel = 'Toque na escala para responder', progressGradient }: any) => {
   const parsedValue = value === null || value === undefined || value === '' ? Number.NaN : Number(value);
   const hasExplicitValue = Number.isFinite(parsedValue);
   const numericValue = hasExplicitValue ? Math.max(0, Math.min(100, parsedValue)) : 50;
@@ -391,7 +391,16 @@ export const BigEnergySlider = ({ value, onChange, onCommit, onInteract, showLab
         </div>
       )} 
       <div className={`big-slider-container ${hasExplicitValue ? '' : 'ring-2 ring-violet-100'}`}>
-        <div className="big-slider-fill" style={{ width: hasExplicitValue ? `${numericValue}%` : '0%' }}></div>
+        <div
+          className="big-slider-fill"
+          style={progressGradient
+            ? {
+                width: '100%',
+                clipPath: `inset(0 ${hasExplicitValue ? Math.max(0, 100 - numericValue) : 100}% 0 0)`,
+                background: progressGradient,
+              }
+            : { width: hasExplicitValue ? `${numericValue}%` : '0%' }}
+        ></div>
         {hasExplicitValue && <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getValueEmoji(numericValue)}</div>}
         {!hasExplicitValue && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-12 text-center text-xs font-semibold text-slate-400">{unselectedLabel}</div>}
         <input
