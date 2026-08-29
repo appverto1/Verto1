@@ -4017,10 +4017,14 @@ function sanitizePhoneE164(value: unknown): string | null {
 }
 
 function resolveStoredCrp(input: any): string | null {
+  const metadata = input?.metadata && typeof input.metadata === 'object' ? input.metadata : {};
   const raw = (
     input?.crp ??
     input?.council_number ??
     input?.councilNumber ??
+    metadata?.crp ??
+    metadata?.councilNumber ??
+    metadata?.council_number ??
     input?.clinicSettings?.councilNumber ??
     null
   );
@@ -4030,7 +4034,10 @@ function resolveStoredCrp(input: any): string | null {
 }
 
 function resolveStoredCouncil(input: any): string | null {
-  return sanitizeString(input?.council, 80) || null;
+  const metadata = input?.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+  const raw = input?.council ?? input?.council_type ?? input?.councilType ?? metadata?.council ?? metadata?.councilType ?? metadata?.council_type;
+  if (raw == null || String(raw).trim() === '') return null;
+  return sanitizeProfessionalIdentifier(raw, 48) || null;
 }
 
 function maskEmail(email: unknown): string {
@@ -44750,8 +44757,18 @@ async function startServer() {
         return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
       }
       const metricKind = sanitizeString(req.body?.metricKind || req.body?.metric_kind, 20).toLowerCase();
-      const metricValue = asSafeNumber(req.body?.metricValue ?? req.body?.metric_value, 0, 100);
-      if (!['mood', 'energy'].includes(metricKind) || metricValue === null) {
+      const rawMetricValue = req.body?.metricValue ?? req.body?.metric_value;
+      const metricValue = typeof rawMetricValue === 'number'
+        ? rawMetricValue
+        : typeof rawMetricValue === 'string' && rawMetricValue.trim() !== ''
+          ? Number(rawMetricValue)
+          : Number.NaN;
+      if (
+        !['mood', 'energy'].includes(metricKind) ||
+        !Number.isFinite(metricValue) ||
+        metricValue < 0 ||
+        metricValue > 100
+      ) {
         return res.status(400).json({ success: false, error: 'Informe um check-in de humor ou energia entre 0 e 100.' });
       }
       const rawClientEventId = sanitizeString(req.body?.clientEventId || req.body?.client_event_id, 120);
@@ -46165,9 +46182,23 @@ async function startServer() {
         canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
           ? req.body.clinicSettings
           : {};
-      const rawResolvedCrp = req.body?.crp;
-      const rawResolvedCouncil = req.body?.council || clinicSettingsInput?.council;
-      const rawResolvedCouncilNumber = req.body?.councilNumber || clinicSettingsInput?.councilNumber;
+      const rawResolvedCrp =
+        req.body?.crp ??
+        professionalProfileInput?.crp ??
+        professionalProfileInput?.councilNumber ??
+        professionalProfileInput?.council_number;
+      const rawResolvedCouncil =
+        req.body?.council ??
+        professionalProfileInput?.council ??
+        professionalProfileInput?.councilType ??
+        professionalProfileInput?.council_type ??
+        clinicSettingsInput?.council;
+      const rawResolvedCouncilNumber =
+        req.body?.councilNumber ??
+        professionalProfileInput?.councilNumber ??
+        professionalProfileInput?.council_number ??
+        professionalProfileInput?.crp ??
+        clinicSettingsInput?.councilNumber;
       if (
         !isProfessionalIdentifierInputValid(rawResolvedCrp, 80) ||
         !isProfessionalIdentifierInputValid(rawResolvedCouncil, 48) ||
@@ -72595,8 +72626,13 @@ async function startServer() {
       .maybeSingle();
     if (planError) throw planError;
     if (!plan) return { plan: null, allowed: false, reason: 'not_found' as const };
-    if (sanitizeString(plan.mode, 40).toLowerCase() === 'interdisciplinary' || sanitizeString(plan.status, 40).toLowerCase() === 'archived') {
+    const planMode = sanitizeString(plan.mode, 40).toLowerCase();
+    const planStatus = sanitizeString(plan.status, 40).toLowerCase();
+    if (planMode === 'interdisciplinary' || planStatus === 'archived') {
       return { plan, allowed: false, reason: 'invalid_scope' as const };
+    }
+    if (planStatus !== 'active') {
+      return { plan, allowed: false, reason: 'inactive_scope' as const };
     }
     if (isTherapeuticPlanManager(params.actorRole)) {
       return { plan, allowed: true, reason: null };
@@ -74020,9 +74056,26 @@ async function startServer() {
       if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== Number(existing.edit_version)) {
         return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
       }
+      const currentStatus = sanitizeString(existing.status, 40).toLowerCase();
       const nextStatus = sanitizeString(req.body?.status ?? existing.status, 40).toLowerCase();
       if (!['draft', 'active', 'paused', 'completed', 'archived'].includes(nextStatus)) {
         return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_STATUS_INVALID' });
+      }
+      const allowedPlanTransitions: Record<string, string[]> = {
+        draft: ['draft', 'active', 'archived'],
+        active: ['active', 'paused', 'completed', 'archived'],
+        paused: ['paused', 'active', 'completed', 'archived'],
+        completed: ['completed', 'archived'],
+        archived: ['archived'],
+      };
+      if (!(allowedPlanTransitions[currentStatus] || [currentStatus]).includes(nextStatus)) {
+        return res.status(409).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_STATUS_TRANSITION_INVALID',
+          message: currentStatus === 'paused'
+            ? 'Um plano pausado pode ser retomado como ativo, concluído ou arquivado.'
+            : 'Esta transição de estado não é permitida para o plano clínico.',
+        });
       }
 
       const hasSpecialtyObjectivesUpdate =
@@ -74689,17 +74742,34 @@ async function startServer() {
         }
         return res.status(400).json({ success: false, error: therapeuticProgramErrorMessage(error) });
       }
+      const parentPlanIsDraft = sanitizeString(therapeuticPlanScope?.status, 40).toLowerCase() === 'draft';
       void persistActivityLog({
         userId: actorId,
         clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
-        title: status === 'awaiting_approval' ? 'Programa enviado para aprovação' : status === 'draft' ? 'Rascunho de programa criado' : 'Programa terapêutico ativado',
+        title: parentPlanIsDraft
+          ? 'Programa configurado em plano rascunho'
+          : status === 'awaiting_approval'
+            ? 'Programa enviado para aprovação'
+            : status === 'draft'
+              ? 'Rascunho de programa criado'
+              : 'Programa terapêutico ativado',
         content: `${sanitizeTextField(req.body?.name, 240)} foi registrado no Plano terapêutico do paciente.`,
         type: 'clinical',
         actionType: 'THERAPEUTIC_PROGRAM_CREATED',
-        payload: { patientId, originType, status }
+        payload: { patientId, originType, status, parentPlanStatus: therapeuticPlanScope?.status || null }
       });
-      return res.status(201).json({ success: true, data, message: status === 'awaiting_approval' ? 'Programa enviado para aprovação.' : status === 'draft' ? 'Rascunho salvo.' : 'Programa ativado e disponível nas próximas sessões.' });
+      return res.status(201).json({
+        success: true,
+        data,
+        message: parentPlanIsDraft
+          ? 'Programa configurado no rascunho; ativação clínica após publicação do plano.'
+          : status === 'awaiting_approval'
+            ? 'Programa enviado para aprovação.'
+            : status === 'draft'
+              ? 'Rascunho salvo.'
+              : 'Programa ativado e disponível nas próximas sessões.'
+      });
     } catch (error) {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-programs [POST]', error, {
         fallbackMessage: 'Não foi possível criar o programa terapêutico.'
@@ -74716,6 +74786,10 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const status = sanitizeString(req.body?.status, 40).toLowerCase();
+      const allowedProgramStatuses = ['draft', 'awaiting_approval', 'teaching', 'maintenance', 'paused', 'completed', 'archived'];
+      if (!allowedProgramStatuses.includes(status)) {
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PROGRAM_STATUS_INVALID' });
+      }
       if (!isTherapeuticPlanManager(role) && status !== 'awaiting_approval') {
         return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
       }
@@ -74736,12 +74810,71 @@ async function startServer() {
           });
         }
       }
+      const { data: currentProgram, error: currentProgramError } = await supabase
+        .from('aba_programs')
+        .select('id,status,version,therapeutic_plan_id')
+        .eq('id', programId)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (currentProgramError) throw currentProgramError;
+      if (!currentProgram?.id) return res.status(404).json({ success: false, error: 'THERAPEUTIC_PROGRAM_NOT_FOUND' });
+
+      const currentProgramStatus = sanitizeString(currentProgram.status, 40).toLowerCase();
+      const allowedProgramTransitions: Record<string, string[]> = {
+        draft: ['draft', 'awaiting_approval', 'teaching'],
+        awaiting_approval: ['awaiting_approval', 'draft', 'teaching'],
+        teaching: ['teaching', 'maintenance', 'paused', 'completed'],
+        maintenance: ['maintenance', 'teaching', 'paused', 'completed'],
+        paused: ['paused', 'teaching', 'maintenance', 'completed'],
+        completed: ['completed', 'archived'],
+        archived: ['archived'],
+      };
+      if (!(allowedProgramTransitions[currentProgramStatus] || [currentProgramStatus]).includes(status)) {
+        return res.status(409).json({
+          success: false,
+          error: 'THERAPEUTIC_PROGRAM_STATUS_TRANSITION_INVALID',
+          message: currentProgramStatus === 'paused'
+            ? 'Um programa pausado pode retomar o ensino, voltar à manutenção ou ser concluído.'
+            : 'Esta transição de fase não é permitida para o programa clínico.',
+        });
+      }
+
+      const therapeuticPlanId = sanitizeString(currentProgram.therapeutic_plan_id, 120);
+      if (therapeuticPlanId && ['teaching', 'maintenance'].includes(status)) {
+        const { data: parentPlan, error: parentPlanError } = await supabase
+          .from('patient_therapeutic_plans')
+          .select('id,status')
+          .eq('id', therapeuticPlanId)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .limit(1)
+          .maybeSingle();
+        if (parentPlanError) throw parentPlanError;
+        if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
+        const parentPlanStatus = sanitizeString(parentPlan.status, 40).toLowerCase();
+        if (parentPlanStatus !== 'active') {
+          return res.status(409).json({
+            success: false,
+            error: 'THERAPEUTIC_PROGRAM_PARENT_PLAN_NOT_ACTIVE',
+            message: parentPlanStatus === 'paused'
+              ? 'Retome o plano antes de reativar este programa.'
+              : 'Publique ou ative o plano antes de colocar o programa em ensino ou manutenção.',
+          });
+        }
+      }
+
+      const requestedExpectedVersion = Number(req.body?.expectedVersion ?? req.body?.expected_version);
+      const expectedProgramVersion = Number.isSafeInteger(requestedExpectedVersion)
+        ? requestedExpectedVersion
+        : Number(currentProgram.version);
       const { data, error } = await supabase.rpc('update_therapeutic_program_status', {
         p_organization_id: organizationId,
         p_patient_id: patientId,
         p_program_id: programId,
         p_status: status,
-        p_expected_version: Number.isFinite(Number(req.body?.expectedVersion ?? req.body?.expected_version)) ? Number(req.body?.expectedVersion ?? req.body?.expected_version) : null,
+        p_expected_version: Number.isSafeInteger(expectedProgramVersion) ? expectedProgramVersion : null,
         p_reason: sanitizeTextField(req.body?.reason, 500) || null,
         p_idempotency_key: sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `therapeutic-program-status:${programId}:${status}:${crypto.randomUUID()}`,
         p_actor_id: actorId
@@ -83355,7 +83488,10 @@ async function startServer() {
           return res.status(404).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_NOT_FOUND', error: 'Plano por especialidade não encontrado para este paciente.' });
         }
         if (planContext.reason === 'invalid_scope') {
-          return res.status(422).json({ success: false, code: 'SESSION_SPECIALTY_PLAN_REQUIRED', error: 'A sessão deve ser iniciada a partir de um plano por especialidade, não do PTS compartilhado.' });
+          return res.status(422).json({ success: false, code: 'SESSION_SPECIALTY_PLAN_REQUIRED', error: 'A sessão deve ser iniciada a partir de um plano por especialidade ativo, não do PTS compartilhado.' });
+        }
+        if (planContext.reason === 'inactive_scope') {
+          return res.status(409).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_NOT_ACTIVE', error: 'Apenas planos ativos podem iniciar sessão. Publique ou retome o plano antes de começar a coleta.' });
         }
         if (!planContext.allowed) {
           return res.status(403).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED', error: 'Você não possui vínculo clínico de escrita com este plano.' });

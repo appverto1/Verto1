@@ -96,10 +96,15 @@ assert.match(block6Followup, /v_history_therapist_id := v_patient_therapist_id/)
 assert.match(block6Followup, /v_history_therapist_id,[\s\S]{0,180}coalesce\(v_task\.completed_at/);
 assert.doesNotMatch(block6Followup, /v_task\.professional_id,[\s\S]{0,180}coalesce\(v_task\.completed_at/, 'legacy TEXT professional_id must not be written directly into history.therapist_id UUID');
 
-// 5) Patient check-in no longer goes through generic POST /api/history.
+// 5) Patient check-in no longer goes through generic POST /api/history and rejects out-of-range values instead of clamping them.
 const moodHandler = app.slice(app.indexOf('const handleMoodCheckin'), app.indexOf('const handleCompleteTask'));
 assert.match(moodHandler, /savePatientSelfWellbeingCheckin/);
 assert.doesNotMatch(moodHandler, /\/api\/history|addHistoryItem|setHistory\(/);
+assert.match(wellbeingPostRoute, /const rawMetricValue = req\.body\?\.metricValue/);
+assert.match(wellbeingPostRoute, /!Number\.isFinite\(metricValue\)/);
+assert.match(wellbeingPostRoute, /metricValue < 0/);
+assert.match(wellbeingPostRoute, /metricValue > 100/);
+assert.doesNotMatch(wellbeingPostRoute, /asSafeNumber\(req\.body\?\.metricValue/, 'wellbeing writes must reject invalid values instead of clamping them');
 
 // 6) Council field is a real select, while the flexible registry input remains separate.
 const councilStart = settings.indexOf('Conselho / tipo de registro');
@@ -108,10 +113,37 @@ const councilBlock = settings.slice(councilStart, councilEnd);
 assert.match(councilBlock, /<select/);
 assert.match(councilBlock, /PROFESSIONAL_COUNCIL_OPTIONS\.map/);
 assert.doesNotMatch(councilBlock, /<datalist|list="clinic-professional-council-options"/);
+const profilePostRoute = server.slice(server.indexOf("app.post('/api/profile/:userId'"), server.indexOf("app.post('/api/profile/media"));
+assert.match(profilePostRoute, /professionalProfileInput\?\.council/);
+assert.match(profilePostRoute, /professionalProfileInput\?\.councilType/);
+assert.match(profilePostRoute, /professionalProfileInput\?\.councilNumber/);
+assert.match(profilePostRoute, /professionalProfileInput\?\.crp/);
+const storedCouncilHelpers = server.slice(server.indexOf('function resolveStoredCrp'), server.indexOf('function maskEmail'));
+assert.match(storedCouncilHelpers, /metadata\?\.councilNumber/);
+assert.match(storedCouncilHelpers, /metadata\?\.council/);
+assert.match(storedCouncilHelpers, /metadata\?\.councilType/);
 
-// 7) Draft plans do not visually claim active teaching/maintenance states.
+// 7) Draft plans use the parent plan as the clinical activation gate, paused programs can resume, and lifecycle colors stay explicit.
 assert.match(plan, /programa\(s\) configurado\(s\) no rascunho · ativação clínica após publicação/);
-assert.match(plan, /String\(scope\?\.status \|\| 'draft'\)\.toLowerCase\(\) === 'draft'/);
+assert.match(plan, /effectiveProgramStatus/);
+assert.match(plan, /Programa configurado no rascunho, ainda sem fase clínica ativa/);
+assert.match(plan, /Retomar ensino/);
+assert.match(plan, /updateStatus\(program, 'teaching'\)/);
+assert.match(plan, /scopeFilterOptions/);
+assert.match(plan, /scopeIsPaused[\s\S]{0,260}\['all', 'paused'\]/);
+assert.match(plan, /Pausado · retome o ensino para reativar a coleta/);
+assert.match(plan, /String\(scope\?\.status \|\| ''\)\.toLowerCase\(\) === 'active'/);
+assert.match(plan, /!border-l-amber-400/);
+assert.match(plan, /!border-l-emerald-500/);
+assert.match(plan, /!border-l-red-500/);
+assert.match(server, /reason: 'inactive_scope'/);
+assert.match(server, /SESSION_THERAPEUTIC_PLAN_NOT_ACTIVE/);
+assert.match(server, /Apenas planos ativos podem iniciar sessão/);
+assert.match(server, /parentPlanIsDraft/);
+assert.match(server, /Programa configurado no rascunho; ativação clínica após publicação do plano/);
+assert.match(server, /THERAPEUTIC_PLAN_STATUS_TRANSITION_INVALID/);
+assert.match(server, /THERAPEUTIC_PROGRAM_STATUS_TRANSITION_INVALID/);
+assert.match(server, /THERAPEUTIC_PROGRAM_PARENT_PLAN_NOT_ACTIVE/);
 
 // 8) Payment failure has a stable seven-day grace and a clear in-product warning.
 assert.match(migration, /interval '7 days'/);
