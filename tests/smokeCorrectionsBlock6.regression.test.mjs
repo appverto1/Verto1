@@ -10,26 +10,60 @@ const settings = fs.readFileSync(new URL('../src/components/ClinicGlobalSettings
 const plan = fs.readFileSync(new URL('../src/components/TherapeuticPlanPanel.tsx', import.meta.url), 'utf8');
 const dataService = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260829000000_smoke_corrections_block6.sql', import.meta.url), 'utf8');
+const block6Followup = fs.readFileSync(new URL('../supabase/migrations/20260829114500_smoke_corrections_block6_followup.sql', import.meta.url), 'utf8');
 
 // 1) Adult mood/energy uses a dedicated canonical store and a longitudinal 0-100 chart.
 assert.match(migration, /create table if not exists public\.patient_wellbeing_checkins/);
 assert.match(migration, /metric_kind in \('mood', 'energy'\)/);
 assert.match(migration, /metric_value between 0 and 100/);
 assert.match(migration, /unique \(clinic_id, patient_id, metric_kind, local_date\)/);
+assert.match(block6Followup, /drop constraint %I/);
+assert.match(block6Followup, /array\['clinic_id','patient_id','metric_kind','local_date'\]::text\[\]/);
+assert.match(block6Followup, /revoke update, delete on table public\.patient_wellbeing_checkins from service_role/);
+assert.match(block6Followup, /grant select, insert on table public\.patient_wellbeing_checkins to service_role/);
+assert.match(block6Followup, /with legacy_wellbeing as/);
+assert.match(block6Followup, /from public\.history history_row/);
+assert.match(block6Followup, /on conflict \(id\) do nothing/);
+assert.doesNotMatch(block6Followup, /delete from public\.history|update public\.history/, 'legacy wellbeing backfill must not mutate history');
 assert.match(server, /app\.post\('\/api\/patient\/self\/wellbeing-checkins'/);
 assert.match(server, /resolveCanonicalPatientPortalScope\(req\.session\.user\)/);
 assert.match(server, /app\.get\(\s*'\/api\/patients\/:patientId\/wellbeing-checkins'/);
 assert.match(dataService, /savePatientSelfWellbeingCheckin/);
+assert.match(dataService, /clientEventId: payload\.clientEventId \|\| crypto\.randomUUID\(\)/);
 assert.match(app, /savePatientSelfWellbeingCheckin/);
-assert.doesNotMatch(app.slice(app.indexOf('const handleMoodCheckin'), app.indexOf('const handleCompleteTask')), /addHistoryItem/);
+const wellbeingPostRoute = server.slice(
+  server.indexOf("app.post('/api/patient/self/wellbeing-checkins'"),
+  server.indexOf("app.get(\n    '/api/patients/:patientId/wellbeing-checkins'"),
+);
+assert.match(wellbeingPostRoute, /patient-wellbeing-event:v2/);
+assert.match(wellbeingPostRoute, /\.insert\(row\)/);
+assert.doesNotMatch(wellbeingPostRoute, /onConflict: 'clinic_id,patient_id,metric_kind,local_date'/);
+assert.doesNotMatch(wellbeingPostRoute, /\.upsert\(/);
+assert.match(server, /resolveWellbeingReadWindow/);
+assert.match(server, /\.gte\('created_at', readWindow\.fromIso\)/);
+const moodCheckinHandler = app.slice(app.indexOf('const handleMoodCheckin'), app.indexOf('const handleCompleteTask'));
+assert.doesNotMatch(moodCheckinHandler, /addHistoryItem|setHistory\(/);
 assert.match(wellbeingChart, /ReferenceLine y=\{50\}/);
 assert.match(wellbeingChart, /gradientUnits="userSpaceOnUse"/);
 assert.match(wellbeingChart, /wellbeingPointColor/);
 assert.match(wellbeingChart, /#dc2626/);
 assert.match(wellbeingChart, /#16a34a/);
 assert.match(wellbeingChart, /Não representa diagnóstico nem score clínico global/);
+assert.match(wellbeingChart, /type WellbeingPeriod = 'day' \| 'week' \| 'month' \| 'year'/);
+assert.match(wellbeingChart, /Dia/);
+assert.match(wellbeingChart, /Semana/);
+assert.match(wellbeingChart, /Mês/);
+assert.match(wellbeingChart, /Ano/);
+assert.match(wellbeingChart, /dot=\{renderEmojiDot\}/);
+assert.match(wellbeingChart, /Anotação do paciente/);
+assert.match(wellbeingChart, /setSelectedPoint\(point\)/);
 assert.match(patientDashboard, /AdultWellbeingTrendChart/);
+assert.match(patientDashboard, /period=\{wellbeingPeriod\}/);
+assert.match(patientDashboard, /onPeriodChange=\{setWellbeingPeriod\}/);
+assert.match(patientDashboard, /!isKidsProfile \? \([\s\S]{0,350}<AdultWellbeingTrendChart/);
+assert.match(patientDashboard, /\) : \([\s\S]{0,350}<Trophy size=\{16\} \/> Histórico/);
 assert.match(patientDetail, /AdultWellbeingTrendChart/);
+assert.match(patientDetail, /onPeriodChange=\{setWellbeingPeriod\}/);
 
 // 2) Message badges are based on persisted per-recipient unread state.
 assert.match(migration, /create table if not exists public\.patient_message_reads/);
@@ -53,11 +87,19 @@ assert.match(app, />Trabalhar<\/h2>/);
 assert.match(migration, /if tg_op = 'UPDATE' then[\s\S]{0,900}return new;/);
 assert.match(migration, /ASSIGNED_TASK_CLINICAL_LINK_IMMUTABLE/);
 assert.match(server, /ASSIGNED_TASK_CLINICAL_CONTEXT_CONFLICT/);
+assert.match(server, /ASSIGNED_TASK_HISTORY_THERAPIST_UNRESOLVED/);
+assert.match(block6Followup, /create or replace function public\.complete_patient_assigned_task_v2/);
+assert.match(block6Followup, /v_task_professional_uuid := nullif\(trim\(v_task\.professional_id\), ''\)::uuid/);
+assert.match(block6Followup, /exists \(select 1 from auth\.users auth_user where auth_user\.id = v_task_professional_uuid\)/);
+assert.match(block6Followup, /select p\.clinic_id, p\.therapist_id[\s\S]{0,180}into v_patient_clinic, v_patient_therapist_id/);
+assert.match(block6Followup, /v_history_therapist_id := v_patient_therapist_id/);
+assert.match(block6Followup, /v_history_therapist_id,[\s\S]{0,180}coalesce\(v_task\.completed_at/);
+assert.doesNotMatch(block6Followup, /v_task\.professional_id,[\s\S]{0,180}coalesce\(v_task\.completed_at/, 'legacy TEXT professional_id must not be written directly into history.therapist_id UUID');
 
 // 5) Patient check-in no longer goes through generic POST /api/history.
 const moodHandler = app.slice(app.indexOf('const handleMoodCheckin'), app.indexOf('const handleCompleteTask'));
 assert.match(moodHandler, /savePatientSelfWellbeingCheckin/);
-assert.doesNotMatch(moodHandler, /\/api\/history|addHistoryItem/);
+assert.doesNotMatch(moodHandler, /\/api\/history|addHistoryItem|setHistory\(/);
 
 // 6) Council field is a real select, while the flexible registry input remains separate.
 const councilStart = settings.indexOf('Conselho / tipo de registro');

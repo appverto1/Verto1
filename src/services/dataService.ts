@@ -2905,9 +2905,10 @@ export const dataService = {
     }
   },
 
-  async getPatientSelfWellbeingCheckins(limit = 90) {
+  async getPatientSelfWellbeingCheckins(period: 'day' | 'week' | 'month' | 'year' = 'month') {
     try {
-      const response = await fetchWithAuthRetry(endpointWithLimit('/api/patient/self/wellbeing-checkins', normalizeListLimit(limit, 90, 180)), {
+      const safePeriod = ['day', 'week', 'month', 'year'].includes(period) ? period : 'month';
+      const response = await fetchWithAuthRetry(`/api/patient/self/wellbeing-checkins?period=${encodeURIComponent(safePeriod)}`, {
         headers: await getAuthHeaders(),
         credentials: 'include',
         cache: 'no-store'
@@ -2926,13 +2927,15 @@ export const dataService = {
     tagLabel?: string | null;
     note?: string;
     icon?: string;
+    clientEventId?: string;
   }) {
     try {
+      const requestPayload = { ...payload, clientEventId: payload.clientEventId || crypto.randomUUID() };
       const response = await fetchWithAuthRetry('/api/patient/self/wellbeing-checkins', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(requestPayload)
       });
       return await safeJson(response);
     } catch (error) {
@@ -2941,11 +2944,12 @@ export const dataService = {
     }
   },
 
-  async getPatientWellbeingCheckins(patientId: string, limit = 90) {
+  async getPatientWellbeingCheckins(patientId: string, period: 'day' | 'week' | 'month' | 'year' = 'month') {
     try {
       const safePatientId = encodeURIComponent(String(patientId || '').trim());
       if (!safePatientId) return { success: false, data: [], error: 'Paciente inválido.' };
-      const response = await fetchWithAuthRetry(endpointWithLimit(`/api/patients/${safePatientId}/wellbeing-checkins`, normalizeListLimit(limit, 90, 180)), {
+      const safePeriod = ['day', 'week', 'month', 'year'].includes(period) ? period : 'month';
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/wellbeing-checkins?period=${encodeURIComponent(safePeriod)}`, {
         headers: await getAuthHeaders(),
         credentials: 'include',
         cache: 'no-store'

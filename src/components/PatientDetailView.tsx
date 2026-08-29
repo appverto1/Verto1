@@ -15,7 +15,7 @@ import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { PatientEvolutionTimelinePanel } from './PatientEvolutionTimelinePanel';
-import { AdultWellbeingTrendChart } from './AdultWellbeingTrendChart';
+import { AdultWellbeingTrendChart, type WellbeingPeriod } from './AdultWellbeingTrendChart';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -431,6 +431,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const initialChartFilters = readPersistedChartFilters();
   const [activeTab, setActiveTab] = useState(initialTab); 
   const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
+  const [wellbeingPeriod, setWellbeingPeriod] = useState<WellbeingPeriod>('month');
   const [wellbeingCheckinsError, setWellbeingCheckinsError] = useState('');
   const [historyPeriod, setHistoryPeriod] = useState<PatientHistoryPeriod>('all');
   const [historyCustomFrom, setHistoryCustomFrom] = useState('');
@@ -668,7 +669,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return () => { active = false; };
     }
     setWellbeingCheckinsError('');
-    void dataService.getPatientWellbeingCheckins(patientId, 90).then((result: any) => {
+    void dataService.getPatientWellbeingCheckins(patientId, wellbeingPeriod).then((result: any) => {
       if (!active) return;
       if (!result?.success) {
         setWellbeingCheckinsError(result?.error || 'Não foi possível carregar humor/energia.');
@@ -678,7 +679,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setWellbeingCheckins(Array.isArray(result?.data) ? result.data : []);
     });
     return () => { active = false; };
-  }, [activeTab, isKidsProfile, patient?.id]);
+  }, [activeTab, isKidsProfile, patient?.id, wellbeingPeriod]);
 
   const flashPEIConfirmation = (goalId: any, skillId: any) => {
     if (peiConfirmationTimerRef.current) {
@@ -10608,6 +10609,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   records={wellbeingCheckins}
                   metricKind={patientPortalKind === 'ADULT_CONVENTIONAL' ? 'mood' : 'energy'}
                   dark={isPanelDark}
+                  period={wellbeingPeriod}
+                  onPeriodChange={setWellbeingPeriod}
                 />
                 {wellbeingCheckinsError && (
                   <p className={`rounded-xl border px-3 py-2 text-xs ${isPanelDark ? 'border-amber-900/50 bg-amber-950/30 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
