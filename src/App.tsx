@@ -3752,6 +3752,17 @@ export default function App() {
   };
 
   const [protocols, setProtocols] = useState<any[]>([]);
+  const handleProtocolsPersisted = (nextProtocols: any[], sectionVersions?: Record<string, number>) => {
+    const persistedProtocols = Array.isArray(nextProtocols) ? nextProtocols : [];
+    clinicStatePersistedSnapshotRef.current.protocols = JSON.stringify(persistedProtocols);
+    if (sectionVersions && typeof sectionVersions === 'object') {
+      clinicStateSectionVersionsRef.current = {
+        ...clinicStateSectionVersionsRef.current,
+        ...sectionVersions,
+      };
+    }
+    setProtocols(persistedProtocols);
+  };
   const [allPatients, setAllPatients] = useState<any[]>([]);
   const [patientListError, setPatientListError] = useState('');
   const patientListEnsureRequestRef = useRef<{ workspaceId: string; promise: Promise<void> } | null>(null);
@@ -8524,6 +8535,7 @@ export default function App() {
             }}
             protocols={protocols}
             setProtocols={setProtocols}
+            onProtocolsPersisted={handleProtocolsPersisted}
             activityLogs={activityLogs}
             onAddActivityLog={onAddActivityLog}
             onScheduleSession={handleScheduleSession}

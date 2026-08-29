@@ -524,6 +524,7 @@ interface CoordinatorDashboardProps {
   onDeleteRoomReservation: (id: string) => void;
   protocols: any[];
   setProtocols: (protocols: any) => void;
+  onProtocolsPersisted?: (protocols: any[], sectionVersions?: Record<string, number>) => void;
   activityLogs: any[];
   onAddActivityLog: (title: string, content: string, type?: string) => void;
   onScheduleSession: (session: any) => Promise<any> | any;
@@ -658,6 +659,7 @@ export function CoordinatorDashboard({
   onDeleteRoomReservation,
   protocols,
   setProtocols,
+  onProtocolsPersisted,
   activityLogs,
   onAddActivityLog,
   onScheduleSession,
@@ -10932,6 +10934,7 @@ export function CoordinatorDashboard({
               onUpdateTask={onUpdateTask}
               protocols={protocols}
               setProtocols={setProtocols}
+              onProtocolsPersisted={onProtocolsPersisted}
               userRole={user.role}
               allowedTabs={isReceptionist ? ["files"] : undefined}
               anamnesisTemplate={anamnesisTemplate}

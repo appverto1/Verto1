@@ -9133,6 +9133,45 @@ export const dataService = {
     }
   },
 
+  async saveReusableAdultProtocol(payload: {
+    operation: 'create_protocol' | 'append_skill';
+    category: 'evaluation' | 'intervention';
+    protocolId?: string;
+    protocolTitle?: string;
+    domainId?: string;
+    domainName?: string;
+    ageGroup?: 'adult' | 'senior';
+    skill: {
+      id?: string;
+      name: string;
+      code?: string;
+      maxScore?: number;
+      objective?: string;
+      question?: string;
+      example?: string;
+      criteria?: string;
+      comment?: string;
+    };
+    idempotencyKey?: string;
+  }) {
+    try {
+      const response = await fetchWithAuthRetry('/api/clinic/protocols/reusable-adult', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      const result = await safeJson(response);
+      if (result?.success && Array.isArray(result?.data?.protocols)) {
+        writeClinicProtocolsBackup(result?.data?.clinicId, result.data.protocols);
+      }
+      return result;
+    } catch (error) {
+      console.error('Error saving reusable adult protocol:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
   async saveClinicState(payload: {
     workspace_id?: string;
     rooms?: any[];

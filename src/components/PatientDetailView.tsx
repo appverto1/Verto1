@@ -213,9 +213,16 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities, focusNoteId = '', onFocusNoteConsumed }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onProtocolsPersisted, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities, focusNoteId = '', onFocusNoteConsumed }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
+  const applyPersistedProtocolCatalog = (nextProtocols: any[], sectionVersions?: Record<string, number>) => {
+    if (typeof onProtocolsPersisted === 'function') {
+      onProtocolsPersisted(nextProtocols, sectionVersions);
+      return;
+    }
+    safeSetProtocols?.(nextProtocols);
+  };
   const hasCapability = (capability: string) => {
     if (capabilities instanceof Set) return capabilities.has(capability);
     if (Array.isArray(capabilities)) return capabilities.includes(capability);
@@ -5716,10 +5723,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         };
         onUpdatePatient(updatedPatient);
       }
+      let resolvedScheduledProtocol: any = selectedProtocol || null;
+      let resolvedScheduledDomain: any = selectedDomain || null;
+      let resolvedScheduledSkill: any = selectedSkill || null;
       if (isCreatingNewTask && !pendingAdultClinicalTaskContext) {
-        if (!newTaskName) { alert("Digite o nome da tarefa."); return; } 
-        let finalSkill = {
-          id: Date.now(),
+        if (!newTaskName) { alert("Digite o nome da tarefa."); return; }
+        const finalSkill = {
+          id: isKidsProfile ? Date.now() : crypto.randomUUID(),
           name: newTaskName,
           code: newTaskCode,
           maxScore: resolvedTaskMaxScore,
@@ -5727,54 +5737,101 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           example: newTaskExample,
           criteria: newTaskCriteria,
           comment: newTaskComment
-        }; 
-        if (addToProtocolMode === 'existing') { 
-          if (!targetProtocolId || !targetDomainId) { alert("Selecione onde salvar a tarefa."); return; } 
-          const updatedProtocols = protocols.map((p: any) => { 
-            if (p.id && String(p.id) === targetProtocolId) { 
-              const updatedData = p.data.map((d: any) => { 
-                if (d.id && String(d.id) === targetDomainId) { 
-                  return { ...d, skills: [...d.skills, finalSkill] }; 
-                } 
-                return d; 
-              }); 
-              return { ...p, data: updatedData }; 
-            } 
-            return p; 
-          }); 
-          safeSetProtocols?.(updatedProtocols); 
-        } else { 
-          if (!newProtocolName || !newDomainName) { alert("Preencha os dados do novo protocolo."); return; } 
-          const inferredAgeGroup =
-            patientAgeYears === null
-              ? 'all'
-              : patientAgeYears <= 12
-                ? 'child'
-                : patientAgeYears <= 18
-                  ? 'teen'
-                  : patientAgeYears <= 59
-                    ? 'adult'
-                    : 'senior';
-          const minAge = patientAgeYears === null ? 0 : patientAgeYears;
-          const maxAge = patientAgeYears === null ? null : patientAgeYears;
-          const newProtocol = {
-            id: Date.now(),
-            title: newProtocolName,
-            data: [{ id: `dom-${Date.now()}`, name: newDomainName, skills: [finalSkill] }],
-            ageGroup: inferredAgeGroup,
-            age_minima: minAge,
-            age_maxima: maxAge,
-            min_age: minAge,
-            max_age: maxAge
-          }; 
-          safeSetProtocols?.([...protocols, newProtocol]); 
-        } 
+        };
+        if (addToProtocolMode === 'existing') {
+          if (!targetProtocolId || !targetDomainId) { alert("Selecione onde salvar a tarefa."); return; }
+          if (isKidsProfile) {
+            const updatedProtocols = protocols.map((p: any) => {
+              if (p.id && String(p.id) === targetProtocolId) {
+                const updatedData = p.data.map((d: any) => {
+                  if (d.id && String(d.id) === targetDomainId) {
+                    return { ...d, skills: [...d.skills, finalSkill] };
+                  }
+                  return d;
+                });
+                return { ...p, data: updatedData };
+              }
+              return p;
+            });
+            safeSetProtocols?.(updatedProtocols);
+          } else {
+            const targetProtocol = (protocols || []).find((p: any) => String(p?.id || '') === String(targetProtocolId));
+            const targetDomain = (targetProtocol?.data || []).find((d: any) => String(d?.id || '') === String(targetDomainId));
+            const persisted = await dataService.saveReusableAdultProtocol({
+              operation: 'append_skill',
+              category: String(targetProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase() === 'intervention' ? 'intervention' : 'evaluation',
+              protocolId: String(targetProtocolId),
+              domainId: String(targetDomainId),
+              skill: finalSkill,
+              idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${String(targetProtocolId)}:${String(targetDomainId)}:${String(finalSkill.id)}`
+            });
+            if (!persisted?.success || !persisted?.data?.protocol) {
+              alert(persisted?.message || persisted?.error || 'Não foi possível salvar a tarefa no protocolo. O agendamento não foi criado.');
+              return;
+            }
+            const persistedCatalog = Array.isArray(persisted?.data?.protocols) ? persisted.data.protocols : protocols;
+            applyPersistedProtocolCatalog(persistedCatalog, persisted?.data?.sectionVersions);
+            resolvedScheduledProtocol = persisted.data.protocol;
+            resolvedScheduledDomain = persisted.data.domain || targetDomain;
+            resolvedScheduledSkill = persisted.data.skill || finalSkill;
+          }
+        } else {
+          if (!newProtocolName || !newDomainName) { alert("Preencha os dados do novo protocolo."); return; }
+          if (isKidsProfile) {
+            const inferredAgeGroup =
+              patientAgeYears === null
+                ? 'all'
+                : patientAgeYears <= 12
+                  ? 'child'
+                  : patientAgeYears <= 18
+                    ? 'teen'
+                    : patientAgeYears <= 59
+                      ? 'adult'
+                      : 'senior';
+            const minAge = patientAgeYears === null ? 0 : patientAgeYears;
+            const maxAge = patientAgeYears === null ? null : patientAgeYears;
+            const newProtocol = {
+              id: Date.now(),
+              title: newProtocolName,
+              data: [{ id: `dom-${Date.now()}`, name: newDomainName, skills: [finalSkill] }],
+              ageGroup: inferredAgeGroup,
+              age_minima: minAge,
+              age_maxima: maxAge,
+              min_age: minAge,
+              max_age: maxAge
+            };
+            safeSetProtocols?.([...protocols, newProtocol]);
+          } else {
+            const reusableProtocolId = crypto.randomUUID();
+            const reusableDomainId = crypto.randomUUID();
+            const persisted = await dataService.saveReusableAdultProtocol({
+              operation: 'create_protocol',
+              category: planType === 'intervention' ? 'intervention' : 'evaluation',
+              protocolId: reusableProtocolId,
+              protocolTitle: newProtocolName,
+              domainId: reusableDomainId,
+              domainName: newDomainName,
+              ageGroup: patientAgeYears !== null && patientAgeYears >= 60 ? 'senior' : 'adult',
+              skill: finalSkill,
+              idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${reusableProtocolId}:${reusableDomainId}:${String(finalSkill.id)}`
+            });
+            if (!persisted?.success || !persisted?.data?.protocol) {
+              alert(persisted?.message || persisted?.error || 'Não foi possível salvar o novo protocolo. O agendamento não foi criado.');
+              return;
+            }
+            const persistedCatalog = Array.isArray(persisted?.data?.protocols) ? persisted.data.protocols : protocols;
+            applyPersistedProtocolCatalog(persistedCatalog, persisted?.data?.sectionVersions);
+            resolvedScheduledProtocol = persisted.data.protocol;
+            resolvedScheduledDomain = persisted.data.domain;
+            resolvedScheduledSkill = persisted.data.skill || finalSkill;
+          }
+        }
       } else if (!pendingAdultClinicalTaskContext) { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } }
       if (isKidsProfile) {
         const saved = (await onAddTask(taskPayload)) !== false;
         if (!saved) return;
       } else {
-        const selectedProtocolCategory = String(selectedProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase();
+        const selectedProtocolCategory = String(resolvedScheduledProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase();
         const assignedPayload = {
           patient_id: String(patient.id),
           patient_email: patient?.email || null,
@@ -5788,13 +5845,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             color: taskPayload.color || 'bg-blue-100 text-blue-600',
             linkedTask: planType === 'intervention' ? linkedTask || undefined : undefined,
             linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId || undefined : undefined,
-            protocolId: taskPayload.protocolId || undefined,
-            protocolTitle: taskPayload.protocolTitle || undefined,
+            protocolId: resolvedScheduledProtocol?.id || taskPayload.protocolId || undefined,
+            protocolTitle: resolvedScheduledProtocol?.title || resolvedScheduledProtocol?.name || taskPayload.protocolTitle || undefined,
             protocolCategory: selectedProtocolCategory,
-            domainId: pendingAdultClinicalTaskContext?.domainId || taskPayload.domainId || undefined,
-            domainName: pendingAdultClinicalTaskContext?.domainName || taskPayload.domainName || undefined,
-            skillId: selectedSkill?.id || undefined,
-            skillName: selectedSkill?.name || taskPayload.title || undefined,
+            domainId: pendingAdultClinicalTaskContext?.domainId || resolvedScheduledDomain?.id || taskPayload.domainId || undefined,
+            domainName: pendingAdultClinicalTaskContext?.domainName || resolvedScheduledDomain?.name || taskPayload.domainName || undefined,
+            skillId: resolvedScheduledSkill?.id || undefined,
+            skillName: resolvedScheduledSkill?.name || taskPayload.title || undefined,
             skillCode: taskPayload.code || undefined,
             objective: taskPayload.objective || undefined,
             question: taskPayload.question || undefined,

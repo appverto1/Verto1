@@ -31638,6 +31638,271 @@ async function startServer() {
     }
   });
 
+  app.post('/api/clinic/protocols/reusable-adult', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'CLINIC_SCOPE_INVALID', message: 'Clínica inválida para salvar o protocolo.' });
+      }
+
+      const operation = sanitizeString(req.body?.operation, 40).toLowerCase();
+      if (!['create_protocol', 'append_skill'].includes(operation)) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_OPERATION_INVALID', message: 'Operação de protocolo inválida.' });
+      }
+
+      const requestedCategory = sanitizeString(req.body?.category, 40).toLowerCase();
+      const category = requestedCategory === 'intervention' ? 'intervention' : requestedCategory === 'evaluation' ? 'evaluation' : '';
+      if (!category) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_CATEGORY_INVALID', message: 'Informe se o protocolo é de avaliação ou intervenção.' });
+      }
+
+      const rawSkill = req.body?.skill && typeof req.body.skill === 'object' ? req.body.skill : {};
+      const skillName = sanitizeTextField(rawSkill?.name || rawSkill?.title, 240);
+      if (!skillName) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_SKILL_REQUIRED', message: 'Informe o nome da tarefa antes de salvar o protocolo.' });
+      }
+      const skillId = sanitizeString(rawSkill?.id, 120) || crypto.randomUUID();
+      const rawMaxScore = Number(rawSkill?.maxScore ?? rawSkill?.max_score ?? 4);
+      const maxScore = Number.isFinite(rawMaxScore) ? Math.max(1, Math.min(100, Math.round(rawMaxScore))) : 4;
+      const skill = sanitizeClinicalPayload(cleanObject({
+        id: skillId,
+        name: skillName,
+        code: sanitizeString(rawSkill?.code, 120) || undefined,
+        maxScore,
+        objective: sanitizeTextField(rawSkill?.objective, 4000) || undefined,
+        question: sanitizeTextField(rawSkill?.question, 4000) || undefined,
+        example: sanitizeTextField(rawSkill?.example, 4000) || undefined,
+        criteria: sanitizeTextField(rawSkill?.criteria, 4000) || undefined,
+        comment: sanitizeTextField(rawSkill?.comment, 4000) || undefined,
+        createdAt: sanitizeString(rawSkill?.createdAt || rawSkill?.created_at, 80) || new Date().toISOString(),
+        createdBy: actorId || undefined
+      }));
+
+      const requestedProtocolId = sanitizeString(req.body?.protocolId || req.body?.protocol_id, 120);
+      const requestedDomainId = sanitizeString(req.body?.domainId || req.body?.domain_id, 120);
+      const requestedProtocolTitle = sanitizeTextField(req.body?.protocolTitle || req.body?.protocol_title, 240);
+      const requestedDomainName = sanitizeTextField(req.body?.domainName || req.body?.domain_name, 240);
+      const requestedAgeGroup = sanitizeString(req.body?.ageGroup || req.body?.age_group, 30).toLowerCase();
+      const ageGroup = requestedAgeGroup === 'senior' ? 'senior' : 'adult';
+      const ageRange = ageGroup === 'senior' ? { min: 60, max: null as number | null } : { min: 19, max: 59 as number | null };
+      const stableProtocolId = requestedProtocolId || crypto.randomUUID();
+      const stableDomainId = requestedDomainId || crypto.randomUUID();
+
+      if (operation === 'append_skill' && (!requestedProtocolId || !requestedDomainId)) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_TARGET_REQUIRED', message: 'Selecione o protocolo e o domínio onde a tarefa será salva.' });
+      }
+      if (operation === 'create_protocol' && (!requestedProtocolTitle || !requestedDomainName)) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_FIELDS_REQUIRED', message: 'Informe o nome do protocolo e do domínio.' });
+      }
+
+      const buildResponse = (params: { protocols: any[]; protocol: any; domain: any; skill: any; persisted?: any; idempotent?: boolean }) => ({
+        success: true,
+        data: {
+          clinicId,
+          protocols: params.protocols,
+          protocol: params.protocol,
+          domain: params.domain,
+          skill: params.skill,
+          revision: Number(params.persisted?.revision || 0) || 0,
+          sectionVersions:
+            params.persisted?.sectionVersions && typeof params.persisted.sectionVersions === 'object'
+              ? params.persisted.sectionVersions
+              : {},
+          idempotent: Boolean(params.idempotent)
+        }
+      });
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const current = await supabase
+          .from('clinic_state')
+          .select('protocols,section_versions')
+          .eq('clinic_id', clinicId)
+          .maybeSingle();
+        if (current.error) {
+          const missingColumn = extractMissingColumnName(current.error);
+          if (missingColumn === 'section_versions' || isMissingRelationError(current.error)) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
+            });
+          }
+          throw current.error;
+        }
+
+        const currentProtocols = normalizeProtocolArrayForRoute(current.data?.protocols);
+        const nextProtocols = currentProtocols.map((protocol: any) => cloneJsonValue(protocol));
+        let persistedProtocol: any = null;
+        let persistedDomain: any = null;
+        let persistedSkill: any = null;
+
+        if (operation === 'create_protocol') {
+          const existingById = nextProtocols.find((protocol: any) => sanitizeString(protocol?.id, 120) === stableProtocolId);
+          if (existingById) {
+            const domain = normalizeJsonArrayForRoute(existingById?.data, ['domains', 'items', 'data', 'value'])
+              .find((item: any) => sanitizeString(item?.id, 120) === stableDomainId) || null;
+            const existingSkill = domain
+              ? normalizeJsonArrayForRoute(domain?.skills, ['skills', 'items', 'data', 'value'])
+                  .find((item: any) => sanitizeString(item?.id, 120) === skillId) || null
+              : null;
+            if (domain && existingSkill) {
+              return res.json(buildResponse({ protocols: nextProtocols, protocol: existingById, domain, skill: existingSkill, idempotent: true }));
+            }
+          }
+
+          const titleKey = normalizeProtocolKey(requestedProtocolTitle);
+          const duplicate = nextProtocols.find((protocol: any) => {
+            const protocolCategory = sanitizeString(protocol?.category, 40).toLowerCase() || 'evaluation';
+            const protocolAgeGroup = sanitizeString(protocol?.ageGroup || protocol?.age_group, 30).toLowerCase() || 'all';
+            return protocolCategory === category &&
+              (protocolAgeGroup === ageGroup || protocolAgeGroup === 'all') &&
+              normalizeProtocolKey(sanitizeString(protocol?.title || protocol?.name, 240)) === titleKey;
+          });
+          if (duplicate) {
+            return res.status(409).json({
+              success: false,
+              error: 'REUSABLE_PROTOCOL_ALREADY_EXISTS',
+              message: 'Já existe um protocolo com esse nome nesta categoria. Selecione o protocolo existente para adicionar a tarefa.',
+              data: { protocol: duplicate }
+            });
+          }
+
+          persistedDomain = sanitizeClinicalPayload({
+            id: stableDomainId,
+            name: requestedDomainName,
+            skills: [skill]
+          });
+          persistedProtocol = sanitizeClinicalPayload({
+            id: stableProtocolId,
+            title: requestedProtocolTitle,
+            category,
+            ageGroup,
+            age_group: ageGroup,
+            age_minima: ageRange.min,
+            age_maxima: ageRange.max,
+            min_age: ageRange.min,
+            max_age: ageRange.max,
+            data: [persistedDomain],
+            origin: 'manual_adult_task_schedule',
+            isManualProtocol: true,
+            createdAt: new Date().toISOString(),
+            createdBy: actorId || null
+          });
+          persistedSkill = skill;
+          nextProtocols.push(persistedProtocol);
+        } else {
+          const protocolIndex = nextProtocols.findIndex((protocol: any) => sanitizeString(protocol?.id, 120) === requestedProtocolId);
+          if (protocolIndex < 0) {
+            return res.status(404).json({ success: false, error: 'REUSABLE_PROTOCOL_NOT_FOUND', message: 'O protocolo selecionado não está mais disponível nesta clínica.' });
+          }
+          const protocol = nextProtocols[protocolIndex];
+          const domains = normalizeJsonArrayForRoute(protocol?.data, ['domains', 'items', 'data', 'value']).map((domain: any) => cloneJsonValue(domain));
+          const domainIndex = domains.findIndex((domain: any) => sanitizeString(domain?.id, 120) === requestedDomainId);
+          if (domainIndex < 0) {
+            return res.status(404).json({ success: false, error: 'REUSABLE_PROTOCOL_DOMAIN_NOT_FOUND', message: 'O domínio selecionado não está mais disponível neste protocolo.' });
+          }
+          const domain = domains[domainIndex];
+          const skills = normalizeJsonArrayForRoute(domain?.skills, ['skills', 'items', 'data', 'value']).map((item: any) => cloneJsonValue(item));
+          const existingSkill = skills.find((item: any) =>
+            sanitizeString(item?.id, 120) === skillId ||
+            normalizeProtocolKey(sanitizeString(item?.name || item?.title, 240)) === normalizeProtocolKey(skillName)
+          );
+          if (existingSkill) {
+            return res.json(buildResponse({ protocols: nextProtocols, protocol, domain, skill: existingSkill, idempotent: true }));
+          }
+          skills.push(skill);
+          persistedDomain = sanitizeClinicalPayload({ ...domain, skills });
+          domains[domainIndex] = persistedDomain;
+          persistedProtocol = sanitizeClinicalPayload({ ...protocol, data: domains });
+          nextProtocols[protocolIndex] = persistedProtocol;
+          persistedSkill = skill;
+        }
+
+        const currentProtocolVersion = Math.max(0, Number(current.data?.section_versions?.protocols || 0) || 0);
+        const operationKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) ||
+          `reusable-adult-protocol:${operation}:${stableProtocolId}:${stableDomainId}:${skillId}`;
+        const { data: persistenceResult, error: persistenceError } = await supabase.rpc('verto_save_clinic_state_sections', {
+          p_clinic_id: clinicId,
+          p_updated_by: isUuid(actorId) ? actorId : null,
+          p_expected_section_versions: { protocols: currentProtocolVersion },
+          p_rooms: null,
+          p_appointments: null,
+          p_protocols: nextProtocols,
+          p_specialty_settings: null,
+          p_idempotency_key: `${operationKey}:v${currentProtocolVersion}`
+        });
+        if (persistenceError) {
+          const message = String(persistenceError?.message || '').toLowerCase();
+          if (sanitizeString(persistenceError?.code, 40) === '42883' || message.includes('verto_save_clinic_state_sections')) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
+            });
+          }
+          throw persistenceError;
+        }
+        if (persistenceResult?.success === false && persistenceResult?.conflict === true) {
+          if (attempt === 0) continue;
+          return res.status(409).json({
+            success: false,
+            error: 'REUSABLE_PROTOCOL_CONCURRENT_EDIT',
+            message: 'A biblioteca de protocolos foi alterada por outra pessoa. Atualize e tente novamente.'
+          });
+        }
+
+        const persistedState = persistenceResult?.data || {};
+        const persistedProtocols = normalizeProtocolArrayForRoute(persistedState?.protocols);
+        const finalProtocol = persistedProtocols.find((protocol: any) => sanitizeString(protocol?.id, 120) === sanitizeString(persistedProtocol?.id, 120)) || persistedProtocol;
+        const finalDomain = normalizeJsonArrayForRoute(finalProtocol?.data, ['domains', 'items', 'data', 'value'])
+          .find((domain: any) => sanitizeString(domain?.id, 120) === sanitizeString(persistedDomain?.id, 120)) || persistedDomain;
+        const finalSkill = normalizeJsonArrayForRoute(finalDomain?.skills, ['skills', 'items', 'data', 'value'])
+          .find((item: any) => sanitizeString(item?.id, 120) === skillId) || persistedSkill;
+
+        try {
+          await persistActivityLog({
+            userId: actorId,
+            clinicId,
+            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+            title: 'Protocolos atualizados',
+            content: operation === 'create_protocol'
+              ? `Protocolo reutilizável "${sanitizeString(finalProtocol?.title, 180)}" criado a partir do agendamento de uma tarefa adulta.`
+              : `Tarefa "${skillName}" adicionada ao protocolo reutilizável "${sanitizeString(finalProtocol?.title, 180)}".`,
+            type: 'clinical',
+            actionType: 'update_protocols',
+            payloadDetails: JSON.stringify({
+              operation,
+              protocolId: sanitizeString(finalProtocol?.id, 120),
+              domainId: sanitizeString(finalDomain?.id, 120),
+              skillId,
+              category,
+              reusableAdultLibrary: true
+            })
+          });
+        } catch (auditError: any) {
+          console.warn('[ReusableAdultProtocol] audit warning:', auditError?.message || String(auditError));
+        }
+
+        return res.json(buildResponse({
+          protocols: persistedProtocols.length > 0 ? persistedProtocols : nextProtocols,
+          protocol: finalProtocol,
+          domain: finalDomain,
+          skill: finalSkill,
+          persisted: persistedState
+        }));
+      }
+
+      return res.status(409).json({ success: false, error: 'REUSABLE_PROTOCOL_CONCURRENT_EDIT', message: 'A biblioteca de protocolos foi alterada. Atualize e tente novamente.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinic/protocols/reusable-adult [POST]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req),
+        fallbackMessage: 'Não foi possível salvar o protocolo reutilizável agora.'
+      });
+    }
+  });
+
   app.post('/api/clinic/state', checkAuth, async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
