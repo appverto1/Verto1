@@ -9,7 +9,7 @@ import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
-import { AdultWellbeingTrendChart } from './AdultWellbeingTrendChart';
+import { AdultWellbeingTrendChart, type WellbeingPeriod } from './AdultWellbeingTrendChart';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
@@ -92,8 +92,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [showMoodSuccess, setShowMoodSuccess] = useState(false); 
   const [isMessagesOpen, setIsMessagesOpen] = useState(false); 
   const [selectedTag, setSelectedTag] = useState<any>(null); 
-  const [dailyCheckinDone, setDailyCheckinDone] = useState(false);
   const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
+  const [wellbeingPeriod, setWellbeingPeriod] = useState<WellbeingPeriod>('month');
   const [readMessageIds, setReadMessageIds] = useState<Set<string>>(() => new Set());
   const [isMoodSaving, setIsMoodSaving] = useState(false);
   const [moodSaveError, setMoodSaveError] = useState('');
@@ -212,12 +212,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setWellbeingCheckins([]);
       return () => { active = false; };
     }
-    void dataService.getPatientSelfWellbeingCheckins(90).then((result: any) => {
+    void dataService.getPatientSelfWellbeingCheckins(wellbeingPeriod).then((result: any) => {
       if (!active) return;
       setWellbeingCheckins(result?.success && Array.isArray(result?.data) ? result.data : []);
     });
     return () => { active = false; };
-  }, [isKidsProfile, portalPatientId]);
+  }, [isKidsProfile, portalPatientId, wellbeingPeriod]);
 
   useEffect(() => {
     let active = true;
@@ -2122,30 +2122,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return () => { active = false; };
   }, [portalPatientId, user?.id]);
 
-  useEffect(() => {
-    if (isKidsProfile) return;
-    const metricKind = isConventionalAdult ? 'mood' : 'energy';
-    const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    const canonicalTodayCheckin = wellbeingCheckins.find((item: any) =>
-      String(item?.metric_kind || item?.metricKind || '').toLowerCase() === metricKind &&
-      String(item?.local_date || item?.localDate || '').slice(0, 10) === todayKey
-    );
-    const legacyTodayCheckin = (Array.isArray(history) ? history : []).find((item: any) => {
-      if (String(item?.type || '').toLowerCase() !== 'checkin') return false;
-      const taskData = item?.task_data && typeof item.task_data === 'object' ? item.task_data : {};
-      const storedKind = String(taskData?.metricKind || taskData?.metric_kind || (item?.energy !== null && item?.energy !== undefined ? 'energy' : 'mood')).toLowerCase();
-      if (storedKind !== metricKind) return false;
-      const dateKey = String(item?.date_group || item?.dateGroup || '').slice(0, 10) || (() => {
-        const raw = item?.created_at || item?.date;
-        const parsed = raw ? new Date(raw) : null;
-        return parsed && !Number.isNaN(parsed.getTime())
-          ? new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(parsed)
-          : '';
-      })();
-      return dateKey === todayKey;
-    });
-    setDailyCheckinDone(Boolean(canonicalTodayCheckin || legacyTodayCheckin));
-  }, [history, isConventionalAdult, isKidsProfile, wellbeingCheckins]);
 
   const familyPhotoCountToday = useMemo(() => {
     const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -4002,7 +3978,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       if (result?.data?.id) {
         setWellbeingCheckins((current) => [result.data, ...current.filter((row: any) => String(row?.id || '') !== String(result.data.id))]);
       }
-      setDailyCheckinDone(true);
       setShowMoodSuccess(true);
       setIsMoodModalOpen(false);
       setMoodNote("");
@@ -4245,11 +4220,6 @@ ${interventionImages.join('\n')}` : ''
       )}
       {portalMenu}
       {portalSection === 'home' && portalHomeSummary}
-      {portalSection === 'home' && !isKidsProfile && (
-        <div className="mb-6">
-          <AdultWellbeingTrendChart records={wellbeingCheckins} metricKind={isConventionalAdult ? 'mood' : 'energy'} />
-        </div>
-      )}
       {portalSection === 'appointments' && portalAppointmentsPanel}
       {portalSection === 'anamnesis' && portalAnamnesisPanel}
       {portalSection === 'notes' && portalNotesPanel}
@@ -4260,8 +4230,7 @@ ${interventionImages.join('\n')}` : ''
       {portalSection === 'profile' && portalProfilePanel}
       {portalSection === 'home' && clinicalPortalEnabled && (
         <React.Fragment>
-      {!dailyCheckinDone ? ( 
-        <div className="mb-8 animate-slide-up"> 
+      <div className="mb-8 animate-slide-up">
           <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2 px-1"> {isConventionalAdult ? <Smile size={16} /> : <BatteryCharging size={16} />} {isConventionalAdult ? 'Como está se sentindo?' : 'Como se sente agora?'} </h2> 
           <div className="flex overflow-x-auto pb-8 pt-4 -mx-6 px-6 gap-4 snap-x snap-mandatory no-scrollbar items-center"> 
             {moodOptions.map((mood) => { 
@@ -4280,15 +4249,6 @@ ${interventionImages.join('\n')}` : ''
           </div> 
           <p className="text-center text-[10px] text-gray-400 font-medium animate-pulse mt-[-10px] italic"> Deslize para escolher ou clique </p> 
         </div> 
-      ) : ( 
-        <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100 mb-6 animate-fade-in flex items-center justify-between"> 
-          <div className="flex items-center gap-4"> 
-            <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center text-green-600"> <Check size={24} /> </div> 
-            <div> <h3 className="font-semibold text-gray-800 tracking-tight">{isConventionalAdult ? 'Sentimento Registrado!' : 'Energia Registrada!'}</h3> <p className="text-xs text-gray-400">Obrigado por compartilhar.</p> </div> 
-          </div> 
-          <button disabled={isReadOnlyMode} onClick={() => setDailyCheckinDone(false)} className="text-[10px] font-semibold text-[#7a32fc] bg-[#7a32fc]/10 px-4 py-2 rounded-xl hover:bg-[#7a32fc]/20 transition-colors flex items-center gap-2 uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed" > <RefreshCcw size={14} /> Ajustar </button> 
-        </div> 
-      )} 
       <div className="flex-1 overflow-y-auto no-scrollbar"> 
         <div className="mb-8"> 
           <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2"> <Zap size={16} /> Suas Atividades </h2> 
@@ -4343,6 +4303,16 @@ ${interventionImages.join('\n')}` : ''
             </div>
           </div>
         )}
+        {!isKidsProfile ? (
+          <div className="mt-8 mb-6">
+            <AdultWellbeingTrendChart
+              records={wellbeingCheckins}
+              metricKind={isConventionalAdult ? 'mood' : 'energy'}
+              period={wellbeingPeriod}
+              onPeriodChange={setWellbeingPeriod}
+            />
+          </div>
+        ) : (
         <div className="mt-8 mb-6"> 
           <div className="flex items-center justify-between mb-4">
              <h2 className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest flex items-center gap-2"> <Trophy size={16} /> Histórico </h2>
@@ -4383,6 +4353,7 @@ ${interventionImages.join('\n')}` : ''
             )) : ( <p className="text-center text-gray-400 text-xs py-4 italic">Nenhuma atividade registrada para esta seleção.</p> )} 
           </div> 
         </div> 
+        )}
       </div> 
         </React.Fragment>
       )}

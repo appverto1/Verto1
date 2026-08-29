@@ -44689,6 +44689,26 @@ async function startServer() {
 
   const WELLBEING_CHECKIN_SELECT = 'id,organization_id,clinic_id,patient_id,actor_user_id,metric_kind,metric_value,tag_id,tag_label,note,icon,local_date,created_at,updated_at';
 
+  type WellbeingReadPeriod = 'day' | 'week' | 'month' | 'year';
+  const resolveWellbeingReadWindow = (value: unknown) => {
+    const requested = sanitizeString(value, 20).toLowerCase();
+    const period: WellbeingReadPeriod = ['day', 'week', 'month', 'year'].includes(requested)
+      ? requested as WellbeingReadPeriod
+      : 'month';
+    const durationMs: Record<WellbeingReadPeriod, number> = {
+      day: 24 * 60 * 60 * 1000,
+      week: 7 * 24 * 60 * 60 * 1000,
+      month: 31 * 24 * 60 * 60 * 1000,
+      year: 366 * 24 * 60 * 60 * 1000,
+    };
+    const limits: Record<WellbeingReadPeriod, number> = { day: 96, week: 336, month: 720, year: 2000 };
+    return {
+      period,
+      fromIso: new Date(Date.now() - durationMs[period]).toISOString(),
+      limit: limits[period],
+    };
+  };
+
   const sendWellbeingSchemaError = (res: any, error: any, route: string) => {
     if (isMissingRelationError(error)) {
       return res.status(503).json({
@@ -44706,16 +44726,17 @@ async function startServer() {
       if (!portalScope) {
         return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
       }
-      const limit = parseBoundedListLimit(req.query?.limit, 90, 180);
+      const readWindow = resolveWellbeingReadWindow(req.query?.period);
       const { data, error } = await supabase
         .from('patient_wellbeing_checkins')
         .select(WELLBEING_CHECKIN_SELECT)
         .eq('clinic_id', portalScope.clinicId)
         .eq('patient_id', portalScope.patientId)
-        .order('local_date', { ascending: false })
-        .limit(limit);
+        .gte('created_at', readWindow.fromIso)
+        .order('created_at', { ascending: false })
+        .limit(readWindow.limit);
       if (error) return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [GET]');
-      return res.json({ success: true, data: data || [] });
+      return res.json({ success: true, data: data || [], period: readWindow.period });
     } catch (error: any) {
       return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [GET]');
     }
@@ -44733,10 +44754,17 @@ async function startServer() {
       if (!['mood', 'energy'].includes(metricKind) || metricValue === null) {
         return res.status(400).json({ success: false, error: 'Informe um check-in de humor ou energia entre 0 e 100.' });
       }
-      const localDate = dateGroupForClinic(new Date(), req.session.user);
+      const rawClientEventId = sanitizeString(req.body?.clientEventId || req.body?.client_event_id, 120);
+      if (rawClientEventId && !isUuid(rawClientEventId)) {
+        return res.status(400).json({ success: false, error: 'Identificador do registro inválido.' });
+      }
+      const clientEventId = rawClientEventId || crypto.randomUUID();
+      const recordedAt = new Date();
+      const recordedAtIso = recordedAt.toISOString();
+      const localDate = dateGroupForClinic(recordedAt, req.session.user);
       const actorUserId = sanitizeString(req.session.user?.id, 120);
       const row = {
-        id: uuidFromStableString(`patient-wellbeing:${portalScope.clinicId}:${portalScope.patientId}:${metricKind}:${localDate}`),
+        id: uuidFromStableString(`patient-wellbeing-event:v2:${portalScope.clinicId}:${portalScope.patientId}:${metricKind}:${clientEventId}`),
         organization_id: portalScope.clinicId,
         clinic_id: portalScope.clinicId,
         patient_id: portalScope.patientId,
@@ -44748,15 +44776,38 @@ async function startServer() {
         note: sanitizeTextField(req.body?.note, 4000) || null,
         icon: sanitizeString(req.body?.icon, 20) || null,
         local_date: localDate,
-        updated_at: new Date().toISOString(),
+        created_at: recordedAtIso,
+        updated_at: recordedAtIso,
       };
-      const { data, error } = await supabase
+      const insertResult = await supabase
         .from('patient_wellbeing_checkins')
-        .upsert(row, { onConflict: 'clinic_id,patient_id,metric_kind,local_date' })
+        .insert(row)
         .select(WELLBEING_CHECKIN_SELECT)
         .single();
-      if (error) return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [POST]');
-      return res.json({ success: true, data });
+      if (insertResult.error) {
+        const errorCode = sanitizeString(insertResult.error?.code, 40);
+        if (errorCode === '23505') {
+          const replay = await supabase
+            .from('patient_wellbeing_checkins')
+            .select(WELLBEING_CHECKIN_SELECT)
+            .eq('id', row.id)
+            .eq('clinic_id', portalScope.clinicId)
+            .eq('patient_id', portalScope.patientId)
+            .eq('metric_kind', metricKind)
+            .limit(1)
+            .maybeSingle();
+          if (!replay.error && replay.data) {
+            return res.json({ success: true, data: replay.data, duplicate: true });
+          }
+          return res.status(503).json({
+            success: false,
+            code: 'PATIENT_WELLBEING_APPEND_SCHEMA_REQUIRED',
+            error: 'A estrutura de registros múltiplos de humor/energia ainda não foi aplicada.'
+          });
+        }
+        return sendWellbeingSchemaError(res, insertResult.error, '/api/patient/self/wellbeing-checkins [POST]');
+      }
+      return res.json({ success: true, data: insertResult.data });
     } catch (error: any) {
       return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [POST]');
     }
@@ -44773,16 +44824,17 @@ async function startServer() {
         const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
         const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
         if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
-        const limit = parseBoundedListLimit(req.query?.limit, 90, 180);
+        const readWindow = resolveWellbeingReadWindow(req.query?.period);
         const { data, error } = await supabase
           .from('patient_wellbeing_checkins')
           .select(WELLBEING_CHECKIN_SELECT)
           .eq('clinic_id', clinicId)
           .eq('patient_id', patientId)
-          .order('local_date', { ascending: false })
-          .limit(limit);
+          .gte('created_at', readWindow.fromIso)
+          .order('created_at', { ascending: false })
+          .limit(readWindow.limit);
         if (error) return sendWellbeingSchemaError(res, error, '/api/patients/:patientId/wellbeing-checkins [GET]');
-        return res.json({ success: true, data: data || [] });
+        return res.json({ success: true, data: data || [], period: readWindow.period });
       } catch (error: any) {
         return sendWellbeingSchemaError(res, error, '/api/patients/:patientId/wellbeing-checkins [GET]');
       }
@@ -47853,6 +47905,13 @@ async function startServer() {
         }
         if (/ASSIGNED_TASK_SCOPE_CHANGED|ASSIGNED_TASK_PATIENT_CLINIC_SCOPE_INVALID|ASSIGNED_TASK_CLINIC_INVALID/.test(completionMessage)) {
           return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_SCOPE_CHANGED', error: 'A tarefa mudou de escopo. Atualize o portal antes de tentar novamente.' });
+        }
+        if (/ASSIGNED_TASK_HISTORY_THERAPIST_UNRESOLVED/.test(completionMessage)) {
+          return res.status(409).json({
+            success: false,
+            code: 'ASSIGNED_TASK_HISTORY_THERAPIST_UNRESOLVED',
+            error: 'Não foi possível identificar o profissional responsável pelo histórico desta tarefa. Atualize o vínculo do paciente e tente novamente.'
+          });
         }
         if (/ASSIGNED_TASK_CLINICAL_LINK_|ASSIGNED_TASK_CLINICAL_(PLAN|PROGRAM|TARGET|OBJECTIVE|SNAPSHOT)/.test(completionMessage)) {
           return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_CLINICAL_CONTEXT_CONFLICT', error: 'O contexto clínico histórico da tarefa não pôde ser confirmado. Atualize a tela e tente novamente.' });

@@ -6900,30 +6900,7 @@ export default function App() {
       }
 
       const persisted = result.data;
-      const item = {
-        id: persisted.id,
-        patientId,
-        patient_id: patientId,
-        type: 'checkin',
-        title: metricKind === 'mood' ? 'Check-in de humor' : 'Check-in de energia',
-        energy: metricKind === 'energy' ? normalizedValue : null,
-        note: persisted.note ?? n,
-        icon: persisted.icon ?? i,
-        created_at: persisted.created_at || new Date().toISOString(),
-        dateGroup: persisted.local_date,
-        date_group: persisted.local_date,
-        task_data: {
-          metricKind,
-          metricValue: normalizedValue,
-          tagId,
-          tagLabel,
-          source: 'patient_portal_daily_checkin',
-          clinicDate: persisted.local_date,
-        },
-        tag: tagId,
-      };
-      setHistory(prev => [item, ...prev.filter((existing: any) => String(existing?.id || '') !== String(item.id))]);
-      return { success: true, data: persisted, historyItem: item };
+      return { success: true, data: persisted };
     } catch (error: any) {
       console.error('Falha ao persistir check-in do paciente:', error);
       return { success: false, error: error?.message || 'Não foi possível persistir o check-in.' };
