@@ -46364,10 +46364,82 @@ async function startServer() {
       let candidate: Record<string, any> = { ...safePayload };
       const removedColumns = new Set<string>();
       let lastError: any = null;
+      const profileUserId = sanitizeString(req.params.userId, 120);
+
+      // A rota de perfil é PATCH semântico, não criação de conta. O antigo upsert
+      // podia cair no caminho INSERT quando o shadow row de public.users estivesse
+      // ausente e então violar users.email NOT NULL. Primeiro detectamos o estado
+      // real: linhas existentes recebem UPDATE; somente um shadow row realmente
+      // ausente pode ser reconstruído a partir da identidade autenticada da sessão.
+      profileSaveStage = 'resolve_user_profile_row';
+      const existingUserResult = await supabase
+        .from('users')
+        .select('id,email,role')
+        .eq('id', profileUserId)
+        .maybeSingle();
+      if (existingUserResult.error) throw existingUserResult.error;
+      let recoverMissingUserRow = !existingUserResult.data?.id;
+      const recoveryEmail = sanitizeEmail(req.session.user?.email);
+      const recoveryRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const recoveryClinicId = currentClinicId(req.session.user);
+      const recoverySubscriptionStatus = sanitizeString(
+        req.session.user?.subscriptionStatus || req.session.user?.subscription_status,
+        40
+      );
+      const recoveryBillingModel = sanitizeString(
+        req.session.user?.billingModel || req.session.user?.billing_model,
+        40
+      );
+      if (recoverMissingUserRow && (!recoveryEmail || !recoveryRole)) {
+        return res.status(409).json({
+          success: false,
+          error: 'PROFILE_USER_SHADOW_MISSING',
+          message: 'A identidade autenticada precisa ser sincronizada antes de salvar o perfil.'
+        });
+      }
 
       profileSaveStage = 'persist_user_profile';
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        const { error } = await supabase.from('users').upsert(candidate, { onConflict: 'id' });
+        let error: any = null;
+        if (recoverMissingUserRow) {
+          const recoveryCandidate = cleanObject({
+            ...candidate,
+            id: profileUserId,
+            email: recoveryEmail,
+            role: recoveryRole,
+            clinic_id: recoveryClinicId || undefined,
+            subscription_status: recoverySubscriptionStatus || undefined,
+            billing_model: recoveryBillingModel || undefined,
+            created_at: new Date().toISOString(),
+          });
+          const recoveryResult = await supabase
+            .from('users')
+            .insert([recoveryCandidate])
+            .select('id')
+            .single();
+          error = recoveryResult.error;
+          // Corrida benigna: se outra requisição reconstruiu o shadow row entre
+          // o SELECT e o INSERT, mudamos para UPDATE sem tocar email/role.
+          if (error?.code === '23505') {
+            recoverMissingUserRow = false;
+            continue;
+          }
+        } else {
+          const { id: _profileUserId, ...updateCandidate } = candidate as any;
+          const updateResult = await supabase
+            .from('users')
+            .update(updateCandidate)
+            .eq('id', profileUserId)
+            .select('id')
+            .maybeSingle();
+          error = updateResult.error;
+          if (!error && !updateResult.data?.id) {
+            error = {
+              code: 'PROFILE_USER_ROW_NOT_UPDATED',
+              message: 'O perfil autenticado não possui shadow row atualizável em public.users.'
+            };
+          }
+        }
         if (!error) {
           const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
           const clinicId = currentClinicId(req.session.user);
