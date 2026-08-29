@@ -39,4 +39,17 @@ assert.match(app, /clinicSettings: nextUser\.clinicSettings/);
 assert.doesNotMatch(app, /saveUserProfile\(user\.id, \{\s*\.\.\.nextUser/);
 assert.doesNotMatch(app, /saveUserProfile\(user\.id, \{\s*\.\.\.baseUser/);
 
+// Regression: a partial profile save must never upsert public.users without email.
+// Existing shadow rows are UPDATE-only; a genuinely missing row may be repaired
+// only from the authenticated session identity, including required email + role.
+assert.match(profileRoute, /resolve_user_profile_row/);
+assert.match(profileRoute, /\.from\('users'\)[\s\S]{0,160}\.select\('id,email,role'\)/);
+assert.match(profileRoute, /recoverMissingUserRow/);
+assert.match(profileRoute, /email: recoveryEmail/);
+assert.match(profileRoute, /role: recoveryRole/);
+assert.match(profileRoute, /\.from\('users'\)[\s\S]{0,180}\.insert\(\[recoveryCandidate\]\)/);
+assert.match(profileRoute, /\.from\('users'\)[\s\S]{0,180}\.update\(updateCandidate\)/);
+assert.doesNotMatch(profileRoute, /\.from\('users'\)\.upsert\(candidate, \{ onConflict: 'id' \}\)/);
+assert.match(profileRoute, /PROFILE_USER_SHADOW_MISSING/);
+
 console.log('smokeCorrectionsBlock6Test6ProfilePersistence.regression: PASS');
