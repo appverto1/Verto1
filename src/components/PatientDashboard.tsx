@@ -9,6 +9,7 @@ import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
+import { AdultWellbeingTrendChart } from './AdultWellbeingTrendChart';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
 import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
@@ -92,6 +93,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isMessagesOpen, setIsMessagesOpen] = useState(false); 
   const [selectedTag, setSelectedTag] = useState<any>(null); 
   const [dailyCheckinDone, setDailyCheckinDone] = useState(false);
+  const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
+  const [readMessageIds, setReadMessageIds] = useState<Set<string>>(() => new Set());
   const [isMoodSaving, setIsMoodSaving] = useState(false);
   const [moodSaveError, setMoodSaveError] = useState('');
   const [familyNote, setFamilyNote] = useState("");
@@ -202,6 +205,36 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
   const portalContext = user?.portalContext && typeof user.portalContext === 'object' ? user.portalContext : {};
   const portalPatientId = String(patientPortalId || portalContext?.resolvedPatientId || user?.patientId || user?.patient_id || '').trim();
+
+  useEffect(() => {
+    let active = true;
+    if (isKidsProfile || !portalPatientId) {
+      setWellbeingCheckins([]);
+      return () => { active = false; };
+    }
+    void dataService.getPatientSelfWellbeingCheckins(90).then((result: any) => {
+      if (!active) return;
+      setWellbeingCheckins(result?.success && Array.isArray(result?.data) ? result.data : []);
+    });
+    return () => { active = false; };
+  }, [isKidsProfile, portalPatientId]);
+
+  useEffect(() => {
+    let active = true;
+    if (!portalPatientId || isKidsProfile) {
+      setReadMessageIds(new Set());
+      return () => { active = false; };
+    }
+    void dataService.getPatientSelfMessageReads().then((result: any) => {
+      if (!active) return;
+      const ids = result?.success && Array.isArray(result?.data)
+        ? result.data.map((row: any) => String(row?.note_id || '')).filter(Boolean)
+        : [];
+      setReadMessageIds(new Set(ids));
+    });
+    return () => { active = false; };
+  }, [isKidsProfile, portalPatientId, user?.id]);
+
   const portalAnamnesisStatusHint = String(user?.onboardingStatus || user?.onboarding_status || user?.status || '').toUpperCase();
   const hasPortalAnamnesisHint = Boolean(
     user?.anamnesisRequired ||
@@ -1873,6 +1906,30 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       .sort((a: any, b: any) => new Date(b?.created_at || b?.date || 0).getTime() - new Date(a?.created_at || a?.date || 0).getTime())
       .slice(0, 30);
   }, [sharedNotes, portalPatientKeys, portalPatientEmail]);
+  const unreadPortalSharedNotes = useMemo(
+    () => portalSharedNotes.filter((note: any) => {
+      const noteId = String(note?.id || '').trim();
+      return noteId && !readMessageIds.has(noteId);
+    }),
+    [portalSharedNotes, readMessageIds]
+  );
+  const openMessagesAndPersistRead = () => {
+    setIsMessagesOpen(true);
+    setIsMenuOpen(false);
+    const unreadIds = unreadPortalSharedNotes
+      .map((note: any) => String(note?.id || '').trim())
+      .filter((noteId: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(noteId));
+    if (unreadIds.length === 0) return;
+    setReadMessageIds((current) => new Set([...Array.from(current), ...unreadIds]));
+    void dataService.markPatientSelfMessagesRead(unreadIds).then(async (result: any) => {
+      if (result?.success) return;
+      const refreshed = await dataService.getPatientSelfMessageReads();
+      const ids = refreshed?.success && Array.isArray(refreshed?.data)
+        ? refreshed.data.map((row: any) => String(row?.note_id || '')).filter(Boolean)
+        : [];
+      setReadMessageIds(new Set(ids));
+    });
+  };
   const familyDiaryHistory = useMemo(() => {
     const normalizedSharedNotes = portalSharedNotes
       .filter((note: any) => {
@@ -2069,7 +2126,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (isKidsProfile) return;
     const metricKind = isConventionalAdult ? 'mood' : 'energy';
     const todayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    const todayCheckin = (Array.isArray(history) ? history : []).find((item: any) => {
+    const canonicalTodayCheckin = wellbeingCheckins.find((item: any) =>
+      String(item?.metric_kind || item?.metricKind || '').toLowerCase() === metricKind &&
+      String(item?.local_date || item?.localDate || '').slice(0, 10) === todayKey
+    );
+    const legacyTodayCheckin = (Array.isArray(history) ? history : []).find((item: any) => {
       if (String(item?.type || '').toLowerCase() !== 'checkin') return false;
       const taskData = item?.task_data && typeof item.task_data === 'object' ? item.task_data : {};
       const storedKind = String(taskData?.metricKind || taskData?.metric_kind || (item?.energy !== null && item?.energy !== undefined ? 'energy' : 'mood')).toLowerCase();
@@ -2083,8 +2144,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       })();
       return dateKey === todayKey;
     });
-    setDailyCheckinDone(Boolean(todayCheckin));
-  }, [history, isConventionalAdult, isKidsProfile]);
+    setDailyCheckinDone(Boolean(canonicalTodayCheckin || legacyTodayCheckin));
+  }, [history, isConventionalAdult, isKidsProfile, wellbeingCheckins]);
 
   const familyPhotoCountToday = useMemo(() => {
     const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -3938,6 +3999,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         setMoodSaveError(result?.error || 'Não foi possível salvar seu check-in.');
         return;
       }
+      if (result?.data?.id) {
+        setWellbeingCheckins((current) => [result.data, ...current.filter((row: any) => String(row?.id || '') !== String(result.data.id))]);
+      }
       setDailyCheckinDone(true);
       setShowMoodSuccess(true);
       setIsMoodModalOpen(false);
@@ -4115,7 +4179,7 @@ ${interventionImages.join('\n')}` : ''
             className="p-3 bg-white rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50 relative"
           >
             <Menu size={20} />
-            {portalSharedNotes.length > 0 && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
+            {unreadPortalSharedNotes.length > 0 && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
           </button>
 
           <AnimatePresence>
@@ -4144,15 +4208,15 @@ ${interventionImages.join('\n')}` : ''
                 </div>
                 {!isReadOnlyMode && (
                   <button 
-                    onClick={() => { setIsMessagesOpen(true); setIsMenuOpen(false); }}
+                    onClick={openMessagesAndPersistRead}
                     className="w-full flex items-center justify-between p-3 text-sm font-medium text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-colors"
                   >
                     <div className="flex items-center gap-3">
                       <MessageCircle size={18} /> Mensagens
                     </div>
-                    {portalSharedNotes.length > 0 && (
+                    {unreadPortalSharedNotes.length > 0 && (
                       <span className="bg-red-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
-                        {portalSharedNotes.length}
+                        {unreadPortalSharedNotes.length}
                       </span>
                     )}
                   </button>
@@ -4181,6 +4245,11 @@ ${interventionImages.join('\n')}` : ''
       )}
       {portalMenu}
       {portalSection === 'home' && portalHomeSummary}
+      {portalSection === 'home' && !isKidsProfile && (
+        <div className="mb-6">
+          <AdultWellbeingTrendChart records={wellbeingCheckins} metricKind={isConventionalAdult ? 'mood' : 'energy'} />
+        </div>
+      )}
       {portalSection === 'appointments' && portalAppointmentsPanel}
       {portalSection === 'anamnesis' && portalAnamnesisPanel}
       {portalSection === 'notes' && portalNotesPanel}

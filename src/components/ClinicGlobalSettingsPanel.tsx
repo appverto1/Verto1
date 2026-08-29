@@ -1438,18 +1438,17 @@ export function ClinicGlobalSettingsPanel({
       </label>
       <label className={labelClass}>
         Conselho / tipo de registro
-        <input
-          type="text"
-          list="clinic-professional-council-options"
-          maxLength={48}
+        <select
           value={values.therapistCouncilType}
           onChange={(event) => setters.setTherapistCouncilType(formatProfessionalCouncil(event.target.value))}
-          placeholder="CRP, CREFITO, CRFa ou Sem conselho"
           className={inputClass}
-        />
-        <datalist id="clinic-professional-council-options">
+        >
+          <option value="">Selecione o conselho ou tipo de registro</option>
           {PROFESSIONAL_COUNCIL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-        </datalist>
+          {values.therapistCouncilType && !PROFESSIONAL_COUNCIL_OPTIONS.some((option) => option.value === values.therapistCouncilType) && (
+            <option value={values.therapistCouncilType}>{values.therapistCouncilType} · registro existente</option>
+          )}
+        </select>
       </label>
       <label className={labelClass}>
         Registro profissional / identificação

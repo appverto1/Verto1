@@ -3619,21 +3619,25 @@ async function markClinicPaymentFailed(params: {
   email?: string | null;
   invoiceId?: string | null;
 }) {
-  const blockedAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-  const payload = {
-    subscription_status: 'delinquent',
-    stripe_payment_failed_at: new Date().toISOString(),
-    stripe_access_block_at: blockedAt,
-    stripe_last_failed_invoice_id: sanitizeString(params.invoiceId, 200) || undefined,
-    updated_at: new Date().toISOString()
-  };
   const clinicId = sanitizeString(params.clinicId, 120);
   const userId = sanitizeString(params.userId, 120);
   const email = sanitizeEmail(params.email);
-
-  if (clinicId) await patchTableSafely('clinics', { column: 'id', value: clinicId }, payload);
-  if (userId) await patchTableSafely('users', { column: 'id', value: userId }, payload);
-  if (!userId && email) await patchTableSafely('users', { column: 'email', value: email }, payload);
+  const failedAt = new Date().toISOString();
+  const result = await supabase.rpc('apply_billing_payment_failure_v1', {
+    p_clinic_id: isUuid(clinicId) ? clinicId : null,
+    p_user_id: isUuid(userId) ? userId : null,
+    p_email: email || null,
+    p_invoice_id: sanitizeString(params.invoiceId, 200) || null,
+    p_failed_at: failedAt,
+  });
+  if (result.error) {
+    const message = String(result.error?.message || result.error?.details || '');
+    if (/apply_billing_payment_failure_v1|42883|function .* does not exist|schema cache/i.test(message)) {
+      throw new Error('BILLING_GRACE_MIGRATION_REQUIRED');
+    }
+    throw result.error;
+  }
+  return result.data || null;
 }
 
 async function clearClinicPaymentFailure(params: {
@@ -15801,6 +15805,8 @@ type ResolvedOnboardingContext = {
     logoUrl: string | null;
     subscriptionStatus: string | null;
     billingModel: string | null;
+    stripePaymentFailedAt: string | null;
+    stripeAccessBlockAt: string | null;
     address: string | null;
     timeZone: string;
     patientPhotoPolicy: 'PORTAL' | 'CLINIC';
@@ -15829,6 +15835,8 @@ function compactOnboardingContextForSession(value: any): ResolvedOnboardingConte
         logoUrl: sanitizeSessionUrl(value.clinic.logoUrl),
         subscriptionStatus: normalizeClinicAccessStatus(value.clinic.subscriptionStatus) || null,
         billingModel: sanitizeString(value.clinic.billingModel, 60).toLowerCase() || null,
+        stripePaymentFailedAt: sanitizeString(value.clinic.stripePaymentFailedAt || value.clinic.stripe_payment_failed_at, 80) || null,
+        stripeAccessBlockAt: sanitizeString(value.clinic.stripeAccessBlockAt || value.clinic.stripe_access_block_at, 80) || null,
         address: sanitizeString(value.clinic.address, 320) || null,
         timeZone: resolveClinicTimeZone({ timeZone: value.clinic.timeZone, state: value.clinic.state }),
         patientPhotoPolicy: sanitizeString(value.clinic.patientPhotoPolicy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
@@ -15872,6 +15880,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'subscription_status',
     'billing_model',
     'billing_sync_status',
+    'stripe_payment_failed_at',
     'stripe_access_block_at',
     'address',
     'clinic_address',
@@ -16072,6 +16081,8 @@ async function resolveOnboardingContextForUser(params: {
           logoUrl: null,
           subscriptionStatus: null,
           billingModel: null,
+          stripePaymentFailedAt: null,
+          stripeAccessBlockAt: null,
           address: null,
           timeZone: DEFAULT_CLINIC_TIME_ZONE,
           patientPhotoPolicy: 'PORTAL',
@@ -16167,6 +16178,8 @@ async function resolveOnboardingContextForUser(params: {
       logoUrl: sanitizeSessionUrl(clinicRow?.logo_url),
       subscriptionStatus: clinicSubscriptionStatus || null,
       billingModel: billingModel || null,
+      stripePaymentFailedAt: sanitizeString(clinicRow?.stripe_payment_failed_at, 80) || null,
+      stripeAccessBlockAt: sanitizeString(clinicRow?.stripe_access_block_at, 80) || null,
       address: clinicOnboardingAddress(clinicRow),
       timeZone: resolveClinicTimeZone({ timeZone: clinicRow?.timezone, state: clinicRow?.state }),
       patientPhotoPolicy: sanitizeString(clinicRow?.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
@@ -16292,6 +16305,8 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
     billingModel: clinicManagedBilling
       ? context.clinic?.billingModel || baseSessionUser.billingModel
       : baseSessionUser.billingModel,
+    stripePaymentFailedAt: context.clinic?.stripePaymentFailedAt || baseSessionUser.stripePaymentFailedAt || null,
+    stripeAccessBlockAt: context.clinic?.stripeAccessBlockAt || baseSessionUser.stripeAccessBlockAt || null,
     specialties: context.membership?.specialty || baseSessionUser.specialties,
     clinicSettings: clinicManagedBilling
       ? mergeAuthoritativeClinicSettings(baseSessionUser.clinicSettings, context)
@@ -16682,6 +16697,8 @@ function buildSessionUserPayload(input: any) {
     planName: sanitizeString(input?.planName, 80) || null,
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
     billingModel: resolvedBillingModel || null,
+    stripePaymentFailedAt: sanitizeString(input?.stripePaymentFailedAt || input?.stripe_payment_failed_at || input?.onboardingContext?.clinic?.stripePaymentFailedAt, 80) || null,
+    stripeAccessBlockAt: sanitizeString(input?.stripeAccessBlockAt || input?.stripe_access_block_at || input?.onboardingContext?.clinic?.stripeAccessBlockAt, 80) || null,
     isDemoUser: resolvedIsDemoUser,
     demoRole: sanitizeString(input?.demoRole || input?.demo_role, 80) || null,
     demoAccessMode: sanitizeString(input?.demoAccessMode || input?.demo_access_mode, 80).toLowerCase() || null,
@@ -28119,6 +28136,11 @@ async function startServer() {
         workspaces
       });
 
+      const loginAccessContexts = await fetchUserAccessContexts(user.id, workspaces);
+      const hasClinicLoginContext = loginAccessContexts.some((context) => context.kind === 'clinic_workspace');
+      const hasPatientLoginContext = loginAccessContexts.some((context) => context.kind === 'patient_portal');
+      const mustChooseLoginMode = !invitedWorkspaceId && hasClinicLoginContext && hasPatientLoginContext;
+
       const userData = {
         id: user.id,
         email: user.email,
@@ -28138,6 +28160,8 @@ async function startServer() {
         billingModel: clinicManagedBilling
           ? onboardingContext.clinic?.billingModel || profile.billing_model
           : profile.billing_model,
+        stripePaymentFailedAt: onboardingContext.clinic?.stripePaymentFailedAt || (profile as any)?.stripe_payment_failed_at || null,
+        stripeAccessBlockAt: onboardingContext.clinic?.stripeAccessBlockAt || (profile as any)?.stripe_access_block_at || null,
         isDemoUser: profile.is_demo_user,
         demoRole: profile.demo_role,
         demoAccessMode: profile.demo_access_mode,
@@ -28157,12 +28181,15 @@ async function startServer() {
           ? mergeAuthoritativeClinicSettings(user.user_metadata?.clinic_settings, onboardingContext)
           : user.user_metadata?.clinic_settings || null,
         onboardingContext,
+        accessContexts: loginAccessContexts,
         activeAccessContextId: invitedWorkspaceId
           ? clinicAccessContextId(invitedWorkspaceId)
-          : sanitizeString(req.session?.user?.activeAccessContextId, 380) || null,
-        accessContextSelectionExplicit: Boolean(
-          invitedWorkspaceId || req.session?.user?.accessContextSelectionExplicit
-        ),
+          : mustChooseLoginMode
+            ? null
+            : sanitizeString(req.session?.user?.activeAccessContextId, 380) || null,
+        accessContextSelectionExplicit: mustChooseLoginMode
+          ? false
+          : Boolean(invitedWorkspaceId || req.session?.user?.accessContextSelectionExplicit),
         workspaces
       };
 
@@ -44660,6 +44687,185 @@ async function startServer() {
     }
   });
 
+  const WELLBEING_CHECKIN_SELECT = 'id,organization_id,clinic_id,patient_id,actor_user_id,metric_kind,metric_value,tag_id,tag_label,note,icon,local_date,created_at,updated_at';
+
+  const sendWellbeingSchemaError = (res: any, error: any, route: string) => {
+    if (isMissingRelationError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: 'PATIENT_WELLBEING_SCHEMA_UNAVAILABLE',
+        error: 'A estrutura de check-in de humor/energia ainda não foi aplicada.'
+      });
+    }
+    return sendRouteDbError(res, route, error);
+  };
+
+  app.get('/api/patient/self/wellbeing-checkins', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const limit = parseBoundedListLimit(req.query?.limit, 90, 180);
+      const { data, error } = await supabase
+        .from('patient_wellbeing_checkins')
+        .select(WELLBEING_CHECKIN_SELECT)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .order('local_date', { ascending: false })
+        .limit(limit);
+      if (error) return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [GET]');
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [GET]');
+    }
+  });
+
+  app.post('/api/patient/self/wellbeing-checkins', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Check-in de humor/energia')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const metricKind = sanitizeString(req.body?.metricKind || req.body?.metric_kind, 20).toLowerCase();
+      const metricValue = asSafeNumber(req.body?.metricValue ?? req.body?.metric_value, 0, 100);
+      if (!['mood', 'energy'].includes(metricKind) || metricValue === null) {
+        return res.status(400).json({ success: false, error: 'Informe um check-in de humor ou energia entre 0 e 100.' });
+      }
+      const localDate = dateGroupForClinic(new Date(), req.session.user);
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const row = {
+        id: uuidFromStableString(`patient-wellbeing:${portalScope.clinicId}:${portalScope.patientId}:${metricKind}:${localDate}`),
+        organization_id: portalScope.clinicId,
+        clinic_id: portalScope.clinicId,
+        patient_id: portalScope.patientId,
+        actor_user_id: isUuid(actorUserId) ? actorUserId : null,
+        metric_kind: metricKind,
+        metric_value: Math.round(metricValue),
+        tag_id: sanitizeString(req.body?.tagId || req.body?.tag_id, 80) || null,
+        tag_label: sanitizeString(req.body?.tagLabel || req.body?.tag_label, 120) || null,
+        note: sanitizeTextField(req.body?.note, 4000) || null,
+        icon: sanitizeString(req.body?.icon, 20) || null,
+        local_date: localDate,
+        updated_at: new Date().toISOString(),
+      };
+      const { data, error } = await supabase
+        .from('patient_wellbeing_checkins')
+        .upsert(row, { onConflict: 'clinic_id,patient_id,metric_kind,local_date' })
+        .select(WELLBEING_CHECKIN_SELECT)
+        .single();
+      if (error) return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [POST]');
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [POST]');
+    }
+  });
+
+  app.get(
+    '/api/patients/:patientId/wellbeing-checkins',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('clinical.record.view', 'clinical.history.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        const limit = parseBoundedListLimit(req.query?.limit, 90, 180);
+        const { data, error } = await supabase
+          .from('patient_wellbeing_checkins')
+          .select(WELLBEING_CHECKIN_SELECT)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .order('local_date', { ascending: false })
+          .limit(limit);
+        if (error) return sendWellbeingSchemaError(res, error, '/api/patients/:patientId/wellbeing-checkins [GET]');
+        return res.json({ success: true, data: data || [] });
+      } catch (error: any) {
+        return sendWellbeingSchemaError(res, error, '/api/patients/:patientId/wellbeing-checkins [GET]');
+      }
+    }
+  );
+
+  app.get('/api/patient/self/message-reads', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      const recipientUserId = sanitizeString(req.session.user?.id, 120);
+      if (!portalScope || !isUuid(recipientUserId)) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const { data, error } = await supabase
+        .from('patient_message_reads')
+        .select('note_id,read_at')
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .eq('recipient_user_id', recipientUserId)
+        .order('read_at', { ascending: false })
+        .limit(300);
+      if (error) {
+        if (isMissingRelationError(error)) return res.status(503).json({ success: false, code: 'PATIENT_MESSAGE_READS_SCHEMA_UNAVAILABLE', error: 'A estrutura de leitura de mensagens ainda não foi aplicada.' });
+        return sendRouteDbError(res, '/api/patient/self/message-reads [GET]', error);
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/message-reads [GET]', error);
+    }
+  });
+
+  app.post('/api/patient/self/messages/read', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Confirmação de leitura de mensagens')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      const recipientUserId = sanitizeString(req.session.user?.id, 120);
+      if (!portalScope || !isUuid(recipientUserId)) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const requestedIds = Array.from(new Set((Array.isArray(req.body?.noteIds) ? req.body.noteIds : [])
+        .map((value: any) => sanitizeString(value, 120))
+        .filter((value: string) => isUuid(value))))
+        .slice(0, 30);
+      if (requestedIds.length === 0) return res.json({ success: true, data: { noteIds: [] } });
+
+      const { data: notes, error: notesError } = await supabase
+        .from('notes')
+        .select('id,patient_id,visibility,type,portability_scope,shared_with_patient,shared_with_professionals,original_author_id,created_by,is_active,deleted_at')
+        .eq('patient_id', portalScope.patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .in('id', requestedIds);
+      if (notesError) throw notesError;
+      const authorizedIds = (notes || [])
+        .filter((note: any) => noteIsReadableByPatient(note))
+        .map((note: any) => sanitizeString(note?.id, 120))
+        .filter((value: string) => isUuid(value));
+      if (authorizedIds.length === 0) return res.json({ success: true, data: { noteIds: [] } });
+
+      const now = new Date().toISOString();
+      const rows = authorizedIds.map((noteId: string) => ({
+        id: uuidFromStableString(`patient-message-read:${portalScope.clinicId}:${portalScope.patientId}:${recipientUserId}:${noteId}`),
+        organization_id: portalScope.clinicId,
+        clinic_id: portalScope.clinicId,
+        patient_id: portalScope.patientId,
+        note_id: noteId,
+        recipient_user_id: recipientUserId,
+        read_at: now,
+        updated_at: now,
+      }));
+      const { error } = await supabase
+        .from('patient_message_reads')
+        .upsert(rows, { onConflict: 'clinic_id,patient_id,note_id,recipient_user_id', ignoreDuplicates: true });
+      if (error) {
+        if (isMissingRelationError(error)) return res.status(503).json({ success: false, code: 'PATIENT_MESSAGE_READS_SCHEMA_UNAVAILABLE', error: 'A estrutura de leitura de mensagens ainda não foi aplicada.' });
+        throw error;
+      }
+      return res.json({ success: true, data: { noteIds: authorizedIds, readAt: now } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/messages/read [POST]', error);
+    }
+  });
+
   app.post('/api/history', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.evolution.create'), checkPatientAccess, async (req: any, res) => {
     const requestId = requestIdForLogs(req);
     const rawPatientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
@@ -47647,6 +47853,9 @@ async function startServer() {
         }
         if (/ASSIGNED_TASK_SCOPE_CHANGED|ASSIGNED_TASK_PATIENT_CLINIC_SCOPE_INVALID|ASSIGNED_TASK_CLINIC_INVALID/.test(completionMessage)) {
           return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_SCOPE_CHANGED', error: 'A tarefa mudou de escopo. Atualize o portal antes de tentar novamente.' });
+        }
+        if (/ASSIGNED_TASK_CLINICAL_LINK_|ASSIGNED_TASK_CLINICAL_(PLAN|PROGRAM|TARGET|OBJECTIVE|SNAPSHOT)/.test(completionMessage)) {
+          return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_CLINICAL_CONTEXT_CONFLICT', error: 'O contexto clínico histórico da tarefa não pôde ser confirmado. Atualize a tela e tente novamente.' });
         }
         throw completionResult.error;
       }

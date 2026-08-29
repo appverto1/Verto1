@@ -13,9 +13,11 @@ assert.match(profile, /export const resolvePatientPortalKind/);
 assert.match(app, /resolvePatientPortalKind\(patient\) !== 'KIDS'/);
 assert.doesNotMatch(app, /adultAssignedResult[\s\S]{0,1000}dataService\.addTask\(/, 'adult writes must not silently fall back to legacy tasks');
 
-assert.match(app, /stableUuidFromString\(`patient-checkin:\$\{patientId\}:\$\{clinicDate\}:\$\{metricKind\}`\)/);
-assert.match(app, /score: undefined,[\s\S]{0,120}energy: persistedEnergy/);
+assert.match(app, /dataService\.savePatientSelfWellbeingCheckin\(\{/);
+assert.match(app, /metricKind,[\s\S]{0,120}metricValue: normalizedValue/);
 assert.match(app, /tagId,[\s\S]{0,100}tagLabel/);
+const moodCheckinFlow = app.slice(app.indexOf('const handleMoodCheckin'), app.indexOf('const handleCompleteTask'));
+assert.doesNotMatch(moodCheckinFlow, /dataService\.addHistoryItem\(/, 'daily wellbeing check-ins must use the dedicated canonical endpoint, not generic history writes');
 assert.match(app, /const patientAuthoredType = actorKind === 'patient' \? 'patient_note' : 'family_note'/);
 assert.match(app, /const type = isPhotoRecord \? 'photo' : patientAuthoredType/);
 assert.match(app, /isDailyReminder: Boolean\(t\.isDailyReminder \|\| t\.is_daily_reminder\)/);
