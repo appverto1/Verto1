@@ -46161,15 +46161,36 @@ async function startServer() {
   });
 
   app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
+    let profileSaveStage = 'authorize_self';
     try {
-      // O perfil profissional é pessoal. Configurações da clínica são autorizadas
-      // separadamente pela capability da membership ativa.
+      // O perfil profissional é pessoal. Configurações institucionais exigem
+      // escopo explícito + capability da membership ativa. Um save profissional
+      // nunca deve depender da disponibilidade do resolver de módulos da clínica.
       if (req.session.user.id !== req.params.userId) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
-      const authorizationContext = await resolveClinicCapabilityContext(req.session.user);
-      const activeClinicRole = sanitizeString(authorizationContext?.role, 40).toLowerCase();
-      const canEditClinicSettings = ['director', 'coordinator'].includes(activeClinicRole) && Boolean(authorizationContext?.capabilities?.has('clinic.settings.edit'));
+      const requestedProfileSaveScope = sanitizeString(
+        req.body?.profileSaveScope || req.body?.profile_save_scope,
+        24
+      ).toLowerCase();
+      const profileSaveScope = requestedProfileSaveScope === 'clinic' ? 'clinic' : 'professional';
+      let authorizationContext: ResolvedClinicCapabilityContext | null = null;
+      let activeClinicRole = '';
+      let canEditClinicSettings = false;
+      if (profileSaveScope === 'clinic') {
+        profileSaveStage = 'resolve_clinic_capability';
+        authorizationContext = await resolveClinicCapabilityContext(req.session.user);
+        activeClinicRole = sanitizeString(authorizationContext?.role, 40).toLowerCase();
+        canEditClinicSettings = ['director', 'coordinator'].includes(activeClinicRole)
+          && Boolean(authorizationContext?.capabilities?.has('clinic.settings.edit'));
+        if (!canEditClinicSettings) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_SETTINGS_EDIT_DENIED',
+            message: 'Seu acesso atual nesta clínica não permite alterar as configurações institucionais.'
+          });
+        }
+      }
 
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 260);
       const signaturePath = sanitizeString(req.body?.signaturePath || req.body?.signature_path, 260);
@@ -46179,7 +46200,7 @@ async function startServer() {
           ? req.body.professionalProfile
           : {};
       const clinicSettingsInput =
-        canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
+        profileSaveScope === 'clinic' && canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
           ? req.body.clinicSettings
           : {};
       const rawResolvedCrp =
@@ -46344,6 +46365,7 @@ async function startServer() {
       const removedColumns = new Set<string>();
       let lastError: any = null;
 
+      profileSaveStage = 'persist_user_profile';
       for (let attempt = 0; attempt < 12; attempt += 1) {
         const { error } = await supabase.from('users').upsert(candidate, { onConflict: 'id' });
         if (!error) {
@@ -46421,6 +46443,9 @@ async function startServer() {
             professionalRoleTitle: professionalRoleTitle || existingMetadata?.professionalRoleTitle || undefined,
             council: resolvedCouncil || existingMetadata?.council || undefined,
             councilType: resolvedCouncil || existingMetadata?.councilType || undefined,
+            councilNumber: resolvedCouncilNumber || existingMetadata?.councilNumber || existingMetadata?.council_number || undefined,
+            council_number: resolvedCouncilNumber || existingMetadata?.council_number || existingMetadata?.councilNumber || undefined,
+            crp: resolvedCrp || resolvedCouncilNumber || existingMetadata?.crp || undefined,
             councilState: professionalCouncilState || existingMetadata?.councilState || undefined,
             cboCode: professionalCboCode || existingMetadata?.cboCode || undefined,
             specialtyName: professionalSpecialtyName || existingMetadata?.specialtyName || undefined,
@@ -46465,18 +46490,62 @@ async function startServer() {
             metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
             updated_at: new Date().toISOString()
           });
+          profileSaveStage = 'persist_professional_profile';
+          let professionalProfilePersisted = false;
+          let professionalProfileWriteError: any = null;
           for (let profileAttempt = 0; profileAttempt < 10; profileAttempt += 1) {
             const { error: profileError } = await supabase
               .from('professional_profiles')
               .upsert([profileCandidate], { onConflict: 'user_id' });
-            if (!profileError) break;
+            professionalProfileWriteError = profileError;
+            if (!profileError) {
+              professionalProfilePersisted = true;
+              break;
+            }
             const missingProfileColumn = extractMissingColumnName(profileError);
             if (!missingProfileColumn || !(missingProfileColumn in profileCandidate)) break;
             const { [missingProfileColumn]: _removed, ...rest } = profileCandidate as any;
             profileCandidate = rest;
           }
 
-          const nextClinicSettings = canEditClinicSettings
+          // Alguns bancos legados possuem constraints antigas nos campos tipados de
+          // conselho. Nesses casos, preservamos a autoridade no metadata JSONB, que já
+          // é lido pelo resolver canônico, sem descartar o restante do perfil.
+          if (!professionalProfilePersisted && professionalProfileWriteError) {
+            let metadataFallbackCandidate: Record<string, any> = cleanObject({
+              user_id: sanitizeString(req.params.userId, 120),
+              full_name: professionalFullName || undefined,
+              phone: professionalPhone || undefined,
+              specialty:
+                professionalSpecialtyName ||
+                sanitizeString(req.body?.specialties || professionalProfileInput?.specialties, 240) ||
+                undefined,
+              mini_curriculum:
+                sanitizeString(req.body?.miniCurriculum || professionalProfileInput?.miniCurriculum, 3000) ||
+                undefined,
+              metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
+              updated_at: new Date().toISOString()
+            });
+            for (let fallbackAttempt = 0; fallbackAttempt < 8; fallbackAttempt += 1) {
+              const { error: fallbackError } = await supabase
+                .from('professional_profiles')
+                .upsert([metadataFallbackCandidate], { onConflict: 'user_id' });
+              professionalProfileWriteError = fallbackError;
+              if (!fallbackError) {
+                professionalProfilePersisted = true;
+                break;
+              }
+              const missingFallbackColumn = extractMissingColumnName(fallbackError);
+              if (!missingFallbackColumn || !(missingFallbackColumn in metadataFallbackCandidate)) break;
+              const { [missingFallbackColumn]: _removed, ...rest } = metadataFallbackCandidate as any;
+              metadataFallbackCandidate = rest;
+            }
+          }
+          if (!professionalProfilePersisted) {
+            throw professionalProfileWriteError || new Error('Falha ao persistir o perfil profissional.');
+          }
+
+          const nextClinicSettings = profileSaveScope === 'clinic' && canEditClinicSettings
             ? compactClinicSettingsForSession({
             ...(req.session.user?.clinicSettings || {}),
             ...clinicSettingsInput,
@@ -46502,8 +46571,12 @@ async function startServer() {
             ...(clinicCnesCode ? { clinicCnesCode } : {}),
             patientPhotoPolicy: clinicPatientPhotoPolicy,
             ...(clinicProviderCode ? { clinicProviderCode } : {}),
-            ...(resolvedCouncil ? { council: resolvedCouncil } : {}),
-            ...(resolvedCouncilNumber ? { councilNumber: resolvedCouncilNumber } : {}),
+            ...(sanitizeProfessionalIdentifier(clinicSettingsInput?.council, 48)
+              ? { council: sanitizeProfessionalIdentifier(clinicSettingsInput?.council, 48) }
+              : {}),
+            ...(sanitizeProfessionalIdentifier(clinicSettingsInput?.councilNumber, 80)
+              ? { councilNumber: sanitizeProfessionalIdentifier(clinicSettingsInput?.councilNumber, 80) }
+              : {}),
             clinicLogoUrl: resolvedClinicLogoUrl || null,
             signatureDataUrl: resolvedSignatureUrl || null,
             therapistSpecialties:
@@ -46517,7 +46590,7 @@ async function startServer() {
           })
             : compactClinicSettingsForSession(req.session.user?.clinicSettings || {});
 
-          if (clinicId && canEditClinicSettings) {
+          if (clinicId && profileSaveScope === 'clinic' && canEditClinicSettings) {
             await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
               name: clinicName || undefined,
               display_name: clinicName || undefined,
@@ -46619,7 +46692,9 @@ async function startServer() {
           req.session.user.clinicTimeZone = clinicTimeZone;
           req.session.user.clinic_timezone = clinicTimeZone;
           req.session.user.clinicSettings = nextClinicSettings;
-          req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
+          req.session.user.workspaces = profileSaveScope === 'clinic'
+            ? compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id))
+            : compactWorkspacesForSession(req.session.user?.workspaces || []);
           req.session.user.crp =
             resolvedCrp ||
             resolvedCouncilNumber ||
@@ -46634,6 +46709,7 @@ async function startServer() {
             req.session.user?.miniCurriculum ||
             null;
 
+          profileSaveStage = 'persist_session';
           await new Promise<void>((resolve, reject) => {
             req.session.save((sessionError: any) => {
               if (sessionError) {
@@ -46662,8 +46738,19 @@ async function startServer() {
       }
 
       throw lastError || new Error('Falha ao salvar perfil.');
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      logRouteDbError('/api/profile/:userId [POST]', error, {
+        stage: profileSaveStage,
+        userId: sanitizeString(req.params?.userId, 120),
+        requesterId: sanitizeString(req.session?.user?.id, 120),
+        profileSaveScope: sanitizeString(req.body?.profileSaveScope || req.body?.profile_save_scope, 24).toLowerCase() || 'professional',
+        requestId: requestIdForLogs(req)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'PROFILE_SAVE_FAILED',
+        message: 'Não foi possível salvar o perfil agora.'
+      });
     }
   });
 

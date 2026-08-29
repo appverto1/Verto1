@@ -8628,6 +8628,7 @@ export function CoordinatorDashboard({
 
     if (saveScope === "professional") {
       onUpdateProfile({
+        profileSaveScope: "professional",
         name: cleanFullName || user?.name,
         cpf: normalizedTherapistDocumentType === "CPF" ? cleanProfessionalDocument || null : null,
         phone: cleanPhone || null,
@@ -8669,6 +8670,7 @@ export function CoordinatorDashboard({
       });
     } else {
       onUpdateProfile({
+        profileSaveScope: "clinic",
         clinicSettings: {
           ...clinicSettings,
           clinicLogoUrl: clinicLogoDataUrl || undefined,

@@ -84,6 +84,7 @@ const ProfileView = ({
 
   const handleSaveProfile = () => {
     onUpdateProfile({
+      profileSaveScope: "professional",
       name: profileName,
       email: profileEmail,
       specialty: profileSpecialty,
@@ -135,6 +136,7 @@ const ProfileView = ({
                     const reader = new FileReader();
                     reader.onloadend = () => {
                       onUpdateProfile({
+                        profileSaveScope: "professional",
                         profilePicture: reader.result as string,
                       });
                     };
