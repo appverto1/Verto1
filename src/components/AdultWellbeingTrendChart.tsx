@@ -255,6 +255,8 @@ export const AdultWellbeingTrendChart = ({
   const minimumChartWidth = compact ? 520 : 640;
   const pointSpacing = activePeriod === 'day' ? 64 : activePeriod === 'year' ? 76 : 58;
   const chartWidth = Math.max(minimumChartWidth, data.length * pointSpacing);
+  const chartHeight = compact ? 176 : 224;
+  const fixedYAxisTicks = [100, 75, 50, 25, 0];
   const isAggregateView = activePeriod !== 'day';
   const aggregationDescription = activePeriod === 'year'
     ? 'Cada emoji representa a média mensal dos registros daquele mês.'
@@ -302,7 +304,7 @@ export const AdultWellbeingTrendChart = ({
   };
 
   return (
-    <section className={`rounded-3xl border p-4 sm:p-5 ${dark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-label={`Tendência de ${label.toLowerCase()}`}>
+    <section className={`w-full min-w-0 rounded-3xl border p-4 sm:p-5 ${dark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-label={`Tendência de ${label.toLowerCase()}`}>
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <h3 className={`text-sm font-semibold ${dark ? 'text-slate-100' : 'text-slate-800'}`}>{label} ao longo do tempo</h3>
@@ -338,70 +340,81 @@ export const AdultWellbeingTrendChart = ({
         </div>
       ) : (
         <>
-          <div
-            ref={scrollRef}
-            className="overflow-x-auto overscroll-x-contain pb-2"
-            style={{ WebkitOverflowScrolling: 'touch' }}
-            aria-label={`Gráfico rolável de ${label.toLowerCase()}`}
-          >
-            <div style={{ width: chartWidth, height: compact ? 176 : 224 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={data} margin={{ top: 12, right: 18, left: -18, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id={strokeGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
-                      <stop offset="0%" stopColor="#dc2626" />
-                      <stop offset="48%" stopColor="#ef4444" />
-                      <stop offset="52%" stopColor="#84cc16" />
-                      <stop offset="100%" stopColor="#16a34a" />
-                    </linearGradient>
-                    <linearGradient id={fillGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
-                      <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3} />
-                      <stop offset="50%" stopColor="#f59e0b" stopOpacity={0.16} />
-                      <stop offset="100%" stopColor="#22c55e" stopOpacity={0.3} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={dark ? '#334155' : '#e2e8f0'} />
-                  <XAxis
-                    dataKey="plotTimestamp"
-                    type="number"
-                    scale="time"
-                    domain={xDomain}
-                    tickFormatter={(value) => formatAxisLabel(Number(value), activePeriod)}
-                    tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }}
-                    axisLine={false}
-                    tickLine={false}
-                    minTickGap={24}
-                  />
-                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    labelFormatter={(_, payload: any[]) => {
-                      const point = payload?.[0]?.payload as ChartPoint | undefined;
-                      if (!point) return '';
-                      return point.aggregateKind === 'raw'
-                        ? formatDetailDate(point.timestamp)
-                        : formatAggregateDate(point.timestamp, point.aggregateKind);
-                    }}
-                    formatter={(value: any, _name: any, item: any) => {
-                      const point = item?.payload as ChartPoint | undefined;
-                      if (!point || point.aggregateKind === 'raw') return [`${Number(value)}%`, label];
-                      return [`${Number(value)}% · ${point.observationCount} registro${point.observationCount === 1 ? '' : 's'}`, `${label} médio`];
-                    }}
-                    contentStyle={{ borderRadius: 14, border: dark ? '1px solid #334155' : '1px solid #e2e8f0', background: dark ? '#0f172a' : '#fff' }}
-                    labelStyle={{ color: dark ? '#e2e8f0' : '#334155' }}
-                  />
-                  <ReferenceLine y={50} stroke={dark ? '#64748b' : '#94a3b8'} strokeDasharray="4 4" />
-                  <Area type="monotone" dataKey="value" stroke="none" fill={`url(#${fillGradientId})`} fillOpacity={1} />
-                  <Line
-                    type="monotone"
-                    dataKey="value"
-                    stroke={`url(#${strokeGradientId})`}
-                    strokeWidth={2.5}
-                    dot={renderEmojiDot}
-                    activeDot={false}
-                    connectNulls
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
+          <div className="flex w-full min-w-0 items-stretch">
+            <div
+              className={`relative w-11 shrink-0 select-none pr-2 text-right text-[10px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+              style={{ height: chartHeight }}
+              aria-hidden="true"
+            >
+              <div className="absolute inset-x-0 bottom-7 top-3 flex flex-col justify-between">
+                {fixedYAxisTicks.map((tick) => <span key={tick}>{tick}</span>)}
+              </div>
+            </div>
+            <div
+              ref={scrollRef}
+              className="min-w-0 flex-1 overflow-x-auto overscroll-x-contain pb-2"
+              style={{ WebkitOverflowScrolling: 'touch' }}
+              aria-label={`Gráfico rolável de ${label.toLowerCase()}`}
+            >
+              <div style={{ width: chartWidth, minWidth: '100%', height: chartHeight }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={data} margin={{ top: 12, right: 18, left: 4, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id={strokeGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
+                        <stop offset="0%" stopColor="#dc2626" />
+                        <stop offset="48%" stopColor="#ef4444" />
+                        <stop offset="52%" stopColor="#84cc16" />
+                        <stop offset="100%" stopColor="#16a34a" />
+                      </linearGradient>
+                      <linearGradient id={fillGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
+                        <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3} />
+                        <stop offset="50%" stopColor="#f59e0b" stopOpacity={0.16} />
+                        <stop offset="100%" stopColor="#22c55e" stopOpacity={0.3} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={dark ? '#334155' : '#e2e8f0'} />
+                    <XAxis
+                      dataKey="plotTimestamp"
+                      type="number"
+                      scale="time"
+                      domain={xDomain}
+                      tickFormatter={(value) => formatAxisLabel(Number(value), activePeriod)}
+                      tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }}
+                      axisLine={false}
+                      tickLine={false}
+                      minTickGap={24}
+                    />
+                    <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} hide />
+                    <Tooltip
+                      labelFormatter={(_, payload: any[]) => {
+                        const point = payload?.[0]?.payload as ChartPoint | undefined;
+                        if (!point) return '';
+                        return point.aggregateKind === 'raw'
+                          ? formatDetailDate(point.timestamp)
+                          : formatAggregateDate(point.timestamp, point.aggregateKind);
+                      }}
+                      formatter={(value: any, _name: any, item: any) => {
+                        const point = item?.payload as ChartPoint | undefined;
+                        if (!point || point.aggregateKind === 'raw') return [`${Number(value)}%`, label];
+                        return [`${Number(value)}% · ${point.observationCount} registro${point.observationCount === 1 ? '' : 's'}`, `${label} médio`];
+                      }}
+                      contentStyle={{ borderRadius: 14, border: dark ? '1px solid #334155' : '1px solid #e2e8f0', background: dark ? '#0f172a' : '#fff' }}
+                      labelStyle={{ color: dark ? '#e2e8f0' : '#334155' }}
+                    />
+                    <ReferenceLine y={50} stroke={dark ? '#64748b' : '#94a3b8'} strokeDasharray="4 4" />
+                    <Area type="monotone" dataKey="value" stroke="none" fill={`url(#${fillGradientId})`} fillOpacity={1} />
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      stroke={`url(#${strokeGradientId})`}
+                      strokeWidth={2.5}
+                      dot={renderEmojiDot}
+                      activeDot={false}
+                      connectNulls
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           </div>
           <p className={`mt-1 text-center text-[10px] font-medium ${dark ? 'text-slate-500' : 'text-slate-400'}`}>

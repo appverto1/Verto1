@@ -4007,6 +4007,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setTaskEnergy(Math.max(0, Math.min(100, Number(resolved))));
     setTaskStep(2);
   };
+  const handleInterventionResponseContinue = () => {
+    if (!selectedTask || selectedTask.type !== 'intervention' || !interventionResponse.trim() || isInterventionUploading) return;
+    setTaskEnergy(null);
+    setTaskStep(2);
+  };
   const handleConfirmTask = async () => { 
     if (isReadOnlyMode || !selectedTask) return;
     if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
@@ -4389,7 +4394,7 @@ ${interventionImages.join('\n')}` : ''
       )} 
       {selectedTask && ( 
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"> 
-          <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative"> 
+          <div className="bg-white w-full max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-[32px] p-6 shadow-2xl animate-pop relative">
             <button onClick={closeTaskModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button> 
             <div className="text-center mb-6"> 
               <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div> 
@@ -4417,7 +4422,7 @@ ${interventionImages.join('\n')}` : ''
                   </div>
                 )}
 
-                {(!isConventionalAdult || taskStep === 1) && (
+                {taskStep === 1 && (
                   <React.Fragment>
                     <div className="bg-green-50 p-4 rounded-2xl border border-green-100">
                       <p className="text-sm text-gray-600 font-medium leading-relaxed italic">"{selectedTask.description}"</p>
@@ -4464,34 +4469,13 @@ ${interventionImages.join('\n')}` : ''
                     )}
 
                     {!isKidsProfile ? (
-                      <div className="space-y-4">
-                        <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
-                          <p className="mb-1 text-sm font-semibold text-slate-700">Como foi fazer essa tarefa?</p>
-                          <p className="mb-4 text-xs text-slate-500">
-                            {isConventionalAdult
-                              ? 'Informe o esforço percebido. A Verto só registra um valor depois da sua escolha.'
-                              : 'Informe como ficou sua energia após a atividade. A Verto só registra um valor depois da sua escolha.'}
-                          </p>
-                          <BigEnergySlider
-                            value={taskEnergy}
-                            onInteract={(value: number) => setTaskEnergy(value)}
-                            onChange={(e: any) => setTaskEnergy(Number(e.target.value))}
-                            onCommit={(value: number) => setTaskEnergy(value)}
-                            label={taskReflectionLabel}
-                            labelHelp={taskReflectionHelp}
-                            scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
-                            emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
-                            unselectedLabel={isConventionalAdult ? 'Toque na barra para informar seu esforço' : 'Toque na barra para informar sua energia'}
-                          />
-                        </div>
-                        <button
-                          onClick={handleConfirmTask}
-                          disabled={showTaskSuccess || !interventionResponse.trim() || taskEnergy === null}
-                          className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                        >
-                          {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
-                        </button>
-                      </div>
+                      <button
+                        onClick={handleInterventionResponseContinue}
+                        disabled={showTaskSuccess || !interventionResponse.trim() || isInterventionUploading}
+                        className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Check size={20} strokeWidth={3} /> Enviar Resposta
+                      </button>
                     ) : (
                       <button 
                         onClick={handleConfirmTask} 
@@ -4502,6 +4486,44 @@ ${interventionImages.join('\n')}` : ''
                       </button>
                     )}
                   </React.Fragment>
+                )}
+
+                {!isKidsProfile && taskStep === 2 && (
+                  <div className="animate-slide-up space-y-4">
+                    <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+                      <p className="mb-1 text-sm font-semibold text-slate-700">Como foi fazer essa tarefa?</p>
+                      <p className="mb-4 text-xs text-slate-500">
+                        {isConventionalAdult
+                          ? 'Agora informe o esforço percebido após concluir a atividade.'
+                          : 'Agora informe como ficou sua energia após concluir a atividade.'}
+                      </p>
+                      <BigEnergySlider
+                        value={taskEnergy}
+                        onInteract={(value: number) => setTaskEnergy(value)}
+                        onChange={(e: any) => setTaskEnergy(Number(e.target.value))}
+                        onCommit={(value: number) => setTaskEnergy(value)}
+                        label={taskReflectionLabel}
+                        labelHelp={taskReflectionHelp}
+                        scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
+                        emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
+                        unselectedLabel={isConventionalAdult ? 'Toque na barra para informar seu esforço' : 'Toque na barra para informar sua energia'}
+                      />
+                    </div>
+                    <button
+                      onClick={handleConfirmTask}
+                      disabled={showTaskSuccess || taskEnergy === null}
+                      className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
+                    >
+                      {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir tarefa</React.Fragment>}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setTaskStep(1)}
+                      className="w-full rounded-xl py-2 text-xs font-semibold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                    >
+                      Voltar à resposta
+                    </button>
+                  </div>
                 )}
 
               </div>
