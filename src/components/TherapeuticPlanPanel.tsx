@@ -2519,7 +2519,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                     </div>
                     <p className={`mt-1 text-xs ${muted}`}>Responsável: {responsibleNameForScope(scope)}</p>
                     <p className={`mt-2 text-xs ${muted}`}>
-                      {scopeSummary.teaching} em ensino · {scopeSummary.maintenance} em manutenção · {scopePrograms.length} programa(s)
+                      {String(scope?.status || 'draft').toLowerCase() === 'draft'
+                        ? `${scopePrograms.length} programa(s) configurado(s) no rascunho · ativação clínica após publicação`
+                        : `${scopeSummary.teaching} em ensino · ${scopeSummary.maintenance} em manutenção · ${scopePrograms.length} programa(s)`}
                     </p>
                   </div>
                   <button type="button" className={secondaryButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>

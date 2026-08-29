@@ -6874,78 +6874,56 @@ export default function App() {
     const identity = resolvePatientIdentityForPortal();
     const portalKind = resolvePatientPortalKind(user);
     const isConventionalAdult = portalKind === 'ADULT_CONVENTIONAL';
-    const metricKind = isConventionalAdult ? 'mood' : 'energy';
+    const metricKind: 'mood' | 'energy' = isConventionalAdult ? 'mood' : 'energy';
     const normalizedValue = typeof l === 'number' && Number.isFinite(l) ? Math.max(0, Math.min(100, l)) : null;
-    const persistedEnergy = metricKind === 'energy' ? normalizedValue : null;
-    const patientId = String(identity.patientId || user?.id || '').trim();
+    if (normalizedValue === null) return { success: false, error: 'Informe um valor válido para o check-in.' };
+    const patientId = String(identity.patientId || user?.patientPortalPatientId || '').trim();
     if (!patientId) return { success: false, error: 'Paciente não identificado para o check-in.' };
 
-    const clinicDate = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'America/Sao_Paulo',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    }).format(new Date());
-    const historyId = stableUuidFromString(`patient-checkin:${patientId}:${clinicDate}:${metricKind}`);
     const tagId = typeof t === 'string' ? t : String(t?.id || '').trim() || null;
     const tagSource = isConventionalAdult ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS;
     const tagLabel = tagId
       ? String((Array.isArray(tagSource) ? tagSource : []).find((tag: any) => String(tag?.id || '') === tagId)?.label || tagId)
       : null;
-    const taskData = {
-      metricKind,
-      metricValue: normalizedValue,
-      tagId,
-      tagLabel,
-      source: 'patient_portal_daily_checkin',
-      clinicDate
-    };
 
     try {
-      const historyResult = await dataService.addHistoryItem({
-        id: historyId,
-        patient_id: patientId,
-        patient_email: identity.patientEmail,
-        patient_name: identity.patientName,
-        type: 'checkin',
-        title: isConventionalAdult ? 'Check-in de humor' : 'Check-in de energia',
-        score: undefined,
-        energy: persistedEnergy,
+      const result = await dataService.savePatientSelfWellbeingCheckin({
+        metricKind,
+        metricValue: normalizedValue,
+        tagId,
+        tagLabel,
         note: n,
         icon: i,
-        task_data: taskData,
-        source: 'patient_portal_checkin'
       });
-      if (!historyResult?.success || historyResult?.pending === true || historyResult?.offline === true) {
-        return {
-          success: false,
-          pending: Boolean(historyResult?.pending || historyResult?.offline),
-          error: historyResult?.pending || historyResult?.offline
-            ? 'Check-in salvo neste dispositivo e aguardando sincronização.'
-            : historyResult?.error || historyResult?.warning || 'Não foi possível persistir o check-in.'
-        };
+      if (!result?.success || !result?.data) {
+        return { success: false, error: result?.error || 'Não foi possível persistir o check-in.' };
       }
 
-      const persisted = historyResult?.data || {};
+      const persisted = result.data;
       const item = {
-        ...persisted,
-        id: persisted?.id || historyId,
-        patientId: persisted?.patient_id || patientId,
-        patient_id: persisted?.patient_id || patientId,
+        id: persisted.id,
+        patientId,
+        patient_id: patientId,
         type: 'checkin',
-        title: persisted?.title || (isConventionalAdult ? 'Check-in de humor' : 'Check-in de energia'),
-        time: new Date(persisted?.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        energy: persisted?.energy ?? persistedEnergy,
-        score: persisted?.score ?? undefined,
-        note: persisted?.note ?? n,
-        icon: persisted?.icon ?? i,
-        dateGroup: persisted?.date_group || 'Hoje',
-        date_group: persisted?.date_group || clinicDate,
-        task_data: persisted?.task_data || taskData,
-        tag: tagId
+        title: metricKind === 'mood' ? 'Check-in de humor' : 'Check-in de energia',
+        energy: metricKind === 'energy' ? normalizedValue : null,
+        note: persisted.note ?? n,
+        icon: persisted.icon ?? i,
+        created_at: persisted.created_at || new Date().toISOString(),
+        dateGroup: persisted.local_date,
+        date_group: persisted.local_date,
+        task_data: {
+          metricKind,
+          metricValue: normalizedValue,
+          tagId,
+          tagLabel,
+          source: 'patient_portal_daily_checkin',
+          clinicDate: persisted.local_date,
+        },
+        tag: tagId,
       };
       setHistory(prev => [item, ...prev.filter((existing: any) => String(existing?.id || '') !== String(item.id))]);
-      return { success: true, data: item };
+      return { success: true, data: persisted, historyItem: item };
     } catch (error: any) {
       console.error('Falha ao persistir check-in do paciente:', error);
       return { success: false, error: error?.message || 'Não foi possível persistir o check-in.' };
@@ -8092,10 +8070,33 @@ export default function App() {
       ? 'Demo de apresentacao.'
       : 'Dados ficticios para demonstracao.';
   const appointmentConfirmationViewModel = appointmentConfirmation ? buildAppointmentConfirmationViewModel() : null;
+  const billingStatus = String(user?.subscriptionStatus || user?.subscription_status || '').trim().toLowerCase();
+  const billingAccessBlockAtRaw = String(user?.stripeAccessBlockAt || user?.stripe_access_block_at || user?.onboardingContext?.clinic?.stripeAccessBlockAt || '').trim();
+  const billingAccessBlockAtMs = billingAccessBlockAtRaw ? new Date(billingAccessBlockAtRaw).getTime() : Number.NaN;
+  const billingWarningRole = String(user?.role || '').trim().toLowerCase();
+  const showBillingGraceWarning = Boolean(
+    user &&
+    ['owner', 'admin', 'director', 'biller'].includes(billingWarningRole) &&
+    ['delinquent', 'past_due', 'unpaid'].includes(billingStatus) &&
+    Number.isFinite(billingAccessBlockAtMs) &&
+    billingAccessBlockAtMs > Date.now()
+  );
+  const billingGraceDaysRemaining = showBillingGraceWarning
+    ? Math.max(1, Math.ceil((billingAccessBlockAtMs - Date.now()) / (24 * 60 * 60 * 1000)))
+    : 0;
+  const billingGraceDeadlineLabel = showBillingGraceWarning
+    ? new Date(billingAccessBlockAtMs).toLocaleDateString('pt-BR')
+    : '';
 
   return (
     <React.Fragment>
       <GlobalStyles />
+      {showBillingGraceWarning && (
+        <div className="fixed bottom-4 left-1/2 z-[9500] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 shadow-2xl" role="alert">
+          <p className="text-sm font-bold text-amber-900">Pagamento pendente: {billingGraceDaysRemaining} dia(s) para regularizar.</p>
+          <p className="mt-1 text-xs leading-5 text-amber-800">Regularize até {billingGraceDeadlineLabel}. Se o pagamento continuar pendente, a assinatura e o acesso pago serão suspensos/cancelados após o período de 7 dias. Os dados clínicos não são apagados.</p>
+        </div>
+      )}
       {appointmentConfirmation && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
@@ -8406,7 +8407,7 @@ export default function App() {
 
                 {patientAccessContexts.length > 0 && (
                   <div>
-                    <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Meu cuidado</h2>
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Cuidar de mim</h2>
                     <div className="mt-2 space-y-2">
                       {patientAccessContexts.map((context) => {
                         const isSelecting = selectingAccessContextId === context.id;

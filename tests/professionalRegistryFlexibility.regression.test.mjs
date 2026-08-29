@@ -43,7 +43,8 @@ assert.match(onboarding, /list="professional-council-options"/);
 assert.match(onboarding, /PROFESSIONAL_COUNCIL_OPTIONS\.map/);
 assert.match(onboarding, /getProfessionalRegistryPlaceholder\(council\)/);
 assert.match(onboarding, /getProfessionalRegistryGuidance\(council\)/);
-assert.match(settings, /list="clinic-professional-council-options"/);
+assert.match(settings, /<select[\s\S]{0,260}Conselho \/ tipo de registro|Conselho \/ tipo de registro[\s\S]{0,260}<select/);
+assert.doesNotMatch(settings, /clinic-professional-council-options/);
 assert.match(settings, /maxLength=\{80\}/);
 
 // Saving a normal professional profile must not be blocked merely because CRP is empty.

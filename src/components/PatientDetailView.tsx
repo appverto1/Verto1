@@ -15,6 +15,7 @@ import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { PatientEvolutionTimelinePanel } from './PatientEvolutionTimelinePanel';
+import { AdultWellbeingTrendChart } from './AdultWellbeingTrendChart';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
@@ -429,6 +430,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
   const initialChartFilters = readPersistedChartFilters();
   const [activeTab, setActiveTab] = useState(initialTab); 
+  const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
+  const [wellbeingCheckinsError, setWellbeingCheckinsError] = useState('');
   const [historyPeriod, setHistoryPeriod] = useState<PatientHistoryPeriod>('all');
   const [historyCustomFrom, setHistoryCustomFrom] = useState('');
   const [historyCustomTo, setHistoryCustomTo] = useState('');
@@ -656,6 +659,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (activeTab !== 'history' || !historyRange.ready || historyPagination.initialized || historyPagination.loading || historyPagination.error) return;
     void requestPatientHistoryPage();
   }, [activeTab, historyPagination.error, historyPagination.initialized, historyPagination.loading, historyRange.ready, requestPatientHistoryPage]);
+
+  useEffect(() => {
+    let active = true;
+    const patientId = String(patient?.id || '').trim();
+    if (activeTab !== 'history' || isKidsProfile || !patientId) {
+      if (isKidsProfile) setWellbeingCheckins([]);
+      return () => { active = false; };
+    }
+    setWellbeingCheckinsError('');
+    void dataService.getPatientWellbeingCheckins(patientId, 90).then((result: any) => {
+      if (!active) return;
+      if (!result?.success) {
+        setWellbeingCheckinsError(result?.error || 'Não foi possível carregar humor/energia.');
+        setWellbeingCheckins([]);
+        return;
+      }
+      setWellbeingCheckins(Array.isArray(result?.data) ? result.data : []);
+    });
+    return () => { active = false; };
+  }, [activeTab, isKidsProfile, patient?.id]);
 
   const flashPEIConfirmation = (goalId: any, skillId: any) => {
     if (peiConfirmationTimerRef.current) {
@@ -10581,6 +10604,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <div className="space-y-6"> 
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
+                <AdultWellbeingTrendChart
+                  records={wellbeingCheckins}
+                  metricKind={patientPortalKind === 'ADULT_CONVENTIONAL' ? 'mood' : 'energy'}
+                  dark={isPanelDark}
+                />
+                {wellbeingCheckinsError && (
+                  <p className={`rounded-xl border px-3 py-2 text-xs ${isPanelDark ? 'border-amber-900/50 bg-amber-950/30 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                    {wellbeingCheckinsError}
+                  </p>
+                )}
                 <div className={`border rounded-3xl p-5 shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                   <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Histórico Adulto</p>
                   <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>

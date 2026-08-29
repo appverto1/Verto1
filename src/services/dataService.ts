@@ -2905,6 +2905,87 @@ export const dataService = {
     }
   },
 
+  async getPatientSelfWellbeingCheckins(limit = 90) {
+    try {
+      const response = await fetchWithAuthRetry(endpointWithLimit('/api/patient/self/wellbeing-checkins', normalizeListLimit(limit, 90, 180)), {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient wellbeing check-ins:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar o histórico de humor/energia.' };
+    }
+  },
+
+  async savePatientSelfWellbeingCheckin(payload: {
+    metricKind: 'mood' | 'energy';
+    metricValue: number;
+    tagId?: string | null;
+    tagLabel?: string | null;
+    note?: string;
+    icon?: string;
+  }) {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/wellbeing-checkins', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving patient wellbeing check-in:', error);
+      return { success: false, error: 'Não foi possível salvar o check-in.' };
+    }
+  },
+
+  async getPatientWellbeingCheckins(patientId: string, limit = 90) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, data: [], error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(endpointWithLimit(`/api/patients/${safePatientId}/wellbeing-checkins`, normalizeListLimit(limit, 90, 180)), {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching professional patient wellbeing check-ins:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar os registros de humor/energia.' };
+    }
+  },
+
+  async getPatientSelfMessageReads() {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/message-reads', {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient message reads:', error);
+      return { success: false, data: [], error: 'Não foi possível atualizar as mensagens lidas.' };
+    }
+  },
+
+  async markPatientSelfMessagesRead(noteIds: string[]) {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/messages/read', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ noteIds: Array.from(new Set((noteIds || []).filter(Boolean))).slice(0, 30) })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error marking patient messages as read:', error);
+      return { success: false, error: 'Não foi possível confirmar a leitura das mensagens.' };
+    }
+  },
+
   async getPatientSelfCareNetwork() {
     try {
       const response = await fetchWithAuthRetry('/api/patient/self/care-network', {
