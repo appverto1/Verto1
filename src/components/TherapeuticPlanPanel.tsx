@@ -1311,6 +1311,35 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     });
   };
 
+  const changePlanScopeStatus = async (scope: any, nextStatus: 'active' | 'paused') => {
+    const scopeId = String(scope?.id || '');
+    if (!scopeId || scopeSaving) return;
+    const currentStatus = String(scope?.status || 'draft').trim().toLowerCase();
+    if (currentStatus === nextStatus) return;
+    setError('');
+    setScopeSaving(true);
+    const response = await dataService.updatePatientTherapeuticPlanScope(patientId, scopeId, {
+      expectedVersion: Number(scope?.edit_version || 1),
+      status: nextStatus,
+    });
+    setScopeSaving(false);
+    if (response?.success === false) {
+      setError(response?.message || response?.error || (nextStatus === 'active'
+        ? 'Não foi possível ativar este plano.'
+        : 'Não foi possível pausar este plano.'));
+      return;
+    }
+    setEditingScopeId('');
+    setNotice(
+      nextStatus === 'active'
+        ? currentStatus === 'draft'
+          ? 'Plano publicado e ativado. Os programas configurados podem seguir o ciclo clínico salvo.'
+          : 'Plano retomado como ativo. A coleta clínica pode continuar nos programas elegíveis.'
+        : 'Plano pausado. Programas e alvos permanecem preservados sem coleta clínica ativa.',
+    );
+    await loadPlan(true);
+  };
+
   const savePlanScope = async () => {
     if (!editingScopeId || scopeSaving) return;
     setError('');
@@ -2645,7 +2674,29 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                         : `${scopeSummary.teaching} em ensino · ${scopeSummary.maintenance} em manutenção · ${scopePrograms.length} programa(s)`}
                     </p>
                   </div>
-                  <button type="button" className={secondaryButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                  <div className="flex flex-wrap gap-2">
+                    {scope?.canEdit === true && String(scope?.status || 'draft').toLowerCase() === 'draft' && (
+                      <button
+                        type="button"
+                        disabled={scopeSaving}
+                        className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-violet-600 px-4 text-sm text-white hover:bg-violet-700 disabled:opacity-50"
+                        onClick={() => void changePlanScopeStatus(scope, 'active')}
+                      >
+                        <Play size={15} /> {scopeSaving ? 'Ativando...' : 'Publicar e ativar'}
+                      </button>
+                    )}
+                    {scope?.canEdit === true && String(scope?.status || '').toLowerCase() === 'paused' && (
+                      <button
+                        type="button"
+                        disabled={scopeSaving}
+                        className="inline-flex min-h-[40px] items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20"
+                        onClick={() => void changePlanScopeStatus(scope, 'active')}
+                      >
+                        <Play size={15} /> {scopeSaving ? 'Retomando...' : 'Retomar plano'}
+                      </button>
+                    )}
+                    <button type="button" className={secondaryButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                  </div>
                 </div>
               </article>
             );
@@ -2796,6 +2847,36 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               {primaryPtsScope && <p className={`mt-2 text-xs ${muted}`}>Integrado ao PTS compartilhado da equipe.</p>}
             </div>
             <div className="flex flex-wrap gap-2">
+              {scopeIsDraft && canEditThisScope && (
+                <button
+                  type="button"
+                  disabled={scopeSaving}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700 disabled:opacity-50"
+                  onClick={() => void changePlanScopeStatus(scope, 'active')}
+                >
+                  <Play size={16} /> {scopeSaving ? 'Ativando...' : 'Publicar e ativar'}
+                </button>
+              )}
+              {scopeIsPaused && canEditThisScope && (
+                <button
+                  type="button"
+                  disabled={scopeSaving}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20"
+                  onClick={() => void changePlanScopeStatus(scope, 'active')}
+                >
+                  <Play size={16} /> {scopeSaving ? 'Retomando...' : 'Retomar plano'}
+                </button>
+              )}
+              {scopeStatus === 'active' && canEditThisScope && (
+                <button
+                  type="button"
+                  disabled={scopeSaving}
+                  className={secondaryButton}
+                  onClick={() => void changePlanScopeStatus(scope, 'paused')}
+                >
+                  <Pause size={16} /> {scopeSaving ? 'Pausando...' : 'Pausar plano'}
+                </button>
+              )}
               {canStartSessionHere && <button type="button" className={secondaryButton} onClick={() => onStartSession?.({ therapeuticPlanId: String(scope.id), specialty: scope.specialty || null })}><Play size={16} /> Iniciar sessão</button>}
               {canEditThisScope && <button type="button" className={secondaryButton} onClick={() => editingScopeId === String(scope.id) ? setEditingScopeId('') : startEditingScope(scope)}><Pencil size={15} /> {editingScopeId === String(scope.id) ? 'Fechar edição' : 'Editar plano'}</button>}
               {canAddProgramHere && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={() => startCreationForScope(String(scope.id))}><Plus size={17} /> Adicionar programa</button>}
