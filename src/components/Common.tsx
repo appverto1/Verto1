@@ -335,8 +335,10 @@ export const SuccessOverlay = ({ title = "Fantástico!", message = "Você está 
   </div> 
 );
 
-export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, label = 'Energia', labelHelp, scaleLabels, emojiForValue }: any) => {
-  const numericValue = Number(value) || 0;
+export const BigEnergySlider = ({ value, onChange, onCommit, onInteract, showLabel = true, label = 'Energia', labelHelp, scaleLabels, emojiForValue, unselectedLabel = 'Toque na escala para responder' }: any) => {
+  const parsedValue = value === null || value === undefined || value === '' ? Number.NaN : Number(value);
+  const hasExplicitValue = Number.isFinite(parsedValue);
+  const numericValue = hasExplicitValue ? Math.max(0, Math.min(100, parsedValue)) : 50;
   const resolvedScaleLabels = Array.isArray(scaleLabels) && scaleLabels.length === 3
     ? scaleLabels
     : ['Baixa', 'Média', 'Alta'];
@@ -349,6 +351,18 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, l
   };
   const getValueEmoji = (val: number) =>
     typeof emojiForValue === 'function' ? String(emojiForValue(val) || '😐') : getMoodEmoji(val);
+  const registerExplicitInteraction = () => {
+    if (!hasExplicitValue && typeof onInteract === 'function') onInteract(numericValue);
+  };
+  const commitValue = (event: any) => {
+    registerExplicitInteraction();
+    if (typeof onCommit === 'function') onCommit(numericValue, event);
+  };
+  const handleSliderKeyDown = (event: any) => {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(String(event?.key || ''))) {
+      registerExplicitInteraction();
+    }
+  };
   return ( 
     <div className="w-full"> 
       {showLabel && (
@@ -366,16 +380,34 @@ export const BigEnergySlider = ({ value, onChange, onCommit, showLabel = true, l
               label
             )}
           </span>
-          <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
-            <span className="text-2xl">{getValueEmoji(numericValue)}</span>
-            <span className="text-xl font-semibold text-[#7a32fc]">{numericValue}%</span>
-          </div>
+          {hasExplicitValue ? (
+            <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full shadow-sm">
+              <span className="text-2xl">{getValueEmoji(numericValue)}</span>
+              <span className="text-xl font-semibold text-[#7a32fc]">{numericValue}%</span>
+            </div>
+          ) : (
+            <span className="rounded-full bg-violet-50 px-3 py-1 text-[11px] font-semibold text-[#7a32fc]">Não informado</span>
+          )}
         </div>
       )} 
-      <div className="big-slider-container">
-        <div className="big-slider-fill" style={{ width: `${numericValue}%` }}></div>
-        <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getValueEmoji(numericValue)}</div>
-        <input type="range" min="0" max="100" value={numericValue} onChange={onChange} onMouseUp={onCommit} onTouchEnd={onCommit} className="big-slider-input" />
+      <div className={`big-slider-container ${hasExplicitValue ? '' : 'ring-2 ring-violet-100'}`}>
+        <div className="big-slider-fill" style={{ width: hasExplicitValue ? `${numericValue}%` : '0%' }}></div>
+        {hasExplicitValue && <div className="slider-thumb-indicator" style={{ left: `${numericValue}%` }}>{getValueEmoji(numericValue)}</div>}
+        {!hasExplicitValue && <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-12 text-center text-xs font-semibold text-slate-400">{unselectedLabel}</div>}
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={numericValue}
+          aria-label={label}
+          aria-valuetext={hasExplicitValue ? `${numericValue}%` : 'Ainda não informado'}
+          onPointerDown={registerExplicitInteraction}
+          onKeyDown={handleSliderKeyDown}
+          onChange={onChange}
+          onMouseUp={commitValue}
+          onTouchEnd={commitValue}
+          className="big-slider-input"
+        />
       </div>
       <div className="flex justify-between text-xs text-gray-400 mt-2 font-semibold px-1"><span>{resolvedScaleLabels[0]}</span><span>{resolvedScaleLabels[1]}</span><span>{resolvedScaleLabels[2]}</span></div> 
     </div> 

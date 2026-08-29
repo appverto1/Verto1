@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useMemo, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Area, CartesianGrid, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 export type WellbeingPeriod = 'day' | 'week' | 'month' | 'year';
@@ -27,6 +27,8 @@ type ChartPoint = {
   emoji: string;
   note: string;
   tagLabel: string;
+  observationCount: number;
+  aggregateKind: 'raw' | 'daily_average' | 'monthly_average';
 };
 
 const PERIOD_LABELS: Record<WellbeingPeriod, string> = {
@@ -99,6 +101,39 @@ const formatDetailDate = (timestamp: number) => {
   });
 };
 
+const formatAggregateDate = (timestamp: number, aggregateKind: ChartPoint['aggregateKind']) => {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return 'Data não disponível';
+  if (aggregateKind === 'monthly_average') {
+    return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  }
+  return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+};
+
+const localDayKey = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+};
+
+const localMonthKey = (timestamp: number) => {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const bucketTimestamp = (key: string, kind: 'day' | 'month') => {
+  const [year, month, day] = key.split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month)) return NaN;
+  return kind === 'month'
+    ? new Date(year, month - 1, 15, 12, 0, 0, 0).getTime()
+    : new Date(year, month - 1, Number.isFinite(day) ? day : 1, 12, 0, 0, 0).getTime();
+};
+
+const roundAverage = (total: number, count: number) => Math.round((total / Math.max(1, count)) * 10) / 10;
+
 export const AdultWellbeingTrendChart = ({
   records,
   metricKind,
@@ -117,6 +152,7 @@ export const AdultWellbeingTrendChart = ({
   const rawId = useId().replace(/:/g, '');
   const strokeGradientId = `wellbeing-stroke-${rawId}`;
   const fillGradientId = `wellbeing-fill-${rawId}`;
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const [internalPeriod, setInternalPeriod] = useState<WellbeingPeriod>('month');
   const [selectedPoint, setSelectedPoint] = useState<ChartPoint | null>(null);
   const activePeriod = period || internalPeriod;
@@ -126,11 +162,18 @@ export const AdultWellbeingTrendChart = ({
 
   const data = useMemo(() => {
     const cutoff = Date.now() - PERIOD_DURATION_MS[activePeriod];
-    const sorted = (Array.isArray(records) ? records : [])
+    const rawRows = (Array.isArray(records) ? records : [])
       .filter((row) => String(row?.metric_kind || row?.metricKind || '').toLowerCase() === metricKind)
       .map((row, index) => {
         const timestamp = recordTimestamp(row);
-        const value = Math.max(0, Math.min(100, Number(row?.metric_value ?? row?.metricValue ?? 0) || 0));
+        const rawValue = row?.metric_value ?? row?.metricValue;
+        const numericValue = typeof rawValue === 'number'
+          ? rawValue
+          : typeof rawValue === 'string' && String(rawValue).trim() !== ''
+            ? Number(rawValue)
+            : Number.NaN;
+        if (!Number.isFinite(timestamp) || !Number.isFinite(numericValue)) return null;
+        const value = Math.max(0, Math.min(100, numericValue));
         return {
           id: String(row?.id || `${metricKind}-${timestamp}-${index}`),
           timestamp,
@@ -139,22 +182,64 @@ export const AdultWellbeingTrendChart = ({
           emoji: String(row?.icon || '').trim() || fallbackEmoji(metricKind, value),
           note: String(row?.note || '').trim(),
           tagLabel: String(row?.tag_label || row?.tagLabel || '').trim(),
+          observationCount: 1,
+          aggregateKind: 'raw' as const,
         };
       })
-      .filter((row) => Number.isFinite(row.timestamp) && row.timestamp >= cutoff)
+      .filter((row): row is ChartPoint => Boolean(row && row.timestamp >= cutoff))
       .sort((a, b) => a.timestamp - b.timestamp);
 
-    let lastPlotTimestamp = -Infinity;
-    return sorted.map((row) => {
-      const plotTimestamp = row.timestamp <= lastPlotTimestamp ? lastPlotTimestamp + 1 : row.timestamp;
-      lastPlotTimestamp = plotTimestamp;
-      return { ...row, plotTimestamp };
+    if (activePeriod === 'day') {
+      let lastPlotTimestamp = -Infinity;
+      return rawRows.map((row) => {
+        const plotTimestamp = row.timestamp <= lastPlotTimestamp ? lastPlotTimestamp + 1 : row.timestamp;
+        lastPlotTimestamp = plotTimestamp;
+        return { ...row, plotTimestamp };
+      });
+    }
+
+    const aggregateKind: ChartPoint['aggregateKind'] = activePeriod === 'year' ? 'monthly_average' : 'daily_average';
+    const groups = new Map<string, { total: number; count: number }>();
+    rawRows.forEach((row) => {
+      const key = aggregateKind === 'monthly_average' ? localMonthKey(row.timestamp) : localDayKey(row.timestamp);
+      const current = groups.get(key) || { total: 0, count: 0 };
+      current.total += row.value;
+      current.count += 1;
+      groups.set(key, current);
     });
+
+    return Array.from(groups.entries())
+      .map(([key, group]) => {
+        const timestamp = bucketTimestamp(key, aggregateKind === 'monthly_average' ? 'month' : 'day');
+        const value = roundAverage(group.total, group.count);
+        return {
+          id: `${metricKind}-${aggregateKind}-${key}`,
+          timestamp,
+          plotTimestamp: timestamp,
+          value,
+          emoji: fallbackEmoji(metricKind, value),
+          note: '',
+          tagLabel: '',
+          observationCount: group.count,
+          aggregateKind,
+        } as ChartPoint;
+      })
+      .filter((row) => Number.isFinite(row.timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp);
   }, [activePeriod, metricKind, records]);
 
   useEffect(() => {
     if (selectedPoint && !data.some((row) => row.id === selectedPoint.id)) setSelectedPoint(null);
   }, [data, selectedPoint]);
+
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container || data.length === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollLeft = Math.max(0, container.scrollWidth - container.clientWidth);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activePeriod, data.length]);
 
   const handlePeriodChange = (nextPeriod: WellbeingPeriod) => {
     setInternalPeriod(nextPeriod);
@@ -167,16 +252,31 @@ export const AdultWellbeingTrendChart = ({
   const xDomain: [number | 'dataMin', number | 'dataMax'] = data.length === 1
     ? [data[0].plotTimestamp - singlePointPadding, data[0].plotTimestamp + singlePointPadding]
     : ['dataMin', 'dataMax'];
+  const minimumChartWidth = compact ? 520 : 640;
+  const pointSpacing = activePeriod === 'day' ? 64 : activePeriod === 'year' ? 76 : 58;
+  const chartWidth = Math.max(minimumChartWidth, data.length * pointSpacing);
+  const isAggregateView = activePeriod !== 'day';
+  const aggregationDescription = activePeriod === 'year'
+    ? 'Cada emoji representa a média mensal dos registros daquele mês.'
+    : isAggregateView
+      ? 'Cada emoji representa a média diária dos registros daquele dia.'
+      : 'Cada emoji é um registro independente. Clique nele para ver o valor e a anotação daquele momento.';
 
   const renderEmojiDot = (props: any) => {
     const point = props?.payload as ChartPoint | undefined;
     if (!point || !Number.isFinite(props?.cx) || !Number.isFinite(props?.cy)) return <g />;
     const openDetails = () => setSelectedPoint(point);
+    const pointDate = point.aggregateKind === 'raw'
+      ? formatDetailDate(point.timestamp)
+      : formatAggregateDate(point.timestamp, point.aggregateKind);
+    const pointLabel = point.aggregateKind === 'raw'
+      ? `${label} ${point.value}% em ${pointDate}`
+      : `${label} médio ${point.value}% em ${pointDate}, ${point.observationCount} registros`;
     return (
       <g
         role="button"
         tabIndex={0}
-        aria-label={`${label} ${point.value}% em ${formatDetailDate(point.timestamp)}. Abrir detalhes.`}
+        aria-label={`${pointLabel}. Abrir detalhes.`}
         onClick={openDetails}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
@@ -207,7 +307,7 @@ export const AdultWellbeingTrendChart = ({
         <div className="min-w-0 flex-1">
           <h3 className={`text-sm font-semibold ${dark ? 'text-slate-100' : 'text-slate-800'}`}>{label} ao longo do tempo</h3>
           <p className={`mt-1 text-xs leading-5 ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-            Cada emoji é um registro independente. Clique nele para ver o valor e a anotação daquele momento.
+            {aggregationDescription}
           </p>
         </div>
         <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${dark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>0–100</span>
@@ -237,55 +337,77 @@ export const AdultWellbeingTrendChart = ({
           Ainda não há registros neste período.
         </div>
       ) : (
-        <div className={compact ? 'h-44' : 'h-56'}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 12, right: 10, left: -24, bottom: 0 }}>
-              <defs>
-                <linearGradient id={strokeGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
-                  <stop offset="0%" stopColor="#dc2626" />
-                  <stop offset="48%" stopColor="#ef4444" />
-                  <stop offset="52%" stopColor="#84cc16" />
-                  <stop offset="100%" stopColor="#16a34a" />
-                </linearGradient>
-                <linearGradient id={fillGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
-                  <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3} />
-                  <stop offset="50%" stopColor="#f59e0b" stopOpacity={0.16} />
-                  <stop offset="100%" stopColor="#22c55e" stopOpacity={0.3} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={dark ? '#334155' : '#e2e8f0'} />
-              <XAxis
-                dataKey="plotTimestamp"
-                type="number"
-                scale="time"
-                domain={xDomain}
-                tickFormatter={(value) => formatAxisLabel(Number(value), activePeriod)}
-                tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }}
-                axisLine={false}
-                tickLine={false}
-                minTickGap={24}
-              />
-              <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
-              <Tooltip
-                labelFormatter={(value) => formatDetailDate(Number(value))}
-                formatter={(value: any) => [`${Number(value)}%`, label]}
-                contentStyle={{ borderRadius: 14, border: dark ? '1px solid #334155' : '1px solid #e2e8f0', background: dark ? '#0f172a' : '#fff' }}
-                labelStyle={{ color: dark ? '#e2e8f0' : '#334155' }}
-              />
-              <ReferenceLine y={50} stroke={dark ? '#64748b' : '#94a3b8'} strokeDasharray="4 4" />
-              <Area type="monotone" dataKey="value" stroke="none" fill={`url(#${fillGradientId})`} fillOpacity={1} />
-              <Line
-                type="monotone"
-                dataKey="value"
-                stroke={`url(#${strokeGradientId})`}
-                strokeWidth={2.5}
-                dot={renderEmojiDot}
-                activeDot={false}
-                connectNulls
-              />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
+        <>
+          <div
+            ref={scrollRef}
+            className="overflow-x-auto overscroll-x-contain pb-2"
+            style={{ WebkitOverflowScrolling: 'touch' }}
+            aria-label={`Gráfico rolável de ${label.toLowerCase()}`}
+          >
+            <div style={{ width: chartWidth, height: compact ? 176 : 224 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={data} margin={{ top: 12, right: 18, left: -18, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id={strokeGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
+                      <stop offset="0%" stopColor="#dc2626" />
+                      <stop offset="48%" stopColor="#ef4444" />
+                      <stop offset="52%" stopColor="#84cc16" />
+                      <stop offset="100%" stopColor="#16a34a" />
+                    </linearGradient>
+                    <linearGradient id={fillGradientId} gradientUnits="userSpaceOnUse" x1="0" y1={plotBottom} x2="0" y2={plotTop}>
+                      <stop offset="0%" stopColor="#ef4444" stopOpacity={0.3} />
+                      <stop offset="50%" stopColor="#f59e0b" stopOpacity={0.16} />
+                      <stop offset="100%" stopColor="#22c55e" stopOpacity={0.3} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={dark ? '#334155' : '#e2e8f0'} />
+                  <XAxis
+                    dataKey="plotTimestamp"
+                    type="number"
+                    scale="time"
+                    domain={xDomain}
+                    tickFormatter={(value) => formatAxisLabel(Number(value), activePeriod)}
+                    tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }}
+                    axisLine={false}
+                    tickLine={false}
+                    minTickGap={24}
+                  />
+                  <YAxis domain={[0, 100]} ticks={[0, 25, 50, 75, 100]} tick={{ fontSize: 10, fill: dark ? '#94a3b8' : '#64748b' }} axisLine={false} tickLine={false} />
+                  <Tooltip
+                    labelFormatter={(_, payload: any[]) => {
+                      const point = payload?.[0]?.payload as ChartPoint | undefined;
+                      if (!point) return '';
+                      return point.aggregateKind === 'raw'
+                        ? formatDetailDate(point.timestamp)
+                        : formatAggregateDate(point.timestamp, point.aggregateKind);
+                    }}
+                    formatter={(value: any, _name: any, item: any) => {
+                      const point = item?.payload as ChartPoint | undefined;
+                      if (!point || point.aggregateKind === 'raw') return [`${Number(value)}%`, label];
+                      return [`${Number(value)}% · ${point.observationCount} registro${point.observationCount === 1 ? '' : 's'}`, `${label} médio`];
+                    }}
+                    contentStyle={{ borderRadius: 14, border: dark ? '1px solid #334155' : '1px solid #e2e8f0', background: dark ? '#0f172a' : '#fff' }}
+                    labelStyle={{ color: dark ? '#e2e8f0' : '#334155' }}
+                  />
+                  <ReferenceLine y={50} stroke={dark ? '#64748b' : '#94a3b8'} strokeDasharray="4 4" />
+                  <Area type="monotone" dataKey="value" stroke="none" fill={`url(#${fillGradientId})`} fillOpacity={1} />
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    stroke={`url(#${strokeGradientId})`}
+                    strokeWidth={2.5}
+                    dot={renderEmojiDot}
+                    activeDot={false}
+                    connectNulls
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <p className={`mt-1 text-center text-[10px] font-medium ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
+            Arraste para o lado para navegar pelos registros.
+          </p>
+        </>
       )}
 
       {selectedPoint && (
@@ -294,17 +416,30 @@ export const AdultWellbeingTrendChart = ({
             <div className="flex min-w-0 items-start gap-3">
               <span className="text-3xl" aria-hidden="true">{selectedPoint.emoji}</span>
               <div className="min-w-0">
-                <p className={`text-sm font-semibold ${dark ? 'text-slate-100' : 'text-slate-800'}`}>{label}: {selectedPoint.value}%</p>
-                <p className={`mt-0.5 text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>{formatDetailDate(selectedPoint.timestamp)}</p>
-                {selectedPoint.tagLabel && <p className={`mt-2 text-xs font-medium ${dark ? 'text-violet-300' : 'text-[#7a32fc]'}`}>{selectedPoint.tagLabel}</p>}
+                <p className={`text-sm font-semibold ${dark ? 'text-slate-100' : 'text-slate-800'}`}>
+                  {selectedPoint.aggregateKind === 'raw' ? label : `${label} médio`}: {selectedPoint.value}%
+                </p>
+                <p className={`mt-0.5 text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  {selectedPoint.aggregateKind === 'raw'
+                    ? formatDetailDate(selectedPoint.timestamp)
+                    : formatAggregateDate(selectedPoint.timestamp, selectedPoint.aggregateKind)}
+                </p>
+                {selectedPoint.aggregateKind !== 'raw' && (
+                  <p className={`mt-2 text-xs font-medium ${dark ? 'text-violet-300' : 'text-[#7a32fc]'}`}>
+                    Média de {selectedPoint.observationCount} registro{selectedPoint.observationCount === 1 ? '' : 's'} neste período.
+                  </p>
+                )}
+                {selectedPoint.aggregateKind === 'raw' && selectedPoint.tagLabel && <p className={`mt-2 text-xs font-medium ${dark ? 'text-violet-300' : 'text-[#7a32fc]'}`}>{selectedPoint.tagLabel}</p>}
               </div>
             </div>
             <button type="button" onClick={() => setSelectedPoint(null)} className={`rounded-lg px-2 py-1 text-lg leading-none ${dark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-white'}`} aria-label="Fechar detalhes">×</button>
           </div>
-          <div className={`mt-3 rounded-xl p-3 ${dark ? 'bg-[#101b2e] text-slate-300' : 'bg-white text-slate-600'}`}>
-            <p className={`text-[10px] font-semibold uppercase tracking-wide ${dark ? 'text-slate-500' : 'text-slate-400'}`}>Anotação do paciente</p>
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-5">{selectedPoint.note || 'Sem anotação neste registro.'}</p>
-          </div>
+          {selectedPoint.aggregateKind === 'raw' && (
+            <div className={`mt-3 rounded-xl p-3 ${dark ? 'bg-[#101b2e] text-slate-300' : 'bg-white text-slate-600'}`}>
+              <p className={`text-[10px] font-semibold uppercase tracking-wide ${dark ? 'text-slate-500' : 'text-slate-400'}`}>Anotação do paciente</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-5">{selectedPoint.note || 'Sem anotação neste registro.'}</p>
+            </div>
+          )}
         </div>
       )}
 

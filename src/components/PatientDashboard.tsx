@@ -78,7 +78,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [selectedSnapshotDate, setSelectedSnapshotDate] = useState(() => String(initialChartFilters.selectedSnapshotDate || "all"));
   const [chartFiltersHydratedKey, setChartFiltersHydratedKey] = useState(chartFiltersStorageKey);
   const [selectedTask, setSelectedTask] = useState<any>(null); 
-  const [taskEnergy, setTaskEnergy] = useState(50); 
+  const [taskEnergy, setTaskEnergy] = useState<number | null>(null);
   const [taskNote, setTaskNote] = useState(""); 
   const [interventionResponse, setInterventionResponse] = useState("");
   const [interventionImages, setInterventionImages] = useState<string[]>([]);
@@ -3991,7 +3991,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const openTaskModal = (task: any) => {
     if (isReadOnlyMode) return;
     setSelectedTask(task);
-    setTaskEnergy(50);
+    setTaskEnergy(isKidsProfile ? 50 : null);
     setTaskNote("");
     setInterventionResponse("");
     setInterventionImages([]);
@@ -4001,9 +4001,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setTaskStep(1);
     }
   };
-  const handleEnergyCommit = () => { setTaskStep(2); }; 
+  const handleEnergyCommit = (committedValue?: number) => {
+    const resolved = Number.isFinite(Number(committedValue)) ? Number(committedValue) : taskEnergy;
+    if (resolved === null || !Number.isFinite(Number(resolved))) return;
+    setTaskEnergy(Math.max(0, Math.min(100, Number(resolved))));
+    setTaskStep(2);
+  };
   const handleConfirmTask = async () => { 
     if (isReadOnlyMode || !selectedTask) return;
+    if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
     const interventionDetails = [
       interventionResponse?.trim() ? `Resposta:
 ${interventionResponse.trim()}` : '',
@@ -4458,13 +4464,30 @@ ${interventionImages.join('\n')}` : ''
                     )}
 
                     {isConventionalAdult ? (
-                      <button
-                        onClick={handleConfirmTask}
-                        disabled={showTaskSuccess || !interventionResponse.trim()}
-                        className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                      >
-                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
-                      </button>
+                      <div className="space-y-4">
+                        <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
+                          <p className="mb-1 text-sm font-semibold text-slate-700">Como foi fazer essa tarefa?</p>
+                          <p className="mb-4 text-xs text-slate-500">Informe o esforço percebido. A Verto só registra um valor depois da sua escolha.</p>
+                          <BigEnergySlider
+                            value={taskEnergy}
+                            onInteract={(value: number) => setTaskEnergy(value)}
+                            onChange={(e: any) => setTaskEnergy(Number(e.target.value))}
+                            onCommit={(value: number) => setTaskEnergy(value)}
+                            label={taskReflectionLabel}
+                            labelHelp={taskReflectionHelp}
+                            scaleLabels={['Pouco esforço', 'Moderado', 'Muito esforço']}
+                            emojiForValue={getTaskEffortEmoji}
+                            unselectedLabel="Toque na barra para informar seu esforço"
+                          />
+                        </div>
+                        <button
+                          onClick={handleConfirmTask}
+                          disabled={showTaskSuccess || !interventionResponse.trim() || taskEnergy === null}
+                          className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
+                        >
+                          {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
+                        </button>
+                      </div>
                     ) : (
                       <button 
                         onClick={handleConfirmTask} 
@@ -4500,7 +4523,7 @@ ${interventionImages.join('\n')}` : ''
                             return (
                               <button 
                                 key={score}
-                                onClick={() => { setTaskEnergy(score); handleEnergyCommit(); }}
+                                onClick={() => handleEnergyCommit(score)}
                                 className={`${colors[score]} text-white h-20 rounded-2xl flex flex-col items-center justify-center shadow-lg hover:scale-[1.02] active:scale-95 transition-all`}
                               >
                                 <span className="text-2xl font-semibold">{score}</span>
@@ -4524,7 +4547,7 @@ ${interventionImages.join('\n')}` : ''
                           return (
                             <button 
                               key={score}
-                              onClick={() => { setTaskEnergy(score); handleEnergyCommit(); }}
+                              onClick={() => handleEnergyCommit(score)}
                               className={`${colorClass} text-white h-20 rounded-2xl flex flex-col items-center justify-center shadow-lg hover:scale-[1.02] active:scale-95 transition-all`}
                             >
                               <span className="text-2xl font-semibold">{score}</span>
@@ -4540,12 +4563,14 @@ ${interventionImages.join('\n')}` : ''
                     <React.Fragment>
                       <BigEnergySlider
                         value={taskEnergy}
-                        onChange={(e: any) => setTaskEnergy(Number(e.target.value) || 0)}
+                        onInteract={(value: number) => setTaskEnergy(value)}
+                        onChange={(e: any) => setTaskEnergy(Number(e.target.value))}
                         onCommit={handleEnergyCommit}
                         label={taskReflectionLabel}
                         labelHelp={taskReflectionHelp}
                         scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
                         emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
+                        unselectedLabel={isConventionalAdult ? 'Toque na barra para informar seu esforço' : 'Toque na barra para informar sua energia'}
                       /> 
                       <p className="text-center text-[10px] text-[#7a32fc]/50 mt-4 font-medium animate-pulse italic uppercase tracking-widest">(Solte para continuar)</p>
                     </React.Fragment>
@@ -4560,7 +4585,7 @@ ${interventionImages.join('\n')}` : ''
                     <span className="text-sm font-semibold text-[#7a32fc] flex items-center gap-2">{!isKidsProfile ? <span>{getTaskReflectionEmoji(Number(taskEnergy) || 0)}</span> : null}{isKidsProfile ? taskEnergy : `${taskEnergy}%`}</span>
                   </div> 
                   <div className="w-full bg-gray-100 rounded-full h-2"> 
-                    <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${taskEnergy * 100}%` : `${taskEnergy}%` }}></div> 
+                    <div className="bg-[#7a32fc] h-2 rounded-full" style={{ width: isKidsProfile ? `${Number(taskEnergy || 0) * 100}%` : `${Number(taskEnergy || 0)}%` }}></div>
                   </div> 
                   {isConventionalAdult && (
                     <div className="flex justify-between text-[10px] text-gray-400 font-semibold mt-1">
