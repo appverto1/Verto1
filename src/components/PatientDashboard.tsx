@@ -4463,11 +4463,15 @@ ${interventionImages.join('\n')}` : ''
                       </div>
                     )}
 
-                    {isConventionalAdult ? (
+                    {!isKidsProfile ? (
                       <div className="space-y-4">
                         <div className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
                           <p className="mb-1 text-sm font-semibold text-slate-700">Como foi fazer essa tarefa?</p>
-                          <p className="mb-4 text-xs text-slate-500">Informe o esforço percebido. A Verto só registra um valor depois da sua escolha.</p>
+                          <p className="mb-4 text-xs text-slate-500">
+                            {isConventionalAdult
+                              ? 'Informe o esforço percebido. A Verto só registra um valor depois da sua escolha.'
+                              : 'Informe como ficou sua energia após a atividade. A Verto só registra um valor depois da sua escolha.'}
+                          </p>
                           <BigEnergySlider
                             value={taskEnergy}
                             onInteract={(value: number) => setTaskEnergy(value)}
@@ -4475,9 +4479,9 @@ ${interventionImages.join('\n')}` : ''
                             onCommit={(value: number) => setTaskEnergy(value)}
                             label={taskReflectionLabel}
                             labelHelp={taskReflectionHelp}
-                            scaleLabels={['Pouco esforço', 'Moderado', 'Muito esforço']}
-                            emojiForValue={getTaskEffortEmoji}
-                            unselectedLabel="Toque na barra para informar seu esforço"
+                            scaleLabels={isConventionalAdult ? ['Pouco esforço', 'Moderado', 'Muito esforço'] : ['Baixa', 'Média', 'Alta']}
+                            emojiForValue={isConventionalAdult ? getTaskEffortEmoji : undefined}
+                            unselectedLabel={isConventionalAdult ? 'Toque na barra para informar seu esforço' : 'Toque na barra para informar sua energia'}
                           />
                         </div>
                         <button
