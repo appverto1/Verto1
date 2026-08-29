@@ -8687,22 +8687,61 @@ export default function App() {
                   if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
                   setUser(nextUser);
 
-                  await dataService.saveUserProfile(user.id, {
-                    ...nextUser,
-                    profilePicturePath: profileUpload.path,
-                    signaturePath: signatureUpload.path,
-                    clinicLogoPath: clinicLogoUpload.path,
-                    workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-                  });
+                  const profileSaveScope = data?.profileSaveScope === 'clinic' ? 'clinic' : 'professional';
+                  const persistencePayload = profileSaveScope === 'clinic'
+                    ? {
+                        profileSaveScope,
+                        clinicSettings: nextUser.clinicSettings,
+                        clinicLogoPath: clinicLogoUpload.path,
+                        signaturePath: signatureUpload.path,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      }
+                    : {
+                        profileSaveScope,
+                        name: nextUser.name,
+                        cpf: nextUser.cpf,
+                        phone: nextUser.phone,
+                        professionalRoleTitle: nextUser.professionalRoleTitle,
+                        crp: nextUser.crp,
+                        specialties: nextUser.specialties,
+                        miniCurriculum: nextUser.miniCurriculum,
+                        profilePicture: nextUser.profilePicture,
+                        profile_picture: nextUser.profile_picture,
+                        profilePicturePath: profileUpload.path,
+                        signatureDataUrl: nextUser.signatureDataUrl,
+                        signaturePath: signatureUpload.path,
+                        professionalProfile: nextUser.professionalProfile,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      };
+                  await dataService.saveUserProfile(user.id, persistencePayload);
                 } catch (error) {
                   console.error('Profile asset upload error:', error);
                   if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
                   if (baseUser.crp !== undefined) setCrp(formatProfessionalRegistry(baseUser.crp));
                   setUser(baseUser);
-                  await dataService.saveUserProfile(user.id, {
-                    ...baseUser,
-                    workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-                  });
+                  const fallbackSaveScope = data?.profileSaveScope === 'clinic' ? 'clinic' : 'professional';
+                  const fallbackPersistencePayload = fallbackSaveScope === 'clinic'
+                    ? {
+                        profileSaveScope: fallbackSaveScope,
+                        clinicSettings: baseUser.clinicSettings,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      }
+                    : {
+                        profileSaveScope: fallbackSaveScope,
+                        name: baseUser.name,
+                        cpf: baseUser.cpf,
+                        phone: baseUser.phone,
+                        professionalRoleTitle: baseUser.professionalRoleTitle,
+                        crp: baseUser.crp,
+                        specialties: baseUser.specialties,
+                        miniCurriculum: baseUser.miniCurriculum,
+                        profilePicture: baseUser.profilePicture,
+                        profile_picture: baseUser.profile_picture,
+                        signatureDataUrl: baseUser.signatureDataUrl,
+                        professionalProfile: baseUser.professionalProfile,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      };
+                  await dataService.saveUserProfile(user.id, fallbackPersistencePayload);
                 }
               })();
             }}
