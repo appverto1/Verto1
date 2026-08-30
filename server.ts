@@ -4228,6 +4228,122 @@ function getClinicInvitationActivationUrl(params: {
   return activationUrl.toString();
 }
 
+
+const PATIENT_ACTIVATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+type PatientActivationTokenClaims = {
+  userId: string;
+  nonce: string;
+  expiresAt: number;
+};
+
+function patientActivationSigningSecret(): string {
+  const sessionSecret = sanitizeString(process.env.SESSION_SECRET || '', 2000);
+  if (sessionSecret.length < 32) {
+    throw new Error('PATIENT_ACTIVATION_LINK_SECRET_INVALID');
+  }
+  return crypto
+    .createHmac('sha256', sessionSecret)
+    .update('verto:patient-activation:v1')
+    .digest('hex');
+}
+
+function createPatientActivationToken(params: {
+  userId: unknown;
+  nonce: unknown;
+  expiresAt: number;
+}): string {
+  const userId = sanitizeString(params.userId, 120);
+  const nonce = sanitizeString(params.nonce, 200);
+  const expiresAt = Number(params.expiresAt);
+  if (!isUuid(userId) || nonce.length < 32 || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+    throw new Error('PATIENT_ACTIVATION_TOKEN_CONTEXT_INVALID');
+  }
+  const payload = Buffer.from(JSON.stringify({ v: 1, u: userId, n: nonce, e: expiresAt }), 'utf8').toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', patientActivationSigningSecret())
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function verifyPatientActivationToken(tokenValue: unknown): PatientActivationTokenClaims | null {
+  const token = sanitizeString(tokenValue, 4096);
+  const parts = token.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  const [payload, suppliedSignature] = parts;
+  const expectedSignature = crypto
+    .createHmac('sha256', patientActivationSigningSecret())
+    .update(payload)
+    .digest('base64url');
+  const suppliedBuffer = Buffer.from(suppliedSignature, 'utf8');
+  const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+  if (
+    suppliedBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)
+  ) return null;
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const userId = sanitizeString(parsed?.u, 120);
+    const nonce = sanitizeString(parsed?.n, 200);
+    const expiresAt = Number(parsed?.e);
+    if (
+      parsed?.v !== 1 ||
+      !isUuid(userId) ||
+      nonce.length < 32 ||
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt <= Date.now()
+    ) return null;
+    return { userId, nonce, expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+function patientActivationIsPending(authUser: any, profile: any): boolean {
+  const metadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
+    ? authUser.user_metadata
+    : {};
+  const role = sanitizeString(profile?.role || metadata?.role, 40).toLowerCase();
+  const status = sanitizeString(profile?.status, 60).toLowerCase();
+  return role === 'patient' && (
+    metadata?.patient_activation_required === true ||
+    status === 'pending_activation' ||
+    profile?.first_login_completed === false ||
+    metadata?.first_login_completed === false
+  );
+}
+
+async function createPatientActivationLink(authUserValue: any): Promise<string> {
+  const authUser = authUserValue?.user || authUserValue;
+  const userId = sanitizeString(authUser?.id, 120);
+  const email = sanitizeEmail(authUser?.email);
+  if (!isUuid(userId) || !email) throw new Error('PATIENT_ACTIVATION_IDENTITY_INVALID');
+
+  const nonce = crypto.randomBytes(32).toString('base64url');
+  const metadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
+    ? { ...authUser.user_metadata }
+    : {};
+  const { data: updatedUserResult, error: nonceError } = await supabase.auth.admin.updateUserById(userId, {
+    user_metadata: {
+      ...metadata,
+      patient_activation_nonce: nonce,
+      patient_activation_required: true,
+      first_login_completed: false,
+    },
+  });
+  if (nonceError) throw nonceError;
+  const token = createPatientActivationToken({
+    userId,
+    nonce,
+    expiresAt: Date.now() + PATIENT_ACTIVATION_TTL_MS,
+  });
+  const activationUrl = new URL(getActivationRedirectUrl('patient', email));
+  activationUrl.hash = new URLSearchParams({ patient_activation_token: token }).toString();
+  return activationUrl.toString();
+}
+
 function getRecoveryRedirectUrl(recoveryToken?: unknown): string {
   const baseUrl = getInvitationAppBaseUrl();
   const params = new URLSearchParams({ auth_action: 'recovery' });
@@ -25638,6 +25754,7 @@ async function startServer() {
       "/auth/logout",
       "/auth/resend-confirmation",
       "/auth/activation/bootstrap",
+      "/auth/patient-activation/password",
       "/auth/invitation/password",
       "/auth/password/recovery/bootstrap",
       "/auth/password/recovery/email/request",
@@ -26436,6 +26553,181 @@ async function startServer() {
     }
   });
 
+  app.post('/api/auth/patient-activation/password', authMfaLimiter, async (req, res) => {
+    const token = sanitizeString(req.body?.token, 4096);
+    const password = validateStrongPassword(req.body?.newPassword);
+    if (!token || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_INVALID',
+        message: 'Link de ativação inválido ou senha fora da política de segurança.'
+      });
+    }
+
+    let claims: PatientActivationTokenClaims | null = null;
+    try {
+      claims = verifyPatientActivationToken(token);
+    } catch (error: any) {
+      console.error('[Auth] patient activation signing unavailable:', {
+        message: sanitizeString(error?.message || String(error), 180)
+      });
+      return res.status(503).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_UNAVAILABLE',
+        message: 'A ativação está temporariamente indisponível. Tente novamente em alguns instantes.'
+      });
+    }
+
+    if (!claims || !isUuid(claims.userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_EXPIRED',
+        message: 'Este link de ativação é inválido ou expirou. Solicite um novo link.'
+      });
+    }
+
+    let leaseAcquired = false;
+    const leaseKey = `patient-activate:${claims.userId}`;
+    try {
+      if (requiresDistributedRuntimeState()) {
+        leaseAcquired = await tryAcquireDistributedJobLease({
+          supabase,
+          jobKey: leaseKey,
+          ownerId: runtimeOwnerId,
+          leaseSeconds: 30,
+        });
+        if (!leaseAcquired) {
+          return res.status(409).json({
+            success: false,
+            error: 'PATIENT_ACTIVATION_IN_PROGRESS',
+            message: 'Esta ativação já está sendo processada. Aguarde alguns instantes e tente novamente.'
+          });
+        }
+      }
+
+      const { data: authUserResult, error: authUserError } = await supabase.auth.admin.getUserById(claims.userId);
+      const authUser = authUserResult?.user || null;
+      if (authUserError || !authUser?.id) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_USER_NOT_FOUND',
+          message: 'Não foi possível validar esta conta de paciente.'
+        });
+      }
+
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: claims.userId,
+        logger: console,
+      });
+      if (profileResult.error) throw profileResult.error;
+      const profile = profileResult.data as any;
+      const metadata: Record<string, any> = authUser.user_metadata && typeof authUser.user_metadata === 'object'
+        ? { ...authUser.user_metadata }
+        : {};
+      if (!patientActivationIsPending(authUser, profile)) {
+        return res.status(409).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_NOT_PENDING',
+          message: 'Esta conta já foi ativada. Entre normalmente com seu e-mail e senha.'
+        });
+      }
+
+      const metadataNonce = sanitizeString(metadata?.patient_activation_nonce, 200);
+      const suppliedNonce = sanitizeString(claims.nonce, 200);
+      const metadataNonceBuffer = Buffer.from(metadataNonce, 'utf8');
+      const suppliedNonceBuffer = Buffer.from(suppliedNonce, 'utf8');
+      const nonceMatches = Boolean(
+        metadataNonce &&
+        suppliedNonce &&
+        metadataNonceBuffer.length === suppliedNonceBuffer.length &&
+        crypto.timingSafeEqual(metadataNonceBuffer, suppliedNonceBuffer)
+      );
+      if (!nonceMatches) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_LINK_REPLACED',
+          message: 'Este link foi substituído por um link de ativação mais recente. Abra o último e-mail recebido.'
+        });
+      }
+
+      const email = sanitizeEmail(authUser.email);
+      if (!email) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_EMAIL_MISSING',
+          message: 'Não foi possível validar o e-mail desta conta.'
+        });
+      }
+
+      delete metadata.patient_activation_nonce;
+      await invalidateAllActiveSessions(claims.userId);
+      const { error: updateAuthError } = await supabase.auth.admin.updateUserById(claims.userId, {
+        password,
+        email_confirm: true,
+        user_metadata: {
+          ...metadata,
+          patient_activation_required: false,
+          first_login_completed: true,
+        },
+      });
+      if (updateAuthError) throw updateAuthError;
+      await invalidateAllActiveSessions(claims.userId);
+
+      const profileUpdate = await updateRowsWithSchemaFallback({
+        tableName: 'users',
+        payload: {
+          status: 'active',
+          first_login_completed: true,
+          updated_at: new Date().toISOString(),
+        },
+        filters: [{ column: 'id', value: claims.userId }],
+        context: 'patient-activation-password-profile',
+      });
+      if (!profileUpdate.success) throw profileUpdate.error;
+
+      await persistIdentityAuditLog({
+        title: 'Conta de paciente ativada por link seguro',
+        content: `Paciente ${maskEmail(email)} definiu a senha e concluiu a ativação da identidade.`,
+        identifier: email,
+        channel: 'email',
+        userId: claims.userId,
+        request: req,
+        status: 'success'
+      });
+
+      return res.json({
+        success: true,
+        loginEmail: email,
+      });
+    } catch (error: any) {
+      console.error('[Auth] patient activation password failed:', {
+        userId: sanitizeString(claims?.userId, 120),
+        message: sanitizeString(error?.message || String(error), 240)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_FAILED',
+        message: 'Não foi possível concluir a ativação agora. Tente novamente.'
+      });
+    } finally {
+      if (leaseAcquired) {
+        try {
+          await releaseDistributedJobLease({
+            supabase,
+            jobKey: leaseKey,
+            ownerId: runtimeOwnerId,
+          });
+        } catch (releaseError: any) {
+          console.warn('[Auth] patient activation lease release failed:', {
+            userId: sanitizeString(claims?.userId, 120),
+            message: sanitizeString(releaseError?.message || String(releaseError), 180)
+          });
+        }
+      }
+    }
+  });
+
   app.post('/api/auth/invitation/password', authMfaLimiter, async (req, res) => {
     const token = sanitizeString(req.body?.token, 4096);
     const password = validateStrongPassword(req.body?.newPassword);
@@ -26615,16 +26907,13 @@ async function startServer() {
 
       const authUser = await findAuthUserByEmail(email);
       if (!authUser?.id) return res.json(genericResponse);
-      const isAlreadyConfirmed = Boolean(
-        (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
-      );
-      if (isAlreadyConfirmed) return res.json(genericResponse);
-
-      const { data: profile } = await supabase
-        .from('users')
-        .select('name,role')
-        .eq('id', authUser.id)
-        .maybeSingle();
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: authUser.id,
+        logger: console,
+      });
+      if (profileResult.error) throw profileResult.error;
+      const profile = profileResult.data as any;
       const authMetadata: Record<string, any> = (authUser as any)?.user_metadata && typeof (authUser as any).user_metadata === 'object'
         ? { ...(authUser as any).user_metadata }
         : {};
@@ -26633,13 +26922,20 @@ async function startServer() {
         40
       );
       const templateProfile = resolveTemplateProfileByRole(persistedRole);
+      const isAlreadyConfirmed = Boolean(
+        (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
+      );
+      const pendingPatientActivation = patientActivationIsPending(authUser, profile);
+      if (isAlreadyConfirmed && !pendingPatientActivation) return res.json(genericResponse);
       const metadataInvitationId = sanitizeString(
         authMetadata?.invitation_id || authMetadata?.clinic_invitation_id,
         120
       );
       let activationLink: string | null = null;
 
-      if (isUuid(metadataInvitationId)) {
+      if (pendingPatientActivation) {
+        activationLink = await createPatientActivationLink(authUser);
+      } else if (isUuid(metadataInvitationId)) {
         const { data: pendingInvitation, error: pendingInvitationError } = await supabase
           .from('invitations')
           .select('id,email,status')
@@ -39085,7 +39381,7 @@ async function startServer() {
           void (async () => {
             try {
               const emailResult = await Promise.race([
-                sendPatientActivationEmail(),
+                sendPatientActivationEmail(input.authUserId || null),
                 new Promise<{ sent: false; reason: string }>((resolve) => {
                   setTimeout(() => {
                     resolve({ sent: false, reason: 'Timeout no envio do e-mail de ativação.' });
@@ -39392,20 +39688,17 @@ async function startServer() {
         return linkedPatientId;
       };
 
-      const sendPatientActivationEmail = async (): Promise<{ sent: boolean; reason?: string }> => {
-        const signupLink = await generateSupabaseActionLink({
-          type: 'signup',
-          email: normalizedEmail,
-          redirectTo: getActivationRedirectUrl('patient', normalizedEmail)
-        });
-        const fallbackRecoveryLink = signupLink
-          ? null
-          : await generateSupabaseActionLink({
-              type: 'recovery',
-              email: normalizedEmail,
-              redirectTo: getRecoveryRedirectUrl()
-            });
-        const activationLink = signupLink || fallbackRecoveryLink || getActivationRedirectUrl('patient', normalizedEmail);
+      const sendPatientActivationEmail = async (authUserId?: string | null): Promise<{ sent: boolean; reason?: string }> => {
+        const safeAuthUserId = sanitizeString(authUserId, 120);
+        const authUserResult = isUuid(safeAuthUserId)
+          ? await supabase.auth.admin.getUserById(safeAuthUserId)
+          : { data: { user: await findAuthUserByEmail(normalizedEmail) }, error: null as any };
+        if (authUserResult?.error) throw authUserResult.error;
+        const activationAuthUser = authUserResult?.data?.user || null;
+        if (!activationAuthUser?.id || sanitizeEmail(activationAuthUser.email) !== normalizedEmail) {
+          throw new Error('PATIENT_ACTIVATION_AUTH_USER_NOT_FOUND');
+        }
+        const activationLink = await createPatientActivationLink(activationAuthUser);
 
         const activationEmail = buildActivationEmailTemplate({
           nome: safeName,
@@ -40198,10 +40491,24 @@ async function startServer() {
           return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
         }
         const authUser = await findRecoverableAuthUserByEmail(patientEmail);
+        if (!authUser?.id) {
+          return res.status(409).json({
+            success: false,
+            code: 'PATIENT_AUTH_IDENTITY_MISSING',
+            error: 'A identidade de acesso deste paciente precisa ser sincronizada antes do reenvio.',
+          });
+        }
+        const profileResult = await fetchProfileWithSchemaFallback({
+          supabase,
+          userId: authUser.id,
+          logger: console,
+        });
+        if (profileResult.error) throw profileResult.error;
+        const pendingActivation = patientActivationIsPending(authUser, profileResult.data);
         const isAlreadyConfirmed = Boolean(
           (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
         );
-        if (isAlreadyConfirmed) {
+        if (isAlreadyConfirmed && !pendingActivation) {
           return res.status(409).json({
             success: false,
             code: 'ALREADY_CONFIRMED',
@@ -40210,32 +40517,20 @@ async function startServer() {
         }
 
         const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
-        if (authUser?.id) {
-          await supabase.auth.admin.updateUserById(authUser.id, {
-            user_metadata: {
-              ...((authUser as any)?.user_metadata || {}),
-              full_name: profileName,
-              role: 'patient',
-              type: sanitizeString(patient?.type, 80) || 'adult_conventional',
-              clinic_id: isUuid(patient?.clinic_id) ? patient.clinic_id : null,
-              invited_email: patientEmail,
-              patient_activation_required: true,
-              first_login_completed: false
-            }
-          });
-        }
-        const activationLink =
-          (await generateSupabaseActionLink({
-            type: 'signup',
-            email: patientEmail,
-            redirectTo: getActivationRedirectUrl('patient', patientEmail)
-          })) ||
-          (await generateSupabaseActionLink({
-            type: 'recovery',
-            email: patientEmail,
-            redirectTo: getActivationRedirectUrl('patient', patientEmail)
-          })) ||
-          getActivationRedirectUrl('patient', patientEmail);
+        const { data: refreshedAuthUserResult, error: refreshActivationIdentityError } = await supabase.auth.admin.updateUserById(authUser.id, {
+          user_metadata: {
+            ...((authUser as any)?.user_metadata || {}),
+            full_name: profileName,
+            role: 'patient',
+            type: sanitizeString(patient?.type, 80) || 'adult_conventional',
+            clinic_id: isUuid(patient?.clinic_id) ? patient.clinic_id : null,
+            invited_email: patientEmail,
+            patient_activation_required: true,
+            first_login_completed: false
+          }
+        });
+        if (refreshActivationIdentityError) throw refreshActivationIdentityError;
+        const activationLink = await createPatientActivationLink(refreshedAuthUserResult?.user || authUser);
 
         const activationEmail = buildActivationEmailTemplate({
           nome: profileName,

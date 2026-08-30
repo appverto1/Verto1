@@ -50,6 +50,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryToken, setRecoveryToken] = useState('');
   const [invitationActivationToken, setInvitationActivationToken] = useState('');
+  const [patientActivationToken, setPatientActivationToken] = useState('');
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return;
     const recoveryUrlState = extractPasswordRecoveryUrlState(window.location.href);
@@ -73,6 +74,21 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setInvitationActivationToken(inviteToken);
       currentUrl.searchParams.delete('invite_token');
       hashParams.delete('invite_token');
+      currentUrl.hash = hashParams.toString();
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+      );
+    }
+
+    const patientToken = String(
+      currentUrl.searchParams.get('patient_activation_token') || hashParams.get('patient_activation_token') || '',
+    ).trim();
+    if (patientToken && patientToken.length <= 4096) {
+      setPatientActivationToken(patientToken);
+      currentUrl.searchParams.delete('patient_activation_token');
+      hashParams.delete('patient_activation_token');
       currentUrl.hash = hashParams.toString();
       window.history.replaceState(
         window.history.state,
@@ -526,10 +542,60 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         setMessage('Senha definida com sucesso. Redirecionando...');
         return;
       }
+      if (patientActivationToken && intendedRole === 'patient') {
+        const passwordValidationError = validateRecoveryPassword(newPassword);
+        if (passwordValidationError) {
+          throw new Error(passwordValidationError);
+        }
+        const activationResponse = await withActivationTimeout(
+          fetch('/api/auth/patient-activation/password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              token: patientActivationToken,
+              newPassword,
+            }),
+          }),
+          10000,
+        );
+        if (!activationResponse) {
+          throw new Error('Tempo esgotado ao concluir a ativação. Tente novamente.');
+        }
+        const activationResult = await (activationResponse as Response).json().catch(() => ({}));
+        if (!(activationResponse as Response).ok || !activationResult?.success) {
+          throw new Error(
+            activationResult?.message ||
+              activationResult?.error ||
+              'Não foi possível concluir a ativação desta conta.',
+          );
+        }
+
+        const loginEmail = String(
+          activationResult?.loginEmail || identifiedEmail || email,
+        ).trim().toLowerCase();
+        const loginRes = await onLogin(
+          null,
+          'patient',
+          { email: loginEmail, password: newPassword },
+          {
+            provider: 'email',
+            activationFlow: true,
+            passwordSetupCompleted: true,
+            activationEmail: loginEmail,
+            invitationId: null,
+          },
+        );
+        if (!loginRes?.success) {
+          throw new Error(loginRes?.error || 'Conta ativada, mas não foi possível concluir o login. Entre novamente com a senha definida.');
+        }
+        setPatientActivationToken('');
+        setMessage('Senha definida com sucesso. Redirecionando...');
+        return;
+      }
+
       const supabase = await getSupabase();
-      let {
-        data: { session },
-      } = await supabase.auth.getSession();
+      let session = await ensureFreshSession({ sessionTimeoutMs: 2500, urlExchangeTimeoutMs: 8000 });
 
       if (!session?.user) {
         session = await establishSessionFromUrl();
@@ -568,7 +634,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
             const resendRequested = await requestActivationBootstrap(fallbackEmail);
             if (resendRequested) {
               setMessage(
-                'Se esta conta ainda estiver pendente, enviaremos um novo link de ativação por e-mail.',
+                'Este link antigo não consegue mais definir a senha com segurança. Enviamos um novo link de ativação para o seu e-mail.',
               );
               return;
             }
@@ -577,9 +643,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         throw updateError;
       }
 
-      const {
-        data: { session: refreshedSession },
-      } = await supabase.auth.getSession();
+      const refreshedSession = await ensureFreshSession({ sessionTimeoutMs: 2500, urlExchangeTimeoutMs: 8000 });
 
       const userEmail = String(session.user.email || identifiedEmail || email).trim().toLowerCase();
       const loginRes = await onLogin(
