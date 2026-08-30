@@ -3,7 +3,6 @@ import {
   AlertTriangle,
   Archive,
   Check,
-  ChevronDown,
   Copy,
   ExternalLink,
   GitCompareArrows,
@@ -22,10 +21,8 @@ import { getSupabase } from '../lib/supabase';
 import {
   applySalesPackageTierSelection,
   calculateSalesModularProposal,
-  isSalesPackageTierCompatible,
   recommendSalesPackageTier,
   resolveSalesPackageTierSelection,
-  SALES_PLATFORM_FOUNDATION_PUBLIC_NAME,
   salesModularProposalRequiresVersionedProfitabilityPolicy,
   salesPackageDemand,
   type SalesModularLineSelection,
@@ -127,6 +124,53 @@ const isValidContractEmail = (value: unknown) => {
 
 const ECONOMY_SIMULATOR_PATIENT_PRESETS = [150, 160, 170, 200] as const;
 
+const SALES_FUNCTIONAL_MODULE_KEYS = [
+  'clinical_core',
+  'appointments_communication',
+  'financial_management',
+  'insurance_tiss',
+  'school_management'
+] as const;
+
+const SALES_PATIENT_CAPACITY_BLOCKS = [10, 20, 30, 40, 50] as const;
+const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000;
+const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000;
+
+const isSalesFunctionalModuleItemKey = (value: string) =>
+  SALES_FUNCTIONAL_MODULE_KEYS.includes(
+    value as (typeof SALES_FUNCTIONAL_MODULE_KEYS)[number]
+  );
+
+const commercialCapacityForDemand = (patientQuantity: number) =>
+  SALES_PATIENT_CAPACITY_BLOCKS.find(
+    (capacity) => patientQuantity <= capacity
+  ) ?? null;
+
+const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
+  if (marginBasisPoints == null) {
+    return {
+      label: 'Margem indisponível',
+      className: 'border-slate-200 bg-slate-100 text-slate-600'
+    };
+  }
+  if (marginBasisPoints >= SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS) {
+    return {
+      label: `Saudável · ${percent(marginBasisPoints)}`,
+      className: 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    };
+  }
+  if (marginBasisPoints >= SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS) {
+    return {
+      label: `Atenção · ${percent(marginBasisPoints)}`,
+      className: 'border-amber-200 bg-amber-50 text-amber-800'
+    };
+  }
+  return {
+    label: `Crítica · ${percent(marginBasisPoints)}`,
+    className: 'border-rose-200 bg-rose-50 text-rose-800'
+  };
+};
+
 const itemTierForQuantity = (
   item: SalesPricingCatalogItem,
   quantity: number
@@ -154,12 +198,22 @@ const selectionForItem = (
       : item.itemKey === 'additional_storage'
         ? 1
         : patientQuantity;
+  const suggestedTier = itemTierForQuantity(item, quantity);
+  const customCommercialTier =
+    perPatientPricing && isSalesFunctionalModuleItemKey(item.itemKey)
+      ? item.tiers.find((tier) => tier.isCustom) ||
+        item.tiers.find((tier) => tier.maximumQuantity === null) ||
+        null
+      : null;
   const linkedTier =
     item.itemKey === 'clinical_core'
       ? baseTier
-      : itemTierForQuantity(item, quantity);
+      : customCommercialTier || suggestedTier;
   const catalogMonthlyAmountCents =
-    linkedTier?.recurringAmountCents ?? item.recurringAmountCents ?? 0;
+    linkedTier?.recurringAmountCents ??
+    suggestedTier?.recurringAmountCents ??
+    item.recurringAmountCents ??
+    0;
   return {
     itemKey: item.itemKey,
     tierId: linkedTier?.id || null,
@@ -466,17 +520,27 @@ export const SalesModularProposalBuilder = ({
           (item) => item.itemKey === 'clinical_core'
         );
         if (!core) throw new Error('PRICING_ITEM_NOT_FOUND');
+        const customCapacityTier =
+          core.tiers.find((tier) => tier.isCustom) ||
+          core.tiers.find((tier) => tier.maximumQuantity === null) ||
+          null;
+        const initialCapacity =
+          commercialCapacityForDemand(patientQuantity) ||
+          Math.max(51, patientQuantity);
+        const initialBaseTier = customCapacityTier || recommendedTier;
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
-          platformFoundationPricingMode: 'automatic_target',
-          platformFoundationMonthlyAmountCents: null,
+          platformFoundationPricingMode: 'manual',
+          platformFoundationMonthlyAmountCents: 0,
           patientQuantity,
           expectedPatientQuantity12Months: patientQuantity,
-          basePackageTierId: recommendedTier.id,
-          basePackageSelectionMode: 'automatic',
-          customBasePackageLimit:
-            recommendedTier.isCustom || recommendedTier.maximumQuantity === null
-              ? 150
+          basePackageTierId: initialBaseTier.id,
+          basePackageSelectionMode: customCapacityTier ? 'manual' : 'automatic',
+          customBasePackageLimit: customCapacityTier
+            ? initialCapacity
+            : initialBaseTier.isCustom ||
+                initialBaseTier.maximumQuantity === null
+              ? initialCapacity
               : null,
           customCapacityBlocks: null,
           customCapacitySelectionMode: 'automatic',
@@ -484,7 +548,7 @@ export const SalesModularProposalBuilder = ({
             selectionForItem(
               core,
               patientQuantity,
-              recommendedTier,
+              initialBaseTier,
               true
             )
           ],
@@ -544,6 +608,41 @@ export const SalesModularProposalBuilder = ({
 
   useEffect(() => {
     if (!catalog || !input) return;
+    const selectedCommercialTier = catalog.items
+      .find((item) => item.itemKey === 'clinical_core')
+      ?.tiers.find((tier) => tier.id === input.basePackageTierId);
+    if (
+      input.basePackageSelectionMode === 'manual' &&
+      selectedCommercialTier &&
+      (selectedCommercialTier.isCustom ||
+        selectedCommercialTier.maximumQuantity === null)
+    ) {
+      const demand = salesPackageDemand(
+        input.patientQuantity,
+        input.expectedPatientQuantity12Months
+      );
+      const currentLimit = Number(input.customBasePackageLimit || 0);
+      if (currentLimit >= demand) return;
+      const nextLimit =
+        commercialCapacityForDemand(demand) || Math.max(51, demand);
+      setInput((current) =>
+        current
+          ? {
+              ...current,
+              customBasePackageLimit: nextLimit,
+              customCapacityBlocks: null,
+              customCapacitySelectionMode: 'automatic'
+            }
+          : current
+      );
+      setPreparedOffer(null);
+      setNotice(
+        nextLimit > 50
+          ? `A demanda projetada exige capacidade Enterprise de ${nextLimit} pacientes.`
+          : `A capacidade foi ajustada para o bloco de ${nextLimit} pacientes para comportar a demanda projetada.`
+      );
+      return;
+    }
     const resolution = resolveSalesPackageTierSelection(catalog, input);
     if (!resolution.selectedTier) return;
     const currentMode = input.basePackageSelectionMode === 'manual'
@@ -835,8 +934,8 @@ export const SalesModularProposalBuilder = ({
         const result = calculateSalesModularProposal(
           {
             ...input,
-            platformFoundationPricingMode: 'automatic_target',
-            platformFoundationMonthlyAmountCents: null,
+            platformFoundationPricingMode: 'manual',
+            platformFoundationMonthlyAmountCents: 0,
             patientQuantity: economySimulatorPatients,
             expectedPatientQuantity12Months: economySimulatorPatients,
             basePackageTierId: customTier.id,
@@ -855,9 +954,7 @@ export const SalesModularProposalBuilder = ({
         );
         rows.push({
           key: String(mask),
-          label: `${SALES_PLATFORM_FOUNDATION_PUBLIC_NAME} + ${selectedModules
-            .map((item) => item.publicName)
-            .join(' + ')}`,
+          label: selectedModules.map((item) => item.publicName).join(' + '),
           revenueCents: result.postPromotion.recurringRevenueCents,
           costCents: result.postPromotion.totalEstimatedCostCents,
           marginBasisPoints: result.postPromotion.ebitdaMarginBasisPoints,
@@ -973,7 +1070,13 @@ export const SalesModularProposalBuilder = ({
             }
           : null
       },
-      items: preview.lines.map((line) => ({
+      items: preview.lines
+        .filter(
+          (line) =>
+            line.itemKey !== 'platform_foundation' &&
+            line.itemKey !== 'onboarding'
+        )
+        .map((line) => ({
         itemKey: line.itemKey,
         publicName: line.publicName,
         description: line.description,
@@ -1117,65 +1220,92 @@ export const SalesModularProposalBuilder = ({
       }
       return line;
     });
+    const selectedTier = catalog.items
+      .find((item) => item.itemKey === 'clinical_core')
+      ?.tiers.find((tier) => tier.id === input.basePackageTierId);
+    const currentCapacity = Number(input.customBasePackageLimit || 0);
+    const automaticCapacity =
+      commercialCapacityForDemand(safeQuantity) || Math.max(51, safeQuantity);
     updateInput({
       patientQuantity: safeQuantity,
-      lines
+      lines,
+      ...(selectedTier?.isCustom || selectedTier?.maximumQuantity === null
+        ? {
+            customBasePackageLimit:
+              currentCapacity >= safeQuantity
+                ? currentCapacity
+                : automaticCapacity,
+            customCapacityBlocks: null,
+            customCapacitySelectionMode: 'automatic' as const
+          }
+        : {})
     });
   };
 
-  const selectBaseTier = (tierId: string) => {
+  const selectCommercialCapacity = (capacity: number | 'enterprise') => {
     if (!catalog || !input) return;
     const core = catalog.items.find(
       (item) => item.itemKey === 'clinical_core'
     );
-    const tier = core?.tiers.find((candidate) => candidate.id === tierId);
-    if (!core || !tier) return;
-    const demand = salesPackageDemand(
+    const customTier =
+      core?.tiers.find((tier) => tier.isCustom) ||
+      core?.tiers.find((tier) => tier.maximumQuantity === null) ||
+      null;
+    if (!core || !customTier) {
+      setError('O catálogo ativo não possui faixa personalizada para esta capacidade.');
+      return;
+    }
+    const minimumCapacity = salesPackageDemand(
       input.patientQuantity,
       input.expectedPatientQuantity12Months
     );
-    if (!isSalesPackageTierCompatible(catalog, tier.id, demand)) {
+    const nextCapacity =
+      capacity === 'enterprise'
+        ? Math.max(51, minimumCapacity, Number(input.customBasePackageLimit || 0))
+        : capacity;
+    if (nextCapacity < minimumCapacity) {
       setError(
-        `Esta faixa não é compatível com a demanda de ${demand} pacientes. Use uma faixa convencional maior ou a recomendação automática.`
+        `A clínica já possui ${minimumCapacity} pacientes. Escolha um bloco que comporte a demanda atual.`
       );
       return;
     }
-    setError('');
-    setInput(applySalesPackageTierSelection(input, tier, 'manual'));
-    setPreparedOffer(null);
-    setNotice('Faixa escolhida manualmente. Ela será mantida enquanto comportar a demanda.');
-  };
-
-  const useRecommendedBaseTier = () => {
-    if (!catalog || !input) return;
-    const recommended = recommendSalesPackageTier(
-      catalog,
-      salesPackageDemand(
-        input.patientQuantity,
-        input.expectedPatientQuantity12Months
-      )
+    const lines = input.lines.map((line) =>
+      line.itemKey === 'clinical_core'
+        ? { ...line, tierId: customTier.id, quantity: input.patientQuantity }
+        : line
     );
-    if (!recommended) return;
-    setInput(applySalesPackageTierSelection(input, recommended, 'automatic'));
-    setPreparedOffer(null);
+    updateInput({
+      basePackageTierId: customTier.id,
+      basePackageSelectionMode: 'manual',
+      customBasePackageLimit: nextCapacity,
+      customCapacityBlocks: null,
+      customCapacitySelectionMode: 'automatic',
+      lines
+    });
     setError('');
-    setNotice(`Faixa recomendada aplicada: ${recommended.publicName}.`);
+    setNotice(
+      capacity === 'enterprise'
+        ? 'Capacidade Enterprise selecionada. Defina o limite acima de 50 pacientes.'
+        : `Bloco de ${nextCapacity} pacientes selecionado.`
+    );
   };
 
   const toggleItem = (item: SalesPricingCatalogItem) => {
     if (!input || !catalog) return;
     const exists = input.lines.some((line) => line.itemKey === item.itemKey);
     if (exists) {
-      if (item.isRequired || item.itemKey === 'clinical_core') return;
       const remainingRecurringItems = input.lines.filter((line) => {
         if (line.itemKey === item.itemKey) return false;
         const catalogItem = catalog.items.find(
           (candidate) => candidate.itemKey === line.itemKey
         );
-        return catalogItem?.billingInterval !== 'one_time';
+        return Boolean(
+          catalogItem?.billingInterval !== 'one_time' &&
+            isSalesFunctionalModuleItemKey(line.itemKey)
+        );
       });
       if (remainingRecurringItems.length < 1) {
-        setError('Selecione pelo menos um módulo recorrente além da Fundação Verto.');
+        setError('Selecione pelo menos um módulo recorrente.');
         return;
       }
       updateInput({
@@ -1196,13 +1326,6 @@ export const SalesModularProposalBuilder = ({
       baseTier,
       true
     );
-    if (
-      item.itemKey === 'onboarding' &&
-      assumptions?.values.defaultOnboardingCostCents != null
-    ) {
-      newSelection.customOneTimeAmountCents =
-        assumptions.values.defaultOnboardingCostCents;
-    }
     updateInput({ lines: [...input.lines, newSelection] });
   };
 
@@ -1373,9 +1496,19 @@ export const SalesModularProposalBuilder = ({
     const snapshotRecommended = catalog
       ? recommendSalesPackageTier(catalog, snapshotDemand)
       : null;
-    const snapshotTier = catalog?.items
-      .find((item) => item.itemKey === 'clinical_core')
-      ?.tiers.find((tier) => tier.id === snapshotInput.basePackageTierId);
+    const snapshotCoreItem = catalog?.items.find(
+      (item) => item.itemKey === 'clinical_core'
+    );
+    const snapshotTier = snapshotCoreItem?.tiers.find(
+      (tier) => tier.id === snapshotInput.basePackageTierId
+    );
+    const modernCoreTier =
+      snapshotCoreItem?.tiers.find((tier) => tier.isCustom) ||
+      snapshotCoreItem?.tiers.find((tier) => tier.maximumQuantity === null) ||
+      null;
+    const modernCapacity =
+      commercialCapacityForDemand(snapshotDemand) ||
+      Math.max(51, snapshotDemand);
     const inferredMode = snapshotInput.basePackageSelectionMode ||
       (snapshotRecommended?.id === snapshotInput.basePackageTierId
         ? 'automatic'
@@ -1384,20 +1517,27 @@ export const SalesModularProposalBuilder = ({
       ...snapshotInput,
       trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
       commercialPricingMode: 'manual_module_prices',
-      // Duplicar um cenário histórico é a ação explícita que o moderniza para
-      // a Fundação automática; o snapshot original permanece inalterado.
-      platformFoundationPricingMode: 'automatic_target',
-      platformFoundationMonthlyAmountCents: null,
+      // Duplicar um cenário histórico cria uma nova composição comercial sem
+      // expor a infraestrutura como módulo; o snapshot original permanece intacto.
+      platformFoundationPricingMode: 'manual',
+      platformFoundationMonthlyAmountCents: 0,
       usageProfile: 'intensive',
       driverOverrides: {},
-      basePackageSelectionMode: inferredMode,
-      customBasePackageLimit:
-        snapshotTier?.isCustom || snapshotTier?.maximumQuantity === null
+      basePackageTierId:
+        modernCoreTier?.id || snapshotInput.basePackageTierId,
+      basePackageSelectionMode: modernCoreTier ? 'manual' : inferredMode,
+      customBasePackageLimit: modernCoreTier
+        ? modernCapacity
+        : snapshotTier?.isCustom || snapshotTier?.maximumQuantity === null
           ? snapshotInput.customBasePackageLimit ??
             simulation.results_snapshot?.basePackage?.limitQuantity ??
             snapshotDemand
           : null,
-      lines: snapshotInput.lines.map((line) => {
+      customCapacityBlocks: null,
+      customCapacitySelectionMode: 'automatic',
+      lines: snapshotInput.lines
+        .filter((line) => isSalesFunctionalModuleItemKey(line.itemKey))
+        .map((line) => {
         const item = catalog?.items.find(
           (candidate) => candidate.itemKey === line.itemKey
         );
@@ -1405,8 +1545,14 @@ export const SalesModularProposalBuilder = ({
         const tier = item.tiers.find(
           (candidate) => candidate.id === line.tierId
         );
+        const modernTier =
+          item.tiers.find((candidate) => candidate.isCustom) ||
+          item.tiers.find((candidate) => candidate.maximumQuantity === null) ||
+          tier ||
+          null;
         return {
           ...line,
+          tierId: modernTier?.id || line.tierId,
           pricingEditMode: line.pricingEditMode || 'monthly_total',
           customRecurringAmountCents:
             line.pricingEditMode === 'per_patient'
@@ -1640,9 +1786,6 @@ export const SalesModularProposalBuilder = ({
         input.expectedPatientQuantity12Months
       )
     : 1;
-  const recommendedBaseTier = catalog && input
-    ? recommendSalesPackageTier(catalog, currentPackageDemand)
-    : null;
   const hasVersionedCustomCapacityPolicy =
     catalog?.status === 'active' &&
     validateCustomCapacityPolicy(catalog.customCapacityPolicy);
@@ -1651,6 +1794,13 @@ export const SalesModularProposalBuilder = ({
   );
   const coreResult = preview?.lines.find(
     (line) => line.itemKey === 'clinical_core'
+  );
+  const coreEconomics = preview?.economics?.items.find(
+    (item) => item.itemKey === 'clinical_core'
+  );
+  const coreMarginTraffic = moduleMarginTrafficLight(
+    coreEconomics?.postPromotionMarginBasisPoints ??
+      coreResult?.postPromotion.ebitdaMarginBasisPoints
   );
   const customPerPatientPricing =
     input?.commercialPricingMode === 'manual_module_prices' &&
@@ -1814,12 +1964,12 @@ export const SalesModularProposalBuilder = ({
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <h2 className="text-base font-semibold text-slate-900">
-                      Fundação, capacidade e módulo clínico
+                      Capacidade contratada
                     </h2>
                     <p className="mt-1 text-sm font-normal text-slate-500">
-                      A Fundação Verto entra uma única vez. A faixa abaixo
-                      dimensiona pacientes e armazenamento, mesmo quando o
-                      cliente contrata somente outro módulo.
+                      Escolha o bloco comercial de pacientes. Acima de 50,
+                      a contratação passa a ser Enterprise e fica sob consulta.
+                      Custos compartilhados continuam apenas no cálculo interno.
                     </p>
                   </div>
                   <button
@@ -1830,111 +1980,31 @@ export const SalesModularProposalBuilder = ({
                     <Settings2 size={16} /> Premissas financeiras
                   </button>
                 </div>
-                <div className="mt-4 rounded-2xl border border-violet-200 bg-violet-50/70 p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-violet-950">
-                        {SALES_PLATFORM_FOUNDATION_PUBLIC_NAME}
-                      </p>
-                      <p className="mt-1 text-xs font-normal leading-5 text-violet-800">
-                        Base segura, infraestrutura, auditoria, operação e
-                        suporte-base. O modo automático completa o valor
-                        necessário para a meta EBITDA do conjunto, sem repetir
-                        os custos dentro de cada módulo.
-                      </p>
-                    </div>
-                    <span className="rounded-full border border-violet-200 bg-white px-3 py-1 text-xs font-semibold text-violet-800">
-                      {currency(preview?.platformFoundation.recurringAmountCents)}
-                      /mês
-                    </span>
-                  </div>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <label className="text-sm font-medium text-slate-700">
-                      Formação do valor da fundação
-                      <select
-                        value={
-                          input.platformFoundationPricingMode === 'manual'
-                            ? 'manual'
-                            : 'automatic_target'
-                        }
-                        onChange={(event) =>
-                          updateInput({
-                            platformFoundationPricingMode:
-                              event.target.value === 'manual'
-                                ? 'manual'
-                                : 'automatic_target',
-                            platformFoundationMonthlyAmountCents:
-                              event.target.value === 'manual'
-                                ? preview?.platformFoundation
-                                    .recurringAmountCents ?? 0
-                                : null
-                          })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      >
-                        <option value="automatic_target">
-                          Automático para a meta EBITDA
-                        </option>
-                        <option value="manual">
-                          Valor comercial manual
-                        </option>
-                      </select>
-                    </label>
-                    <label className="text-sm font-medium text-slate-700">
-                      Mensalidade da fundação
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        disabled={
-                          input.platformFoundationPricingMode !== 'manual'
-                        }
-                        value={
-                          input.platformFoundationPricingMode === 'manual'
-                            ? Number(
-                                input.platformFoundationMonthlyAmountCents || 0
-                              ) / 100
-                            : Number(
-                                preview?.platformFoundation
-                                  .recurringAmountCents || 0
-                              ) / 100
-                        }
-                        onChange={(event) =>
-                          updateInput({
-                            platformFoundationMonthlyAmountCents: Math.max(
-                              0,
-                              Math.round(Number(event.target.value || 0) * 100)
-                            )
-                          })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-violet-200 bg-white px-3 font-normal text-slate-900 outline-none disabled:bg-violet-100/60 disabled:text-violet-700 focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      />
-                    </label>
-                  </div>
-                  <div className="mt-3 grid gap-2 text-xs text-violet-900 sm:grid-cols-3">
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <p className="text-sm font-semibold text-slate-900">
+                    Custos compartilhados da plataforma
+                  </p>
+                  <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
+                    Estes valores continuam compondo o EBITDA e o preço-alvo, mas
+                    não são vendidos como módulo e não aparecem na proposta pública
+                    nem no Checkout. Se houver gap para a meta, ajuste os preços dos módulos contratados.
+                  </p>
+                  <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-4">
                     <span>
-                      Valor recomendado:{' '}
-                      <strong>
-                        {currency(
-                          preview?.platformFoundation
-                            .recommendedRecurringAmountCents
-                        )}
-                      </strong>
+                      Custo compartilhado:{' '}
+                      <strong>{currency(preview?.platformFoundation.sharedCostCents)}</strong>
                     </span>
                     <span>
-                      Custos compartilhados:{' '}
-                      <strong>
-                        {currency(preview?.platformFoundation.sharedCostCents)}
-                      </strong>
+                      Tarifa fixa Stripe:{' '}
+                      <strong>{currency(preview?.platformFoundation.fixedPaymentFeeCents)}</strong>
                     </span>
                     <span>
                       Receita dos módulos:{' '}
-                      <strong>
-                        {currency(
-                          preview?.platformFoundation
-                            .moduleRecurringRevenueCents
-                        )}
-                      </strong>
+                      <strong>{currency(preview?.platformFoundation.moduleRecurringRevenueCents)}</strong>
+                    </span>
+                    <span>
+                      Gap para a meta EBITDA:{' '}
+                      <strong>{currency(preview?.platformFoundation.recommendedRecurringAmountCents)}</strong>
                     </span>
                   </div>
                 </div>
@@ -1970,67 +2040,107 @@ export const SalesModularProposalBuilder = ({
                       className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                     />
                   </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Faixa técnica de capacidade
-                    <span className="relative mt-1 block">
-                      <select
-                        value={input.basePackageTierId}
-                        onChange={(event) => selectBaseTier(event.target.value)}
-                        className="min-h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-9 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      >
-                        {coreItem?.tiers.map((tier) => (
-                          <option key={tier.id} value={tier.id}>
-                            {tier.publicName} ·{' '}
-                            {tier.recurringAmountCents == null
-                              ? 'personalizado'
-                              : currency(tier.recurringAmountCents)}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown
-                        size={16}
-                        className="pointer-events-none absolute right-3 top-3.5 text-slate-400"
-                      />
-                    </span>
-                  </label>
+                  <div className="text-sm font-medium text-slate-700">
+                    Capacidade contratada
+                    <div className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 font-normal text-slate-900">
+                      {Number(input.customBasePackageLimit || 0) > 50
+                        ? `Enterprise · ${Number(input.customBasePackageLimit || 0)} pacientes`
+                        : `${Number(input.customBasePackageLimit || 0)} pacientes`}
+                    </div>
+                  </div>
                 </div>
-                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
-                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-700">
-                    {input.basePackageSelectionMode === 'manual'
-                      ? 'Seleção manual'
-                      : 'Seleção automática'}
-                  </span>
-                  <span className="text-slate-500">
-                    Demanda considerada: {currentPackageDemand} pacientes
-                  </span>
-                  {input.basePackageSelectionMode === 'manual' ? (
+                <div className="mt-4">
+                  <p className="text-xs font-medium text-slate-600">
+                    Bloco de pacientes
+                  </p>
+                  <div
+                    role="radiogroup"
+                    aria-label="Capacidade contratada"
+                    className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-6"
+                  >
+                    {SALES_PATIENT_CAPACITY_BLOCKS.map((capacity) => {
+                      const selected =
+                        Number(input.customBasePackageLimit || 0) === capacity;
+                      const disabled = currentPackageDemand > capacity;
+                      return (
+                        <button
+                          key={capacity}
+                          type="button"
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={disabled}
+                          onClick={() => selectCommercialCapacity(capacity)}
+                          className={`min-h-11 rounded-xl border px-3 text-sm font-medium transition ${
+                            selected
+                              ? 'border-violet-300 bg-violet-600 text-white'
+                              : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50'
+                          } disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300`}
+                        >
+                          {capacity}
+                        </button>
+                      );
+                    })}
                     <button
                       type="button"
-                      onClick={useRecommendedBaseTier}
-                      className="min-h-9 rounded-lg border border-violet-200 bg-violet-50 px-3 font-medium text-violet-700 hover:bg-violet-100"
+                      role="radio"
+                      aria-checked={Number(input.customBasePackageLimit || 0) > 50}
+                      onClick={() => selectCommercialCapacity('enterprise')}
+                      className={`min-h-11 rounded-xl border px-3 text-sm font-medium transition ${
+                        Number(input.customBasePackageLimit || 0) > 50
+                          ? 'border-violet-300 bg-violet-600 text-white'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50'
+                      }`}
                     >
-                      Usar faixa recomendada
+                      Enterprise
                     </button>
-                  ) : recommendedBaseTier ? (
-                    <span className="text-violet-700">
-                      Recomendada: {recommendedBaseTier.publicName}
-                    </span>
-                  ) : null}
+                  </div>
+                  <p className="mt-2 text-xs font-normal text-slate-500">
+                    10, 20, 30, 40 ou 50 pacientes. Acima disso, preço e capacidade são tratados sob consulta.
+                  </p>
                 </div>
                 {coreItem ? (
-                  <div className="mt-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">
-                        Verto Clínica + ABA
-                      </p>
-                      <p className="mt-1 text-xs font-normal text-slate-500">
-                        Núcleo clínico obrigatório da Verto: pacientes, prontuários,
-                        painéis e portal do paciente. Os adicionais são contratados separadamente.
-                      </p>
+                  <div
+                    className={`mt-4 rounded-xl border p-4 transition ${
+                      coreSelection
+                        ? 'border-violet-200 bg-violet-50/50'
+                        : 'border-slate-200 bg-white'
+                    }`}
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="flex items-start gap-3">
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked={Boolean(coreSelection)}
+                          aria-label={`${coreSelection ? 'Remover' : 'Adicionar'} ${coreItem.publicName}`}
+                          onClick={() => toggleItem(coreItem)}
+                          className={`mt-0.5 flex min-h-10 min-w-10 items-center justify-center rounded-xl border ${
+                            coreSelection
+                              ? 'border-violet-300 bg-violet-600 text-white'
+                              : 'border-slate-200 bg-white text-slate-400'
+                          }`}
+                        >
+                          {coreSelection ? <Check size={17} /> : <Layers3 size={17} />}
+                        </button>
+                        <div>
+                          <p className="text-sm font-medium text-slate-900">
+                            {coreItem.publicName}
+                          </p>
+                          <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
+                            Prontuário/Clínico é independente dos demais módulos e
+                            pode ser contratado ou removido sem alterar Agenda,
+                            Financeiro, Convênios/TISS ou Escolar.
+                          </p>
+                        </div>
+                      </div>
+                      {coreSelection ? (
+                        <span
+                          className={`inline-flex min-h-8 items-center rounded-full border px-3 text-xs font-medium ${coreMarginTraffic.className}`}
+                        >
+                          {coreMarginTraffic.label}
+                        </span>
+                      ) : null}
                     </div>
-                    <span className="inline-flex min-h-10 items-center rounded-xl border border-violet-200 bg-violet-50 px-4 text-sm font-semibold text-violet-700">
-                      Núcleo obrigatório
-                    </span>
                   </div>
                 ) : null}
                 {coreSelection && selectedBaseTier &&
@@ -2099,43 +2209,51 @@ export const SalesModularProposalBuilder = ({
                 (selectedBaseTier.isCustom ||
                   selectedBaseTier.maximumQuantity === null) ? (
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label className={`text-sm font-medium text-slate-700 ${
-                      coreSelection ? '' : 'sm:col-span-2'
-                    }`}>
-                      Limite técnico de capacidade
-                      <input
-                        type="number"
-                        min={1}
-                        max={100000}
-                        step={1}
-                        required
-                        value={input.customBasePackageLimit ?? ''}
-                        onChange={(event) =>
-                          updateInput({
-                            customBasePackageLimit:
-                              event.target.value === ''
-                                ? null
-                                : Math.max(
-                                    1,
-                                    Math.min(
-                                      100000,
-                                      Math.trunc(Number(event.target.value) || 0)
-                                    )
-                                  )
-                          })
-                        }
-                        aria-describedby="custom-base-limit-help"
-                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
-                      />
-                      <span
-                        id="custom-base-limit-help"
-                        className="mt-1 block font-normal leading-5 text-slate-500"
+                    {Number(input.customBasePackageLimit || 0) > 50 ? (
+                      <label className={`text-sm font-medium text-slate-700 ${
+                        coreSelection ? '' : 'sm:col-span-2'
+                      }`}>
+                        Limite Enterprise
+                        <input
+                          type="number"
+                          min={51}
+                          max={100000}
+                          step={1}
+                          required
+                          value={input.customBasePackageLimit ?? ''}
+                          onChange={(event) =>
+                            updateInput({
+                              customBasePackageLimit: Math.max(
+                                51,
+                                currentPackageDemand,
+                                Math.min(
+                                  100000,
+                                  Math.trunc(Number(event.target.value) || 51)
+                                )
+                              )
+                            })
+                          }
+                          aria-describedby="custom-base-limit-help"
+                          className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+                        />
+                        <span
+                          id="custom-base-limit-help"
+                          className="mt-1 block font-normal leading-5 text-slate-500"
+                        >
+                          Acima de 50 pacientes a capacidade é Enterprise e o
+                          preço final permanece sob consulta.
+                        </span>
+                      </label>
+                    ) : (
+                      <div
+                        className={`rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs font-normal leading-5 text-slate-600 ${
+                          coreSelection ? '' : 'sm:col-span-2'
+                        }`}
                       >
-                        {hasVersionedCustomCapacityPolicy
-                          ? 'Capacidade incluída na composição. Blocos cobrem a demanda acima deste limite.'
-                          : 'Capacidade técnica congelada nesta proposta. Este catálogo não possui blocos versionados.'}
-                      </span>
-                    </label>
+                        O limite contratado está congelado pelo bloco selecionado.
+                        Para alterar, escolha 10, 20, 30, 40, 50 ou Enterprise acima.
+                      </div>
+                    )}
                     {coreSelection ? (
                     <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
                       <div className="flex items-center justify-between gap-3">
@@ -2585,12 +2703,6 @@ export const SalesModularProposalBuilder = ({
                         : preview.basePackage.availableQuantity}
                     </span>
                     <span>
-                      Fundação Verto:{' '}
-                      {currency(
-                        preview.platformFoundation.recurringAmountCents
-                      )}
-                    </span>
-                    <span>
                       Módulos após benefícios:{' '}
                       {currency(
                         preview.platformFoundation.moduleRecurringRevenueCents
@@ -2662,15 +2774,23 @@ export const SalesModularProposalBuilder = ({
 
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
                 <h2 className="text-base font-semibold text-slate-900">
-                  Módulos e adicionais
+                  Módulos contratados
                 </h2>
                 <p className="mt-1 text-sm font-normal text-slate-500">
-                  O núcleo clínico Verto é obrigatório. Selecione abaixo apenas
-                  os módulos adicionais necessários para esta clínica.
+                  Os cinco módulos são independentes. Selecione apenas o que a
+                  clínica contratará; nenhum módulo é incluído por dependência comercial.
+                </p>
+                <p className="mt-2 text-xs font-normal text-slate-500">
+                  Semáforo de margem por módulo: verde a partir de 70%, amarelo-laranja
+                  entre 50% e 69,99% e vermelho abaixo de 50%.
                 </p>
                 <div className="mt-4 space-y-3">
                   {catalog.items
-                    .filter((item) => item.itemKey !== 'clinical_core')
+                    .filter(
+                      (item) =>
+                        item.itemKey !== 'clinical_core' &&
+                        isSalesFunctionalModuleItemKey(item.itemKey)
+                    )
                     .map((item) => {
                     const line = input.lines.find(
                       (selection) => selection.itemKey === item.itemKey
@@ -2692,6 +2812,14 @@ export const SalesModularProposalBuilder = ({
                       postBenefitCapacityBlockPhase?.modules.find(
                         (module) => module.itemKey === item.itemKey
                       );
+                    const moduleEconomics = preview?.economics?.items.find(
+                      (economicsItem) =>
+                        economicsItem.itemKey === item.itemKey
+                    );
+                    const marginTraffic = moduleMarginTrafficLight(
+                      moduleEconomics?.postPromotionMarginBasisPoints ??
+                        resultLine?.postPromotion.ebitdaMarginBasisPoints
+                    );
                     return (
                       <div
                         key={item.id}
@@ -2707,7 +2835,6 @@ export const SalesModularProposalBuilder = ({
                             role="checkbox"
                             aria-checked={enabled}
                             aria-label={`${enabled ? 'Remover' : 'Adicionar'} ${item.publicName}`}
-                            disabled={item.isRequired && item.itemKey !== 'clinical_core'}
                             onClick={() => toggleItem(item)}
                             className={`mt-0.5 flex min-h-10 min-w-10 items-center justify-center rounded-xl border ${
                               enabled
@@ -2721,15 +2848,6 @@ export const SalesModularProposalBuilder = ({
                             <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                               <p className="text-sm font-medium text-slate-900">
                                 {item.publicName}
-                                {item.isRequired && item.itemKey !== 'clinical_core' ? (
-                                  <span className="ml-2 text-xs font-normal text-violet-700">
-                                    incluído obrigatoriamente
-                                  </span>
-                                ) : item.itemKey === 'clinical_core' ? (
-                                  <span className="ml-2 text-xs font-normal text-slate-500">
-                                    opcional
-                                  </span>
-                                ) : null}
                               </p>
                               {enabled && preview ? (
                                 <p className="text-sm font-semibold text-slate-900">
@@ -2752,6 +2870,13 @@ export const SalesModularProposalBuilder = ({
                             <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
                               {item.description}
                             </p>
+                            {enabled ? (
+                              <span
+                                className={`mt-2 inline-flex min-h-7 items-center rounded-full border px-2.5 text-xs font-medium ${marginTraffic.className}`}
+                              >
+                                {marginTraffic.label}
+                              </span>
+                            ) : null}
                             {enabled && capacityBlockModule ? (
                               <p className="mt-1.5 text-xs font-medium text-violet-700">
                                 Parcela no bloco de{' '}
@@ -2772,44 +2897,9 @@ export const SalesModularProposalBuilder = ({
                             ) : null}
                             {enabled && line ? (
                               <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                                {item.tiers.length > 0 ? (
+                                {item.itemKey === 'insurance_tiss' ? (
                                   <label className="text-xs font-medium text-slate-600">
-                                    Faixa
-                                    <select
-                                      value={line.tierId || ''}
-                                      onChange={(event) => {
-                                        const tier = item.tiers.find(
-                                          (candidate) =>
-                                            candidate.id === event.target.value
-                                        );
-                                        updateLine(item.itemKey, {
-                                          tierId: event.target.value,
-                                          customRecurringAmountCents:
-                                            customPerPatientPricing
-                                              ? line
-                                                  .customRecurringAmountCents ??
-                                                null
-                                              : tier?.isCustom
-                                                ? 0
-                                                : null
-                                        });
-                                      }}
-                                      className="mt-1 min-h-10 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-800"
-                                    >
-                                      {item.tiers.map((tier) => (
-                                        <option key={tier.id} value={tier.id}>
-                                          {tier.publicName}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                ) : null}
-                                {item.itemKey === 'insurance_tiss' ||
-                                item.itemKey === 'additional_storage' ? (
-                                  <label className="text-xs font-medium text-slate-600">
-                                    {item.itemKey === 'insurance_tiss'
-                                      ? 'Guias por mês'
-                                      : 'Quantidade de blocos'}
+                                    Guias por mês
                                     <input
                                       type="number"
                                       min={1}
@@ -3331,7 +3421,13 @@ export const SalesModularProposalBuilder = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {preview.lines.map((line) => {
+                        {preview.lines
+                          .filter(
+                            (line) =>
+                              line.itemKey !== 'platform_foundation' &&
+                              line.itemKey !== 'onboarding'
+                          )
+                          .map((line) => {
                           const totalCostCents = [
                             line.promotional.directCostCents,
                             line.promotional.transactionAndTaxCostAllocatedCents,
@@ -3597,10 +3693,11 @@ export const SalesModularProposalBuilder = ({
                     <h2 className="text-base font-semibold text-slate-900">
                       Projeções da proposta
                     </h2>
-                    <p className="mt-1 text-sm font-normal text-slate-500">
-                      Implantação reconhecida conforme o parcelamento comercial,
-                      sem criar cobrança na Stripe.
-                    </p>
+                    {preview.oneTimeRevenueCents > 0 ? (
+                      <p className="mt-1 text-sm font-normal text-slate-500">
+                        Valor pontual reconhecido conforme a condição comercial.
+                      </p>
+                    ) : null}
                   </div>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-violet-100 bg-violet-50 p-3">
@@ -3632,7 +3729,9 @@ export const SalesModularProposalBuilder = ({
                         <tr>
                           <th className="px-3 py-2 font-medium">Horizonte</th>
                           <th className="px-3 py-2 font-medium">Receita recorrente</th>
-                          <th className="px-3 py-2 font-medium">Implantação</th>
+                          {preview.oneTimeRevenueCents > 0 ? (
+                            <th className="px-3 py-2 font-medium">Valor pontual</th>
+                          ) : null}
                           <th className="px-3 py-2 font-medium">Desconto acumulado</th>
                           <th className="px-3 py-2 font-medium">
                             EBITDA atribuído
@@ -3651,9 +3750,11 @@ export const SalesModularProposalBuilder = ({
                               <td className="px-3 py-3">
                                 {currency(projection.recurringRevenueCents)}
                               </td>
-                              <td className="px-3 py-3">
-                                {currency(projection.oneTimeRevenueCents)}
-                              </td>
+                              {preview.oneTimeRevenueCents > 0 ? (
+                                <td className="px-3 py-3">
+                                  {currency(projection.oneTimeRevenueCents)}
+                                </td>
+                              ) : null}
                               <td className="px-3 py-3">
                                 {currency(projection.discountImpactCents)}
                               </td>
@@ -3669,21 +3770,21 @@ export const SalesModularProposalBuilder = ({
                       </tbody>
                     </table>
                   </div>
-                  <dl className="mt-4 grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-xl bg-slate-50 p-3">
-                      <dt className="text-xs text-slate-500">
-                        Implantação total
-                      </dt>
-                      <dd className="mt-1 text-sm font-semibold text-slate-900">
-                        {currency(preview.oneTimeRevenueCents)}
-                      </dd>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {input.onboardingInstallments ?? 1}{' '}
-                        {(input.onboardingInstallments ?? 1) === 1
-                          ? 'parcela'
-                          : 'parcelas'}
-                      </p>
-                    </div>
+                  <dl
+                    className={`mt-4 grid gap-3 ${
+                      preview.oneTimeRevenueCents > 0
+                        ? 'sm:grid-cols-3'
+                        : 'sm:grid-cols-2'
+                    }`}
+                  >
+                    {preview.oneTimeRevenueCents > 0 ? (
+                      <div className="rounded-xl bg-slate-50 p-3">
+                        <dt className="text-xs text-slate-500">Valor pontual total</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">
+                          {currency(preview.oneTimeRevenueCents)}
+                        </dd>
+                      </div>
+                    ) : null}
                     <div className="rounded-xl bg-slate-50 p-3">
                       <dt className="text-xs text-slate-500">
                         Preço-alvo de margem
@@ -3720,9 +3821,9 @@ export const SalesModularProposalBuilder = ({
                           Economia da clínica
                         </h2>
                         <p className="mt-1 max-w-2xl text-sm font-normal leading-6 text-slate-600">
-                          A Fundação Verto absorve os custos compartilhados e a tarifa
-                          fixa uma única vez. Cada módulo mostra apenas seu custo e sua
-                          margem incremental.
+                          Custos compartilhados da plataforma e a tarifa fixa são
+                          considerados uma única vez no consolidado. Cada módulo mostra
+                          apenas seu custo direto e sua margem incremental.
                         </p>
                       </div>
                       <span
@@ -5149,7 +5250,13 @@ export const SalesModularProposalBuilder = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {preview.lines.map((line) => (
+                        {preview.lines
+                          .filter(
+                            (line) =>
+                              line.itemKey !== 'platform_foundation' &&
+                              line.itemKey !== 'onboarding'
+                          )
+                          .map((line) => (
                           <tr key={line.lineKey}>
                             <td className="px-3 py-3 font-medium text-slate-800">
                               {line.publicName}
@@ -5295,7 +5402,9 @@ export const SalesModularProposalBuilder = ({
                       <span>Inicial: {currency(checkoutLink.initial_amount_cents)}</span>
                       <span>Promocional: {currency(checkoutLink.promotional_monthly_cents)}/mês</span>
                       <span>Futura: {currency(checkoutLink.future_monthly_cents)}/mês</span>
-                      <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
+                      {checkoutLink.one_time_cents > 0 ? (
+                        <span>Implantação: {currency(checkoutLink.one_time_cents)}</span>
+                      ) : null}
                       <span>Criado em: {new Date(checkoutLink.created_at).toLocaleString('pt-BR')}</span>
                       <span>Expira em: {checkoutLink.expires_at ? new Date(checkoutLink.expires_at).toLocaleString('pt-BR') : 'sem data'}</span>
                       <span>Cliente: {lead?.clinicName || lead?.name || 'não informado'}</span>
