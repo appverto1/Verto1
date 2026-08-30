@@ -1521,11 +1521,19 @@ export function CoordinatorDashboard({
       }
     }
 
+    const sortAlphabetically = (rows: any[]) => rows.slice().sort((left: any, right: any) =>
+      String(left?.name || left?.nome || '').localeCompare(
+        String(right?.name || right?.nome || ''),
+        'pt-BR',
+        { sensitivity: 'base', numeric: true },
+      ),
+    );
+
     if (patientQuickFilter === "birthdaysToday") {
-      return filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient));
+      return sortAlphabetically(filteredPatients.filter((patient: any) => isBirthdayTodayPatient(patient)));
     }
 
-    return filteredPatients;
+    return sortAlphabetically(filteredPatients);
   }, [isTherapist, patientQuickFilter, patientTherapistFilter, roleScopedPatients, patientSchoolFilter, schoolFilteredPatientRows, therapistFilterOptions]);
 
   const visiblePatientsWithoutQuickFilter = useMemo(() => {
