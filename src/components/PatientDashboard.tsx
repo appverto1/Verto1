@@ -2424,8 +2424,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <p className="mt-1 text-sm font-medium text-white/80">Atualize foto, nome, endereço e notificações do dispositivo.</p>
             </div>
             <button
-              onClick={() => setIsSettingsOpen(false)}
-              className="rounded-2xl bg-white/15 p-2 text-white transition hover:bg-white/25"
+              type="button"
+              aria-label="Fechar configurações"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setIsSettingsOpen(false);
+              }}
+              className="relative z-30 inline-flex h-11 w-11 shrink-0 touch-manipulation items-center justify-center rounded-2xl bg-white/15 p-2 text-white transition hover:bg-white/25"
             >
               <X size={20} />
             </button>
@@ -3886,7 +3892,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             {isFamilyLogOpen && (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
                 <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative">
-                  <button onClick={() => setIsFamilyLogOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button>
+                  <button type="button" aria-label="Fechar diário da família" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setIsFamilyLogOpen(false); }} className="absolute top-4 right-4 z-30 inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl text-gray-400 hover:bg-gray-50 hover:text-gray-600" > <X size={24} /> </button>
                   <div className="text-center mb-6">
                     <div className="w-16 h-16 mx-auto bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center text-3xl mb-3"> 🏠 </div>
                     <h3 className="text-xl font-bold text-gray-800 tracking-tight">Diário da Família</h3>
@@ -4126,7 +4132,7 @@ ${interventionImages.join('\n')}` : ''
       {isMessagesOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/30 backdrop-blur-sm animate-fade-in" onClick={() => setIsMessagesOpen(false)}>
           <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl animate-pop relative" onClick={e => e.stopPropagation()}>
-            <button onClick={() => setIsMessagesOpen(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"><X size={20}/></button>
+            <button type="button" aria-label="Fechar mensagens" onClick={(event) => { event.preventDefault(); event.stopPropagation(); setIsMessagesOpen(false); }} className="absolute top-4 right-4 z-30 inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl text-gray-400 hover:bg-gray-50 hover:text-gray-600"><X size={20}/></button>
             <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2 tracking-tight"><BookOpen className="text-[#7a32fc]"/> Mensagens do Terapeuta</h2>
             <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
               {portalSharedNotes.length > 0 ? portalSharedNotes.map((note: any) => (
@@ -4367,7 +4373,7 @@ ${interventionImages.join('\n')}` : ''
       {isMoodModalOpen && selectedMood && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white w-full max-w-sm rounded-[32px] p-6 shadow-2xl animate-pop relative">
-            <button onClick={closeMoodModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button>
+            <button type="button" aria-label="Fechar registro de humor" onClick={(event) => { event.preventDefault(); event.stopPropagation(); closeMoodModal(); }} className="absolute top-4 right-4 z-30 inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl text-gray-400 hover:bg-gray-50 hover:text-gray-600" > <X size={24} /> </button>
             <div className="text-center mb-4">
               {!isConventionalAdult && (
                 <div className="inline-flex items-center gap-2 bg-gray-100 px-4 py-1.5 rounded-full mb-4"> <BatteryFull size={16} className="text-gray-500" /> <span className="text-sm font-semibold text-gray-600">Energia registrada: <span className="text-[#7a32fc]">{selectedMood.value}%</span></span> </div>
@@ -4391,7 +4397,7 @@ ${interventionImages.join('\n')}` : ''
       {selectedTask && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white w-full max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-[32px] p-6 shadow-2xl animate-pop relative">
-            <button onClick={closeTaskModal} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600" > <X size={24} /> </button>
+            <button type="button" aria-label="Fechar tarefa" onClick={(event) => { event.preventDefault(); event.stopPropagation(); closeTaskModal(); }} className="absolute top-4 right-4 z-30 inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl text-gray-400 hover:bg-gray-50 hover:text-gray-600" > <X size={24} /> </button>
             <div className="text-center mb-6">
               <div className={`w-16 h-16 mx-auto rounded-2xl flex items-center justify-center text-3xl mb-3 ${selectedTask.color || 'bg-blue-100 text-blue-600'}`}> {selectedTask.icon || '📋'} </div>
               <h3 className="text-xl font-semibold text-gray-800 tracking-tight">{selectedTask.title}</h3>
