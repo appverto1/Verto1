@@ -470,7 +470,7 @@ async function getAuthHeaders(includeBearer = true) {
   if (!includeBearer) return headers;
 
   try {
-    const session = await ensureFreshSession();
+    const session = await ensureFreshSession({ sessionTimeoutMs: 1200, urlExchangeTimeoutMs: 8000 });
     const token = session?.access_token;
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
