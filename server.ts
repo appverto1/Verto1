@@ -16664,6 +16664,153 @@ async function insertUserProfileWithSchemaFallback(basePayload: Record<string, a
   return { error: lastError, payload };
 }
 
+
+function invalidateAuthUserEmailCache(...emails: unknown[]) {
+  for (const value of emails) {
+    const email = sanitizeEmail(value);
+    if (!email) continue;
+    authUserByEmailCache.delete(email);
+    authUserByEmailInFlight.delete(email);
+  }
+}
+
+async function ensurePatientActivationAuthIdentityFromPatient(patientValue: any): Promise<{ user: any; created: boolean }> {
+  const patient = patientValue && typeof patientValue === 'object' ? patientValue : {};
+  const email = sanitizeEmail(patient?.email);
+  const patientName = sanitizeString(patient?.name, 180) || (email ? email.split('@')[0] : 'Paciente');
+  const patientType = sanitizeString(patient?.type, 80) || 'adult_conventional';
+  const clinicId = isUuid(patient?.clinic_id) ? sanitizeString(patient.clinic_id, 120) : null;
+  if (!email) {
+    const error: any = new Error('PATIENT_AUTH_IDENTITY_EMAIL_REQUIRED');
+    error.code = 'PATIENT_AUTH_IDENTITY_EMAIL_REQUIRED';
+    throw error;
+  }
+
+  const ensurePublicProfile = async (authUser: any) => {
+    const authUserId = sanitizeString(authUser?.id, 120);
+    if (!isUuid(authUserId)) throw new Error('PATIENT_AUTH_IDENTITY_INVALID');
+    const byId = await fetchProfileWithSchemaFallback({ supabase, userId: authUserId, logger: console });
+    if (byId.error) throw byId.error;
+    if (byId.data?.id) return;
+
+    const byEmail = await fetchProfileByEmailWithSchemaFallback({ supabase, email, logger: console });
+    if (byEmail.error) throw byEmail.error;
+    if (byEmail.data?.id && sanitizeString(byEmail.data.id, 120) !== authUserId) {
+      const conflict: any = new Error('PATIENT_AUTH_IDENTITY_INCONSISTENT');
+      conflict.code = 'PATIENT_AUTH_IDENTITY_INCONSISTENT';
+      throw conflict;
+    }
+    if (byEmail.data?.id) return;
+
+    const profileInsert = await insertUserProfileWithSchemaFallback({
+      id: authUserId,
+      email,
+      name: patientName,
+      role: 'patient',
+      type: patientType,
+      clinic_id: clinicId,
+      subscription_status: 'pending',
+      status: 'pending_activation',
+      first_login_completed: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    if (profileInsert.error) {
+      const retryProfile = await fetchProfileWithSchemaFallback({ supabase, userId: authUserId, logger: console });
+      if (!retryProfile.data?.id) throw profileInsert.error;
+    }
+  };
+
+  const existing = await findRecoverableAuthUserByEmail(email);
+  if (existing?.id) {
+    const direct = await withTimeoutOrFallback(
+      supabase.auth.admin.getUserById(existing.id),
+      7000,
+      { data: { user: null }, error: null } as any,
+      'supabase.auth.admin.getUserById.patientActivationRepair'
+    );
+    const directUser = direct?.data?.user || null;
+    if (directUser?.id && sanitizeEmail(directUser.email) === email) {
+      await ensurePublicProfile(directUser);
+      invalidateAuthUserEmailCache(email);
+      authUserByEmailCache.set(email, {
+        user: directUser,
+        expiresAt: Date.now() + AUTH_USER_EMAIL_CACHE_TTL_MS,
+      });
+      return { user: directUser, created: false };
+    }
+    const inconsistent: any = new Error('PATIENT_AUTH_IDENTITY_INCONSISTENT');
+    inconsistent.code = 'PATIENT_AUTH_IDENTITY_INCONSISTENT';
+    throw inconsistent;
+  }
+
+  const profileResult = await fetchProfileByEmailWithSchemaFallback({
+    supabase,
+    email,
+    logger: console,
+  });
+  if (profileResult.error) throw profileResult.error;
+  if (profileResult.data?.id) {
+    const inconsistent: any = new Error('PATIENT_AUTH_IDENTITY_INCONSISTENT');
+    inconsistent.code = 'PATIENT_AUTH_IDENTITY_INCONSISTENT';
+    throw inconsistent;
+  }
+
+  const generatedPassword = `${crypto.randomBytes(16).toString('base64url')}V!9a`;
+  const createResult = await supabase.auth.admin.createUser({
+    email,
+    password: generatedPassword,
+    email_confirm: false,
+    user_metadata: {
+      full_name: patientName,
+      role: 'patient',
+      type: patientType,
+      clinic_id: clinicId,
+      invited_email: email,
+      patient_activation_required: true,
+      first_login_completed: false,
+      repaired_from_patient_record: true,
+    },
+  });
+
+  if (createResult.error) {
+    const message = String(createResult.error?.message || '').toLowerCase();
+    const duplicate = /already\s+(registered|exists)|user\s+already\s+registered|email.*already/i.test(message);
+    if (duplicate) {
+      invalidateAuthUserEmailCache(email);
+      const recovered = await findAuthUserByEmail(email);
+      if (recovered?.id) {
+        await ensurePublicProfile(recovered);
+        return { user: recovered, created: false };
+      }
+      const conflict: any = new Error('PATIENT_AUTH_IDENTITY_CONFLICT');
+      conflict.code = 'PATIENT_AUTH_IDENTITY_CONFLICT';
+      throw conflict;
+    }
+    throw createResult.error;
+  }
+
+  const createdUser = createResult.data?.user || null;
+  if (!createdUser?.id) {
+    const missing: any = new Error('PATIENT_AUTH_IDENTITY_CREATE_FAILED');
+    missing.code = 'PATIENT_AUTH_IDENTITY_CREATE_FAILED';
+    throw missing;
+  }
+
+  await ensurePublicProfile(createdUser);
+  invalidateAuthUserEmailCache(email);
+  authUserByEmailCache.set(email, {
+    user: createdUser,
+    expiresAt: Date.now() + AUTH_USER_EMAIL_CACHE_TTL_MS,
+  });
+  console.warn('[Patients] Identidade Auth ausente foi reconstruída a partir do cadastro canônico do paciente.', {
+    patientId: sanitizeString(patient?.id, 120) || null,
+    email: maskEmail(email),
+    authUserId: sanitizeString(createdUser.id, 120),
+  });
+  return { user: createdUser, created: true };
+}
+
 function compactClinicSettingsForSession(settings: any) {
   if (!settings || typeof settings !== 'object') return null;
   return cleanObject({
@@ -40490,14 +40637,21 @@ async function startServer() {
         if (!patientEmail) {
           return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
         }
-        const authUser = await findRecoverableAuthUserByEmail(patientEmail);
-        if (!authUser?.id) {
-          return res.status(409).json({
-            success: false,
-            code: 'PATIENT_AUTH_IDENTITY_MISSING',
-            error: 'A identidade de acesso deste paciente precisa ser sincronizada antes do reenvio.',
-          });
+        let authIdentity: { user: any; created: boolean };
+        try {
+          authIdentity = await ensurePatientActivationAuthIdentityFromPatient(patient);
+        } catch (identityError: any) {
+          const identityCode = sanitizeString(identityError?.code || identityError?.message, 80);
+          if (['PATIENT_AUTH_IDENTITY_INCONSISTENT', 'PATIENT_AUTH_IDENTITY_CONFLICT'].includes(identityCode)) {
+            return res.status(409).json({
+              success: false,
+              code: identityCode,
+              error: 'O cadastro possui um conflito de identidade de acesso que precisa de revisão antes do reenvio.',
+            });
+          }
+          throw identityError;
         }
+        const authUser = authIdentity.user;
         const profileResult = await fetchProfileWithSchemaFallback({
           supabase,
           userId: authUser.id,
@@ -40565,9 +40719,12 @@ async function startServer() {
 
         return res.json({
           success: true,
+          identityRepaired: authIdentity.created,
           message: sent
-            ? 'E-mail de ativação reenviado com sucesso.'
-            : 'Reenvio solicitado, mas houve falha no envio do e-mail. Tente novamente.'
+            ? (authIdentity.created
+                ? 'Identidade de acesso sincronizada e e-mail de ativação enviado com sucesso.'
+                : 'E-mail de ativação reenviado com sucesso.')
+            : 'A identidade de acesso foi sincronizada, mas houve falha no envio do e-mail. Tente novamente.'
         });
       } catch (error: any) {
         console.error('[Patients] resend activation error:', error);
@@ -40703,8 +40860,15 @@ async function startServer() {
       const patients = isExplicitDemoUser(req.session.user)
         ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
         : result.data || [];
+      const patientsAlphabetical = patients.slice().sort((left: any, right: any) =>
+        sanitizeString(left?.name || left?.nome, 180).localeCompare(
+          sanitizeString(right?.name || right?.nome, 180),
+          'pt-BR',
+          { sensitivity: 'base', numeric: true }
+        )
+      );
 
-      const returnedPatientIds = patients
+      const returnedPatientIds = patientsAlphabetical
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
       let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
@@ -40740,7 +40904,7 @@ async function startServer() {
 
       return res.json({
         success: true,
-        data: patients.map((patient: any) => {
+        data: patientsAlphabetical.map((patient: any) => {
           const serialized = serializePatientMediaForClient(patient);
           const withProfessionalLinks = activeProfessionalLinksByPatient
             ? {
