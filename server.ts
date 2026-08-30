@@ -2954,6 +2954,10 @@ function normalizeSalesModularProposalRequest(
       "manual_module_prices"
         ? "manual_module_prices"
         : "catalog",
+    commercialCapacityBasis:
+      sanitizeString(source.commercialCapacityBasis, 40) === "current_patients"
+        ? "current_patients"
+        : "projected_demand",
     // Snapshots anteriores à Fundação não possuem estes campos. Para não
     // recalcular propostas históricas com uma cobrança nova, ausência significa
     // Fundação manual zero. A interface atual envia automatic_target de forma
@@ -25256,23 +25260,84 @@ async function startServer() {
     ) {
       throw new Error("MODULAR_CAPACITY_SNAPSHOT_INVALID");
     }
+    const presentationVersion = Number(
+      frozenResults?.commercialPresentationVersion
+      ?? modularSnapshot?.commercialPresentationVersion
+      ?? 1,
+    );
+    const automaticUpgradeMaxPatients =
+      acceptedCapacityLimitPatients <= 50 ? 50 : acceptedCapacityLimitPatients;
+    const gracePeriodDays =
+      presentationVersion >= SALES_CUSTOMER_FACING_PRESENTATION_VERSION
+        ? 0
+        : Number(capacity.policy.gracePeriodDays);
+    const acceptedMonthlyAmountCents = Math.max(
+      0,
+      Math.floor(Number(
+        frozenResults?.promotionalRecurringRevenueCents
+        ?? modularSnapshot?.promotionalRecurringRevenueCents
+        ?? 0,
+      ) || 0),
+    );
+    const acceptedPostPromotionMonthlyAmountCents = Math.max(
+      0,
+      Math.floor(Number(
+        frozenResults?.postPromotionRecurringRevenueCents
+        ?? modularSnapshot?.postPromotionRecurringRevenueCents
+        ?? acceptedMonthlyAmountCents,
+      ) || acceptedMonthlyAmountCents),
+    );
+    const capacityPriceLadder = acceptedCapacityLimitPatients <= 50
+      ? [10, 20, 30, 40, 50]
+          .filter((limitPatients) => limitPatients >= acceptedCapacityLimitPatients)
+          .map((limitPatients) => {
+            const additionalBlocks = Math.max(
+              0,
+              Math.ceil(
+                (limitPatients - acceptedCapacityLimitPatients) / blockSizePatients,
+              ),
+            );
+            return {
+              limitPatients,
+              monthlyAmountCents:
+                acceptedMonthlyAmountCents + additionalBlocks * effectiveBlockPriceCents,
+              postPromotionMonthlyAmountCents:
+                acceptedPostPromotionMonthlyAmountCents +
+                additionalBlocks * effectiveBlockPriceCents,
+            };
+          })
+      : [{
+          limitPatients: acceptedCapacityLimitPatients,
+          monthlyAmountCents: acceptedMonthlyAmountCents,
+          postPromotionMonthlyAmountCents: acceptedPostPromotionMonthlyAmountCents,
+        }];
     return {
       acceptedCapacityLimitPatients,
       initialCapacityBlocks,
       initialCapacityMonthlyCents,
       blockSizePatients,
       blockPriceCents: effectiveBlockPriceCents,
-      gracePeriodDays: Number(capacity.policy.gracePeriodDays),
+      gracePeriodDays,
       billingAdjustment: "next_cycle" as const,
       blocksClinicalAccess: false as const,
       sourceSnapshot: {
         schemaVersion: Number(capacity.schemaVersion || 1),
+        commercialPresentationVersion: presentationVersion,
+        commercialCapacityBasis:
+          sanitizeString(frozenResults?.input?.commercialCapacityBasis, 40) === "current_patients"
+            ? "current_patients"
+            : "projected_demand",
         acceptedCapacityLimitPatients,
+        acceptedMonthlyAmountCents,
+        acceptedPostPromotionMonthlyAmountCents,
+        capacityPriceLadder,
+        automaticUpgradeMaxPatients,
+        enterpriseContract: acceptedCapacityLimitPatients > 50,
         initialCapacityBlocks,
         initialCapacityMonthlyCents,
         blockSizePatients,
         blockPriceCents: effectiveBlockPriceCents,
-        gracePeriodDays: Number(capacity.policy.gracePeriodDays),
+        gracePeriodDays,
         billingAdjustment: "next_cycle",
         blocksClinicalAccess: false,
         blockPricingBasis: sanitizeString(capacity.blockPricingBasis, 80) || "catalog_fixed",
@@ -25378,7 +25443,7 @@ async function startServer() {
         sales_checkout_link_id: linkResult.data.id,
         stripe_subscription_id: stripeSubscriptionId,
         stripe_schedule_id: sanitizeString(linkResult.data.stripe_schedule_id, 200) || null,
-        billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+        billing_model: "modular_capacity_v1",
         status: "active",
         accepted_capacity_limit_patients: capacity.acceptedCapacityLimitPatients,
         initial_capacity_blocks: capacity.initialCapacityBlocks,
@@ -92355,15 +92420,13 @@ async function startServer() {
         }
         const input: SalesModularProposalInput = {
           ...requestedInput,
+          commercialCapacityBasis: "current_patients",
           platformFoundationPricingMode: "manual",
           platformFoundationMonthlyAmountCents: 0,
           onboardingInstallments: 1,
         };
         const contractedCapacity = Number(input.customBasePackageLimit);
-        const requestedDemand = salesPackageDemand(
-          input.patientQuantity,
-          input.expectedPatientQuantity12Months,
-        );
+        const requestedDemand = Math.max(1, Math.floor(Number(input.patientQuantity) || 1));
         const validStandardCapacity =
           Number.isSafeInteger(contractedCapacity)
           && SALES_STANDARD_PATIENT_CAPACITY_BLOCKS.has(contractedCapacity);

@@ -530,6 +530,7 @@ export const SalesModularProposalBuilder = ({
         const initialBaseTier = customCapacityTier || recommendedTier;
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
+          commercialCapacityBasis: 'current_patients',
           platformFoundationPricingMode: 'manual',
           platformFoundationMonthlyAmountCents: 0,
           patientQuantity,
@@ -617,10 +618,13 @@ export const SalesModularProposalBuilder = ({
       (selectedCommercialTier.isCustom ||
         selectedCommercialTier.maximumQuantity === null)
     ) {
-      const demand = salesPackageDemand(
-        input.patientQuantity,
-        input.expectedPatientQuantity12Months
-      );
+      const demand =
+        input.commercialCapacityBasis === 'current_patients'
+          ? input.patientQuantity
+          : salesPackageDemand(
+              input.patientQuantity,
+              input.expectedPatientQuantity12Months
+            );
       const currentLimit = Number(input.customBasePackageLimit || 0);
       if (currentLimit >= demand) return;
       const nextLimit =
@@ -638,8 +642,8 @@ export const SalesModularProposalBuilder = ({
       setPreparedOffer(null);
       setNotice(
         nextLimit > 50
-          ? `A demanda projetada exige capacidade Enterprise de ${nextLimit} pacientes.`
-          : `A capacidade foi ajustada para o bloco de ${nextLimit} pacientes para comportar a demanda projetada.`
+          ? `A quantidade atual exige capacidade Enterprise de ${nextLimit} pacientes.`
+          : `A capacidade foi ajustada para o bloco de ${nextLimit} pacientes para comportar os pacientes atuais.`
       );
       return;
     }
@@ -712,7 +716,10 @@ export const SalesModularProposalBuilder = ({
     const capacity = calculateCustomCapacity(
       {
         currentPatients: input.patientQuantity,
-          expectedPatients: input.expectedPatientQuantity12Months,
+          expectedPatients:
+            input.commercialCapacityBasis === 'current_patients'
+              ? input.patientQuantity
+              : input.expectedPatientQuantity12Months,
           baseLimitPatients: Number(input.customBasePackageLimit),
           basePriceCents,
         selection: {
@@ -1255,10 +1262,13 @@ export const SalesModularProposalBuilder = ({
       setError('O catálogo ativo não possui faixa personalizada para esta capacidade.');
       return;
     }
-    const minimumCapacity = salesPackageDemand(
-      input.patientQuantity,
-      input.expectedPatientQuantity12Months
-    );
+    const minimumCapacity =
+      input.commercialCapacityBasis === 'current_patients'
+        ? input.patientQuantity
+        : salesPackageDemand(
+            input.patientQuantity,
+            input.expectedPatientQuantity12Months
+          );
     const nextCapacity =
       capacity === 'enterprise'
         ? Math.max(51, minimumCapacity, Number(input.customBasePackageLimit || 0))
@@ -1489,10 +1499,7 @@ export const SalesModularProposalBuilder = ({
 
   const duplicateSimulation = (simulation: SavedModularSimulation) => {
     const snapshotInput = simulation.modular_input_snapshot;
-    const snapshotDemand = salesPackageDemand(
-      snapshotInput.patientQuantity,
-      snapshotInput.expectedPatientQuantity12Months
-    );
+    const snapshotDemand = Math.max(1, snapshotInput.patientQuantity);
     const snapshotRecommended = catalog
       ? recommendSalesPackageTier(catalog, snapshotDemand)
       : null;
@@ -1517,6 +1524,7 @@ export const SalesModularProposalBuilder = ({
       ...snapshotInput,
       trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
       commercialPricingMode: 'manual_module_prices',
+      commercialCapacityBasis: 'current_patients',
       // Duplicar um cenário histórico cria uma nova composição comercial sem
       // expor a infraestrutura como módulo; o snapshot original permanece intacto.
       platformFoundationPricingMode: 'manual',
@@ -1781,10 +1789,12 @@ export const SalesModularProposalBuilder = ({
     (tier) => tier.id === input?.basePackageTierId
   );
   const currentPackageDemand = input
-    ? salesPackageDemand(
-        input.patientQuantity,
-        input.expectedPatientQuantity12Months
-      )
+    ? input.commercialCapacityBasis === 'current_patients'
+      ? Math.max(1, input.patientQuantity)
+      : salesPackageDemand(
+          input.patientQuantity,
+          input.expectedPatientQuantity12Months
+        )
     : 1;
   const hasVersionedCustomCapacityPolicy =
     catalog?.status === 'active' &&
@@ -1823,6 +1833,32 @@ export const SalesModularProposalBuilder = ({
         (preview?.commercialPricing.capacityBlockPhases.length || 1) - 1
       )
     ] || null;
+  const currentCommercialCapacity = Math.max(
+    0,
+    Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
+  );
+  const nextStandardCommercialCapacity =
+    currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
+      ? SALES_PATIENT_CAPACITY_BLOCKS.find(
+          (capacity) => capacity > currentCommercialCapacity
+        ) || null
+      : null;
+  const selectedCommercialModuleNames = input && catalog
+    ? input.lines
+        .filter((line) => isSalesFunctionalModuleItemKey(line.itemKey))
+        .map(
+          (line) =>
+            catalog.items.find((item) => item.itemKey === line.itemKey)?.publicName ||
+            line.itemKey
+        )
+    : [];
+  const nextCommercialMonthlyAmountCents =
+    preview &&
+    nextStandardCommercialCapacity &&
+    currentCapacityBlockPhase?.blockPriceCents != null
+      ? preview.promotionalRecurringRevenueCents +
+        currentCapacityBlockPhase.blockPriceCents
+      : null;
 
   return (
     <div className="fixed inset-0 z-[100] flex justify-end bg-slate-950/45 backdrop-blur-[2px]">
@@ -1980,16 +2016,17 @@ export const SalesModularProposalBuilder = ({
                     <Settings2 size={16} /> Premissas financeiras
                   </button>
                 </div>
-                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
-                  <p className="text-sm font-semibold text-slate-900">
-                    Custos compartilhados da plataforma
-                  </p>
-                  <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
-                    Estes valores continuam compondo o EBITDA e o preço-alvo, mas
-                    não são vendidos como módulo e não aparecem na proposta pública
-                    nem no Checkout. Se houver gap para a meta, ajuste os preços dos módulos contratados.
-                  </p>
-                  <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-4">
+                <details className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/70">
+                  <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium text-slate-700">
+                    Ver custos internos compartilhados
+                  </summary>
+                  <div className="border-t border-slate-200 px-4 pb-4 pt-3">
+                    <p className="text-xs font-normal leading-5 text-slate-600">
+                      Estes valores continuam compondo o EBITDA e o preço-alvo, mas
+                      não são vendidos como módulo e não aparecem na proposta pública
+                      nem no Checkout. Se houver gap para a meta, ajuste os preços dos módulos contratados.
+                    </p>
+                    <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-4">
                     <span>
                       Custo compartilhado:{' '}
                       <strong>{currency(preview?.platformFoundation.sharedCostCents)}</strong>
@@ -2006,8 +2043,9 @@ export const SalesModularProposalBuilder = ({
                       Gap para a meta EBITDA:{' '}
                       <strong>{currency(preview?.platformFoundation.recommendedRecurringAmountCents)}</strong>
                     </span>
+                    </div>
                   </div>
-                </div>
+                </details>
                 <div className="mt-4 grid gap-4 sm:grid-cols-3">
                   <label className="text-sm font-medium text-slate-700">
                     Pacientes atuais
@@ -2023,7 +2061,7 @@ export const SalesModularProposalBuilder = ({
                     />
                   </label>
                   <label className="text-sm font-medium text-slate-700">
-                    Previsão em 12 meses
+                    Previsão em 12 meses · análise interna
                     <input
                       type="number"
                       min={1}
@@ -2039,6 +2077,9 @@ export const SalesModularProposalBuilder = ({
                       }
                       className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
                     />
+                    <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
+                      Serve para projeção de receita e custos. Não aumenta o plano contratado hoje.
+                    </span>
                   </label>
                   <div className="text-sm font-medium text-slate-700">
                     Capacidade contratada
@@ -4503,7 +4544,7 @@ export const SalesModularProposalBuilder = ({
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-base font-semibold text-slate-900">
-                    Resumo financeiro da proposta
+                    Resumo comercial
                   </h2>
                   {preview ? (
                     <span
@@ -4535,8 +4576,59 @@ export const SalesModularProposalBuilder = ({
                         </p>
                       ) : null}
                     </div>
+                    <dl className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <dt className="font-normal text-slate-500">Pacientes ativos</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">
+                          {input.patientQuantity.toLocaleString('pt-BR')}
+                        </dd>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <dt className="font-normal text-slate-500">Plano da proposta</dt>
+                        <dd className="mt-1 text-sm font-semibold text-slate-900">
+                          {currentCommercialCapacity > 50
+                            ? `Enterprise · ${currentCommercialCapacity}`
+                            : `Até ${currentCommercialCapacity} pacientes`}
+                        </dd>
+                      </div>
+                      <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                        <dt className="font-normal text-slate-500">Módulos contratados</dt>
+                        <dd className="mt-1 font-medium leading-5 text-slate-900">
+                          {selectedCommercialModuleNames.join(' · ') || 'Nenhum módulo selecionado'}
+                        </dd>
+                      </div>
+                      {nextStandardCommercialCapacity ? (
+                        <div className="col-span-2 rounded-xl border border-violet-200 bg-violet-50/60 p-3">
+                          <dt className="font-normal text-violet-700">Próximo upgrade automático</dt>
+                          <dd className="mt-1 font-medium leading-5 text-violet-950">
+                            Ao chegar a {currentCommercialCapacity + 1} pacientes, o plano passa para até{' '}
+                            {nextStandardCommercialCapacity}.
+                            {nextCommercialMonthlyAmountCents == null
+                              ? ''
+                              : ` Próxima mensalidade: ${currency(nextCommercialMonthlyAmountCents)}.`}
+                          </dd>
+                          <p className="mt-1 font-normal leading-5 text-violet-700">
+                            Sem cobrança proporcional no meio do ciclo; o novo valor entra na próxima renovação.
+                          </p>
+                        </div>
+                      ) : currentCommercialCapacity === 50 ? (
+                        <div className="col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                          <dt className="font-normal text-amber-700">Próximo passo</dt>
+                          <dd className="mt-1 font-medium leading-5 text-amber-950">
+                            A partir do 51º paciente, a conta entra em revisão Enterprise; nenhum preço é criado automaticamente.
+                          </dd>
+                        </div>
+                      ) : null}
+                    </dl>
                     {promotionalMoneyFlow ? (
-                      <>
+                      <details className="mt-4 rounded-xl border border-slate-200 bg-white">
+                        <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-slate-900">
+                          Ver custos e margem
+                          <span className="ml-2 text-xs font-normal text-slate-500">
+                            DRE, Stripe, impostos, custos e indicadores internos
+                          </span>
+                        </summary>
+                        <div className="border-t border-slate-200 px-3 pb-3">
                         <dl className="mt-4 grid grid-cols-2 gap-3">
                           {[
                             {
@@ -4642,7 +4734,6 @@ export const SalesModularProposalBuilder = ({
                         </dl>
 
                         <details
-                          open
                           className="mt-4 rounded-xl border border-slate-200 bg-white"
                         >
                           <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-slate-900">
@@ -4899,7 +4990,8 @@ export const SalesModularProposalBuilder = ({
                             ))}
                           </dl>
                         </details>
-                      </>
+                        </div>
+                      </details>
                     ) : null}
                     {preview.rating === 'attention' ||
                     preview.rating === 'not_recommended' ? (
@@ -5215,13 +5307,12 @@ export const SalesModularProposalBuilder = ({
               </section>
 
               {preview ? (
-                <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-                  <div className="border-b border-slate-200 px-4 py-3">
-                    <h2 className="text-sm font-semibold text-slate-900">
-                      Resultado interno por módulo
-                    </h2>
-                  </div>
-                  <div className="max-h-[420px] overflow-auto">
+                <details className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-slate-900">
+                    Resultado interno por módulo
+                    <span className="ml-2 text-xs font-normal text-slate-500">Detalhes técnicos</span>
+                  </summary>
+                  <div className="max-h-[420px] overflow-auto border-t border-slate-200">
                     <table className="min-w-[1380px] w-full text-left text-xs">
                       <thead className="sticky top-0 bg-slate-50 text-slate-500">
                         <tr>
@@ -5352,7 +5443,7 @@ export const SalesModularProposalBuilder = ({
                       </tbody>
                     </table>
                   </div>
-                </section>
+                </details>
               ) : null}
 
               {error ? (

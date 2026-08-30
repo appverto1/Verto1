@@ -184,6 +184,7 @@ export type SalesModularLineSelection = {
 
 export type SalesModularProposalInput = {
   commercialPricingMode?: 'catalog' | 'manual_module_prices';
+  commercialCapacityBasis?: 'current_patients' | 'projected_demand';
   platformFoundationPricingMode?: SalesPlatformFoundationPricingMode;
   platformFoundationMonthlyAmountCents?: number | null;
   patientQuantity: number;
@@ -949,6 +950,19 @@ export const salesPackageDemand = (
   integer(expectedPatientQuantity12Months, 1)
 );
 
+export const salesContractedCapacityDemand = (
+  input: Pick<
+    SalesModularProposalInput,
+    'patientQuantity' | 'expectedPatientQuantity12Months' | 'commercialCapacityBasis'
+  >
+) =>
+  input.commercialCapacityBasis === 'current_patients'
+    ? Math.max(1, integer(input.patientQuantity, 1))
+    : salesPackageDemand(
+        input.patientQuantity,
+        input.expectedPatientQuantity12Months
+      );
+
 export function isSalesPackageTierCompatible(
   catalog: SalesPricingCatalogSnapshot,
   tierId: string | null | undefined,
@@ -986,12 +1000,10 @@ export function resolveSalesPackageTierSelection(
     | 'expectedPatientQuantity12Months'
     | 'basePackageTierId'
     | 'basePackageSelectionMode'
+    | 'commercialCapacityBasis'
   >
 ): SalesPackageTierSelectionResolution {
-  const demand = salesPackageDemand(
-    input.patientQuantity,
-    input.expectedPatientQuantity12Months
-  );
+  const demand = salesContractedCapacityDemand(input);
   const recommendedTier = recommendSalesPackageTier(catalog, demand);
   const requestedMode = input.basePackageSelectionMode === 'manual'
     ? 'manual'
@@ -1018,10 +1030,7 @@ export function applySalesPackageTierSelection(
   tier: SalesPricingCatalogTier,
   mode: 'automatic' | 'manual'
 ): SalesModularProposalInput {
-  const demand = salesPackageDemand(
-    input.patientQuantity,
-    input.expectedPatientQuantity12Months
-  );
+  const demand = salesContractedCapacityDemand(input);
   const customBasePackageLimit = tier.isCustom || tier.maximumQuantity === null
     ? Number.isInteger(input.customBasePackageLimit)
       ? Number(input.customBasePackageLimit)
@@ -1113,6 +1122,14 @@ export function validateSalesModularProposalInput(
     )
   ) {
     errors.push('commercialPricingMode');
+  }
+  if (
+    input.commercialCapacityBasis !== undefined &&
+    !['current_patients', 'projected_demand'].includes(
+      input.commercialCapacityBasis
+    )
+  ) {
+    errors.push('commercialCapacityBasis');
   }
   if (
     input.platformFoundationPricingMode !== undefined &&
@@ -2580,10 +2597,7 @@ export function calculateSalesModularProposal(
     (tier) => tier.id === input.basePackageTierId
   );
   if (!baseTier) throw new Error('PRICING_TIER_NOT_FOUND:clinical_core');
-  const demand = salesPackageDemand(
-    input.patientQuantity,
-    input.expectedPatientQuantity12Months
-  );
+  const demand = salesContractedCapacityDemand(input);
   const isCustomBaseTier = baseTier.isCustom || baseTier.maximumQuantity === null;
   const selections = [...input.lines];
   const coreSelections = selections.filter(
@@ -2634,7 +2648,10 @@ export function calculateSalesModularProposal(
     ? calculateCustomCapacity(
         {
           currentPatients: input.patientQuantity,
-          expectedPatients: input.expectedPatientQuantity12Months,
+          expectedPatients:
+            input.commercialCapacityBasis === 'current_patients'
+              ? input.patientQuantity
+              : input.expectedPatientQuantity12Months,
           baseLimitPatients: Number(input.customBasePackageLimit),
           basePriceCents: perPatientPricingEnabled
             ? Math.round(
@@ -2902,7 +2919,10 @@ export function calculateSalesModularProposal(
     capacity = calculateCustomCapacity(
       {
         currentPatients: input.patientQuantity,
-        expectedPatients: input.expectedPatientQuantity12Months,
+        expectedPatients:
+          input.commercialCapacityBasis === 'current_patients'
+            ? input.patientQuantity
+            : input.expectedPatientQuantity12Months,
         baseLimitPatients: Number(input.customBasePackageLimit),
         basePriceCents:
           selectedPerPatientTotal === null
