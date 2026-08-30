@@ -1346,6 +1346,98 @@ async function syncModularCapacityBillingContract(params: {
   const effectiveLimit =
     contract.acceptedCapacityLimitPatients
     + contract.billedAdditionalBlocks * contract.blockSizePatients;
+  const configuredAutomaticUpgradeMax = toSafeInteger(
+    contract.sourceSnapshot?.automaticUpgradeMaxPatients
+  );
+  const automaticUpgradeMaxPatients =
+    configuredAutomaticUpgradeMax &&
+    configuredAutomaticUpgradeMax >= contract.acceptedCapacityLimitPatients
+      ? configuredAutomaticUpgradeMax
+      : contract.acceptedCapacityLimitPatients <= 50
+        ? 50
+        : contract.acceptedCapacityLimitPatients;
+  if (activePatients > automaticUpgradeMaxPatients) {
+    const standardAdditionalBlocks = Math.max(
+      contract.billedAdditionalBlocks,
+      Math.ceil(
+        Math.max(
+          automaticUpgradeMaxPatients - contract.acceptedCapacityLimitPatients,
+          0
+        ) / contract.blockSizePatients
+      )
+    );
+    let stripeSync: Awaited<ReturnType<typeof syncModularCapacityStripeAmount>> | null = null;
+    if (standardAdditionalBlocks > contract.billedAdditionalBlocks) {
+      stripeSync = await syncModularCapacityStripeAmount({
+        stripe: params.stripe,
+        contract,
+        subscription,
+        targetAdditionalBlocks: standardAdditionalBlocks,
+        idempotencyKey: params.idempotencyKey
+      });
+    }
+    const nowIso = new Date().toISOString();
+    const effectiveStandardLimit =
+      contract.acceptedCapacityLimitPatients
+      + standardAdditionalBlocks * contract.blockSizePatients;
+    await patchModularCapacityBillingContract(params.supabase, contract.id, {
+      billed_additional_blocks: standardAdditionalBlocks,
+      last_active_patient_count: activePatients,
+      overage_started_at: null,
+      grace_expires_at: null,
+      last_capacity_sync_error: null,
+      ...(stripeSync
+        ? {
+            last_capacity_sync_at: nowIso,
+            capacity_product_id: stripeSync.productId,
+            capacity_subscription_item_id: stripeSync.subscriptionItemId,
+            capacity_price_id: stripeSync.priceId,
+            stripe_schedule_id:
+              contract.stripeScheduleId || scheduleIdFromSubscription(subscription) || null
+          }
+        : {})
+    });
+    await patchClinicBillingSafely(params.supabase, params.clinicId, {
+      stripe_customer_id: toSafeString(String(subscription.customer || ''), 200) || undefined,
+      stripe_subscription_id: subscription.id,
+      ...(stripeSync?.subscriptionItemId
+        ? { stripe_subscription_item_id: stripeSync.subscriptionItemId }
+        : {}),
+      ...(stripeSync?.priceId ? { stripe_price_id: stripeSync.priceId } : {}),
+      subscription_status: subscription.status,
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      active_patient_count: activePatients,
+      current_active_patient_count: activePatients,
+      current_active_patient_limit: effectiveStandardLimit,
+      pending_billing_quantity: standardAdditionalBlocks,
+      pending_billing_status: 'enterprise_review_required',
+      ...(stripeSync?.effectiveDate
+        ? { pending_effective_date: stripeSync.effectiveDate }
+        : {}),
+      billing_sync_status: 'enterprise_review_required',
+      billing_sync_error: null,
+      last_billing_sync_at: nowIso,
+      updated_at: nowIso
+    });
+    params.logger.warn('[Stripe Sync] Limite de upgrade automático atingido; revisão Enterprise necessária.', {
+      clinicId: params.clinicId,
+      subscriptionId: subscription.id,
+      activePatients,
+      automaticUpgradeMaxPatients,
+      effectiveStandardLimit,
+      trigger: params.trigger
+    });
+    return {
+      success: true,
+      activePatients,
+      billableQuantity: standardAdditionalBlocks,
+      synced: true,
+      subscriptionId: subscription.id,
+      subscriptionItemId:
+        stripeSync?.subscriptionItemId || contract.capacitySubscriptionItemId || undefined,
+      reason: 'enterprise_review_required'
+    };
+  }
   if (activePatients <= effectiveLimit) {
     await patchModularCapacityBillingContract(params.supabase, contract.id, {
       last_active_patient_count: activePatients,
