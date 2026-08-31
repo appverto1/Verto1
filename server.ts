@@ -541,6 +541,10 @@ function validateRequiredEnvForDeploy(): void {
   } catch (error: any) {
     throw new Error(`Ambiente Stripe invalido para deploy: ${sanitizeString(error?.message || String(error), 220)}`);
   }
+
+  if (!String(process.env.RESEND_API_KEY || '').trim()) {
+    console.warn('[Deploy] RESEND_API_KEY ausente: pagamentos continuam preservados e o link direto de ativação permanece disponível, mas e-mails transacionais não serão enviados até a configuração ser corrigida.');
+  }
 }
 
 validateRequiredEnvForDeploy();
@@ -4938,6 +4942,7 @@ type TransactionalEmailParams = {
   templateKind?: ResendTemplateKind;
   templateData?: Record<string, unknown>;
   preferHtml?: boolean;
+  idempotencyKey?: string;
   metadata?: Record<string, unknown>;
 };
 
@@ -4966,7 +4971,8 @@ async function sendTransactionalEmailWithResultSafe(
       from: params.from || OFFICIAL_FROM_NOREPLY,
       replyTo: params.replyTo || OFFICIAL_TRANSACTIONAL_REPLY_TO,
       templateId,
-      templateData: params.templateData
+      templateData: params.templateData,
+      idempotencyKey: params.idempotencyKey
     });
     return {
       sent: true,
@@ -5505,14 +5511,17 @@ function createResendDeliveryError(params: {
 
 async function postResendEmail(
   apiKey: string,
-  payload: Record<string, any>
+  payload: Record<string, any>,
+  idempotencyKey?: string | null
 ): Promise<Response> {
+  const safeIdempotencyKey = sanitizeString(idempotencyKey, 240);
   return fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'User-Agent': 'Verto/1.0'
+      'User-Agent': 'Verto/1.0',
+      ...(safeIdempotencyKey ? { 'Idempotency-Key': safeIdempotencyKey } : {})
     },
     body: JSON.stringify(payload)
   });
@@ -5525,7 +5534,8 @@ async function sendEmailViaResend({
   from,
   replyTo,
   templateId,
-  templateData
+  templateData,
+  idempotencyKey
 }: {
   to: string;
   subject: string;
@@ -5534,6 +5544,7 @@ async function sendEmailViaResend({
   replyTo?: string;
   templateId?: string | null;
   templateData?: Record<string, unknown>;
+  idempotencyKey?: string;
 }): Promise<{
   providerMessageId: string | null;
   deliveryMode: ResendEmailDeliveryMode;
@@ -5570,7 +5581,11 @@ async function sendEmailViaResend({
 
   let deliveryMode: ResendEmailDeliveryMode = templatePayload ? 'template' : 'html';
   let templateFallbackReason: string | null = null;
-  let response = await postResendEmail(apiKey, templatePayload || htmlPayload);
+  let response = await postResendEmail(
+    apiKey,
+    templatePayload || htmlPayload,
+    idempotencyKey,
+  );
 
   if (!response.ok && templatePayload) {
     const templateFailure = await readResendResponseBody(response);
@@ -5587,7 +5602,11 @@ async function sendEmailViaResend({
       ) || null,
       message: templateFallbackReason
     });
-    response = await postResendEmail(apiKey, htmlPayload);
+    response = await postResendEmail(
+      apiKey,
+      htmlPayload,
+      idempotencyKey ? `${idempotencyKey}:html-fallback` : null,
+    );
     deliveryMode = 'html_fallback';
   }
 
@@ -16318,7 +16337,7 @@ async function resolveOnboardingContextForUser(params: {
 
   return {
     onboardingMode,
-    requiresPayment: onboardingMode === 'clinic_owner',
+    requiresPayment: onboardingMode === 'clinic_owner' ? !canAccessDashboard : false,
     canAccessDashboard,
     canEditClinic: onboardingMode === 'clinic_owner' && ['owner', 'admin', 'director', 'coordinator'].includes(role),
     source: isInvited ? 'membership_invitation' : isOwner ? 'clinic_owner' : membership ? 'membership' : 'profile',
@@ -20304,6 +20323,358 @@ async function startServer() {
     return staleClaim || null;
   };
 
+  const prepareSalesActivationAccess = async (params: {
+    offerId: string;
+    leadId: string;
+    checkoutSessionId: string;
+    email: string;
+    clinicLabel?: string | null;
+    attemptEmail?: boolean;
+  }) => {
+    const offerId = sanitizeString(params.offerId, 120);
+    const leadId = sanitizeString(params.leadId, 120);
+    const checkoutSessionId = sanitizeString(params.checkoutSessionId, 200);
+    const email = sanitizeEmail(params.email);
+    if (!isUuid(offerId) || !isUuid(leadId) || !checkoutSessionId || !email) {
+      throw new Error("SALES_ACTIVATION_PREPARATION_INPUT_INVALID");
+    }
+
+    const activationToken = deriveSalesActivationToken(checkoutSessionId);
+    const tokenHash = hashSalesOfferToken(activationToken);
+    const activationExpiresAt = new Date(
+      Date.now() + SALES_ACTIVATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const readActivation = async () => {
+      const result = await supabase
+        .from("pending_activations")
+        .select("id,email,token,used,expires_at,sales_offer_id,sales_lead_id,activation_email_sent_at,activation_email_last_attempt_at,activation_email_error_code,activation_email_attempts")
+        .eq("stripe_checkout_session_id", checkoutSessionId)
+        .eq("source", "sales_assisted_signup")
+        .limit(1)
+        .maybeSingle();
+      if (result.error) throw result.error;
+      return result.data as any;
+    };
+
+    let activation = await readActivation();
+    if (activation?.id) {
+      const existingOfferId = sanitizeString(activation.sales_offer_id, 120);
+      const existingLeadId = sanitizeString(activation.sales_lead_id, 120);
+      if (
+        (existingOfferId && existingOfferId !== offerId)
+        || (existingLeadId && existingLeadId !== leadId)
+      ) {
+        throw new Error("SALES_ACTIVATION_LINKAGE_CONFLICT");
+      }
+    }
+    if (activation?.used === true) {
+      return {
+        activationReady: false,
+        activationPath: null,
+        activationEmailSent: Boolean(activation.activation_email_sent_at),
+        emailErrorCode: sanitizeString(activation.activation_email_error_code, 120) || null,
+        accountActivated: true,
+      };
+    }
+
+    const expired = activation?.expires_at
+      ? new Date(activation.expires_at).getTime() <= Date.now()
+      : true;
+    const linkageNeedsRepair =
+      !activation
+      || sanitizeString(activation.token, 128) !== tokenHash
+      || sanitizeEmail(activation.email) !== email
+      || expired;
+
+    if (activation?.id) {
+      if (linkageNeedsRepair) {
+        const { error: updateError } = await supabase
+          .from("pending_activations")
+          .update({
+            email,
+            token: tokenHash,
+            used: false,
+            source: "sales_assisted_signup",
+            sales_offer_id: offerId,
+            sales_lead_id: leadId,
+            expires_at: activationExpiresAt,
+            ...(expired ? { activation_email_last_attempt_at: null } : {}),
+          })
+          .eq("id", activation.id)
+          .eq("used", false);
+        if (updateError) throw updateError;
+      }
+    } else {
+      const { error: insertError } = await supabase
+        .from("pending_activations")
+        .insert([{
+          email,
+          token: tokenHash,
+          used: false,
+          source: "sales_assisted_signup",
+          sales_offer_id: offerId,
+          sales_lead_id: leadId,
+          stripe_checkout_session_id: checkoutSessionId,
+          expires_at: activationExpiresAt,
+        }]);
+      if (insertError) {
+        activation = await readActivation();
+        if (!activation?.id || activation.used === true) throw insertError;
+        const { error: repairRaceError } = await supabase
+          .from("pending_activations")
+          .update({
+            email,
+            token: tokenHash,
+            sales_offer_id: offerId,
+            sales_lead_id: leadId,
+            expires_at: activationExpiresAt,
+          })
+          .eq("id", activation.id)
+          .eq("used", false);
+        if (repairRaceError) throw repairRaceError;
+      }
+    }
+
+    activation = await readActivation();
+    if (!activation?.id || activation.used === true) {
+      throw new Error("SALES_ACTIVATION_PREPARATION_FAILED");
+    }
+    const storedTokenMatches = sanitizeString(activation.token, 128) === tokenHash;
+    const storedLinkageMatches =
+      sanitizeEmail(activation.email) === email
+      && sanitizeString(activation.sales_offer_id || offerId, 120) === offerId
+      && sanitizeString(activation.sales_lead_id || leadId, 120) === leadId;
+    const storedNotExpired = !activation.expires_at
+      || new Date(activation.expires_at).getTime() > Date.now();
+    if (!storedTokenMatches || !storedLinkageMatches || !storedNotExpired) {
+      throw new Error("SALES_ACTIVATION_PREPARATION_VERIFICATION_FAILED");
+    }
+
+    let activationEmailSent = Boolean(activation.activation_email_sent_at);
+    let emailErrorCode = sanitizeString(activation.activation_email_error_code, 120) || null;
+    const activationEmailAttempts = Math.max(0, Number(activation.activation_email_attempts || 0));
+
+    const { error: preparedStatusError } = await supabase
+      .from("sales_offers")
+      .update({
+        provisioning_status: activationEmailSent ? "pending" : "email_pending",
+        provisioning_error_code: activationEmailSent ? null : emailErrorCode,
+        provisioning_updated_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", offerId)
+      .eq("lead_id", leadId)
+      .eq("status", "paid");
+    if (preparedStatusError) throw preparedStatusError;
+
+    if (!activationEmailSent && params.attemptEmail !== false) {
+      const claim = await claimSalesActivationEmailDelivery(checkoutSessionId);
+      if (claim) {
+        const attemptsBeforeSend = Math.max(
+          activationEmailAttempts,
+          Number(claim.activation_email_attempts || 0),
+        );
+        const delivery = await sendTransactionalEmailWithResultSafe({
+          to: email,
+          subject: "Bem-vindo à Verto: conclua sua ativação",
+          html: buildSalesPostPaymentActivationEmail(activationToken),
+          context: "sales_paid_director_activation",
+          from: sanitizeString(process.env.RESEND_FROM_EMAIL, 320) || OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          preferHtml: true,
+          idempotencyKey: `sales-activation:${checkoutSessionId}`,
+          metadata: { offerId, leadId, checkoutSessionId },
+        });
+        const sentAt = new Date().toISOString();
+        if (delivery.sent) {
+          const results = await Promise.all([
+            supabase
+              .from("pending_activations")
+              .update({
+                activation_email_sent_at: sentAt,
+                activation_email_last_attempt_at: sentAt,
+                activation_email_error_code: null,
+                activation_email_attempts: attemptsBeforeSend + 1,
+              })
+              .eq("id", activation.id)
+              .eq("used", false),
+            supabase.from("sales_lead_events").upsert(
+              [{
+                lead_id: leadId,
+                event_type: "activation_sent",
+                metadata: {
+                  offer_id: offerId,
+                  checkout_session_id: checkoutSessionId,
+                  provider: delivery.provider,
+                  provider_message_id: delivery.providerMessageId,
+                  delivery_mode: delivery.deliveryMode,
+                },
+                idempotency_key: `activation-sent:${checkoutSessionId}`,
+              }],
+              { onConflict: "idempotency_key", ignoreDuplicates: true },
+            ),
+            supabase
+              .from("sales_offers")
+              .update({
+                provisioning_status: "pending",
+                provisioning_error_code: null,
+                provisioning_updated_at: sentAt,
+                updated_at: sentAt,
+              })
+              .eq("id", offerId)
+              .eq("lead_id", leadId)
+              .eq("status", "paid"),
+          ]);
+          const firstError = results.find((result: any) => result?.error)?.error;
+          if (firstError) throw firstError;
+          activationEmailSent = true;
+          emailErrorCode = null;
+        } else {
+          emailErrorCode = delivery.errorCode || "ACTIVATION_EMAIL_FAILED";
+          const failureResults = await Promise.all([
+            supabase
+              .from("pending_activations")
+              .update({
+                activation_email_last_attempt_at: sentAt,
+                activation_email_error_code: emailErrorCode,
+                activation_email_attempts: attemptsBeforeSend + 1,
+              })
+              .eq("id", activation.id)
+              .eq("used", false),
+            supabase
+              .from("sales_offers")
+              .update({
+                provisioning_status: "email_pending",
+                provisioning_error_code: emailErrorCode,
+                provisioning_updated_at: sentAt,
+                updated_at: sentAt,
+              })
+              .eq("id", offerId)
+              .eq("lead_id", leadId)
+              .eq("status", "paid"),
+          ]);
+          const failureError = failureResults.find((result: any) => result?.error)?.error;
+          if (failureError) throw failureError;
+          const ownerId = sanitizeString(process.env.SALES_OWNER_USER_ID, 120);
+          if (isUuid(ownerId)) {
+            await persistActivityLog({
+              userId: ownerId,
+              title: "Ativação comercial pendente de envio",
+              content: `Pagamento confirmado para ${sanitizeString(params.clinicLabel, 180) || "cliente Verto"}. O link direto permanece disponível e o e-mail pode ser reenviado.`,
+              type: "sales",
+              action: "sales_activation_email_failed",
+              payload: {
+                leadId,
+                offerId,
+                checkoutSessionId,
+                email: maskEmail(email),
+                emailErrorCode,
+              },
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      activationReady: true,
+      activationPath: `/ativacao-comercial/${encodeURIComponent(activationToken)}`,
+      activationEmailSent,
+      emailErrorCode,
+      accountActivated: false,
+    };
+  };
+
+  const preparePaidDirectorSessionBootstrap = async (params: {
+    offerId: string;
+    leadId: string;
+    checkoutSessionId: string;
+    email: string;
+  }) => {
+    const offerId = sanitizeString(params.offerId, 120);
+    const leadId = sanitizeString(params.leadId, 120);
+    const checkoutSessionId = sanitizeString(params.checkoutSessionId, 200);
+    const email = sanitizeEmail(params.email);
+    if (!isUuid(offerId) || !isUuid(leadId) || !checkoutSessionId || !email) {
+      throw new Error("SALES_DIRECTOR_BOOTSTRAP_INPUT_INVALID");
+    }
+
+    const bootstrapToken = deriveSalesActivationToken(checkoutSessionId);
+    const bootstrapTokenHash = hashSalesOfferToken(bootstrapToken);
+    const expiresAt = new Date(
+      Date.now() + SALES_ACTIVATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const readBootstrap = async () => {
+      const result = await supabase
+        .from("pending_activations")
+        .select("id,email,token,used,expires_at,sales_offer_id,sales_lead_id,stripe_checkout_session_id")
+        .eq("stripe_checkout_session_id", checkoutSessionId)
+        .eq("source", "sales_assisted_signup")
+        .limit(1)
+        .maybeSingle();
+      if (result.error) throw result.error;
+      return result.data as any;
+    };
+
+    let bootstrap = await readBootstrap();
+    if (bootstrap?.used === true) {
+      return { bootstrapReady: false, sessionClaimed: true };
+    }
+
+    const repairPayload = {
+      email,
+      token: bootstrapTokenHash,
+      used: false,
+      source: "sales_assisted_signup",
+      sales_offer_id: offerId,
+      sales_lead_id: leadId,
+      stripe_checkout_session_id: checkoutSessionId,
+      expires_at: expiresAt,
+    };
+
+    if (bootstrap?.id) {
+      const existingOfferId = sanitizeString(bootstrap.sales_offer_id, 120);
+      const existingLeadId = sanitizeString(bootstrap.sales_lead_id, 120);
+      if ((existingOfferId && existingOfferId !== offerId) || (existingLeadId && existingLeadId !== leadId)) {
+        throw new Error("SALES_DIRECTOR_BOOTSTRAP_LINKAGE_CONFLICT");
+      }
+      const { error } = await supabase
+        .from("pending_activations")
+        .update(repairPayload)
+        .eq("id", bootstrap.id)
+        .eq("used", false);
+      if (error) throw error;
+    } else {
+      const { error } = await supabase.from("pending_activations").insert([repairPayload]);
+      if (error) {
+        bootstrap = await readBootstrap();
+        if (!bootstrap?.id || bootstrap.used === true) throw error;
+        const { error: retryError } = await supabase
+          .from("pending_activations")
+          .update(repairPayload)
+          .eq("id", bootstrap.id)
+          .eq("used", false);
+        if (retryError) throw retryError;
+      }
+    }
+
+    bootstrap = await readBootstrap();
+    const ready = Boolean(
+      bootstrap?.id
+      && bootstrap.used !== true
+      && sanitizeEmail(bootstrap.email) === email
+      && sanitizeString(bootstrap.sales_offer_id, 120) === offerId
+      && sanitizeString(bootstrap.sales_lead_id, 120) === leadId
+      && sanitizeString(bootstrap.stripe_checkout_session_id, 200) === checkoutSessionId
+      && sanitizeString(bootstrap.token, 128) === bootstrapTokenHash
+      && (!bootstrap.expires_at || new Date(bootstrap.expires_at).getTime() > Date.now())
+    );
+    if (!ready) throw new Error("SALES_DIRECTOR_BOOTSTRAP_PREPARATION_FAILED");
+    return { bootstrapReady: true, sessionClaimed: false };
+  };
+
   const processSalesAssistedCheckoutCompleted = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
@@ -20534,254 +20905,66 @@ async function startServer() {
       });
     }
 
-    const activationExpiresAt = new Date(
-      Date.now() + SALES_ACTIVATION_TTL_DAYS * 24 * 60 * 60 * 1000,
-    ).toISOString();
-    let activationToken = "";
-    let activationEmailAlreadySent = false;
-    let activationEmailSent = false;
-    let activationEmailAttempts = 0;
-
-    const { data: existingActivation, error: existingActivationError } =
-      await supabase
-        .from("pending_activations")
-        .select("id,activation_email_sent_at,activation_email_attempts")
-        .eq("stripe_checkout_session_id", session.id)
-        .eq("source", "sales_assisted_signup")
-        .limit(1)
-        .maybeSingle();
-    if (existingActivationError) throw existingActivationError;
-
-    activationEmailAlreadySent = Boolean(
-      existingActivation?.activation_email_sent_at,
-    );
-    activationEmailSent = activationEmailAlreadySent;
-    activationEmailAttempts = Math.max(
-      0,
-      Number(existingActivation?.activation_email_attempts || 0),
-    );
-    if (!activationEmailAlreadySent) {
-      activationToken = deriveSalesActivationToken(session.id);
-      const tokenHash = hashSalesOfferToken(activationToken);
-      if (existingActivation?.id) {
-        const { error: updateActivationError } = await supabase
-          .from("pending_activations")
-          .update({
-            email: customerEmail,
-            token: tokenHash,
-            used: false,
-            source: "sales_assisted_signup",
-            sales_offer_id: offerId,
-            sales_lead_id: leadId,
-            expires_at: activationExpiresAt,
-          })
-          .eq("id", existingActivation.id)
-          .eq("used", false);
-        if (updateActivationError) throw updateActivationError;
-      } else {
-        const { error: insertActivationError } = await supabase
-          .from("pending_activations")
-          .insert([
-            {
-              email: customerEmail,
-              token: tokenHash,
-              used: false,
-              source: "sales_assisted_signup",
-              sales_offer_id: offerId,
-              sales_lead_id: leadId,
-              stripe_checkout_session_id: session.id,
-              expires_at: activationExpiresAt,
-            },
-          ]);
-        if (insertActivationError) {
-          const { data: racedActivation, error: racedActivationError } =
-            await supabase
-              .from("pending_activations")
-              .select("id,activation_email_sent_at,activation_email_attempts")
-              .eq("stripe_checkout_session_id", session.id)
-              .eq("source", "sales_assisted_signup")
-              .limit(1)
-              .maybeSingle();
-          if (racedActivationError || !racedActivation)
-            throw insertActivationError;
-          activationEmailAlreadySent = Boolean(
-            racedActivation.activation_email_sent_at,
-          );
-          activationEmailAttempts = Math.max(
-            activationEmailAttempts,
-            Number(racedActivation.activation_email_attempts || 0),
-          );
-          if (!activationEmailAlreadySent) {
-            const { error: rotateError } = await supabase
-              .from("pending_activations")
-              .update({ token: tokenHash, expires_at: activationExpiresAt })
-              .eq("id", racedActivation.id)
-              .eq("used", false);
-            if (rotateError) throw rotateError;
-          }
-        }
-      }
+    const directorEmail =
+      sanitizeString((offer as any).offer_type, 30) === "modular"
+        ? sanitizeEmail((offer as any).contract_email)
+        : customerEmail;
+    if (!directorEmail) {
+      throw new Error("SALES_DIRECTOR_EMAIL_MISSING");
     }
 
-    const { error: activationPreparedStatusError } = await supabase
-      .from("sales_offers")
-      .update({
-        provisioning_status: activationEmailAlreadySent ? "completed" : "email_pending",
-        provisioning_error_code: null,
-        provisioning_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", offerId)
-      .eq("lead_id", leadId)
-      .eq("status", "paid");
-    if (activationPreparedStatusError) throw activationPreparedStatusError;
-
-    if (!activationEmailAlreadySent && activationToken) {
-      const activationEmailClaim = await claimSalesActivationEmailDelivery(
-        session.id,
+    let directorProvisioning: { userId: string; clinicId: string };
+    try {
+      directorProvisioning = await provisionPaidSalesDirectorAccount({
+        email: directorEmail,
+        offerId,
+        leadId,
+        checkoutSessionId: session.id,
+        leadName: lead.name,
+        clinicName: lead.clinic_name,
+      });
+    } catch (provisioningError: any) {
+      const provisioningCode = sanitizeString(
+        provisioningError?.code || provisioningError?.message,
+        120,
       );
-      if (!activationEmailClaim) {
-        activationToken = "";
-      } else {
-        activationEmailAttempts = Math.max(
-          activationEmailAttempts,
-          Number(activationEmailClaim.activation_email_attempts || 0),
-        );
+      if ([
+        "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED",
+        "SALES_ACTIVATION_PROFILE_SCOPE_MISMATCH",
+      ].includes(provisioningCode)) {
+        await supabase
+          .from("sales_offers")
+          .update({
+            provisioning_status: "review_required",
+            provisioning_error_code: provisioningCode,
+            provisioning_updated_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", offerId)
+          .eq("lead_id", leadId)
+          .eq("status", "paid");
+        return {
+          paymentConfirmed: true,
+          accountActivated: false,
+          directorSessionReady: false,
+          reviewRequired: true,
+        };
       }
+      throw provisioningError;
     }
 
-    if (!activationEmailAlreadySent && activationToken) {
-      try {
-        const resend = getResend();
-        const from =
-          sanitizeString(process.env.RESEND_FROM_EMAIL || "", 320) ||
-          OFFICIAL_FROM_NOREPLY;
-        const emailResult = await resend.emails.send(
-          {
-          from,
-          to: customerEmail,
-          subject: "Bem-vindo à Verto: conclua sua ativação",
-          html: buildSalesPostPaymentActivationEmail(activationToken),
-          },
-          { idempotencyKey: `sales-activation:${session.id}` },
-        );
-        if (emailResult.error) {
-          throw new Error(
-            String(
-              emailResult.error.message || JSON.stringify(emailResult.error),
-            ),
-          );
-        }
-
-        const activationSentResults = await Promise.all([
-          supabase
-            .from("pending_activations")
-            .update({
-              activation_email_sent_at: new Date().toISOString(),
-              activation_email_last_attempt_at: new Date().toISOString(),
-              activation_email_error_code: null,
-              activation_email_attempts: activationEmailAttempts + 1,
-            })
-            .eq("stripe_checkout_session_id", session.id)
-            .eq("source", "sales_assisted_signup")
-            .eq("used", false),
-          supabase.from("sales_lead_events").upsert(
-            [
-              {
-                lead_id: leadId,
-                event_type: "activation_sent",
-                metadata: {
-                  offer_id: offerId,
-                  checkout_session_id: session.id,
-                },
-                idempotency_key: `activation-sent:${session.id}`,
-              },
-            ],
-            { onConflict: "idempotency_key", ignoreDuplicates: true },
-          ),
-          supabase
-            .from("sales_offers")
-            .update({
-              provisioning_status: "completed",
-              provisioning_error_code: null,
-              provisioning_updated_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", offerId)
-            .eq("lead_id", leadId)
-            .eq("status", "paid"),
-        ]);
-        const activationSentError = activationSentResults.find(
-          (result: any) => result?.error,
-        )?.error;
-        if (activationSentError) throw activationSentError;
-        activationEmailSent = true;
-      } catch (emailError: any) {
-        console.error(
-          "[Sales Checkout] Pagamento persistido, mas o e-mail de ativação falhou:",
-          {
-            email: maskEmail(customerEmail),
-            message: sanitizeString(
-              emailError?.message || String(emailError),
-              240,
-            ),
-          },
-        );
-        const ownerId = sanitizeString(process.env.SALES_OWNER_USER_ID, 120);
-        if (isUuid(ownerId)) {
-          await persistActivityLog({
-            userId: ownerId,
-            title: "Ativação comercial pendente de envio",
-            content: `Pagamento confirmado para ${sanitizeString(lead.clinic_name || lead.name, 180)}. O e-mail de ativação precisa ser reenviado.`,
-            type: "sales",
-            action: "sales_activation_email_failed",
-            payload: {
-              leadId,
-              offerId,
-              checkoutSessionId: session.id,
-              email: maskEmail(customerEmail),
-            },
-          });
-        }
-        const emailFailureCode = sanitizeString(
-          emailError?.code || emailError?.name || "ACTIVATION_EMAIL_FAILED",
-          120,
-        );
-        const emailFailureResults = await Promise.all([
-          supabase
-            .from("pending_activations")
-            .update({
-              activation_email_last_attempt_at: new Date().toISOString(),
-              activation_email_error_code: emailFailureCode,
-              activation_email_attempts: activationEmailAttempts + 1,
-            })
-            .eq("stripe_checkout_session_id", session.id)
-            .eq("source", "sales_assisted_signup")
-            .eq("used", false),
-          supabase
-            .from("sales_offers")
-            .update({
-              provisioning_status: "email_pending",
-              provisioning_error_code: emailFailureCode,
-              provisioning_updated_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", offerId)
-            .eq("lead_id", leadId)
-            .eq("status", "paid"),
-        ]);
-        const emailFailurePersistenceError = emailFailureResults.find(
-          (result: any) => result?.error,
-        )?.error;
-        if (emailFailurePersistenceError) throw emailFailurePersistenceError;
-      }
-    }
+    const bootstrap = await preparePaidDirectorSessionBootstrap({
+      offerId,
+      leadId,
+      checkoutSessionId: session.id,
+      email: directorEmail,
+    });
 
     if (subscription) {
       try {
         await syncSalesSubscriptionDiscount(subscription);
       } catch (discountError: any) {
-        console.warn("[Sales Checkout] Pagamento e ativacao preservados; sincronizacao de desconto pendente.", {
+        console.warn("[Sales Checkout] Pagamento e acesso do Diretor preservados; sincronizacao de desconto pendente.", {
           offerId,
           leadId,
           message: sanitizeString(discountError?.message || String(discountError), 200),
@@ -20791,8 +20974,15 @@ async function startServer() {
 
     return {
       paymentConfirmed: true,
-      activationPrepared: true,
-      activationEmailSent,
+      accountActivated: true,
+      directorSessionReady: bootstrap.bootstrapReady,
+      sessionClaimed: bootstrap.sessionClaimed,
+      directorUserId: directorProvisioning.userId,
+      directorClinicId: directorProvisioning.clinicId,
+      activationPrepared: false,
+      activationEmailSent: false,
+      activationPath: null,
+      emailErrorCode: null,
     };
   };
 
@@ -24725,7 +24915,7 @@ async function startServer() {
         const { data: offer, error: offerError } = await supabase
           .from("sales_offers")
           .select(
-            "id,lead_id,status,payment_confirmed_at,provisioning_status,provisioning_error_code",
+            "id,lead_id,status,payment_confirmed_at,provisioning_status,provisioning_error_code,offer_type,stripe_subscription_id",
           )
           .eq("public_token_hash", tokenHash)
           .eq("stripe_checkout_session_id", checkoutSessionId)
@@ -24738,47 +24928,77 @@ async function startServer() {
           });
         }
 
-        const { data: activation, error: activationError } = await supabase
-          .from("pending_activations")
-          .select("activation_email_sent_at,used")
-          .eq("source", "sales_assisted_signup")
-          .eq("sales_offer_id", offer.id)
-          .eq("sales_lead_id", offer.lead_id)
-          .eq("stripe_checkout_session_id", checkoutSessionId)
-          .limit(1)
-          .maybeSingle();
-        if (activationError) throw activationError;
+        const [leadResult, bootstrapResult] = await Promise.all([
+          supabase
+            .from("sales_leads")
+            .select("id,converted_user_id,converted_clinic_id")
+            .eq("id", offer.lead_id)
+            .is("deleted_at", null)
+            .maybeSingle(),
+          supabase
+            .from("pending_activations")
+            .select("token,expires_at,used")
+            .eq("source", "sales_assisted_signup")
+            .eq("sales_offer_id", offer.id)
+            .eq("sales_lead_id", offer.lead_id)
+            .eq("stripe_checkout_session_id", checkoutSessionId)
+            .limit(1)
+            .maybeSingle(),
+        ]);
+        if (leadResult.error || bootstrapResult.error) {
+          throw leadResult.error || bootstrapResult.error;
+        }
 
         const paymentConfirmed =
           sanitizeString(offer.status, 40) === "paid" &&
           Boolean(offer.payment_confirmed_at);
-        const activationEmailSent = Boolean(
-          activation?.activation_email_sent_at,
-        );
-        const accountActivated = activation?.used === true;
         const reviewRequired =
-          sanitizeString(offer.provisioning_status, 40) ===
-          "review_required";
+          sanitizeString(offer.provisioning_status, 40) === "review_required";
+        const convertedUserId = sanitizeString(leadResult.data?.converted_user_id, 120);
+        const convertedClinicId = sanitizeString(leadResult.data?.converted_clinic_id, 120);
+        const accountProvisioned = Boolean(
+          paymentConfirmed
+          && !reviewRequired
+          && sanitizeString(offer.provisioning_status, 40) === "completed"
+          && isUuid(convertedUserId)
+          && isUuid(convertedClinicId)
+          && convertedUserId === convertedClinicId,
+        );
+        const bootstrap = bootstrapResult.data as any;
+        const expectedBootstrapToken = paymentConfirmed
+          ? deriveSalesActivationToken(checkoutSessionId)
+          : "";
+        const directorSessionReady = Boolean(
+          accountProvisioned
+          && bootstrap
+          && bootstrap.used !== true
+          && sanitizeString(bootstrap.token, 128) === hashSalesOfferToken(expectedBootstrapToken)
+          && (!bootstrap.expires_at || new Date(bootstrap.expires_at).getTime() > Date.now()),
+        );
+        const sessionClaimed = Boolean(accountProvisioned && bootstrap?.used === true);
         const state = reviewRequired
           ? "review_required"
-          : accountActivated
+          : sessionClaimed
             ? "account_activated"
-            : activationEmailSent
-              ? "activation_email_sent"
+            : directorSessionReady
+              ? "director_ready"
               : paymentConfirmed
-                ? "payment_confirmed"
+                ? "provisioning"
                 : "payment_pending";
 
-        return res.status(state === "payment_pending" ? 202 : 200).json({
+        return res.status(state === "payment_pending" || state === "provisioning" ? 202 : 200).json({
           success: true,
           state,
           paymentConfirmed,
-          activationEmailSent,
-          accountActivated,
+          accountProvisioned,
+          directorSessionReady,
+          sessionClaimed,
+          accountActivated: sessionClaimed,
           reviewRequired,
+          provisioningErrorCode: sanitizeString(offer.provisioning_error_code, 120) || null,
           retryAfterMs:
-            state === "payment_pending" || state === "payment_confirmed"
-              ? 2000
+            state === "payment_pending" || state === "provisioning"
+              ? 1500
               : null,
         });
       } catch (error: any) {
@@ -24789,6 +25009,242 @@ async function startServer() {
           success: false,
           error: "PAYMENT_STATUS_UNAVAILABLE",
         });
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/sales-offers/:token/prepare-activation",
+    publicSalesLeadIpLimiter,
+    publicSalesActivationLimiter,
+    async (req: any, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const token = sanitizeString(req.params?.token, 256);
+      const checkoutSessionId = sanitizeString(
+        req.body?.sessionId || req.body?.session_id,
+        200,
+      );
+      if (token.length < 32 || !checkoutSessionId) {
+        return res.status(400).json({
+          success: false,
+          error: "SALES_DIRECTOR_PROVISIONING_CONTEXT_INVALID",
+        });
+      }
+
+      try {
+        const tokenHash = hashSalesOfferToken(token);
+        const { data: offer, error: offerError } = await supabase
+          .from("sales_offers")
+          .select("id,lead_id,status,provisioning_status,stripe_checkout_session_id")
+          .eq("public_token_hash", tokenHash)
+          .eq("stripe_checkout_session_id", checkoutSessionId)
+          .maybeSingle();
+        if (offerError) throw offerError;
+        if (!offer) {
+          return res.status(404).json({
+            success: false,
+            error: "SALES_DIRECTOR_PROVISIONING_CONTEXT_NOT_FOUND",
+          });
+        }
+        if (sanitizeString(offer.provisioning_status, 40) === "review_required") {
+          return res.status(409).json({
+            success: false,
+            error: "SALES_ACTIVATION_REVIEW_REQUIRED",
+          });
+        }
+
+        const stripe = getStripe();
+        const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
+        const metadata = (session.metadata || {}) as Record<string, string>;
+        if (
+          sanitizeString(metadata.offerId, 120) !== sanitizeString(offer.id, 120)
+          || sanitizeString(metadata.leadId, 120) !== sanitizeString(offer.lead_id, 120)
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: "SALES_CHECKOUT_RECONCILIATION_MISMATCH",
+          });
+        }
+        await ensureModularSubscriptionSchedule(stripe, session);
+        const result: any = await processSalesAssistedCheckoutCompleted(stripe, session);
+        const state = result.reviewRequired
+          ? "review_required"
+          : result.sessionClaimed
+            ? "account_activated"
+            : result.directorSessionReady
+              ? "director_ready"
+              : result.paymentConfirmed
+                ? "provisioning"
+                : "payment_pending";
+        return res.status(state === "payment_pending" || state === "provisioning" ? 202 : 200).json({
+          success: true,
+          state,
+          paymentConfirmed: result.paymentConfirmed === true,
+          accountProvisioned: result.accountActivated === true,
+          directorSessionReady: result.directorSessionReady === true,
+          sessionClaimed: result.sessionClaimed === true,
+          accountActivated: result.sessionClaimed === true,
+          reviewRequired: result.reviewRequired === true,
+          message: result.directorSessionReady
+            ? "Pagamento confirmado. A Verto liberou o acesso de Diretor e os módulos contratados."
+            : result.paymentConfirmed
+              ? "Pagamento confirmado. A Verto está concluindo a liberação do acesso de Diretor."
+              : "Aguardando confirmação final da Stripe.",
+        });
+      } catch (error: any) {
+        console.error("[Sales Director] Falha ao reconciliar provisionamento pós-pagamento.", {
+          checkoutSessionId,
+          code: sanitizeString(error?.code, 120) || null,
+          message: sanitizeString(error?.message || String(error), 240),
+        });
+        return res.status(503).json({
+          success: false,
+          error: "SALES_DIRECTOR_PROVISIONING_FAILED",
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/public/sales-offers/:token/director-session",
+    publicSalesLeadIpLimiter,
+    publicSalesActivationLimiter,
+    async (req: any, res) => {
+      res.setHeader("Cache-Control", "no-store");
+      const token = sanitizeString(req.params?.token, 256);
+      const checkoutSessionId = sanitizeString(
+        req.body?.sessionId || req.body?.session_id,
+        200,
+      );
+      if (token.length < 32 || !checkoutSessionId) {
+        return res.status(400).json({ success: false, error: "SALES_DIRECTOR_SESSION_CONTEXT_INVALID" });
+      }
+
+      try {
+        const tokenHash = hashSalesOfferToken(token);
+        const { data: offer, error: offerError } = await supabase
+          .from("sales_offers")
+          .select("id,lead_id,status,payment_confirmed_at,provisioning_status,offer_type,contract_email,stripe_subscription_id")
+          .eq("public_token_hash", tokenHash)
+          .eq("stripe_checkout_session_id", checkoutSessionId)
+          .maybeSingle();
+        if (offerError) throw offerError;
+        if (
+          !offer
+          || sanitizeString(offer.status, 40) !== "paid"
+          || !offer.payment_confirmed_at
+          || sanitizeString(offer.provisioning_status, 40) !== "completed"
+        ) {
+          return res.status(409).json({ success: false, error: "SALES_DIRECTOR_SESSION_NOT_READY" });
+        }
+
+        const { data: lead, error: leadError } = await supabase
+          .from("sales_leads")
+          .select("id,email,normalized_email,converted_user_id,converted_clinic_id")
+          .eq("id", offer.lead_id)
+          .is("deleted_at", null)
+          .maybeSingle();
+        if (leadError) throw leadError;
+        const userId = sanitizeString(lead?.converted_user_id, 120);
+        const clinicId = sanitizeString(lead?.converted_clinic_id, 120);
+        if (!lead || !isUuid(userId) || !isUuid(clinicId) || userId !== clinicId) {
+          return res.status(409).json({ success: false, error: "SALES_DIRECTOR_SESSION_LINKAGE_INVALID" });
+        }
+
+        const directorEmail = sanitizeString(offer.offer_type, 30) === "modular"
+          ? sanitizeEmail(offer.contract_email)
+          : sanitizeEmail(lead.normalized_email || lead.email);
+        if (!directorEmail) {
+          return res.status(409).json({ success: false, error: "SALES_DIRECTOR_SESSION_EMAIL_MISSING" });
+        }
+
+        const { data: bootstrap, error: bootstrapError } = await supabase
+          .from("pending_activations")
+          .select("id,email,token,used,expires_at")
+          .eq("source", "sales_assisted_signup")
+          .eq("sales_offer_id", offer.id)
+          .eq("sales_lead_id", offer.lead_id)
+          .eq("stripe_checkout_session_id", checkoutSessionId)
+          .limit(1)
+          .maybeSingle();
+        if (bootstrapError) throw bootstrapError;
+        if (!bootstrap || bootstrap.used === true) {
+          return res.status(409).json({
+            success: false,
+            error: bootstrap?.used === true
+              ? "SALES_DIRECTOR_SESSION_ALREADY_CLAIMED"
+              : "SALES_DIRECTOR_SESSION_BOOTSTRAP_MISSING",
+          });
+        }
+        const expectedBootstrapHash = hashSalesOfferToken(
+          deriveSalesActivationToken(checkoutSessionId),
+        );
+        if (
+          sanitizeEmail(bootstrap.email) !== directorEmail
+          || sanitizeString(bootstrap.token, 128) !== expectedBootstrapHash
+          || (bootstrap.expires_at && new Date(bootstrap.expires_at).getTime() <= Date.now())
+        ) {
+          return res.status(409).json({ success: false, error: "SALES_DIRECTOR_SESSION_BOOTSTRAP_INVALID" });
+        }
+
+        if (sanitizeString(offer.offer_type, 30) === "modular") {
+          const subscriptionId = sanitizeString(offer.stripe_subscription_id, 200);
+          if (!subscriptionId) {
+            return res.status(409).json({ success: false, error: "SALES_SUBSCRIPTION_LINKAGE_MISSING" });
+          }
+          await verifySalesDirectorContractAccess({
+            offerId: offer.id,
+            userId,
+            organizationId: clinicId,
+            stripeSubscriptionId: subscriptionId,
+          });
+        }
+
+        const { data: authUserResult, error: authUserError } =
+          await supabase.auth.admin.getUserById(userId);
+        if (authUserError || !authUserResult?.user) throw authUserError || new Error("SALES_DIRECTOR_AUTH_USER_NOT_FOUND");
+        if (sanitizeEmail(authUserResult.user.email) !== directorEmail) {
+          return res.status(409).json({ success: false, error: "SALES_DIRECTOR_AUTH_EMAIL_MISMATCH" });
+        }
+
+        const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
+          type: "magiclink",
+          email: directorEmail,
+        });
+        if (linkError) throw linkError;
+        const otpTokenHash = sanitizeString((linkData as any)?.properties?.hashed_token, 1000);
+        if (!otpTokenHash) throw new Error("SALES_DIRECTOR_SESSION_TOKEN_MISSING");
+
+        await supabase.from("sales_lead_events").upsert(
+          [{
+            lead_id: offer.lead_id,
+            event_type: "lead_updated",
+            metadata: {
+              action: "director_session_issued_after_payment",
+              offer_id: offer.id,
+              checkout_session_id: checkoutSessionId,
+              user_id: userId,
+              clinic_id: clinicId,
+            },
+            idempotency_key: `director-session-issued:${offer.id}:${checkoutSessionId}`,
+          }],
+          { onConflict: "idempotency_key", ignoreDuplicates: true },
+        );
+
+        return res.json({
+          success: true,
+          role: "director",
+          otpType: "magiclink",
+          tokenHash: otpTokenHash,
+          message: "Acesso de Diretor autorizado pela confirmação de pagamento.",
+        });
+      } catch (error: any) {
+        console.error("[Sales Director] Falha ao emitir sessão pós-pagamento.", {
+          checkoutSessionId,
+          code: sanitizeString(error?.code, 120) || null,
+          message: sanitizeString(error?.message || String(error), 240),
+        });
+        return res.status(503).json({ success: false, error: "SALES_DIRECTOR_SESSION_FAILED" });
       }
     },
   );
@@ -25620,6 +26076,199 @@ async function startServer() {
     return created?.id || null;
   };
 
+  async function provisionPaidSalesDirectorAccount(params: {
+    email: string;
+    offerId: string;
+    leadId: string;
+    checkoutSessionId: string;
+    leadName?: string | null;
+    clinicName?: string | null;
+  }): Promise<{ userId: string; clinicId: string }> {
+    const email = sanitizeEmail(params.email);
+    const offerId = sanitizeString(params.offerId, 120);
+    const leadId = sanitizeString(params.leadId, 120);
+    const checkoutSessionId = sanitizeString(params.checkoutSessionId, 200);
+    if (!email || !isUuid(offerId) || !isUuid(leadId) || !checkoutSessionId) {
+      throw new Error("SALES_DIRECTOR_PROVISIONING_INPUT_INVALID");
+    }
+
+    let authUser = await findAuthUserByEmail(email);
+    const ownerName = sanitizeString(params.leadName, 180) || email.split("@")[0];
+    if (authUser?.id) {
+      const existingProfile = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: authUser.id,
+        logger: console,
+      });
+      if (existingProfile.error) throw existingProfile.error;
+      const existingMetadataOfferId = sanitizeString(
+        authUser?.user_metadata?.sales_activation_offer_id,
+        120,
+      );
+      if (existingProfile.data) {
+        const profile = existingProfile.data as any;
+        const profileEmail = sanitizeEmail(profile.email);
+        const profileClinicId = sanitizeString(profile.clinic_id, 120);
+        const profileRole = sanitizeString(profile.role, 40).toLowerCase();
+        const samePartialCommercialAccount =
+          profileEmail === email
+          && (!profileClinicId || profileClinicId === authUser.id)
+          && ["director", "coordinator"].includes(profileRole)
+          && (!existingMetadataOfferId || existingMetadataOfferId === offerId);
+        if (!samePartialCommercialAccount) {
+          const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+          (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+          throw conflict;
+        }
+      } else if (existingMetadataOfferId && existingMetadataOfferId !== offerId) {
+        const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+        (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+        throw conflict;
+      }
+
+      const { data: updatedAuthUser, error: updateAuthError } =
+        await supabase.auth.admin.updateUserById(authUser.id, {
+          email_confirm: true,
+          user_metadata: {
+            ...(authUser.user_metadata || {}),
+            full_name: ownerName,
+            sales_activation_offer_id: offerId,
+            sales_checkout_session_id: checkoutSessionId,
+            sales_paid_director: true,
+            first_login_completed: false,
+          },
+        });
+      if (updateAuthError) throw updateAuthError;
+      authUser = updatedAuthUser?.user || authUser;
+    } else {
+      const { data: createdUser, error: createError } =
+        await supabase.auth.admin.createUser({
+          email,
+          email_confirm: true,
+          user_metadata: {
+            full_name: ownerName,
+            sales_activation_offer_id: offerId,
+            sales_checkout_session_id: checkoutSessionId,
+            sales_paid_director: true,
+            first_login_completed: false,
+          },
+        });
+      if (createError) {
+        const normalized = sanitizeString(createError.message, 240).toLowerCase();
+        if (!normalized.includes("already")) throw createError;
+        authUser = await findAuthUserByEmail(email);
+        if (!authUser?.id) throw createError;
+        const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+        (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+        throw conflict;
+      }
+      authUser = createdUser?.user || null;
+    }
+    if (!authUser?.id) throw new Error("SALES_AUTH_USER_NOT_CREATED");
+
+    const profileResult = await fetchProfileWithSchemaFallback({
+      supabase,
+      userId: authUser.id,
+      logger: console,
+    });
+    if (profileResult.error) throw profileResult.error;
+    if (profileResult.data) {
+      const profile = profileResult.data as any;
+      if (
+        sanitizeEmail(profile.email) !== email
+        || (sanitizeString(profile.clinic_id, 120) && sanitizeString(profile.clinic_id, 120) !== authUser.id)
+      ) {
+        const conflict = new Error("SALES_ACTIVATION_PROFILE_SCOPE_MISMATCH");
+        (conflict as any).code = "SALES_ACTIVATION_PROFILE_SCOPE_MISMATCH";
+        throw conflict;
+      }
+      let updates: Record<string, any> = cleanObject({
+        email,
+        name: ownerName,
+        role: "director",
+        clinic_id: authUser.id,
+        subscription_status: "active",
+        first_login_completed: false,
+        updated_at: new Date().toISOString(),
+      });
+      while (Object.keys(updates).length > 0) {
+        const updateResult = await supabase.from("users").update(updates).eq("id", authUser.id);
+        if (!updateResult.error) break;
+        const missingColumn = extractMissingColumnName(updateResult.error);
+        if (missingColumn && missingColumn in updates && !["email", "name", "role", "clinic_id"].includes(missingColumn)) {
+          delete updates[missingColumn];
+          continue;
+        }
+        throw updateResult.error;
+      }
+    } else {
+      const insertResult = await insertUserProfileWithSchemaFallback({
+        id: authUser.id,
+        email,
+        name: ownerName,
+        role: "director",
+        clinic_id: authUser.id,
+        subscription_status: "active",
+        first_login_completed: false,
+        created_at: new Date().toISOString(),
+      });
+      if (insertResult.error) throw insertResult.error;
+    }
+
+    await ensureClinicAndMembershipForCoordinator(authUser.id, "director");
+    const clinicName = sanitizeString(params.clinicName, 180);
+    if (clinicName) {
+      await patchTableSafely("clinics", { column: "id", value: authUser.id }, {
+        name: clinicName,
+        updated_at: new Date().toISOString(),
+      });
+    }
+
+    const [clinicCheck, membershipCheck] = await Promise.all([
+      supabase.from("clinics").select("id").eq("id", authUser.id).maybeSingle(),
+      supabase
+        .from("clinic_memberships")
+        .select("user_id,clinic_id,role,status")
+        .eq("user_id", authUser.id)
+        .eq("clinic_id", authUser.id)
+        .eq("status", "active")
+        .maybeSingle(),
+    ]);
+    if (
+      clinicCheck.error
+      || !clinicCheck.data
+      || membershipCheck.error
+      || !membershipCheck.data
+      || sanitizeString((membershipCheck.data as any).role, 40).toLowerCase() !== "director"
+    ) {
+      throw new Error("SALES_ACTIVATION_WORKSPACE_PROVISIONING_FAILED");
+    }
+
+    await finalizeSalesActivationForUser({
+      email,
+      userId: authUser.id,
+      clinicId: authUser.id,
+      offerId,
+      leadId,
+      checkoutSessionId,
+      requireActivationRecord: false,
+    });
+
+    const { error: metadataError } = await supabase.auth.admin.updateUserById(authUser.id, {
+      user_metadata: {
+        ...(authUser.user_metadata || {}),
+        full_name: ownerName,
+        sales_activation_offer_id: offerId,
+        sales_checkout_session_id: checkoutSessionId,
+        sales_paid_director: true,
+        first_login_completed: false,
+      },
+    });
+    if (metadataError) throw metadataError;
+
+    return { userId: authUser.id, clinicId: authUser.id };
+  }
+
   async function finalizeSalesActivationForUser(params: {
     email: string;
     userId: string;
@@ -25627,6 +26276,7 @@ async function startServer() {
     offerId: string;
     leadId: string;
     checkoutSessionId: string;
+    requireActivationRecord?: boolean;
   }) {
     const normalizedEmail = sanitizeEmail(params.email);
     const offerId = sanitizeString(params.offerId, 120);
@@ -25645,6 +26295,19 @@ async function startServer() {
 
     let modularContract = false;
     try {
+      const requireActivationRecord = params.requireActivationRecord !== false;
+      const activationLookup = requireActivationRecord
+        ? supabase
+            .from("pending_activations")
+            .select("id,used,expires_at")
+            .eq("email", normalizedEmail)
+            .eq("source", "sales_assisted_signup")
+            .eq("sales_offer_id", offerId)
+            .eq("sales_lead_id", leadId)
+            .eq("stripe_checkout_session_id", checkoutSessionId)
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null });
       const [leadResult, offerResult, activationResult] = await Promise.all([
         supabase
           .from("sales_leads")
@@ -25660,28 +26323,19 @@ async function startServer() {
           .eq("status", "paid")
           .eq("stripe_checkout_session_id", checkoutSessionId)
           .maybeSingle(),
-        supabase
-          .from("pending_activations")
-          .select("id,used,expires_at")
-          .eq("email", normalizedEmail)
-          .eq("source", "sales_assisted_signup")
-          .eq("sales_offer_id", offerId)
-          .eq("sales_lead_id", leadId)
-          .eq("stripe_checkout_session_id", checkoutSessionId)
-          .limit(1)
-          .maybeSingle(),
+        activationLookup,
       ]);
       const readError = [leadResult, offerResult, activationResult].find(
         (result: any) => result?.error,
       )?.error;
       if (readError) throw readError;
-      if (!leadResult.data || !offerResult.data || !activationResult.data)
+      if (!leadResult.data || !offerResult.data || (requireActivationRecord && !activationResult.data))
         return;
       modularContract = sanitizeString(offerResult.data.offer_type, 30) === "modular";
-      const activationExpired = activationResult.data.expires_at
+      const activationExpired = activationResult.data?.expires_at
         ? new Date(activationResult.data.expires_at).getTime() <= Date.now()
         : false;
-      if (activationExpired && activationResult.data.used !== true) {
+      if (activationExpired && activationResult.data?.used !== true) {
         throw new Error("SALES_ACTIVATION_EXPIRED");
       }
 
@@ -25746,6 +26400,27 @@ async function startServer() {
           organizationId: params.clinicId,
           stripeSubscriptionId: subscriptionId,
         });
+        const clinicSubscriptionStatus =
+          sanitizeString(subscription.status, 40).toLowerCase() === "trialing"
+            ? "trialing"
+            : sanitizeString(subscription.status, 40).toLowerCase() === "active"
+              ? "active"
+              : sanitizeString(subscription.status, 40).toLowerCase() === "past_due"
+                ? "past_due"
+                : "subscription_pending";
+        await Promise.all([
+          patchTableSafely("clinics", { column: "id", value: params.clinicId }, {
+            subscription_status: clinicSubscriptionStatus,
+            billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+            stripe_subscription_id: subscriptionId,
+            updated_at: now,
+          }),
+          patchTableSafely("users", { column: "id", value: params.userId }, {
+            subscription_status: clinicSubscriptionStatus,
+            billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+            updated_at: now,
+          }),
+        ]);
         await verifySalesDirectorContractAccess({
           offerId,
           userId: params.userId,
@@ -25754,12 +26429,14 @@ async function startServer() {
         });
       }
 
-      const [activationUpdate, eventUpdate] = await Promise.all([
-        supabase
-          .from("pending_activations")
-          .update({ used: true })
-          .eq("id", activationResult.data.id)
-          .eq("used", false),
+      const activationUpdate = activationResult.data?.id
+        ? await supabase
+            .from("pending_activations")
+            .update({ used: true })
+            .eq("id", activationResult.data.id)
+            .eq("used", false)
+        : { error: null };
+      const [eventUpdate, offerCompletionUpdate] = await Promise.all([
         supabase.from("sales_lead_events").upsert(
           [
             {
@@ -25771,6 +26448,7 @@ async function startServer() {
                 clinic_id: params.clinicId,
                 checkout_session_id: checkoutSessionId,
                 modular_contract: modularContract,
+                activation_channel: requireActivationRecord ? "legacy_activation" : "stripe_payment",
               },
               idempotency_key: conversionKey,
               created_at: now,
@@ -25778,9 +26456,20 @@ async function startServer() {
           ],
           { onConflict: "idempotency_key", ignoreDuplicates: true },
         ),
+        supabase
+          .from("sales_offers")
+          .update({
+            provisioning_status: "completed",
+            provisioning_error_code: null,
+            provisioning_updated_at: now,
+            updated_at: now,
+          })
+          .eq("id", offerId)
+          .eq("lead_id", leadId)
+          .eq("status", "paid"),
       ]);
-      if (activationUpdate.error || eventUpdate.error) {
-        throw activationUpdate.error || eventUpdate.error;
+      if (activationUpdate.error || eventUpdate.error || offerCompletionUpdate.error) {
+        throw activationUpdate.error || eventUpdate.error || offerCompletionUpdate.error;
       }
     } catch (error: any) {
       if (isMissingRelationError(error)) {
@@ -28560,7 +29249,7 @@ async function startServer() {
         ownedCommercialClinicId === sanitizeString(user.id, 120) &&
         safeAuthEmail
       ) {
-        const activationOfferHint = activationFlow
+        const activationOfferHint = activationFlow || authProvider === 'sales_checkout'
           ? sanitizeString((user as any)?.user_metadata?.sales_activation_offer_id, 120)
           : '';
         let pendingSalesActivationQuery = supabase
@@ -46739,11 +47428,14 @@ async function startServer() {
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath, 260);
       const workSchedule = sanitizeProfessionalWorkingSchedule(req.body?.workSchedule || req.body?.work_schedule, sessionDurationMinutes);
       const currentSubscriptionStatus = normalizeClinicAccessStatus(req.session.user?.subscriptionStatus);
+      const clinicSubscriptionStatus = normalizeClinicAccessStatus(context.clinic.subscriptionStatus);
       const nextSubscriptionStatus = isClinicManagedMember
-        ? normalizeClinicAccessStatus(context.clinic.subscriptionStatus) || currentSubscriptionStatus || null
-        : CLINIC_ACCESS_ACTIVE_STATUSES.has(currentSubscriptionStatus)
-          ? currentSubscriptionStatus
-          : 'payment_required';
+        ? clinicSubscriptionStatus || currentSubscriptionStatus || null
+        : CLINIC_ACCESS_ACTIVE_STATUSES.has(clinicSubscriptionStatus)
+          ? clinicSubscriptionStatus
+          : CLINIC_ACCESS_ACTIVE_STATUSES.has(currentSubscriptionStatus)
+            ? currentSubscriptionStatus
+            : 'payment_required';
       const nextBillingModel = isClinicManagedMember
         ? context.clinic.billingModel || req.session.user?.billingModel || null
         : role === 'patient'
@@ -46921,7 +47613,7 @@ async function startServer() {
         if (membershipSettingsError) throw membershipSettingsError;
       }
 
-      if (!isClinicManagedMember && clinicId && (role === 'coordinator' || role === 'admin' || role === 'owner')) {
+      if (!isClinicManagedMember && clinicId && (role === 'director' || role === 'coordinator' || role === 'admin' || role === 'owner')) {
         const { error: clinicUpdateError } = await supabase
           .from('clinics')
           .upsert([{
@@ -47030,7 +47722,7 @@ async function startServer() {
           requiresPayment: context.requiresPayment,
           onboardingContext: req.session.user.onboardingContext,
           user: req.session.user,
-          onboardingState: context.requiresPayment ? 'PAYMENT_REQUIRED' : 'MEMBER_READY'
+          onboardingState: context.requiresPayment ? 'PAYMENT_REQUIRED' : context.onboardingMode === 'clinic_owner' ? 'DIRECTOR_READY' : 'MEMBER_READY'
         });
       });
     } catch (error: any) {
@@ -95700,7 +96392,7 @@ async function startServer() {
               supabase
                 .from("sales_offers")
                 .update({
-                  provisioning_status: "completed",
+                  provisioning_status: "pending",
                   provisioning_error_code: null,
                   provisioning_updated_at: now,
                   updated_at: now,
