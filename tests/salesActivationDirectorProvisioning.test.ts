@@ -18,15 +18,15 @@ const onboardingResolver = server.match(
 )?.[0] || '';
 
 assert.match(activationUi, /verto_intended_role', 'director'/);
-assert.match(activationUi, /data\.session,\s*'director'/);
-assert.doesNotMatch(activationUi, /data\.session,\s*'coordinator'/);
+assert.match(activationUi, /onLogin\(\s*null,\s*'director'/);
+assert.doesNotMatch(activationUi, /onLogin\(\s*null,\s*'coordinator'/);
 
 assert.match(passwordActivation, /role: "director"/);
 assert.match(passwordActivation, /ensureClinicAndMembershipForCoordinator\(authUser\.id, "director"\)/);
 assert.match(passwordActivation, /finalizeSalesActivationForUser\(\{/);
 assert.match(passwordActivation, /offerId: loaded\.offerId/);
 assert.match(passwordActivation, /checkoutSessionId: loaded\.checkoutSessionId/);
-assert.match(passwordActivation, /role: "director",\s*message:/);
+assert.match(passwordActivation, /role: "director"[\s\S]*?modules: loaded\.contractedModules/);
 assert.match(
   passwordActivation,
   /\["director", "coordinator"\]\.includes\(profileRole\)/,

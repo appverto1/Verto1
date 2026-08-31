@@ -24,6 +24,8 @@ type ActivationSummary = {
   clinicName: string | null;
   email: string;
   expiresAt: string | null;
+  role: 'director';
+  modules: Array<{ itemKey: string; publicName: string }>;
 };
 
 const validateActivationPassword = (value: string): string | null => {
@@ -233,6 +235,25 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
                 </div>
               </div>
 
+              <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
+                <p className="text-sm font-semibold text-violet-950">Seu acesso após a ativação</p>
+                <p className="mt-1 text-sm leading-6 text-violet-900">
+                  Você será o <strong>Diretor da clínica</strong>. A Verto liberará somente os módulos contratados nesta proposta.
+                </p>
+                {activation.modules?.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {activation.modules.map((module) => (
+                      <span
+                        key={module.itemKey}
+                        className="rounded-full border border-violet-200 bg-white px-2.5 py-1 text-xs font-medium text-violet-800"
+                      >
+                        {module.publicName}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
               <button
                 type="button"
                 onClick={() => void handleGoogleLogin()}
@@ -240,7 +261,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
                 className="mt-6 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-5 py-3 text-sm font-medium text-slate-800 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <GoogleIcon size={18} />
-                Vincular e entrar com Google
+                Ativar como Diretor e entrar com Google
               </button>
 
               <div className="my-5 flex items-center gap-3" aria-hidden="true">
@@ -355,7 +376,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
                   ? 'Concluindo ativação...'
                   : passwordSaved
                     ? 'Entrar com a senha criada'
-                    : 'Definir senha e criar minha clínica'}
+                    : 'Definir senha e ativar acesso de Diretor'}
               </button>
             </div>
           ) : null}

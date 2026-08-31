@@ -71,6 +71,7 @@ type SavedModularSimulation = {
   scenario_name?: string | null;
   assumption_set_id: string;
   catalog_version_id: string;
+  assumptions_snapshot: SalesAssumptionSnapshot;
   modular_input_snapshot: SalesModularProposalInput;
   results_snapshot: SalesModularProposalResult & {
     commercialReview?: SalesProposalReviewClassification & {
@@ -994,10 +995,24 @@ export const SalesModularProposalBuilder = ({
         0
       )
     : null;
-  const draftTrialDays = normalizeSalesTrialDays(input?.trialDays, 0);
-  const selectedSimulationTrialMismatch =
-    selectedSimulationTrialDays !== null &&
-    selectedSimulationTrialDays !== draftTrialDays;
+  const summaryPreview = selectedSimulation?.results_snapshot || preview;
+  const summaryInput = selectedSimulation?.modular_input_snapshot || input;
+  const summaryAssumptions = selectedSimulation
+    ? selectedSimulation.assumptions_snapshot || null
+    : assumptions;
+  const summaryMoneyFlow = useMemo(() => {
+    if (!summaryPreview || !summaryInput || !summaryAssumptions) return null;
+    try {
+      return buildSalesRecurringMoneyFlow({
+        period: summaryPreview.promotional,
+        assumptions: summaryAssumptions,
+        usageProfile: summaryInput.usageProfile,
+        lines: summaryPreview.lines
+      });
+    } catch {
+      return null;
+    }
+  }, [summaryAssumptions, summaryInput, summaryPreview]);
   const selectedSimulationHasVersionedEconomics =
     validateSalesProfitabilityPolicy(
       selectedSimulation?.results_snapshot?.economics?.policy
@@ -1034,50 +1049,52 @@ export const SalesModularProposalBuilder = ({
     [comparisonIds, simulations]
   );
   const publicPreviewOffer = useMemo<ModularPublicOffer | null>(() => {
-    if (!preview || !input) return null;
+    const previewSource = summaryPreview;
+    const inputSource = summaryInput;
+    if (!previewSource || !inputSource) return null;
     return {
       offerType: 'modular',
-      proposalName: scenarioName || 'Proposta Verto',
+      proposalName: selectedSimulation?.scenario_name || scenarioName || 'Proposta Verto',
       leadName: lead?.name || null,
       clinicName: lead?.clinicName || null,
       currency: 'BRL',
-      initialActivePatientQuantity: input.patientQuantity,
+      initialActivePatientQuantity: inputSource.patientQuantity,
       basePackage: {
-        name: preview.basePackage.name,
-        limitQuantity: preview.basePackage.limitQuantity,
-        includedStorageMb: preview.basePackage.includedStorageMb,
-        capacity: preview.basePackage.capacity
+        name: previewSource.basePackage.name,
+        limitQuantity: previewSource.basePackage.limitQuantity,
+        includedStorageMb: previewSource.basePackage.includedStorageMb,
+        capacity: previewSource.basePackage.capacity
           ? {
-              schemaVersion: preview.basePackage.capacity.schemaVersion,
-              demandPatients: preview.basePackage.capacity.demandPatients,
+              schemaVersion: previewSource.basePackage.capacity.schemaVersion,
+              demandPatients: previewSource.basePackage.capacity.demandPatients,
               baseLimitPatients:
-                preview.basePackage.capacity.baseLimitPatients,
-              basePriceCents: preview.basePackage.capacity.basePriceCents,
-              minimumBlocks: preview.basePackage.capacity.minimumBlocks,
-              selectedBlocks: preview.basePackage.capacity.selectedBlocks,
-              selectionMode: preview.basePackage.capacity.selectionMode,
+                previewSource.basePackage.capacity.baseLimitPatients,
+              basePriceCents: previewSource.basePackage.capacity.basePriceCents,
+              minimumBlocks: previewSource.basePackage.capacity.minimumBlocks,
+              selectedBlocks: previewSource.basePackage.capacity.selectedBlocks,
+              selectionMode: previewSource.basePackage.capacity.selectionMode,
               addedCapacityPatients:
-                preview.basePackage.capacity.addedCapacityPatients,
+                previewSource.basePackage.capacity.addedCapacityPatients,
               totalContractedLimitPatients:
-                preview.basePackage.capacity.totalContractedLimitPatients,
+                previewSource.basePackage.capacity.totalContractedLimitPatients,
               includedStorageMb:
-                preview.basePackage.capacity.includedStorageMb,
+                previewSource.basePackage.capacity.includedStorageMb,
               blocksMonthlyRevenueCents:
-                preview.basePackage.capacity.blocksMonthlyRevenueCents,
+                previewSource.basePackage.capacity.blocksMonthlyRevenueCents,
               effectiveBlockPriceCents:
-                preview.basePackage.capacity.effectiveBlockPriceCents ?? null,
+                previewSource.basePackage.capacity.effectiveBlockPriceCents ?? null,
               blockPricingBasis:
-                preview.basePackage.capacity.blockPricingBasis ||
+                previewSource.basePackage.capacity.blockPricingBasis ||
                 'selected_module_per_patient_prices',
               blockSizePatients:
-                preview.basePackage.capacity.policy.blockSizePatients,
+                previewSource.basePackage.capacity.policy.blockSizePatients,
               gracePeriodDays:
-                preview.basePackage.capacity.policy.gracePeriodDays,
+                previewSource.basePackage.capacity.policy.gracePeriodDays,
               billingAdjustment: 'next_cycle'
             }
           : null
       },
-      items: preview.lines
+      items: previewSource.lines
         .filter(
           (line) =>
             line.itemKey !== 'platform_foundation' &&
@@ -1116,23 +1133,23 @@ export const SalesModularProposalBuilder = ({
         }
       })),
       promotionalMonthlyAmountCents:
-        preview.promotionalRecurringRevenueCents,
+        previewSource.promotionalRecurringRevenueCents,
       postDiscountMonthlyAmountCents:
-        preview.postPromotionRecurringRevenueCents,
-      oneTimeAmountCents: preview.oneTimeRevenueCents,
-      globalDiscountCents: preview.globalDiscountCents,
-      globalDiscountPercentage: input.globalDiscountBasisPoints / 100,
-      discountDurationMonths: input.discountDurationMonths,
-      onboardingInstallments: input.onboardingInstallments ?? 1,
-      publicNotes: publicNotes || null,
+        previewSource.postPromotionRecurringRevenueCents,
+      oneTimeAmountCents: previewSource.oneTimeRevenueCents,
+      globalDiscountCents: previewSource.globalDiscountCents,
+      globalDiscountPercentage: inputSource.globalDiscountBasisPoints / 100,
+      discountDurationMonths: inputSource.discountDurationMonths,
+      onboardingInstallments: inputSource.onboardingInstallments ?? 1,
+      publicNotes: (selectedSimulation?.public_notes ?? publicNotes) || null,
       expiresAt: new Date(
-        Date.now() + input.offerValidityDays * 24 * 60 * 60 * 1000
+        Date.now() + inputSource.offerValidityDays * 24 * 60 * 60 * 1000
       ).toISOString(),
       status: 'preview',
       modularCheckoutEnabled: true,
       stripeReady: true,
-      trialDays: input.trialDays ?? 0,
-      commercialPhases: preview.commercialPhases.map((phase) => ({
+      trialDays: inputSource.trialDays ?? 0,
+      commercialPhases: previewSource.commercialPhases.map((phase) => ({
         phaseNumber: phase.phaseNumber,
         startsAt: phase.startsAt,
         endsAt: phase.endsAt,
@@ -1151,7 +1168,7 @@ export const SalesModularProposalBuilder = ({
         }))
       })),
       capacityBlockPhases:
-        preview.commercialPricing.capacityBlockPhases.map((phase) => ({
+        previewSource.commercialPricing.capacityBlockPhases.map((phase) => ({
           schemaVersion: 1,
           phaseNumber: phase.phaseNumber,
           startsAt: phase.startsAt,
@@ -1180,7 +1197,7 @@ export const SalesModularProposalBuilder = ({
           }))
         }))
     };
-  }, [input, lead?.clinicName, lead?.name, preview, publicNotes, scenarioName]);
+  }, [lead?.clinicName, lead?.name, publicNotes, scenarioName, selectedSimulation, summaryInput, summaryPreview]);
 
   if (useLegacyFallback) return <>{legacyFallback}</>;
 
@@ -1413,25 +1430,21 @@ export const SalesModularProposalBuilder = ({
         { method: 'POST', body: JSON.stringify({}) }
       );
       setSelectedSimulationId(simulation.id);
-      setInput((current) =>
-        current
-          ? {
-              ...current,
-              trialDays: normalizeSalesTrialDays(
-                simulation.modular_input_snapshot?.trialDays,
-                0
-              )
-            }
-          : current
-      );
+      if (simulation.offer?.contract_email) {
+        setContractEmail(normalizeContractEmail(simulation.offer.contract_email));
+      }
       setSimulations((current) =>
         current.map((candidate) =>
           candidate.id === simulation.id
             ? { ...candidate, status: 'selected' }
-            : candidate
+            : candidate.status === 'selected'
+              ? { ...candidate, status: 'saved' }
+              : candidate
         )
       );
-      setNotice('Cenário selecionado para a proposta.');
+      setNotice(
+        'Cenário selecionado. O resumo e as margens agora usam exatamente o snapshot congelado deste cenário.'
+      );
     } catch (selectError: any) {
       setError(selectError?.message || 'Não foi possível selecionar.');
     } finally {
@@ -4540,12 +4553,45 @@ export const SalesModularProposalBuilder = ({
               </section>
             </div>
 
+            {(() => {
+              const preview = summaryPreview;
+              const input = summaryInput;
+              const promotionalMoneyFlow = summaryMoneyFlow;
+              const currentCapacityBlockPhase = preview?.commercialPricing.capacityBlockPhases[0] || null;
+              const postBenefitCapacityBlockPhase = preview?.commercialPricing.capacityBlockPhases[
+                Math.max(0, (preview?.commercialPricing.capacityBlockPhases.length || 1) - 1)
+              ] || null;
+              const currentCommercialCapacity = Math.max(
+                0,
+                Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
+              );
+              const nextStandardCommercialCapacity =
+                currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
+                  ? SALES_PATIENT_CAPACITY_BLOCKS.find((capacity) => capacity > currentCommercialCapacity) || null
+                  : null;
+              const selectedCommercialModuleNames = preview
+                ? preview.lines
+                    .filter((line) => isSalesFunctionalModuleItemKey(line.itemKey))
+                    .map((line) => line.publicName || line.itemKey)
+                : [];
+              const nextCommercialMonthlyAmountCents =
+                preview && nextStandardCommercialCapacity && currentCapacityBlockPhase?.blockPriceCents != null
+                  ? preview.promotionalRecurringRevenueCents + currentCapacityBlockPhase.blockPriceCents
+                  : null;
+              return (
             <aside className="min-w-0 space-y-4 lg:sticky lg:top-[104px] lg:self-start">
               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-base font-semibold text-slate-900">
-                    Resumo comercial
-                  </h2>
+                  <div>
+                    <h2 className="text-base font-semibold text-slate-900">
+                      Resumo comercial
+                    </h2>
+                    {selectedSimulation ? (
+                      <p className="mt-0.5 text-xs font-normal text-violet-700">
+                        Snapshot selecionado · {selectedSimulation.scenario_name || 'Cenário modular'}
+                      </p>
+                    ) : null}
+                  </div>
                   {preview ? (
                     <span
                       className={`rounded-full border px-2.5 py-1 text-xs font-medium ${ratingStyle[preview.rating]}`}
@@ -5541,6 +5587,8 @@ export const SalesModularProposalBuilder = ({
                 </section>
               ) : null}
             </aside>
+              );
+            })()}
           </div>
         )}
 
@@ -5586,7 +5634,6 @@ export const SalesModularProposalBuilder = ({
                   !selectedSimulation ||
                   !contractEmailValid ||
                   historicalOfferMissingContractIdentity ||
-                  selectedSimulationTrialMismatch ||
                   (!selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
                     !selectedSimulationHasVersionedEconomics) ||
@@ -5617,8 +5664,6 @@ export const SalesModularProposalBuilder = ({
                   ? 'Confirme um e-mail válido do responsável pela contratação. Ele será congelado na proposta e usado no Checkout e na ativação.'
                   : historicalOfferMissingContractIdentity
                   ? 'Esta proposta histórica não possui identidade contratual. Duplique o cenário, salve e selecione a nova versão antes de gerar o novo link.'
-                  : selectedSimulationTrialMismatch
-                  ? 'O período de teste do rascunho difere do cenário congelado. Salve e selecione um novo cenário antes de gerar a proposta.'
                   : selectedSimulation &&
                     !selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&

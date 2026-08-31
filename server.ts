@@ -21427,6 +21427,7 @@ async function startServer() {
           organizationId,
           stripeSubscriptionId: subscription.id,
           stripeEventId: event.id,
+          stripeEventCreatedAt: new Date(event.created * 1000).toISOString(),
           status: event.type === "customer.subscription.deleted"
             ? "cancelled"
             : stripeSubscriptionToEntitlementStatus(subscription.status),
@@ -24739,7 +24740,7 @@ async function startServer() {
 
         const { data: activation, error: activationError } = await supabase
           .from("pending_activations")
-          .select("activation_email_sent_at")
+          .select("activation_email_sent_at,used")
           .eq("source", "sales_assisted_signup")
           .eq("sales_offer_id", offer.id)
           .eq("sales_lead_id", offer.lead_id)
@@ -24754,22 +24755,26 @@ async function startServer() {
         const activationEmailSent = Boolean(
           activation?.activation_email_sent_at,
         );
+        const accountActivated = activation?.used === true;
         const reviewRequired =
           sanitizeString(offer.provisioning_status, 40) ===
           "review_required";
         const state = reviewRequired
           ? "review_required"
-          : activationEmailSent
-            ? "activation_email_sent"
-            : paymentConfirmed
-              ? "payment_confirmed"
-              : "payment_pending";
+          : accountActivated
+            ? "account_activated"
+            : activationEmailSent
+              ? "activation_email_sent"
+              : paymentConfirmed
+                ? "payment_confirmed"
+                : "payment_pending";
 
         return res.status(state === "payment_pending" ? 202 : 200).json({
           success: true,
           state,
           paymentConfirmed,
           activationEmailSent,
+          accountActivated,
           reviewRequired,
           retryAfterMs:
             state === "payment_pending" || state === "payment_confirmed"
@@ -24849,9 +24854,26 @@ async function startServer() {
     ) {
       return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
     }
+    let contractedModules: Array<{ itemKey: string; publicName: string }> = [];
     if (sanitizeString((offerResult.data as any).offer_type, 30) === "modular") {
       const contractEmail = sanitizeEmail((offerResult.data as any).contract_email);
       if (!contractEmail || contractEmail !== email) {
+        return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
+      }
+      const { data: moduleRows, error: moduleRowsError } = await supabase
+        .from("sales_offer_items")
+        .select("item_key,public_name_snapshot,sort_order")
+        .eq("offer_id", offerId)
+        .in("item_key", Array.from(SALES_CUSTOMER_FACING_MODULE_ITEM_KEYS))
+        .order("sort_order", { ascending: true });
+      if (moduleRowsError) throw moduleRowsError;
+      contractedModules = (moduleRows || []).map((row: any) => ({
+        itemKey: sanitizeString(row.item_key, 80),
+        publicName:
+          sanitizeString(row.public_name_snapshot, 180) ||
+          sanitizeString(row.item_key, 80),
+      })).filter((row: any) => Boolean(row.itemKey));
+      if (contractedModules.length < 1) {
         return { error: "SALES_ACTIVATION_NOT_AUTHORIZED" as const };
       }
     }
@@ -24865,6 +24887,7 @@ async function startServer() {
       offerId,
       leadId,
       checkoutSessionId,
+      contractedModules,
     };
   };
 
@@ -24891,6 +24914,8 @@ async function startServer() {
             clinicName: sanitizeString(loaded.lead.clinic_name, 180) || null,
             email: loaded.email,
             expiresAt: loaded.activation.expires_at || null,
+            role: "director",
+            modules: loaded.contractedModules || [],
           },
         });
       } catch (error: any) {
@@ -24927,6 +24952,7 @@ async function startServer() {
         });
       }
 
+      let passwordSaved = false;
       try {
         const loaded = await loadPublicSalesActivation(req.params?.token);
         if ("error" in loaded) {
@@ -25033,6 +25059,7 @@ async function startServer() {
         }
 
         if (!authUser?.id) throw new Error("SALES_AUTH_USER_NOT_CREATED");
+        passwordSaved = true;
 
         // The person who contracts a new clinic is its initial director. Finish
         // the commercial provisioning here, while the activation token is still
@@ -25147,9 +25174,11 @@ async function startServer() {
 
         return res.json({
           success: true,
+          passwordSaved: true,
           email: loaded.email,
           role: "director",
-          message: "Senha definida. Sua clínica está pronta para o primeiro acesso.",
+          modules: loaded.contractedModules || [],
+          message: "Senha definida. Seu acesso de Diretor está pronto com os módulos contratados.",
         });
       } catch (error: any) {
         console.error(
@@ -25164,13 +25193,17 @@ async function startServer() {
           "SALES_ACTIVATION_WORKSPACE_PROVISIONING_FAILED",
           "SALES_SUBSCRIPTION_LINKAGE_MISSING",
           "SALES_SUBSCRIPTION_NOT_ACTIVE",
+          "SALES_DIRECTOR_ENTITLEMENT_VERIFICATION_FAILED",
         ].includes(safeCode);
         return res.status(provisioningFailure ? 503 : 500).json({
           success: false,
+          passwordSaved,
           error: provisioningFailure
             ? "SALES_ACTIVATION_PROVISIONING_FAILED"
             : "SALES_ACTIVATION_SETUP_FAILED",
-          message: "Não foi possível concluir a ativação agora. Tente novamente; nenhum acesso será duplicado.",
+          message: passwordSaved
+            ? "Sua senha foi salva, mas a liberação do acesso de Diretor ainda não terminou. Tente novamente para concluir sem criar outra conta."
+            : "Não foi possível concluir a ativação agora. Tente novamente; nenhum acesso será duplicado.",
         });
       }
     },
@@ -25192,15 +25225,17 @@ async function startServer() {
     organizationId: string;
     stripeSubscriptionId: string;
     stripeEventId: string;
+    stripeEventCreatedAt: string;
     status: "active" | "trial" | "grace" | "suspended" | "cancelled";
   }) => {
     const { error } = await supabase.rpc(
-      "apply_sales_offer_module_entitlements_v1",
+      "apply_sales_offer_module_entitlements_v2",
       {
         p_offer_id: params.offerId,
         p_organization_id: params.organizationId,
         p_stripe_subscription_id: params.stripeSubscriptionId,
         p_stripe_event_id: params.stripeEventId,
+        p_stripe_event_created_at: params.stripeEventCreatedAt,
         p_status: params.status,
       },
     );
@@ -25216,6 +25251,115 @@ async function startServer() {
       (wrapped as any).cause = error;
       throw wrapped;
     }
+  };
+
+  const verifySalesDirectorContractAccess = async (params: {
+    offerId: string;
+    userId: string;
+    organizationId: string;
+    stripeSubscriptionId: string;
+  }) => {
+    const [profileResult, membershipResult, accessProfileResult, offerItemsResult, entitlementResult] =
+      await Promise.all([
+        supabase
+          .from("users")
+          .select("id,role,clinic_id")
+          .eq("id", params.userId)
+          .maybeSingle(),
+        supabase
+          .from("clinic_memberships")
+          .select("user_id,clinic_id,role,status")
+          .eq("user_id", params.userId)
+          .eq("clinic_id", params.organizationId)
+          .eq("status", "active")
+          .maybeSingle(),
+        supabase
+          .from("organization_module_access_profiles")
+          .select("organization_id,mode,source_offer_id,stripe_subscription_id")
+          .eq("organization_id", params.organizationId)
+          .maybeSingle(),
+        supabase
+          .from("sales_offer_items")
+          .select("item_key")
+          .eq("offer_id", params.offerId)
+          .in("item_key", Array.from(SALES_CUSTOMER_FACING_MODULE_ITEM_KEYS)),
+        supabase
+          .from("organization_module_entitlements")
+          .select("module_key,status,source_offer_id,stripe_subscription_id")
+          .eq("organization_id", params.organizationId)
+          .in("status", ["active", "trial", "grace"]),
+      ]);
+    const readError = [
+      profileResult,
+      membershipResult,
+      accessProfileResult,
+      offerItemsResult,
+      entitlementResult,
+    ].find((result: any) => result?.error)?.error;
+    if (readError) throw readError;
+
+    const expectedModules = Array.from(new Set(
+      (offerItemsResult.data || [])
+        .map((row: any) => sanitizeString(row.item_key, 80))
+        .filter((itemKey: string) => SALES_CUSTOMER_FACING_MODULE_ITEM_KEYS.has(itemKey)),
+    )).sort();
+    const activeEntitlementRows = (entitlementResult.data || []).filter((row: any) =>
+      SALES_CUSTOMER_FACING_MODULE_ITEM_KEYS.has(
+        sanitizeString(row.module_key, 80),
+      ),
+    );
+    const effectiveModules = Array.from(new Set(
+      activeEntitlementRows
+        .map((row: any) => sanitizeString(row.module_key, 80))
+        .filter(Boolean),
+    )).sort();
+    const everyActiveModuleComesFromContract = activeEntitlementRows.every(
+      (row: any) =>
+        sanitizeString(row.source_offer_id, 120) === params.offerId &&
+        sanitizeString(row.stripe_subscription_id, 200) ===
+          params.stripeSubscriptionId,
+    );
+    const exactModules =
+      expectedModules.length > 0 &&
+      everyActiveModuleComesFromContract &&
+      expectedModules.length === effectiveModules.length &&
+      expectedModules.every((moduleKey, index) => moduleKey === effectiveModules[index]);
+    const profile = profileResult.data as any;
+    const membership = membershipResult.data as any;
+    const accessProfile = accessProfileResult.data as any;
+    const validDirector =
+      profile &&
+      sanitizeString(profile.role, 40).toLowerCase() === "director" &&
+      sanitizeString(profile.clinic_id, 120) === params.organizationId &&
+      membership &&
+      sanitizeString(membership.role, 40).toLowerCase() === "director" &&
+      sanitizeString(membership.status, 40).toLowerCase() === "active";
+    const validContractScope =
+      accessProfile &&
+      sanitizeString(accessProfile.mode, 40) === "contract" &&
+      sanitizeString(accessProfile.source_offer_id, 120) === params.offerId &&
+      sanitizeString(accessProfile.stripe_subscription_id, 200) ===
+        params.stripeSubscriptionId;
+
+    if (!validDirector || !validContractScope || !exactModules) {
+      console.error("[Sales Activation] Director/module verification failed.", {
+        offerId: sanitizeString(params.offerId, 120),
+        organizationId: sanitizeString(params.organizationId, 120),
+        validDirector,
+        validContractScope,
+        expectedModules,
+        effectiveModules,
+        everyActiveModuleComesFromContract,
+      });
+      const verificationError = new Error(
+        "SALES_DIRECTOR_ENTITLEMENT_VERIFICATION_FAILED",
+      );
+      (verificationError as any).code =
+        "SALES_DIRECTOR_ENTITLEMENT_VERIFICATION_FAILED";
+      throw verificationError;
+    }
+
+    return { modules: effectiveModules };
   };
 
   const resolveAcceptedModularCapacityContract = (offer: any) => {
@@ -25594,10 +25738,17 @@ async function startServer() {
           organizationId: params.clinicId,
           stripeSubscriptionId: subscriptionId,
           stripeEventId: `activation:${checkoutSessionId}:${subscriptionId}`,
+          stripeEventCreatedAt: new Date().toISOString(),
           status: entitlementStatus,
         });
         await provisionModularCapacityBillingContract({
           offer: offerResult.data,
+          organizationId: params.clinicId,
+          stripeSubscriptionId: subscriptionId,
+        });
+        await verifySalesDirectorContractAccess({
+          offerId,
+          userId: params.userId,
           organizationId: params.clinicId,
           stripeSubscriptionId: subscriptionId,
         });
@@ -95415,22 +95566,219 @@ async function startServer() {
           });
         }
 
-        const stripe = getStripe();
-        const checkoutSession = await stripe.checkout.sessions.retrieve(
-          checkoutSessionId,
+        const { data: activation, error: activationError } = await supabase
+          .from("pending_activations")
+          .select(
+            "id,email,token,used,expires_at,sales_offer_id,sales_lead_id,stripe_checkout_session_id,activation_email_attempts",
+          )
+          .eq("sales_offer_id", offerId)
+          .eq("stripe_checkout_session_id", checkoutSessionId)
+          .eq("source", "sales_assisted_signup")
+          .limit(1)
+          .maybeSingle();
+        if (activationError) throw activationError;
+        if (!activation?.id) {
+          return res.status(404).json({
+            success: false,
+            error: "SALES_ACTIVATION_NOT_FOUND",
+          });
+        }
+        if (activation.used === true) {
+          return res.status(409).json({
+            success: false,
+            error: "SALES_ACTIVATION_ALREADY_USED",
+            message: "Esta ativação já foi concluída.",
+          });
+        }
+
+        const activationEmail = sanitizeEmail(activation.email);
+        const activationLeadId = sanitizeString(activation.sales_lead_id, 120);
+        if (
+          !activationEmail ||
+          !isUuid(activationLeadId) ||
+          activationLeadId !== sanitizeString(offer.lead_id, 120) ||
+          sanitizeString(activation.stripe_checkout_session_id, 200) !== checkoutSessionId
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: "SALES_ACTIVATION_LINKAGE_INVALID",
+          });
+        }
+
+        const reissueToken = deriveSalesActivationToken(checkoutSessionId);
+        const reissueTokenHash = hashSalesOfferToken(reissueToken);
+        const previousTokenHash = sanitizeString(activation.token, 128);
+        const previousExpiresAt = activation.expires_at || null;
+        const expiresAt = new Date(
+          Date.now() + SALES_ACTIVATION_TTL_DAYS * 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const attempts = Math.max(
+          0,
+          Math.floor(Number(activation.activation_email_attempts || 0)),
         );
-        const result = await processSalesAssistedCheckoutCompleted(
-          stripe,
-          checkoutSession,
-        );
-        return res.status(result.activationEmailSent ? 200 : 202).json({
-          success: true,
-          paymentConfirmed: result.paymentConfirmed,
-          activationEmailSent: result.activationEmailSent,
-          message: result.activationEmailSent
-            ? "E-mail de ativacao confirmado."
-            : "Pagamento preservado; o envio da ativacao continua pendente.",
-        });
+
+        const { data: rotatedActivation, error: rotateError } = await supabase
+          .from("pending_activations")
+          .update({
+            token: reissueTokenHash,
+            expires_at: expiresAt,
+            activation_email_error_code: null,
+          })
+          .eq("id", activation.id)
+          .eq("used", false)
+          .select("id")
+          .maybeSingle();
+        if (rotateError) throw rotateError;
+        if (!rotatedActivation?.id) {
+          return res.status(409).json({
+            success: false,
+            error: "SALES_ACTIVATION_ALREADY_USED",
+          });
+        }
+
+        const reissuePreflight = await loadPublicSalesActivation(reissueToken);
+        if ("error" in reissuePreflight) {
+          const rollbackResult = await supabase
+            .from("pending_activations")
+            .update({
+              token: previousTokenHash || null,
+              expires_at: previousExpiresAt,
+            })
+            .eq("id", activation.id)
+            .eq("used", false)
+            .eq("token", reissueTokenHash);
+          console.warn("[Owner Sales] Reemissão de ativação revertida após preflight invalido.", {
+            offerId,
+            activationId: sanitizeString(activation.id, 120),
+            code: reissuePreflight.error,
+            rollbackError: sanitizeString(rollbackResult.error?.message, 180) || null,
+          });
+          return res.status(503).json({
+            success: false,
+            error: "SALES_ACTIVATION_REISSUE_PREFLIGHT_FAILED",
+          });
+        }
+
+        let providerMessageId = "";
+        try {
+          const resend = getResend();
+          const from =
+            sanitizeString(process.env.RESEND_FROM_EMAIL || "", 320) ||
+            OFFICIAL_FROM_NOREPLY;
+          const emailResult = await resend.emails.send(
+            {
+              from,
+              to: activationEmail,
+              subject: "Bem-vindo à Verto: conclua sua ativação",
+              html: buildSalesPostPaymentActivationEmail(reissueToken),
+            },
+            {
+              idempotencyKey: `sales-activation-reissue:${activation.id}:attempt-${attempts + 1}`,
+            },
+          );
+          if (emailResult.error) {
+            throw new Error(
+              String(emailResult.error.message || JSON.stringify(emailResult.error)),
+            );
+          }
+          providerMessageId = sanitizeString(emailResult.data?.id, 200);
+
+          const now = new Date().toISOString();
+          const [activationPersistence, offerPersistence, eventPersistence] =
+            await Promise.all([
+              supabase
+                .from("pending_activations")
+                .update({
+                  activation_email_sent_at: now,
+                  activation_email_last_attempt_at: now,
+                  activation_email_error_code: null,
+                  activation_email_attempts: attempts + 1,
+                })
+                .eq("id", activation.id)
+                .eq("used", false)
+                .eq("token", reissueTokenHash),
+              supabase
+                .from("sales_offers")
+                .update({
+                  provisioning_status: "completed",
+                  provisioning_error_code: null,
+                  provisioning_updated_at: now,
+                  updated_at: now,
+                })
+                .eq("id", offerId)
+                .eq("status", "paid"),
+              supabase.from("sales_lead_events").upsert(
+                [
+                  {
+                    lead_id: activationLeadId,
+                    event_type: "activation_sent",
+                    metadata: {
+                      offer_id: offerId,
+                      checkout_session_id: checkoutSessionId,
+                      activation_id: activation.id,
+                      reissued: true,
+                      delivery_attempt: attempts + 1,
+                      provider_message_id: providerMessageId || null,
+                    },
+                    idempotency_key: `activation-reissued:${activation.id}:attempt-${attempts + 1}`,
+                  },
+                ],
+                { onConflict: "idempotency_key", ignoreDuplicates: true },
+              ),
+            ]);
+          const persistenceError = [
+            activationPersistence,
+            offerPersistence,
+            eventPersistence,
+          ].find((result: any) => result?.error)?.error;
+
+          return res.status(200).json({
+            success: true,
+            paymentConfirmed: true,
+            activationEmailSent: true,
+            bookkeepingWarning: Boolean(persistenceError),
+            message: persistenceError
+              ? "E-mail reenviado; a confirmação interna do envio será reconciliada automaticamente."
+              : "E-mail de ativação reenviado.",
+          });
+        } catch (emailError: any) {
+          const failureCode = sanitizeString(
+            emailError?.code || emailError?.name || "ACTIVATION_EMAIL_FAILED",
+            120,
+          );
+          await Promise.all([
+            supabase
+              .from("pending_activations")
+              .update({
+                activation_email_last_attempt_at: new Date().toISOString(),
+                activation_email_error_code: failureCode,
+                activation_email_attempts: attempts + 1,
+              })
+              .eq("id", activation.id)
+              .eq("used", false)
+              .eq("token", reissueTokenHash),
+            supabase
+              .from("sales_offers")
+              .update({
+                provisioning_status: "email_pending",
+                provisioning_error_code: failureCode,
+                provisioning_updated_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", offerId)
+              .eq("status", "paid"),
+          ]);
+          console.warn("[Owner Sales] Reenvio de ativação falhou.", {
+            offerId,
+            activationId: sanitizeString(activation.id, 120),
+            providerMessageId: providerMessageId || null,
+            message: sanitizeString(emailError?.message || String(emailError), 200),
+          });
+          return res.status(502).json({
+            success: false,
+            error: "SALES_ACTIVATION_RESEND_FAILED",
+          });
+        }
       } catch (error: any) {
         console.error("[Owner Sales] Falha ao reenviar ativacao.", {
           offerId,
