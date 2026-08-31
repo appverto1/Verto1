@@ -11,13 +11,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
-import {
-  PROFESSIONAL_COUNCIL_OPTIONS,
-  formatProfessionalCouncil,
-  formatProfessionalRegistry,
-  getProfessionalRegistryGuidance,
-  getProfessionalRegistryPlaceholder,
-} from '../utils/professionalRegistry';
+import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 
 type OnboardingContext = {
   onboardingMode: 'invited_professional' | 'clinic_member' | 'clinic_owner' | 'standard' | 'invalid';
@@ -92,7 +86,7 @@ const formatCnpj = (value: string) => {
 };
 
 const formatDocument = (value: string, type: 'CPF' | 'CNPJ' | 'OTHER') =>
-  type === 'CNPJ' ? formatCnpj(value) : type === 'CPF' ? formatCpf(value) : formatProfessionalRegistry(value).slice(0, 80);
+  type === 'CNPJ' ? formatCnpj(value) : type === 'CPF' ? formatCpf(value) : value.slice(0, 40);
 
 const formatCep = (value: string) => {
   const digits = digitsOnly(value).slice(0, 8);
@@ -188,7 +182,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     context?.clinic?.id &&
     ['invited_professional', 'clinic_member'].includes(context?.onboardingMode || ''),
   );
-  const isOwnerOnboarding = context?.requiresPayment === true;
+  const isOwnerOnboarding = context?.onboardingMode === 'clinic_owner';
+  const ownerAlreadyPaid = Boolean(
+    isOwnerOnboarding &&
+    context?.requiresPayment === false &&
+    context?.canAccessDashboard === true,
+  );
   const maxStep = isManagedMember ? 3 : 2;
   const specialty = context?.membership?.specialty || user?.specialties || '';
   const effectiveRole = context?.membership?.role || user?.role || 'therapist';
@@ -258,9 +257,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setGender(profile?.gender || draft.gender || '');
         setCountryCode(formatCountryCode(profile?.country_code || draft.countryCode || '+55'));
         setProfilePicture(profile?.profile_photo_url || draft.profilePicture || user?.profilePicture || null);
-        const loadedCouncil = formatProfessionalCouncil(profile?.council || draft.council || '');
-        setCouncil(loadedCouncil);
-        setCouncilNumber(formatProfessionalRegistry(profile?.council_number || draft.councilNumber || user?.crp || '', loadedCouncil));
+        setCouncil(profile?.council || draft.council || '');
+        setCouncilNumber(formatProfessionalRegistry(profile?.council_number || draft.councilNumber || user?.crp || ''));
         setMiniCurriculum(profile?.mini_curriculum || metadata?.miniCurriculum || draft.miniCurriculum || user?.miniCurriculum || '');
         setSignatureDataUrl(profile?.signature_data_url || draft.signatureDataUrl || user?.signatureDataUrl || null);
         setSessionDurationMinutes(String(metadata?.sessionDurationMinutes || metadata?.defaultSessionDurationMinutes || draft.sessionDurationMinutes || '50'));
@@ -524,7 +522,9 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
               <p className="mt-3 text-sm text-violet-100">
                 {isManagedMember
                   ? 'Complete suas informações profissionais para acessar a clínica à qual você foi convidado.'
-                  : 'Complete os dados iniciais da clínica antes de escolher o plano.'}
+                  : ownerAlreadyPaid
+                    ? 'Seu plano já está ativo. Complete os dados iniciais para começar a usar a Verto como Diretor da clínica.'
+                    : 'Complete os dados iniciais da clínica antes de escolher o plano.'}
               </p>
               <div className="mt-8 space-y-3 text-xs">
                 {sidebarSteps.map((label, index) => (
@@ -532,12 +532,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                     {index + 1}. {label}
                   </div>
                 ))}
-                {!isManagedMember && (
+                {!isManagedMember && context?.requiresPayment === true ? (
                   <>
                     <div className="text-violet-200">3. Plano por pacientes ativos</div>
                     <div className="text-violet-200">4. Cartão e assinatura</div>
                   </>
-                )}
+                ) : null}
               </div>
             </div>
 
@@ -550,8 +550,14 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
 
               {step === 1 && (
                 <div className="space-y-5">
-                  <h3 className="text-lg font-bold text-slate-900">Dados pessoais e profissionais</h3>
-                  <p className="text-sm text-slate-500">Preencha seus dados. A clínica e a especialidade vêm do convite e não podem ser trocadas aqui.</p>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {isOwnerOnboarding ? 'Seus dados' : 'Dados pessoais e profissionais'}
+                  </h3>
+                  <p className="text-sm text-slate-500">
+                    {isOwnerOnboarding
+                      ? 'Confirme os dados do Diretor responsável pela clínica. O acesso contratado já está vinculado a esta conta.'
+                      : 'Preencha seus dados. A clínica e a especialidade vêm do convite e não podem ser trocadas aqui.'}
+                  </p>
                   <div className="flex items-center gap-4">
                     <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-dashed border-slate-300 bg-slate-50">
                       {profilePicture ? <SecureImage src={profilePicture} alt="Foto de perfil" className="h-full w-full object-cover" /> : <Camera size={24} className="text-slate-400" />}
@@ -612,13 +618,15 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                         <option value="prefer_not_to_say">Prefiro não informar</option>
                       </select>
                     </label>
-                    <div className="space-y-2">
-                      <p className="text-sm font-medium text-slate-700">Especialidade vinculada</p>
-                      <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
-                        <p className="text-[11px] font-bold uppercase tracking-wider text-violet-500">Definida pela clínica</p>
-                        <p className="mt-1 text-sm font-semibold text-violet-900">{specialty || 'Definida pela clínica'}</p>
+                    {!isOwnerOnboarding ? (
+                      <div className="space-y-2">
+                        <p className="text-sm font-medium text-slate-700">Especialidade vinculada</p>
+                        <div className="rounded-xl border border-violet-100 bg-violet-50 px-4 py-3">
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-violet-500">Definida pela clínica</p>
+                          <p className="mt-1 text-sm font-semibold text-violet-900">{specialty || 'Definida pela clínica'}</p>
+                        </div>
                       </div>
-                    </div>
+                    ) : null}
                   </div>
                   <div className="flex justify-end pt-2">
                     <button disabled={!fullName.trim() || digitsOnly(phone).length < 10} onClick={() => setStep(2)} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">Continuar</button>
@@ -632,29 +640,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                   <p className="text-sm text-slate-500">Essas informações pertencem ao seu perfil profissional e serão usadas em documentos clínicos.</p>
                   <div className="grid gap-4 md:grid-cols-2">
                     <label className="space-y-2 text-sm font-medium text-slate-700">
-                      <span>Conselho / tipo de registro</span>
-                      <input
-                        value={council}
-                        list="professional-council-options"
-                        maxLength={48}
-                        onChange={(event) => setCouncil(formatProfessionalCouncil(event.target.value))}
-                        placeholder="Ex.: CRP, CREFITO, CRFa ou Sem conselho"
-                        className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900"
-                      />
-                      <datalist id="professional-council-options">
-                        {PROFESSIONAL_COUNCIL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                      </datalist>
+                      <span>Conselho profissional</span>
+                      <input value={council} onChange={(event) => setCouncil(event.target.value)} placeholder="Ex.: CRP, CREFONO, CRM" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
                     </label>
                     <label className="space-y-2 text-sm font-medium text-slate-700">
-                      <span>Registro profissional / identificação</span>
-                      <input
-                        value={councilNumber}
-                        maxLength={80}
-                        onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value, council))}
-                        placeholder={getProfessionalRegistryPlaceholder(council)}
-                        className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900"
-                      />
-                      <span className="block text-xs font-normal leading-5 text-slate-500">{getProfessionalRegistryGuidance(council)}</span>
+                      <span>Número do conselho</span>
+                      <input value={councilNumber} onChange={(event) => setCouncilNumber(formatProfessionalRegistry(event.target.value))} placeholder="Ex.: 123456" className="w-full rounded-xl bg-slate-50 px-4 py-3 text-slate-900" />
                     </label>
                     <label className="space-y-2 text-sm font-medium text-slate-700">
                       <span>Duração padrão da sessão</span>
@@ -713,7 +704,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
               {step === 2 && !isManagedMember && (
                 <div className="space-y-5">
                   <h3 className="text-lg font-bold text-slate-900">Configurações da clínica</h3>
-                  <p className="text-sm text-slate-500">Configure os dados mínimos da nova clínica. O fluxo comercial permanece disponível somente para o responsável.</p>
+                  <p className="text-sm text-slate-500">
+                    {ownerAlreadyPaid
+                      ? 'Configure os dados mínimos da clínica. O plano e os módulos contratados já estão ativos para este acesso de Diretor.'
+                      : 'Configure os dados mínimos da nova clínica. O fluxo comercial permanece disponível somente para o responsável.'}
+                  </p>
                   <div className="grid gap-4 md:grid-cols-2">
                     <input value={clinicName} onChange={(event) => setClinicName(event.target.value)} placeholder="Nome da clínica" className="rounded-xl bg-slate-50 px-4 py-3" />
                     <input value={clinicPhone} onChange={(event) => setClinicPhone(event.target.value)} placeholder="Telefone ou WhatsApp da clínica" className="rounded-xl bg-slate-50 px-4 py-3" />
@@ -732,7 +727,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                   <div className="flex justify-between pt-2">
                     <button onClick={() => setStep(1)} className="rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700">Voltar</button>
                     <button disabled={loading || !clinicName.trim()} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
-                      {loading ? 'Salvando...' : 'Continuar para o plano'}
+                      {loading
+                        ? 'Salvando...'
+                        : ownerAlreadyPaid
+                          ? 'Concluir configuração e acessar a Verto'
+                          : 'Continuar para o plano'}
                     </button>
                   </div>
                 </div>
