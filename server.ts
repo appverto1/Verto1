@@ -20087,6 +20087,61 @@ async function startServer() {
     },
   });
 
+  const publicSalesPostPaymentRateLimitKey = (req: any) => {
+    const token = sanitizeString(req.params?.token, 256);
+    const checkoutSessionId = sanitizeString(
+      req.query?.session_id || req.body?.sessionId || req.body?.session_id,
+      200,
+    );
+    const tokenKey = token
+      ? hashSalesOfferToken(token).slice(0, 24)
+      : "sem-token";
+    const sessionKey = checkoutSessionId
+      ? crypto.createHash("sha256").update(checkoutSessionId).digest("hex").slice(0, 24)
+      : "sem-sessao";
+    return `${sanitizeString(req.ip, 120)}:${tokenKey}:${sessionKey}`;
+  };
+
+  // Read-only polling must not consume the same quota as lead submission,
+  // acceptance or Checkout creation. The token + Stripe session pair is already
+  // high-entropy and is revalidated against the frozen offer in the route.
+  const publicSalesPaymentStatusLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000,
+    store: distributedRateLimitStore('sales-payment-status', 5 * 60 * 1000),
+    passOnStoreError: false,
+    max: 90,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    keyGenerator: publicSalesPostPaymentRateLimitKey,
+    message: {
+      success: false,
+      error: "PAYMENT_STATUS_RATE_LIMITED",
+      message: "A confirmação continua em andamento. Aguarde alguns instantes para consultar novamente.",
+      retryAfterMs: 5000,
+    },
+  });
+
+  // Post-payment reconciliation/session issuance is isolated from both the lead
+  // limiter and legacy e-mail activation limiter. These mutations are idempotent
+  // and always validate public offer token + Stripe checkout session server-side.
+  const publicSalesPostPaymentLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    store: distributedRateLimitStore('sales-post-payment', 15 * 60 * 1000),
+    passOnStoreError: false,
+    max: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: false,
+    keyGenerator: publicSalesPostPaymentRateLimitKey,
+    message: {
+      success: false,
+      error: "SALES_POST_PAYMENT_RATE_LIMITED",
+      message: "A liberação da conta já está sendo processada. Aguarde alguns instantes e tente novamente.",
+      retryAfterMs: 5000,
+    },
+  });
+
   const patientCreateLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     store: distributedRateLimitStore('patient-create', 15 * 60 * 1000),
@@ -24898,7 +24953,7 @@ async function startServer() {
 
   app.get(
     "/api/public/sales-offers/:token/payment-status",
-    publicSalesLeadIpLimiter,
+    publicSalesPaymentStatusLimiter,
     async (req: any, res) => {
       res.setHeader("Cache-Control", "no-store");
       const token = sanitizeString(req.params?.token, 256);
@@ -25015,8 +25070,7 @@ async function startServer() {
 
   app.post(
     "/api/public/sales-offers/:token/prepare-activation",
-    publicSalesLeadIpLimiter,
-    publicSalesActivationLimiter,
+    publicSalesPostPaymentLimiter,
     async (req: any, res) => {
       res.setHeader("Cache-Control", "no-store");
       const token = sanitizeString(req.params?.token, 256);
@@ -25107,8 +25161,7 @@ async function startServer() {
 
   app.post(
     "/api/public/sales-offers/:token/director-session",
-    publicSalesLeadIpLimiter,
-    publicSalesActivationLimiter,
+    publicSalesPostPaymentLimiter,
     async (req: any, res) => {
       res.setHeader("Cache-Control", "no-store");
       const token = sanitizeString(req.params?.token, 256);
