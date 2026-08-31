@@ -30,7 +30,8 @@ const modularCheckout =
 
 assert.match(builder, /platformFoundationPricingMode: 'manual'/);
 assert.match(builder, /platformFoundationMonthlyAmountCents: 0/);
-assert.match(builder, /item\.itemKey !== 'onboarding'/);
+assert.match(builder, /const SALES_FUNCTIONAL_MODULE_KEYS = \[/);
+assert.match(builder, /isSalesFunctionalModuleItemKey/);
 assert.match(builder, /Custos compartilhados da plataforma/);
 assert.match(builder, /não são vendidos como módulo/);
 assert.doesNotMatch(

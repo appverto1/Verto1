@@ -88716,8 +88716,26 @@ async function startServer() {
       const endMs = candidate?.endsAt ? Date.parse(String(candidate.endsAt)) : Number.POSITIVE_INFINITY;
       return Number.isFinite(atMs) && Number.isFinite(startMs) && atMs >= startMs && atMs < endMs;
     }) || phases[phases.length - 1] || null;
-    const discountEndsAt = sanitizeString(offer?.discount_ends_at, 80);
-    const promotional = discountEndsAt && Date.parse(discountEndsAt) > atMs;
+    const discountDurationMonths = Math.max(0, Math.trunc(Number(offer?.discount_duration_months || 0)));
+    const discountAnchorMs = Date.parse(String(offer?.accepted_at || offer?.created_at || ''));
+    const discountEndsAtMs = (() => {
+      if (!discountDurationMonths || !Number.isFinite(discountAnchorMs)) return Number.NaN;
+      const anchor = new Date(discountAnchorMs);
+      const originalDay = anchor.getUTCDate();
+      const end = new Date(anchor.getTime());
+      end.setUTCDate(1);
+      end.setUTCMonth(end.getUTCMonth() + discountDurationMonths);
+      const lastDay = new Date(Date.UTC(
+        end.getUTCFullYear(),
+        end.getUTCMonth() + 1,
+        0,
+      )).getUTCDate();
+      end.setUTCDate(Math.min(originalDay, lastDay));
+      return end.getTime();
+    })();
+    const promotional = Number.isFinite(atMs)
+      && Number.isFinite(discountEndsAtMs)
+      && discountEndsAtMs > atMs;
     const fallbackPeriod = promotional ? frozenResults?.promotional : frozenResults?.postPromotion;
     return {
       recurringRevenueCents: Math.max(0, Number(
@@ -88795,7 +88813,7 @@ async function startServer() {
     const offersResult = offerIds.length || leadIds.length
       ? await supabase
           .from('sales_offers')
-          .select('id,lead_id,status,proposal_name,offer_type,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_ends_at,trial_days,stripe_subscription_id,accepted_at,created_at')
+          .select('id,lead_id,status,proposal_name,offer_type,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_duration_months,trial_days,stripe_subscription_id,accepted_at,created_at')
           .in('lead_id', leadIds.length ? leadIds : ['00000000-0000-0000-0000-000000000000'])
           .order('created_at', { ascending: false })
       : { data: [], error: null } as any;
@@ -88938,7 +88956,7 @@ async function startServer() {
       loadOwnerAssumptionSets(),
       supabase
         .from('sales_offers')
-        .select('id,lead_id,proposal_name,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_ends_at,created_at'),
+        .select('id,lead_id,proposal_name,modular_snapshot,simulation_snapshot,promotional_monthly_amount_cents,post_discount_monthly_amount_cents,discount_duration_months,accepted_at,created_at'),
     ]);
     if (ledgerResult.error && isMissingRelationError(ledgerResult.error)) return null;
     if (statesResult.error && isMissingRelationError(statesResult.error)) return null;
@@ -93583,10 +93601,14 @@ async function startServer() {
       );
       const dbCode = sanitizeString(error?.code, 40).toUpperCase();
       const dbMessage = extractSupabaseErrorMessage(error);
+      const schemaDiagnostic = `${dbMessage} ${sanitizeString(error?.details, 800)}`;
+      const positiveBaseSchemaDrift = dbCode === '23514'
+        && /sales_offers_(?:amount_positive|base_amount_check)/i.test(schemaDiagnostic);
       const schemaPending =
         dbCode === 'PGRST202'
         || dbCode === '42883'
         || extractMissingColumnName(error) === 'contract_email'
+        || positiveBaseSchemaDrift
         || /create_sales_modular_offer_v3|contract_email|schema cache|function .* does not exist/i.test(dbMessage);
       const conflict = rawCode.includes("PROPOSAL_SNAPSHOT_CONFLICT");
 
