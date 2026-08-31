@@ -88746,10 +88746,31 @@ async function startServer() {
     const clinicIds = clinics.map((row: any) => sanitizeString(row.id, 120));
     const ownerIds = clinics.map((row: any) => sanitizeString(row?.owner_user_id, 120)).filter(isUuid);
 
+    const loadOwnerRowsForFinance = async () => {
+      if (!ownerIds.length) return { data: [], error: null } as any;
+      const primary = await supabase
+        .from('users')
+        .select('id,name,email,role,subscription_status,plan_name,plan_price,billing_source,created_at')
+        .in('id', ownerIds);
+      if (!primary.error) return primary;
+      if (extractMissingColumnName(primary.error) !== 'billing_source') return primary;
+
+      console.warn('[Owner Finance] users.billing_source ausente; usando leitura compatível até a migration de reparo.', {
+        ownerCount: ownerIds.length,
+      });
+      const fallback = await supabase
+        .from('users')
+        .select('id,name,email,role,subscription_status,plan_name,plan_price,created_at')
+        .in('id', ownerIds);
+      if (fallback.error) return fallback;
+      return {
+        data: (fallback.data || []).map((row: any) => ({ ...row, billing_source: null })),
+        error: null,
+      } as any;
+    };
+
     const [ownersResult, statesResult, leadsResult] = await Promise.all([
-      ownerIds.length
-        ? supabase.from('users').select('id,name,email,role,subscription_status,plan_name,plan_price,billing_source,created_at').in('id', ownerIds)
-        : Promise.resolve({ data: [], error: null } as any),
+      loadOwnerRowsForFinance(),
       clinicIds.length
         ? supabase.from('platform_subscription_financial_state').select('organization_id,sales_offer_id,sales_lead_id,stripe_subscription_id,stripe_status,trial_ends_at,first_paid_at,current_period_end,cancel_at_period_end,canceled_at').in('organization_id', clinicIds)
         : Promise.resolve({ data: [], error: null } as any),
@@ -93560,7 +93581,32 @@ async function startServer() {
         error?.message || error?.code,
         220,
       );
+      const dbCode = sanitizeString(error?.code, 40).toUpperCase();
+      const dbMessage = extractSupabaseErrorMessage(error);
+      const schemaPending =
+        dbCode === 'PGRST202'
+        || dbCode === '42883'
+        || extractMissingColumnName(error) === 'contract_email'
+        || /create_sales_modular_offer_v3|contract_email|schema cache|function .* does not exist/i.test(dbMessage);
       const conflict = rawCode.includes("PROPOSAL_SNAPSHOT_CONFLICT");
+
+      console.error('[Owner Sales] Falha ao preparar proposta modular.', {
+        leadId,
+        simulationId,
+        code: dbCode || null,
+        message: sanitizeString(dbMessage, 500) || null,
+        details: sanitizeString(error?.details, 500) || null,
+        hint: sanitizeString(error?.hint, 500) || null,
+        schemaPending,
+      });
+
+      if (schemaPending) {
+        return res.status(503).json({
+          success: false,
+          code: 'PROPOSAL_SCHEMA_MIGRATION_REQUIRED',
+          error: 'A atualização de persistência das propostas ainda não foi aplicada neste ambiente.',
+        });
+      }
       return res.status(conflict ? 409 : 500).json({
         success: false,
         code: conflict
