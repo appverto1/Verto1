@@ -157,6 +157,7 @@ type PaymentReturnState =
   | 'confirming'
   | 'payment_confirmed'
   | 'activation_email_sent'
+  | 'account_activated'
   | 'review_required'
   | 'unavailable';
 
@@ -593,6 +594,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
+  const [paymentStatusRefreshKey, setPaymentStatusRefreshKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -616,6 +618,10 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
             throw new Error(data?.error || 'PAYMENT_STATUS_UNAVAILABLE');
           }
           if (cancelled) return;
+          if (data?.state === 'account_activated') {
+            setPaymentReturnState('account_activated');
+            return;
+          }
           if (data?.state === 'activation_email_sent') {
             setPaymentReturnState('activation_email_sent');
             return;
@@ -665,7 +671,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       cancelled = true;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [token]);
+  }, [paymentStatusRefreshKey, token]);
 
   const continueToCheckout = async () => {
     setContinuing(true);
@@ -735,23 +741,53 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
               <h1 className="text-xl font-semibold text-slate-900">
                 {paymentReturnState === 'confirming'
                   ? 'Confirmando seu pagamento'
-                  : paymentReturnState === 'activation_email_sent'
-                    ? 'Pagamento confirmado'
-                    : paymentReturnState === 'review_required'
+                  : paymentReturnState === 'account_activated'
+                    ? 'Conta ativada'
+                    : paymentReturnState === 'activation_email_sent'
+                      ? 'Pagamento confirmado'
+                      : paymentReturnState === 'review_required'
                       ? 'Pagamento recebido'
                       : paymentReturnState === 'unavailable'
                         ? 'Confirmação em andamento'
                         : 'Pagamento confirmado'}
               </h1>
               <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
-                {paymentReturnState === 'activation_email_sent'
-                  ? 'Enviamos o link de ativação para o e-mail informado no Checkout. Abra a mensagem para criar seu acesso à Verto.'
-                  : paymentReturnState === 'review_required'
+                {paymentReturnState === 'account_activated'
+                  ? 'A conta da clínica foi ativada com papel de Diretor e os módulos contratados já foram vinculados ao acesso.'
+                  : paymentReturnState === 'activation_email_sent'
+                    ? 'Enviamos o link de ativação para o e-mail informado no Checkout. Abra a mensagem para ativar o acesso de Diretor da clínica.'
+                    : paymentReturnState === 'review_required'
                     ? 'Seu pagamento foi preservado. A equipe da Verto revisará os dados de ativação antes de liberar o acesso.'
                     : paymentReturnState === 'unavailable'
                       ? 'Ainda não recebemos a confirmação final. Aguarde alguns minutos e verifique seu e-mail; se necessário, fale com o suporte.'
                       : 'A Stripe confirmou o retorno e estamos preparando seu e-mail de ativação. Esta página não cria a conta automaticamente.'}
               </p>
+              {paymentReturnState !== 'confirming' && paymentReturnState !== 'unavailable' ? (
+                <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
+                  {[
+                    { label: 'Pagamento confirmado', done: ['payment_confirmed', 'activation_email_sent', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'E-mail de ativação enviado', done: ['activation_email_sent', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Conta ativada como Diretor', done: paymentReturnState === 'account_activated' },
+                    { label: 'Módulos contratados liberados', done: paymentReturnState === 'account_activated' }
+                  ].map((step) => (
+                    <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">
+                      <span className={step.done ? 'text-emerald-600' : 'text-slate-300'}>
+                        {step.done ? '✓' : '○'}
+                      </span>
+                      <span className={step.done ? 'font-medium text-slate-800' : 'font-normal text-slate-500'}>{step.label}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {['payment_confirmed', 'activation_email_sent'].includes(paymentReturnState) ? (
+                <button
+                  type="button"
+                  onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}
+                  className="mt-4 min-h-10 rounded-xl border border-violet-200 bg-white px-4 text-sm font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                >
+                  Atualizar status da ativação
+                </button>
+              ) : null}
             </div>
           ) : loading ? (
             <div className="flex min-h-72 items-center justify-center gap-3 text-sm text-slate-600">
