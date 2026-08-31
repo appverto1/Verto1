@@ -695,6 +695,17 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       return 'payment_pending';
     };
 
+    const paymentRetryDelayMs = (response: Response | null, data: any, fallbackMs: number) => {
+      const headerSeconds = Number(response?.headers?.get('retry-after') || 0);
+      const payloadMs = Number(data?.retryAfterMs || 0);
+      const requestedMs = headerSeconds > 0
+        ? headerSeconds * 1000
+        : payloadMs > 0
+          ? payloadMs
+          : fallbackMs;
+      return Math.max(1500, Math.min(30000, Math.round(requestedMs)));
+    };
+
     const reconcileDirectorProvisioning = async () => {
       const response = await fetch(
         `/api/public/sales-offers/${encodeURIComponent(token)}/prepare-activation`,
@@ -707,6 +718,13 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         },
       );
       const data = await response.json().catch(() => ({}));
+      if (response.status === 429) {
+        return {
+          ...data,
+          rateLimited: true,
+          retryAfterMs: paymentRetryDelayMs(response, data, 5000),
+        };
+      }
       if (!response.ok && response.status !== 202) {
         throw new Error(data?.error || 'SALES_DIRECTOR_PROVISIONING_FAILED');
       }
@@ -714,51 +732,92 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       return data;
     };
 
+    const finishReturnedPaymentState = async (data: any) => {
+      if (cancelled || data?.rateLimited === true) return false;
+      const state = applyStatusPayload(data);
+      if (state === 'account_activated') {
+        window.location.replace('/');
+        return true;
+      }
+      if (state === 'review_required') return true;
+      if (state === 'director_ready') {
+        await openDirectorSession(checkoutSessionId);
+        return true;
+      }
+      return false;
+    };
+
     const loadPaymentStatus = async () => {
       setPaymentReturnState('confirming');
       setLoading(false);
-      const maxAttempts = 12;
-      let reconciliationAttempted = false;
+      const maxAttempts = 10;
+      let nextDelayMs = 1800;
+
+      // The success return already carries the Stripe Checkout session id. Reconcile
+      // it immediately on the server instead of waiting for the webhook/database
+      // status to change first. The operation is idempotent and validates the frozen
+      // offer metadata against Stripe before provisioning the Director.
+      try {
+        const initialReconciliation = await reconcileDirectorProvisioning();
+        if (await finishReturnedPaymentState(initialReconciliation)) return;
+        if (initialReconciliation?.rateLimited === true) {
+          nextDelayMs = Number(initialReconciliation.retryAfterMs || nextDelayMs);
+        } else {
+          nextDelayMs = paymentRetryDelayMs(null, initialReconciliation, nextDelayMs);
+        }
+      } catch {
+        // Webhook/status polling below remains the recovery path for transient Stripe
+        // or network failures. A failed reconciliation never creates another charge.
+      }
+
       for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
+        await new Promise<void>((resolve) => {
+          retryTimer = window.setTimeout(resolve, nextDelayMs);
+        });
+        if (cancelled) return;
+
         try {
           const response = await fetch(
             `/api/public/sales-offers/${encodeURIComponent(token)}/payment-status?session_id=${encodeURIComponent(checkoutSessionId)}`,
             { credentials: 'omit', cache: 'no-store' },
           );
           const data = await response.json().catch(() => ({}));
+          if (response.status === 429) {
+            setPaymentReturnState('confirming');
+            nextDelayMs = paymentRetryDelayMs(response, data, 5000);
+            continue;
+          }
           if (!response.ok && response.status !== 202) {
             throw new Error(data?.error || 'PAYMENT_STATUS_UNAVAILABLE');
           }
           if (cancelled) return;
-          const state = applyStatusPayload(data);
-          if (state === 'account_activated') {
-            window.location.replace('/');
-            return;
-          }
-          if (state === 'review_required') return;
-          if (state === 'director_ready') {
-            await openDirectorSession(checkoutSessionId);
-            return;
-          }
-          if (data?.paymentConfirmed === true && !reconciliationAttempted) {
-            reconciliationAttempted = true;
+          if (await finishReturnedPaymentState(data)) return;
+          nextDelayMs = paymentRetryDelayMs(
+            response,
+            data,
+            Math.min(5000, 1800 + attempt * 400),
+          );
+
+          // Retry authoritative Stripe reconciliation periodically while provisioning
+          // remains pending. This handles a delayed/missed webhook without hammering
+          // either Stripe or the status endpoint.
+          if (attempt === 2 || attempt === 5 || attempt === 8) {
             const reconciled = await reconcileDirectorProvisioning();
-            const reconciledState = applyStatusPayload(reconciled);
-            if (reconciledState === 'director_ready') {
-              await openDirectorSession(checkoutSessionId);
-              return;
+            if (await finishReturnedPaymentState(reconciled)) return;
+            if (reconciled?.rateLimited === true) {
+              nextDelayMs = Math.max(
+                nextDelayMs,
+                Number(reconciled.retryAfterMs || 5000),
+              );
             }
-            if (reconciledState === 'review_required') return;
           }
         } catch {
+          nextDelayMs = Math.min(8000, Math.max(2500, nextDelayMs + 1000));
           if (attempt === maxAttempts - 1 && !cancelled) {
             setPaymentReturnState('unavailable');
             return;
           }
         }
-        await new Promise<void>((resolve) => {
-          retryTimer = window.setTimeout(resolve, 1500);
-        });
       }
       if (!cancelled) setPaymentReturnState('provisioning');
     };
