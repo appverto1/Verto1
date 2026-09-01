@@ -17,9 +17,9 @@ type WorkspaceTab = 'evidence' | 'reviews' | 'history';
 
 type PtsTherapeuticDashboardProps = {
   scope: any;
-  availableScopes: any[];
-  professionals: any[];
-  sharedEvidence: any[];
+  availableScopes?: any[];
+  professionals?: any[];
+  sharedEvidence?: any[];
   legacyEvidence?: any[];
   loading?: boolean;
   isDark?: boolean;
@@ -98,9 +98,9 @@ const humanSpecialty = (value: unknown) => {
 
 export function PtsTherapeuticDashboard({
   scope,
-  availableScopes,
-  professionals,
-  sharedEvidence,
+  availableScopes = [],
+  professionals = [],
+  sharedEvidence = [],
   legacyEvidence = [],
   loading = false,
   isDark = false,
@@ -488,6 +488,7 @@ export function PtsTherapeuticDashboard({
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className={`text-xs ${muted}`}>{sourceSpecialty}</p>
+                                  {evidence?.sharingMode === 'legacy_pts' && <span className={`rounded-full border px-2 py-0.5 text-[10px] ${isDark ? 'border-slate-600 text-slate-300' : 'border-slate-200 text-slate-500'}`}>Legado</span>}
                                 </div>
                                 <h4 className={`mt-1 text-base font-semibold ${text}`}>{evidence?.name || 'Evidência compartilhada'}</h4>
                                 {evidence?.objective && <p className={`mt-2 text-sm leading-6 ${muted}`}>{evidence.objective}</p>}

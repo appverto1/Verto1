@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { getSupabase } from '../lib/supabase';
+import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import { GoogleIcon } from './GoogleIcon';
 import { LogoVerto } from './Common';
 import { extractPasswordRecoveryUrlState } from '../utils/passwordRecoveryUrl';
@@ -22,8 +22,19 @@ type ActivationAccessProps = {
 };
 
 export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
-  const safeAuthErrorMessage = (error: unknown) =>
-    error instanceof Error ? error.message : 'Falha na operação de autenticação.';
+  const withActivationTimeout = async <T,>(promise: Promise<T>, timeoutMs: number): Promise<T | null> => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race<T | null>([
+        promise,
+        new Promise<null>((resolve) => {
+          timeoutId = setTimeout(() => resolve(null), Math.max(1, timeoutMs));
+        }),
+      ]);
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+    }
+  };
 
   const authAction = typeof window !== 'undefined'
     ? String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase()
@@ -39,6 +50,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
   const [recoveryCode, setRecoveryCode] = useState('');
   const [recoveryToken, setRecoveryToken] = useState('');
   const [invitationActivationToken, setInvitationActivationToken] = useState('');
+  const [patientActivationToken, setPatientActivationToken] = useState('');
   useLayoutEffect(() => {
     if (typeof window === 'undefined') return;
     const recoveryUrlState = extractPasswordRecoveryUrlState(window.location.href);
@@ -62,6 +74,21 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       setInvitationActivationToken(inviteToken);
       currentUrl.searchParams.delete('invite_token');
       hashParams.delete('invite_token');
+      currentUrl.hash = hashParams.toString();
+      window.history.replaceState(
+        window.history.state,
+        document.title,
+        `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`,
+      );
+    }
+
+    const patientToken = String(
+      currentUrl.searchParams.get('patient_activation_token') || hashParams.get('patient_activation_token') || '',
+    ).trim();
+    if (patientToken && patientToken.length <= 4096) {
+      setPatientActivationToken(patientToken);
+      currentUrl.searchParams.delete('patient_activation_token');
+      hashParams.delete('patient_activation_token');
       currentUrl.hash = hashParams.toString();
       window.history.replaceState(
         window.history.state,
@@ -153,50 +180,48 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     const { type, action, code, tokenHash, accessToken, refreshToken, invitationId: parsedInvitationId, inviteMode: parsedInviteMode, hasActivationParams } =
       parseActivationParams();
     const supabase = await getSupabase();
+    let resolvedSession: any = null;
 
     if (code || tokenHash || accessToken || refreshToken) {
-      // Token exchanges must not inherit a stale local session. A plain invitation link,
-      // however, keeps an already authenticated professional signed in.
-      try {
-        await supabase.auth.signOut({ scope: 'local' } as any);
-      } catch {
-        // no-op
-      }
+      // A sessão será substituída pela operação canônica abaixo. Não fazemos signOut
+      // local antes da troca porque isso disputa o mesmo auth lock do callback OAuth.
+      setIsActivationLinkContext(true);
     }
 
     if (code) {
-      try {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (exchangeError) throw exchangeError;
-      } catch (exchangeErr) {
-        console.error('Activation code exchange failed:', safeAuthErrorMessage(exchangeErr));
+      // OAuth/PKCE code exchange is centralized in ensureFreshSession. Keeping a
+      // single owner avoids the automatic/manual double exchange that could hold
+      // the Supabase auth lock and leave the activation screen waiting forever.
+      resolvedSession = await ensureFreshSession({ sessionTimeoutMs: 2500, urlExchangeTimeoutMs: 8000 });
+      if (!resolvedSession) {
+        throw new Error('A autenticação com Google demorou além do esperado. Tente novamente.');
       }
     } else if (tokenHash) {
-      try {
-        const otpType = type || 'signup';
-        const { error: verifyError } = await supabase.auth.verifyOtp({
+      const otpType = type || 'signup';
+      const verified = await withActivationTimeout(
+        supabase.auth.verifyOtp({
           token_hash: tokenHash,
           type: otpType as any,
-        });
-        if (verifyError) throw verifyError;
-      } catch (verifyErr) {
-        console.error('Activation verification failed:', safeAuthErrorMessage(verifyErr));
-      }
+        }),
+        8000,
+      );
+      if (!verified) throw new Error('Tempo esgotado ao validar o link de ativação.');
+      if ((verified as any)?.error) throw (verified as any).error;
+      resolvedSession = (verified as any)?.data?.session || null;
     } else if (accessToken && refreshToken) {
-      try {
-        const { error: setSessionError } = await supabase.auth.setSession({
+      const established = await withActivationTimeout(
+        supabase.auth.setSession({
           access_token: accessToken,
           refresh_token: refreshToken,
-        });
-        if (setSessionError) throw setSessionError;
-      } catch (setSessionErr) {
-        console.error('Activation session setup failed:', safeAuthErrorMessage(setSessionErr));
-      }
+        }),
+        8000,
+      );
+      if (!established) throw new Error('Tempo esgotado ao concluir a sessão de ativação.');
+      if ((established as any)?.error) throw (established as any).error;
+      resolvedSession = (established as any)?.data?.session || null;
     }
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    const session = resolvedSession || await ensureFreshSession({ sessionTimeoutMs: 2500, urlExchangeTimeoutMs: 8000 });
 
     const sessionEmail = String(session?.user?.email || '').trim().toLowerCase();
     if (sessionEmail) {
@@ -352,16 +377,20 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
       if (invitationId) redirectParams.set('invitation_id', invitationId);
       if (!isRecoveryRoute && !isInvitationAcceptanceAction && invitationId) redirectParams.set('invite_mode', inviteMode);
       const supabase = await getSupabase();
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/?${redirectParams.toString()}`,
-          // Some Google Workspace tenants require the e-mail scope explicitly.
-          // The server still enforces that the authenticated e-mail matches the invite.
-          scopes: 'https://www.googleapis.com/auth/userinfo.email',
-        },
-      });
-      if (oauthError) throw oauthError;
+      const oauthResult = await withActivationTimeout(
+        supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: `${window.location.origin}/?${redirectParams.toString()}`,
+            // Some Google Workspace tenants require the e-mail scope explicitly.
+            // The server still enforces that the authenticated e-mail matches the invite.
+            scopes: 'https://www.googleapis.com/auth/userinfo.email',
+          },
+        }),
+        8000,
+      );
+      if (!oauthResult) throw new Error('Tempo esgotado ao iniciar o acesso com Google. Tente novamente.');
+      if ((oauthResult as any)?.error) throw (oauthResult as any).error;
     } catch (err: any) {
       setError(err?.message || 'Falha ao iniciar login com Google.');
       setLoading(false);
@@ -513,10 +542,60 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         setMessage('Senha definida com sucesso. Redirecionando...');
         return;
       }
+      if (patientActivationToken && intendedRole === 'patient') {
+        const passwordValidationError = validateRecoveryPassword(newPassword);
+        if (passwordValidationError) {
+          throw new Error(passwordValidationError);
+        }
+        const activationResponse = await withActivationTimeout(
+          fetch('/api/auth/patient-activation/password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              token: patientActivationToken,
+              newPassword,
+            }),
+          }),
+          10000,
+        );
+        if (!activationResponse) {
+          throw new Error('Tempo esgotado ao concluir a ativação. Tente novamente.');
+        }
+        const activationResult = await (activationResponse as Response).json().catch(() => ({}));
+        if (!(activationResponse as Response).ok || !activationResult?.success) {
+          throw new Error(
+            activationResult?.message ||
+              activationResult?.error ||
+              'Não foi possível concluir a ativação desta conta.',
+          );
+        }
+
+        const loginEmail = String(
+          activationResult?.loginEmail || identifiedEmail || email,
+        ).trim().toLowerCase();
+        const loginRes = await onLogin(
+          null,
+          'patient',
+          { email: loginEmail, password: newPassword },
+          {
+            provider: 'email',
+            activationFlow: true,
+            passwordSetupCompleted: true,
+            activationEmail: loginEmail,
+            invitationId: null,
+          },
+        );
+        if (!loginRes?.success) {
+          throw new Error(loginRes?.error || 'Conta ativada, mas não foi possível concluir o login. Entre novamente com a senha definida.');
+        }
+        setPatientActivationToken('');
+        setMessage('Senha definida com sucesso. Redirecionando...');
+        return;
+      }
+
       const supabase = await getSupabase();
-      let {
-        data: { session },
-      } = await supabase.auth.getSession();
+      let session = await ensureFreshSession({ sessionTimeoutMs: 2500, urlExchangeTimeoutMs: 8000 });
 
       if (!session?.user) {
         session = await establishSessionFromUrl();
@@ -555,7 +634,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
             const resendRequested = await requestActivationBootstrap(fallbackEmail);
             if (resendRequested) {
               setMessage(
-                'Se esta conta ainda estiver pendente, enviaremos um novo link de ativação por e-mail.',
+                'Este link antigo não consegue mais definir a senha com segurança. Enviamos um novo link de ativação para o seu e-mail.',
               );
               return;
             }
@@ -564,9 +643,7 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
         throw updateError;
       }
 
-      const {
-        data: { session: refreshedSession },
-      } = await supabase.auth.getSession();
+      const refreshedSession = await ensureFreshSession({ sessionTimeoutMs: 2500, urlExchangeTimeoutMs: 8000 });
 
       const userEmail = String(session.user.email || identifiedEmail || email).trim().toLowerCase();
       const loginRes = await onLogin(

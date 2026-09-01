@@ -9,7 +9,6 @@ import {
   Plus,
   Search,
   Bell,
-  ChevronLeft,
   ChevronRight,
   DollarSign,
   PieChart,
@@ -131,6 +130,11 @@ import {
   parseDocumentForStorage,
 } from "../utils/brMasks";
 import { resolveClinicTimeZone } from "../utils/clinicTimeZone";
+import {
+  formatProfessionalCouncil,
+  formatProfessionalRegistry,
+  isProfessionalRegistryValid,
+} from "../utils/professionalRegistry";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -500,6 +504,10 @@ const getPatientPhotoSource = (patient: any) =>
       patient?.profile_picture ||
       patient?.profilePictureUrl ||
       patient?.profile_picture_url ||
+      patient?.portalProfilePicture ||
+      patient?.portal_profile_picture ||
+      patient?.portalProfilePictureUrl ||
+      patient?.portal_profile_picture_url ||
       patient?.photoUrl ||
       patient?.photo_url ||
       ""
@@ -523,6 +531,7 @@ interface CoordinatorDashboardProps {
   onDeleteRoomReservation: (id: string) => void;
   protocols: any[];
   setProtocols: (protocols: any) => void;
+  onProtocolsPersisted?: (protocols: any[], sectionVersions?: Record<string, number>) => void;
   activityLogs: any[];
   onAddActivityLog: (title: string, content: string, type?: string) => void;
   onScheduleSession: (session: any) => Promise<any> | any;
@@ -657,6 +666,7 @@ export function CoordinatorDashboard({
   onDeleteRoomReservation,
   protocols,
   setProtocols,
+  onProtocolsPersisted,
   activityLogs,
   onAddActivityLog,
   onScheduleSession,
@@ -2086,7 +2096,7 @@ export function CoordinatorDashboard({
   };
   const coordinatorAvatarUrl = user?.profilePicture || user?.profile_picture || null;
   const [therapistCrp, setTherapistCrp] = useState<string>(
-    String(user?.crp || ""),
+    formatProfessionalRegistry(user?.crp || ""),
   );
   const [therapistDocumentType, setTherapistDocumentType] = useState<string>(
     String(user?.professionalProfile?.documentType || user?.professional_profile?.document_type || profileMetadata?.documentType || profileMetadata?.document_type || "CPF").toUpperCase(),
@@ -2134,7 +2144,7 @@ export function CoordinatorDashboard({
     user?.clinicSettings?.clinicLogoUrl || null,
   );
   const [therapistCouncilType, setTherapistCouncilType] = useState<string>(
-    String(user?.professionalProfile?.council || user?.professional_profile?.council || profileMetadata?.council || profileMetadata?.councilType || ""),
+    formatProfessionalCouncil(user?.professionalProfile?.council || user?.professional_profile?.council || profileMetadata?.council || profileMetadata?.councilType || ""),
   );
   const [therapistCouncilState, setTherapistCouncilState] = useState<string>(
     String(user?.professionalProfile?.councilState || user?.professional_profile?.council_state || profileMetadata?.councilState || profileMetadata?.council_state || "").toUpperCase().slice(0, 2),
@@ -2207,7 +2217,7 @@ export function CoordinatorDashboard({
     profile: 0,
     logo: 0,
   });
-  const therapistCanRegisterClinicalData = !isTherapist || Boolean(therapistCrp.trim());
+  const therapistCanRegisterClinicalData = true;
   const isDemoAccount = Boolean(user?.isDemoUser);
   const canManageProtocolLibrary = hasCapability("aba.program.edit");
   const canManageClinicSettings = ["director", "coordinator"].includes(normalizedRole) && hasCapability("clinic.settings.edit");
@@ -2339,16 +2349,7 @@ export function CoordinatorDashboard({
     return Math.round((target.getTime() - today.getTime()) / 86400000);
   };
 
-  const ensureTherapistClinicalProfile = () => {
-    if (therapistCanRegisterClinicalData) return true;
-    const warning =
-      "Complete seu perfil com o CRP para habilitar registros clínicos";
-    alert(warning);
-    showToast(warning, "error");
-    setActiveTab("settings");
-    setTabHistory((prev) => (prev[prev.length - 1] === "settings" ? prev : [...prev, "settings"]));
-    return false;
-  };
+  const ensureTherapistClinicalProfile = () => true;
 
   const readImageAsDataUrl = (file: File, onDone: (result: string) => void) => {
     const reader = new FileReader();
@@ -8502,19 +8503,19 @@ export function CoordinatorDashboard({
 
   const handleSaveClinicSettings = async (saveScope: "professional" | "clinic" = "clinic") => {
     const cleanFullName = therapistFullName.trim();
-    const cleanCrp = therapistCrp.trim();
+    const cleanCrp = formatProfessionalRegistry(therapistCrp, therapistCouncilType);
     const normalizedTherapistDocumentType = ["CPF", "CNPJ", "OTHER"].includes(String(therapistDocumentType || "").toUpperCase())
       ? String(therapistDocumentType || "").toUpperCase()
       : "CPF";
     const cleanProfessionalDocument = normalizedTherapistDocumentType === "OTHER"
-      ? therapistCpf.trim().replace(/[^A-Za-z0-9./-]/g, "").slice(0, 40)
+      ? formatProfessionalRegistry(therapistCpf)
       : onlyDigits(therapistCpf, normalizedTherapistDocumentType === "CNPJ" ? 14 : 11);
     const cleanPhone = onlyDigits(therapistPhone, 11);
     const cleanTherapistEmail = therapistEmail.trim();
     const cleanRoleTitle = therapistRoleTitle.trim();
     const cleanSpecialties = therapistSpecialties.trim();
     const cleanMiniCurriculum = therapistMiniCurriculum.trim();
-    const cleanCouncilType = therapistCouncilType.trim();
+    const cleanCouncilType = formatProfessionalCouncil(therapistCouncilType);
     const cleanCouncilState = therapistCouncilState.trim().toUpperCase().slice(0, 2);
     const cleanCboCode = onlyDigits(therapistCboCode, 12);
     const cleanSpecialtyName = therapistSpecialtyName.trim();
@@ -8541,16 +8542,14 @@ export function CoordinatorDashboard({
         .filter(Boolean)
         .join(", ");
     const cleanClinicCnesCode = onlyDigits(clinicCnesCode, 12);
-    const isCrpValid =
-      !cleanCrp ||
-      /^[A-Za-z0-9À-ÿ .\/-]{2,80}$/u.test(cleanCrp);
+    const isCrpValid = isProfessionalRegistryValid(cleanCrp);
 
     if (saveScope === "professional" && (!cleanFullName || cleanFullName.length < 3)) {
       showToast("Informe o nome completo para salvar o perfil.", "error");
       return;
     }
     if (saveScope === "professional" && !isCrpValid) {
-      showToast("Registro profissional inválido. Revise o número do conselho.", "error");
+      showToast("Registro profissional inválido. Use até 80 caracteres, sem símbolos de controle.", "error");
       return;
     }
     if (saveScope === "professional" && cleanProfessionalDocument && normalizedTherapistDocumentType !== "OTHER") {
@@ -8662,6 +8661,7 @@ export function CoordinatorDashboard({
 
     if (saveScope === "professional") {
       onUpdateProfile({
+        profileSaveScope: "professional",
         name: cleanFullName || user?.name,
         cpf: normalizedTherapistDocumentType === "CPF" ? cleanProfessionalDocument || null : null,
         phone: cleanPhone || null,
@@ -8703,6 +8703,7 @@ export function CoordinatorDashboard({
       });
     } else {
       onUpdateProfile({
+        profileSaveScope: "clinic",
         clinicSettings: {
           ...clinicSettings,
           clinicLogoUrl: clinicLogoDataUrl || undefined,
@@ -10971,6 +10972,7 @@ export function CoordinatorDashboard({
               onUpdateTask={onUpdateTask}
               protocols={protocols}
               setProtocols={setProtocols}
+              onProtocolsPersisted={onProtocolsPersisted}
               userRole={user.role}
               allowedTabs={isReceptionist ? ["files"] : undefined}
               anamnesisTemplate={anamnesisTemplate}
@@ -14267,7 +14269,7 @@ export function CoordinatorDashboard({
                   <div className="space-y-8">
                     <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
                       <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">
-                        Dados obrigatórios para registros clínicos
+                        Identificação profissional
                       </h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="md:col-span-2">
@@ -14285,20 +14287,15 @@ export function CoordinatorDashboard({
 
                         <div className="md:col-span-2">
                           <label className="block text-xs font-bold text-slate-700 mb-2">
-                            CRP <span className="text-red-500">*</span>
+                            Registro profissional / identificação (opcional)
                           </label>
                           <input
                             type="text"
                             value={therapistCrp}
-                            onChange={(e) => setTherapistCrp(e.target.value)}
-                            placeholder="Ex: 06/123456"
+                            onChange={(e) => setTherapistCrp(formatProfessionalRegistry(e.target.value, therapistCouncilType))}
+                            placeholder="Ex.: 06/123456, 12345-TO ou registro livre"
                             className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                           />
-                          {!therapistCanRegisterClinicalData && (
-                            <p className="text-xs text-amber-700 font-semibold mt-2">
-                              Complete seu perfil com o CRP para habilitar registros clínicos
-                            </p>
-                          )}
                         </div>
 
                         <div>
@@ -14460,8 +14457,8 @@ export function CoordinatorDashboard({
                             <input
                               type="text"
                               value={therapistCrp}
-                              onChange={(e) => setTherapistCrp(e.target.value)}
-                              placeholder="Ex: CRP 06/123456"
+                              onChange={(e) => setTherapistCrp(formatProfessionalRegistry(e.target.value, therapistCouncilType))}
+                              placeholder="Ex.: CRP 06/123456, 12345-TO ou registro livre"
                               className="w-full p-4 bg-white border border-slate-200 rounded-2xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500/20 transition-all"
                             />
                           </div>

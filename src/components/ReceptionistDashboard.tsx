@@ -13,7 +13,6 @@ import {
   Plus,
   CalendarPlus,
   MessageCircle,
-  ChevronLeft,
   ChevronRight,
   Settings,
   Users,
@@ -58,7 +57,7 @@ import {
   writeAgendaViewPreference,
   type AgendaView,
 } from "../utils/agendaViewPreference";
-import { formatProfessionalRegistry } from "../utils/professionalRegistry";
+import { formatProfessionalRegistry, getProfessionalRegistryPlaceholder } from "../utils/professionalRegistry";
 import {
   getDefaultAnamnesisTemplate,
   normalizeAnamnesisTemplate,
@@ -85,10 +84,8 @@ const ProfileView = ({
   const [profileCrp, setProfileCrp] = useState(formatProfessionalRegistry(user.crp || ""));
 
   const handleSaveProfile = () => {
-    if (profileSpecialty === "Psicólogo" && !profileCrp.trim()) {
-      return alert("O preenchimento do CRP é obrigatório para Psicólogos.");
-    }
     onUpdateProfile({
+      profileSaveScope: "professional",
       name: profileName,
       email: profileEmail,
       specialty: profileSpecialty,
@@ -140,6 +137,7 @@ const ProfileView = ({
                     const reader = new FileReader();
                     reader.onloadend = () => {
                       onUpdateProfile({
+                        profileSaveScope: "professional",
                         profilePicture: reader.result as string,
                       });
                     };
@@ -207,19 +205,17 @@ const ProfileView = ({
             </div>
             <div className="space-y-2">
               <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                Registro Profissional (CRP/CRM){" "}
-                {profileSpecialty === "Psicólogo" && (
-                  <span className="text-red-500">*</span>
-                )}
+                Registro profissional / identificação de classe (opcional)
               </label>
               <input
                 type="text"
                 value={profileCrp}
+                maxLength={80}
                 onChange={(e) => setProfileCrp(formatProfessionalRegistry(e.target.value))}
-                placeholder="00/00000"
+                placeholder={getProfessionalRegistryPlaceholder('', profileSpecialty)}
                 className="w-full bg-slate-50 border border-slate-100 rounded-2xl p-4 text-sm font-semibold outline-none focus:border-blue-500 transition-all"
-                required={profileSpecialty === "Psicólogo"}
               />
+              <p className="text-[10px] leading-4 text-slate-400">Aceita letras, números, hífens, barras e sufixos profissionais. Deixe em branco quando não houver conselho formal.</p>
             </div>
           </div>
 
@@ -1343,6 +1339,11 @@ export const ReceptionistDashboard = ({
                       "Clínica Verto",
                     cnpj: user?.clinicSettings?.clinicCnpj || "",
                     address: user?.clinicSettings?.clinicAddress || "",
+                    patientPhotoPolicy:
+                      String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC'
+                        ? 'CLINIC'
+                        : 'PORTAL',
+                    role: user?.role || 'receptionist',
                     logoUrl:
                       user?.clinicSettings?.clinicLogoUrl ||
                       user?.profilePicture ||
@@ -1352,6 +1353,7 @@ export const ReceptionistDashboard = ({
                     signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                     defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || 50,
                   }}
+                  userRole={user?.role || 'receptionist'}
                 />
               );
             })()}

@@ -45,6 +45,15 @@ export function formatDocument(value: unknown, documentType?: BrazilianDocumentT
   const type = String(documentType || "").toUpperCase();
   if (type === "CPF") return maskCpf(value);
   if (type === "CNPJ") return maskCnpj(value);
+  if (type === "OTHER") {
+    return String(value ?? "")
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, " ")
+      .normalize("NFC")
+      .replace(/\s+/g, " ")
+      .replace(/[^\p{L}\p{M}\p{N} .,/\\_#:+()\-]/gu, "")
+      .trimStart()
+      .slice(0, 80);
+  }
   return maskCpfCnpj(value);
 }
 

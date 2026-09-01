@@ -244,7 +244,7 @@ export function normalizeHistoryMutationPayload(input: any, context: {
     icon: cleanString(input?.icon, 40),
     image: cleanUrl(input?.image || input?.image_url || input?.imageUrl),
     image_path: cleanString(input?.image_path || input?.imagePath, 600) || undefined,
-    date_group: cleanString(input?.date_group || input?.dateGroup || context.dateGroup, 80) || undefined,
+    date_group: cleanString(context.dateGroup || input?.date_group || input?.dateGroup, 80) || undefined,
     therapist_id: cleanString(input?.therapist_id || input?.therapistId || context.userId, 120),
     assigned_task_id: cleanString(input?.assigned_task_id || input?.assignedTaskId, 120) || undefined,
     source: cleanString(input?.source || 'offline_sync', 80),

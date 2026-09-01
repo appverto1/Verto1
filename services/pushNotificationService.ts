@@ -851,12 +851,41 @@ export async function findPushSubscriptionsForRecipients(params: {
     if (!rowClinicId) return !requireClinic;
     return rowClinicId === recipient.clinicId;
   };
-  const recipientsWithoutPatientSubscription = recipients.filter((recipient) => {
-    const patientIdSet = new Set(recipient.patientIds);
-    return !patientRows.rows.some((row: any) =>
-      clinicMatches(recipient, row) && patientIdSet.has(sanitizeText(row?.patient_id, 120)),
-    );
-  });
+  const indexRows = (rows: any[], field: 'patient_id' | 'user_id' | 'user_email') => {
+    const index = new Map<string, any[]>();
+    for (const row of rows) {
+      const raw = field === 'user_email' ? sanitizeEmail(row?.[field]) : sanitizeText(row?.[field], 120);
+      if (!raw) continue;
+      const existing = index.get(raw);
+      if (existing) existing.push(row);
+      else index.set(raw, [row]);
+    }
+    return index;
+  };
+  const collectIndexedMatches = (
+    index: Map<string, any[]>,
+    keys: string[],
+    recipient: (typeof recipients)[number],
+    requireClinic = false,
+  ) => {
+    const rows: any[] = [];
+    const seenEndpoints = new Set<string>();
+    for (const key of keys) {
+      for (const row of index.get(key) || []) {
+        if (!clinicMatches(recipient, row, requireClinic)) continue;
+        const endpoint = sanitizeText(row?.endpoint || row?.subscription?.endpoint, 2000);
+        if (endpoint && seenEndpoints.has(endpoint)) continue;
+        if (endpoint) seenEndpoints.add(endpoint);
+        rows.push(row);
+      }
+    }
+    return rows;
+  };
+
+  const patientRowIndex = indexRows(patientRows.rows, 'patient_id');
+  const recipientsWithoutPatientSubscription = recipients.filter((recipient) =>
+    collectIndexedMatches(patientRowIndex, recipient.patientIds, recipient).length === 0,
+  );
   const userIds = Array.from(new Set(recipientsWithoutPatientSubscription.flatMap((recipient) => [
     ...recipient.patientIds,
     ...recipient.legacyUserIds,
@@ -865,12 +894,10 @@ export async function findPushSubscriptionsForRecipients(params: {
   if (userRows.failed) {
     return { complete: false, subscriptionsByRecipientKey: result };
   }
-  const recipientsWithoutExactSubscription = recipientsWithoutPatientSubscription.filter((recipient) => {
-    const userIdSet = new Set([...recipient.patientIds, ...recipient.legacyUserIds]);
-    return !userRows.rows.some((row: any) =>
-      clinicMatches(recipient, row) && userIdSet.has(sanitizeText(row?.user_id, 120)),
-    );
-  });
+  const userRowIndex = indexRows(userRows.rows, 'user_id');
+  const recipientsWithoutExactSubscription = recipientsWithoutPatientSubscription.filter((recipient) =>
+    collectIndexedMatches(userRowIndex, [...recipient.patientIds, ...recipient.legacyUserIds], recipient).length === 0,
+  );
   const patientEmails = Array.from(new Set(
     recipientsWithoutExactSubscription.map((recipient) => recipient.patientEmail).filter(Boolean),
   ));
@@ -878,27 +905,20 @@ export async function findPushSubscriptionsForRecipients(params: {
   if (emailRows.failed) {
     return { complete: false, subscriptionsByRecipientKey: result };
   }
+  const emailRowIndex = indexRows(emailRows.rows, 'user_email');
 
   for (const recipient of recipients) {
-    const patientIdSet = new Set(recipient.patientIds);
-    const userIdSet = new Set([...recipient.patientIds, ...recipient.legacyUserIds]);
-    const patientMatches = patientRows.rows.filter((row: any) =>
-      clinicMatches(recipient, row) && patientIdSet.has(sanitizeText(row?.patient_id, 120)),
-    );
+    const patientMatches = collectIndexedMatches(patientRowIndex, recipient.patientIds, recipient);
     const userMatches = patientMatches.length > 0
       ? []
-      : userRows.rows.filter((row: any) =>
-          clinicMatches(recipient, row) && userIdSet.has(sanitizeText(row?.user_id, 120)),
-        );
+      : collectIndexedMatches(userRowIndex, [...recipient.patientIds, ...recipient.legacyUserIds], recipient);
     const matchingRows = patientMatches.length > 0
       ? patientMatches
       : userMatches.length > 0
         ? userMatches
-        : emailRows.rows.filter((row: any) =>
-          clinicMatches(recipient, row, true) &&
-          Boolean(recipient.patientEmail) &&
-          sanitizeEmail(row?.user_email) === recipient.patientEmail,
-        );
+        : recipient.patientEmail
+          ? collectIndexedMatches(emailRowIndex, [recipient.patientEmail], recipient, true)
+          : [];
     result.set(recipient.key, Array.from(new Map(
       matchingRows
         .map((row: any) => {

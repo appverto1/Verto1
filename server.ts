@@ -1967,6 +1967,19 @@ function sanitizePhone(value: unknown): string | null {
   return digits.slice(0, 20);
 }
 
+const PROFESSIONAL_IDENTIFIER_PATTERN = /^[\p{L}\p{M}\p{N} .,/\\_#:+()\-]*$/u;
+
+function isProfessionalIdentifierInputValid(value: unknown, maxLength: number): boolean {
+  if (value == null || String(value).trim() === '') return true;
+  const normalized = sanitizeString(value, maxLength + 1).replace(/\s+/g, ' ').trim();
+  return normalized.length <= maxLength && PROFESSIONAL_IDENTIFIER_PATTERN.test(normalized);
+}
+
+function sanitizeProfessionalIdentifier(value: unknown, maxLength: number): string {
+  const normalized = sanitizeString(value, maxLength).replace(/\s+/g, ' ').trim();
+  return PROFESSIONAL_IDENTIFIER_PATTERN.test(normalized) ? normalized : '';
+}
+
 const BRAZIL_STATE_CODES = new Set([
   "AC",
   "AL",
@@ -3698,21 +3711,25 @@ async function markClinicPaymentFailed(params: {
   email?: string | null;
   invoiceId?: string | null;
 }) {
-  const blockedAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString();
-  const payload = {
-    subscription_status: 'delinquent',
-    stripe_payment_failed_at: new Date().toISOString(),
-    stripe_access_block_at: blockedAt,
-    stripe_last_failed_invoice_id: sanitizeString(params.invoiceId, 200) || undefined,
-    updated_at: new Date().toISOString()
-  };
   const clinicId = sanitizeString(params.clinicId, 120);
   const userId = sanitizeString(params.userId, 120);
   const email = sanitizeEmail(params.email);
-
-  if (clinicId) await patchTableSafely('clinics', { column: 'id', value: clinicId }, payload);
-  if (userId) await patchTableSafely('users', { column: 'id', value: userId }, payload);
-  if (!userId && email) await patchTableSafely('users', { column: 'email', value: email }, payload);
+  const failedAt = new Date().toISOString();
+  const result = await supabase.rpc('apply_billing_payment_failure_v1', {
+    p_clinic_id: isUuid(clinicId) ? clinicId : null,
+    p_user_id: isUuid(userId) ? userId : null,
+    p_email: email || null,
+    p_invoice_id: sanitizeString(params.invoiceId, 200) || null,
+    p_failed_at: failedAt,
+  });
+  if (result.error) {
+    const message = String(result.error?.message || result.error?.details || '');
+    if (/apply_billing_payment_failure_v1|42883|function .* does not exist|schema cache/i.test(message)) {
+      throw new Error('BILLING_GRACE_MIGRATION_REQUIRED');
+    }
+    throw result.error;
+  }
+  return result.data || null;
 }
 
 async function clearClinicPaymentFailure(params: {
@@ -4092,21 +4109,27 @@ function sanitizePhoneE164(value: unknown): string | null {
 }
 
 function resolveStoredCrp(input: any): string | null {
+  const metadata = input?.metadata && typeof input.metadata === 'object' ? input.metadata : {};
   const raw = (
-    sanitizeString(input?.crp, 80) ||
-    sanitizeString(input?.council_number, 80) ||
-    sanitizeString(input?.councilNumber, 80) ||
-    sanitizeString(input?.clinicSettings?.councilNumber, 80) ||
+    input?.crp ??
+    input?.council_number ??
+    input?.councilNumber ??
+    metadata?.crp ??
+    metadata?.councilNumber ??
+    metadata?.council_number ??
+    input?.clinicSettings?.councilNumber ??
     null
   );
-  if (!raw) return null;
-  const digits = raw.replace(/\D/g, '').slice(0, 7);
-  if (digits.length <= 2) return digits || null;
-  return `${digits.slice(0, 2)}/${digits.slice(2)}`;
+  if (raw == null || String(raw).trim() === '') return null;
+  const normalized = sanitizeProfessionalIdentifier(raw, 80);
+  return normalized || null;
 }
 
 function resolveStoredCouncil(input: any): string | null {
-  return sanitizeString(input?.council, 80) || null;
+  const metadata = input?.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+  const raw = input?.council ?? input?.council_type ?? input?.councilType ?? metadata?.council ?? metadata?.councilType ?? metadata?.council_type;
+  if (raw == null || String(raw).trim() === '') return null;
+  return sanitizeProfessionalIdentifier(raw, 48) || null;
 }
 
 function maskEmail(email: unknown): string {
@@ -4294,6 +4317,122 @@ function getClinicInvitationActivationUrl(params: {
   );
   const fragment = new URLSearchParams({ invite_token: token });
   activationUrl.hash = fragment.toString();
+  return activationUrl.toString();
+}
+
+
+const PATIENT_ACTIVATION_TTL_MS = 24 * 60 * 60 * 1000;
+
+type PatientActivationTokenClaims = {
+  userId: string;
+  nonce: string;
+  expiresAt: number;
+};
+
+function patientActivationSigningSecret(): string {
+  const sessionSecret = sanitizeString(process.env.SESSION_SECRET || '', 2000);
+  if (sessionSecret.length < 32) {
+    throw new Error('PATIENT_ACTIVATION_LINK_SECRET_INVALID');
+  }
+  return crypto
+    .createHmac('sha256', sessionSecret)
+    .update('verto:patient-activation:v1')
+    .digest('hex');
+}
+
+function createPatientActivationToken(params: {
+  userId: unknown;
+  nonce: unknown;
+  expiresAt: number;
+}): string {
+  const userId = sanitizeString(params.userId, 120);
+  const nonce = sanitizeString(params.nonce, 200);
+  const expiresAt = Number(params.expiresAt);
+  if (!isUuid(userId) || nonce.length < 32 || !Number.isSafeInteger(expiresAt) || expiresAt <= Date.now()) {
+    throw new Error('PATIENT_ACTIVATION_TOKEN_CONTEXT_INVALID');
+  }
+  const payload = Buffer.from(JSON.stringify({ v: 1, u: userId, n: nonce, e: expiresAt }), 'utf8').toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', patientActivationSigningSecret())
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function verifyPatientActivationToken(tokenValue: unknown): PatientActivationTokenClaims | null {
+  const token = sanitizeString(tokenValue, 4096);
+  const parts = token.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  const [payload, suppliedSignature] = parts;
+  const expectedSignature = crypto
+    .createHmac('sha256', patientActivationSigningSecret())
+    .update(payload)
+    .digest('base64url');
+  const suppliedBuffer = Buffer.from(suppliedSignature, 'utf8');
+  const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+  if (
+    suppliedBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(suppliedBuffer, expectedBuffer)
+  ) return null;
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const userId = sanitizeString(parsed?.u, 120);
+    const nonce = sanitizeString(parsed?.n, 200);
+    const expiresAt = Number(parsed?.e);
+    if (
+      parsed?.v !== 1 ||
+      !isUuid(userId) ||
+      nonce.length < 32 ||
+      !Number.isSafeInteger(expiresAt) ||
+      expiresAt <= Date.now()
+    ) return null;
+    return { userId, nonce, expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+function patientActivationIsPending(authUser: any, profile: any): boolean {
+  const metadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
+    ? authUser.user_metadata
+    : {};
+  const role = sanitizeString(profile?.role || metadata?.role, 40).toLowerCase();
+  const status = sanitizeString(profile?.status, 60).toLowerCase();
+  return role === 'patient' && (
+    metadata?.patient_activation_required === true ||
+    status === 'pending_activation' ||
+    profile?.first_login_completed === false ||
+    metadata?.first_login_completed === false
+  );
+}
+
+async function createPatientActivationLink(authUserValue: any): Promise<string> {
+  const authUser = authUserValue?.user || authUserValue;
+  const userId = sanitizeString(authUser?.id, 120);
+  const email = sanitizeEmail(authUser?.email);
+  if (!isUuid(userId) || !email) throw new Error('PATIENT_ACTIVATION_IDENTITY_INVALID');
+
+  const nonce = crypto.randomBytes(32).toString('base64url');
+  const metadata = authUser?.user_metadata && typeof authUser.user_metadata === 'object'
+    ? { ...authUser.user_metadata }
+    : {};
+  const { data: updatedUserResult, error: nonceError } = await supabase.auth.admin.updateUserById(userId, {
+    user_metadata: {
+      ...metadata,
+      patient_activation_nonce: nonce,
+      patient_activation_required: true,
+      first_login_completed: false,
+    },
+  });
+  if (nonceError) throw nonceError;
+  const token = createPatientActivationToken({
+    userId,
+    nonce,
+    expiresAt: Date.now() + PATIENT_ACTIVATION_TTL_MS,
+  });
+  const activationUrl = new URL(getActivationRedirectUrl('patient', email));
+  activationUrl.hash = new URLSearchParams({ patient_activation_token: token }).toString();
   return activationUrl.toString();
 }
 
@@ -4932,7 +5071,11 @@ async function sendTransactionalEmailSafe(
 }
 
 type RecoveryChannel = 'email';
-type OtpPurpose = 'password_recovery' | 'phone_verification' | 'portal_login';
+type OtpPurpose = 'password_recovery' | 'phone_verification' | 'portal_login' | 'external_clinical_share';
+
+function otpPurposeRequiresPersistentStorage(purpose: OtpPurpose): boolean {
+  return purpose === 'password_recovery' || purpose === 'external_clinical_share';
+}
 
 type OtpChallenge = {
   key: string;
@@ -5142,7 +5285,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
 
   const useDb = await ensureOtpTableAvailability();
   if (!useDb) {
-    if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+    if (otpPurposeRequiresPersistentStorage(normalizedChallenge.purpose) && requiresPersistentRecoveryStorage()) {
       otpStore.delete(normalizedChallenge.key);
       throw recoveryStorageUnavailableError();
     }
@@ -5168,7 +5311,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
     if (error) {
       console.warn('[OTP] Falha no upsert de otp_challenges, fallback memória:', error.message);
       markOtpTableAvailability(false);
-      if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+      if (otpPurposeRequiresPersistentStorage(normalizedChallenge.purpose) && requiresPersistentRecoveryStorage()) {
         otpStore.delete(normalizedChallenge.key);
         throw recoveryStorageUnavailableError();
       }
@@ -5177,7 +5320,7 @@ async function setOtpChallenge(challenge: OtpChallenge): Promise<void> {
     if (error?.code === 'RECOVERY_STORAGE_UNAVAILABLE') throw error;
     console.warn('[OTP] Exceção no upsert de otp_challenges, fallback memória:', error?.message || String(error));
     markOtpTableAvailability(false);
-    if (normalizedChallenge.purpose === 'password_recovery' && requiresPersistentRecoveryStorage()) {
+    if (otpPurposeRequiresPersistentStorage(normalizedChallenge.purpose) && requiresPersistentRecoveryStorage()) {
       otpStore.delete(normalizedChallenge.key);
       throw recoveryStorageUnavailableError();
     }
@@ -6225,19 +6368,11 @@ async function canAccessPatientPhotoReferencedByHistory(params: {
   }
 
   if (role === 'patient') {
-    const actorEmail = sanitizeEmail(req.session.user?.email);
-    const linkedPatientIds = actorEmail
-      ? await getPatientIdsByEmailAcrossClinics(actorEmail, actorId, activeClinicId)
-      : [];
-    const linkedPatientIdSet = new Set(linkedPatientIds.map((id) => sanitizeString(id, 120)).filter(Boolean));
-    return matchingRows.some((row) => {
-      const rowPatientId = sanitizeString(row?.patient_id, 120);
-      const rowPatientEmail = sanitizeEmail(row?.patient_email);
-      return (
-        (rowPatientId && linkedPatientIdSet.has(rowPatientId)) ||
-        (actorEmail && rowPatientEmail && rowPatientEmail === actorEmail)
-      );
-    });
+    const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+    if (!portalScope || portalScope.clinicId !== activeClinicId) return false;
+    return matchingRows.some((row) =>
+      sanitizeString(row?.patient_id, 120) === portalScope.patientId
+    );
   }
 
   for (const row of matchingRows) {
@@ -8714,24 +8849,26 @@ function resolveProtocolSkillOriginForRoute(
   };
 }
 
+const ADULT_EFFORT_SEMANTICS_V2 = 'effort_min_0_max_100_v2';
+
 function effortEmojiForPercent(value: number | null | undefined): string | null {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
   const percent = Number(value);
-  if (percent < 20) return '😫';
-  if (percent < 40) return '😕';
+  if (percent < 20) return '🙂';
+  if (percent < 40) return '😌';
   if (percent < 60) return '😐';
-  if (percent < 80) return '🙂';
-  return '🤩';
+  if (percent < 80) return '😕';
+  return '😫';
 }
 
 function effortLabelForPercent(value: number | null | undefined): string | null {
   if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
   const percent = Number(value);
-  if (percent < 20) return 'Muito difícil';
-  if (percent < 40) return 'Difícil';
+  if (percent < 20) return 'Muito leve';
+  if (percent < 40) return 'Leve';
   if (percent < 60) return 'Moderado';
-  if (percent < 80) return 'Leve';
-  return 'Muito leve';
+  if (percent < 80) return 'Difícil';
+  return 'Muito difícil';
 }
 
 function isVbMappTask(taskLike: any): boolean {
@@ -9329,6 +9466,73 @@ function currentClinicId(user: any): string | null {
     120
   );
   return id || null;
+}
+
+type CanonicalPatientPortalScope = {
+  patientId: string;
+  clinicId: string;
+};
+
+async function resolveCanonicalPatientPortalScope(user: any): Promise<CanonicalPatientPortalScope | null> {
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  if (!isUuid(clinicId)) return null;
+
+  const contextKind = sanitizeString(user?.activeAccessContext?.kind, 60).toLowerCase();
+  const selectedPatientId = sanitizeString(
+    user?.patientPortalPatientId ||
+      (contextKind === 'patient_portal' ? user?.activeAccessContext?.patientId : ''),
+    120
+  );
+
+  const patientExistsInSelectedClinic = async (patientId: string) => {
+    const { data, error } = await supabase
+      .from('patients')
+      .select('id')
+      .eq('id', patientId)
+      .eq('clinic_id', clinicId)
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('[PatientPortalScope] patient scope validation failed:', {
+        patientId,
+        clinicId,
+        message: sanitizeString(error?.message || String(error), 240)
+      });
+      return false;
+    }
+    return sanitizeString(data?.id, 120) === patientId;
+  };
+
+  // Canonical access context wins. If it exists but is stale/invalid, fail closed;
+  // never rediscover a different patient by e-mail behind the selected context.
+  if (isUuid(selectedPatientId)) {
+    if (!(await patientExistsInSelectedClinic(selectedPatientId))) return null;
+    return { patientId: selectedPatientId, clinicId };
+  }
+
+  // Compatibility only for old sessions created before patient-portal contexts.
+  // It is intentionally tenant-scoped and only succeeds when exactly one patient
+  // can be resolved inside the already selected clinic.
+  const candidateIds = new Set<string>();
+  const userId = sanitizeString(user?.id, 120);
+  const userEmail = sanitizeEmail(user?.email);
+
+  if (isUuid(userId) && await patientExistsInSelectedClinic(userId)) {
+    candidateIds.add(userId);
+  }
+
+  const linkedIds = await getPatientIdsByEmailAcrossClinics(userEmail, userId, clinicId);
+  linkedIds.forEach((patientId) => {
+    const safePatientId = sanitizeString(patientId, 120);
+    if (isUuid(safePatientId)) candidateIds.add(safePatientId);
+  });
+
+  if (candidateIds.size !== 1) return null;
+  const [patientId] = Array.from(candidateIds);
+  if (!(await canPortalSessionAccessPatient(patientId, user))) return null;
+  return { patientId, clinicId };
 }
 
 function currentClinicTimeZone(user: any): string {
@@ -10009,12 +10213,10 @@ async function resolveLegacyClinicalEmailReadScope(user: any, emailInput: unknow
 
   if (isPatientPortal) {
     if (!isSelfRequest) return { allowed: false, roleForFilter: 'patient', patientIds: [] };
-    const patientIds = await getPatientIdsByEmailAcrossClinics(
-      safeEmail,
-      sanitizeString(user?.id, 120),
-      currentClinicId(user),
-    );
-    return { allowed: true, roleForFilter: 'patient', patientIds };
+    const portalScope = await resolveCanonicalPatientPortalScope(user);
+    return portalScope
+      ? { allowed: true, roleForFilter: 'patient', patientIds: [portalScope.patientId] }
+      : { allowed: false, roleForFilter: 'patient', patientIds: [] };
   }
 
   const context = await resolveClinicCapabilityContext(user);
@@ -11647,7 +11849,10 @@ async function getPatientIdsByEmailAcrossClinics(patientEmail: string, responsib
   const safeEmail = sanitizeEmail(patientEmail);
   const safeResponsibleUserId = sanitizeString(responsibleUserId, 120);
   const safeClinicId = sanitizeString(clinicId, 120);
-  if (!safeEmail && !isUuid(safeResponsibleUserId)) return [];
+  // Legacy name kept to avoid a broad refactor, but this resolver is now fail-closed
+  // unless a concrete clinic is supplied. Patient portal reads must never fan out
+  // across tenants merely because an e-mail matches.
+  if (!isUuid(safeClinicId) || (!safeEmail && !isUuid(safeResponsibleUserId))) return [];
   const rows: any[] = [];
   const run = async (column: 'email' | 'responsible_email' | 'responsible_user_id', value: string, operator: 'ilike' | 'eq' = 'eq') => {
     if (!value) return;
@@ -11658,7 +11863,7 @@ async function getPatientIdsByEmailAcrossClinics(patientEmail: string, responsib
       .is('deleted_at', null)
       .limit(1000);
     query = operator === 'ilike' ? query.ilike(column, value) : query.eq(column, value);
-    if (isUuid(safeClinicId)) query = query.eq('clinic_id', safeClinicId);
+    query = query.eq('clinic_id', safeClinicId);
     const { data, error } = await query;
     if (error) {
       const missingColumn = extractMissingColumnName(error);
@@ -11724,53 +11929,42 @@ async function resolvePatientIdForRequest(
 ): Promise<string | null> {
   const safeRaw = sanitizeString(rawPatientId, 120);
   if (!safeRaw) return null;
+
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  if (role === 'patient') {
+    const portalScope = await resolveCanonicalPatientPortalScope(user);
+    if (!portalScope) return null;
+
+    const sessionUserId = sanitizeString(user?.id, 120);
+    if (
+      safeRaw === portalScope.patientId ||
+      (isUuid(sessionUserId) && safeRaw === sessionUserId) ||
+      !isUuid(safeRaw)
+    ) {
+      return portalScope.patientId;
+    }
+
+    // A patient-portal session can never redirect a clinical write to another
+    // patient UUID, even if that UUID exists and even if the e-mail matches.
+    return null;
+  }
+
   if (isUuid(safeRaw)) {
-    const role = sanitizeString(user?.role, 40).toLowerCase();
-    const safeEmail = sanitizeEmail(user?.email);
     const clinicId = currentClinicId(user);
 
-    const { data: byId, error: byIdError } = await supabase
+    let byIdQuery = supabase
       .from('patients')
       .select('id, created_at, created_by')
       .eq('id', safeRaw)
       .eq('is_active', true)
       .is('deleted_at', null)
-      .maybeSingle();
+      .limit(1);
+    if (isUuid(sanitizeString(clinicId, 120))) {
+      byIdQuery = byIdQuery.eq('clinic_id', sanitizeString(clinicId, 120));
+    }
+    const { data: byId, error: byIdError } = await byIdQuery.maybeSingle();
 
     if (!byIdError && byId?.id) return sanitizeString(byId.id, 120);
-
-    // Patient sessions can send auth user UUID instead of patients.id.
-    // In this case, resolve by e-mail to keep persistence linked correctly.
-    if (role === 'patient' && safeEmail) {
-      const resolveByEmailRows = async (scopedToClinic: boolean) => {
-        let byEmailQuery = supabase
-          .from('patients')
-          .select('id')
-          .ilike('email', safeEmail)
-          .eq('is_active', true)
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(1);
-        if (scopedToClinic && clinicId) {
-          byEmailQuery = byEmailQuery.eq('clinic_id', clinicId);
-        }
-        return await byEmailQuery;
-      };
-
-      // 1) Try clinic-scoped match first (when session has clinic context)
-      const { data: byEmailScopedRows, error: byEmailScopedError } = await resolveByEmailRows(true);
-      if (!byEmailScopedError && Array.isArray(byEmailScopedRows) && byEmailScopedRows[0]?.id) {
-        return sanitizeString(byEmailScopedRows[0].id, 120);
-      }
-
-      // 2) Fallback to any clinic match for this e-mail
-      const { data: byEmailRows, error: byEmailError } = await resolveByEmailRows(false);
-      if (!byEmailError && Array.isArray(byEmailRows) && byEmailRows[0]?.id) {
-        return sanitizeString(byEmailRows[0].id, 120);
-      }
-      return null;
-    }
-
     return safeRaw;
   }
 
@@ -15841,6 +16035,8 @@ type ResolvedOnboardingContext = {
     logoUrl: string | null;
     subscriptionStatus: string | null;
     billingModel: string | null;
+    stripePaymentFailedAt: string | null;
+    stripeAccessBlockAt: string | null;
     address: string | null;
     timeZone: string;
     patientPhotoPolicy: 'PORTAL' | 'CLINIC';
@@ -15869,6 +16065,8 @@ function compactOnboardingContextForSession(value: any): ResolvedOnboardingConte
         logoUrl: sanitizeSessionUrl(value.clinic.logoUrl),
         subscriptionStatus: normalizeClinicAccessStatus(value.clinic.subscriptionStatus) || null,
         billingModel: sanitizeString(value.clinic.billingModel, 60).toLowerCase() || null,
+        stripePaymentFailedAt: sanitizeString(value.clinic.stripePaymentFailedAt || value.clinic.stripe_payment_failed_at, 80) || null,
+        stripeAccessBlockAt: sanitizeString(value.clinic.stripeAccessBlockAt || value.clinic.stripe_access_block_at, 80) || null,
         address: sanitizeString(value.clinic.address, 320) || null,
         timeZone: resolveClinicTimeZone({ timeZone: value.clinic.timeZone, state: value.clinic.state }),
         patientPhotoPolicy: sanitizeString(value.clinic.patientPhotoPolicy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
@@ -15912,6 +16110,7 @@ async function fetchClinicOnboardingSnapshot(clinicId: string) {
     'subscription_status',
     'billing_model',
     'billing_sync_status',
+    'stripe_payment_failed_at',
     'stripe_access_block_at',
     'address',
     'clinic_address',
@@ -16112,6 +16311,8 @@ async function resolveOnboardingContextForUser(params: {
           logoUrl: null,
           subscriptionStatus: null,
           billingModel: null,
+          stripePaymentFailedAt: null,
+          stripeAccessBlockAt: null,
           address: null,
           timeZone: DEFAULT_CLINIC_TIME_ZONE,
           patientPhotoPolicy: 'PORTAL',
@@ -16207,6 +16408,8 @@ async function resolveOnboardingContextForUser(params: {
       logoUrl: sanitizeSessionUrl(clinicRow?.logo_url),
       subscriptionStatus: clinicSubscriptionStatus || null,
       billingModel: billingModel || null,
+      stripePaymentFailedAt: sanitizeString(clinicRow?.stripe_payment_failed_at, 80) || null,
+      stripeAccessBlockAt: sanitizeString(clinicRow?.stripe_access_block_at, 80) || null,
       address: clinicOnboardingAddress(clinicRow),
       timeZone: resolveClinicTimeZone({ timeZone: clinicRow?.timezone, state: clinicRow?.state }),
       patientPhotoPolicy: sanitizeString(clinicRow?.patient_photo_policy, 20).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL',
@@ -16332,6 +16535,8 @@ async function hydrateSessionUserWithOnboardingContext(sessionUser: any) {
     billingModel: clinicManagedBilling
       ? context.clinic?.billingModel || baseSessionUser.billingModel
       : baseSessionUser.billingModel,
+    stripePaymentFailedAt: context.clinic?.stripePaymentFailedAt || baseSessionUser.stripePaymentFailedAt || null,
+    stripeAccessBlockAt: context.clinic?.stripeAccessBlockAt || baseSessionUser.stripeAccessBlockAt || null,
     specialties: context.membership?.specialty || baseSessionUser.specialties,
     clinicSettings: clinicManagedBilling
       ? mergeAuthoritativeClinicSettings(baseSessionUser.clinicSettings, context)
@@ -16566,6 +16771,153 @@ async function insertUserProfileWithSchemaFallback(basePayload: Record<string, a
   return { error: lastError, payload };
 }
 
+
+function invalidateAuthUserEmailCache(...emails: unknown[]) {
+  for (const value of emails) {
+    const email = sanitizeEmail(value);
+    if (!email) continue;
+    authUserByEmailCache.delete(email);
+    authUserByEmailInFlight.delete(email);
+  }
+}
+
+async function ensurePatientActivationAuthIdentityFromPatient(patientValue: any): Promise<{ user: any; created: boolean }> {
+  const patient = patientValue && typeof patientValue === 'object' ? patientValue : {};
+  const email = sanitizeEmail(patient?.email);
+  const patientName = sanitizeString(patient?.name, 180) || (email ? email.split('@')[0] : 'Paciente');
+  const patientType = sanitizeString(patient?.type, 80) || 'adult_conventional';
+  const clinicId = isUuid(patient?.clinic_id) ? sanitizeString(patient.clinic_id, 120) : null;
+  if (!email) {
+    const error: any = new Error('PATIENT_AUTH_IDENTITY_EMAIL_REQUIRED');
+    error.code = 'PATIENT_AUTH_IDENTITY_EMAIL_REQUIRED';
+    throw error;
+  }
+
+  const ensurePublicProfile = async (authUser: any) => {
+    const authUserId = sanitizeString(authUser?.id, 120);
+    if (!isUuid(authUserId)) throw new Error('PATIENT_AUTH_IDENTITY_INVALID');
+    const byId = await fetchProfileWithSchemaFallback({ supabase, userId: authUserId, logger: console });
+    if (byId.error) throw byId.error;
+    if (byId.data?.id) return;
+
+    const byEmail = await fetchProfileByEmailWithSchemaFallback({ supabase, email, logger: console });
+    if (byEmail.error) throw byEmail.error;
+    if (byEmail.data?.id && sanitizeString(byEmail.data.id, 120) !== authUserId) {
+      const conflict: any = new Error('PATIENT_AUTH_IDENTITY_INCONSISTENT');
+      conflict.code = 'PATIENT_AUTH_IDENTITY_INCONSISTENT';
+      throw conflict;
+    }
+    if (byEmail.data?.id) return;
+
+    const profileInsert = await insertUserProfileWithSchemaFallback({
+      id: authUserId,
+      email,
+      name: patientName,
+      role: 'patient',
+      type: patientType,
+      clinic_id: clinicId,
+      subscription_status: 'pending',
+      status: 'pending_activation',
+      first_login_completed: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    if (profileInsert.error) {
+      const retryProfile = await fetchProfileWithSchemaFallback({ supabase, userId: authUserId, logger: console });
+      if (!retryProfile.data?.id) throw profileInsert.error;
+    }
+  };
+
+  const existing = await findRecoverableAuthUserByEmail(email);
+  if (existing?.id) {
+    const direct = await withTimeoutOrFallback(
+      supabase.auth.admin.getUserById(existing.id),
+      7000,
+      { data: { user: null }, error: null } as any,
+      'supabase.auth.admin.getUserById.patientActivationRepair'
+    );
+    const directUser = direct?.data?.user || null;
+    if (directUser?.id && sanitizeEmail(directUser.email) === email) {
+      await ensurePublicProfile(directUser);
+      invalidateAuthUserEmailCache(email);
+      authUserByEmailCache.set(email, {
+        user: directUser,
+        expiresAt: Date.now() + AUTH_USER_EMAIL_CACHE_TTL_MS,
+      });
+      return { user: directUser, created: false };
+    }
+    const inconsistent: any = new Error('PATIENT_AUTH_IDENTITY_INCONSISTENT');
+    inconsistent.code = 'PATIENT_AUTH_IDENTITY_INCONSISTENT';
+    throw inconsistent;
+  }
+
+  const profileResult = await fetchProfileByEmailWithSchemaFallback({
+    supabase,
+    email,
+    logger: console,
+  });
+  if (profileResult.error) throw profileResult.error;
+  if (profileResult.data?.id) {
+    const inconsistent: any = new Error('PATIENT_AUTH_IDENTITY_INCONSISTENT');
+    inconsistent.code = 'PATIENT_AUTH_IDENTITY_INCONSISTENT';
+    throw inconsistent;
+  }
+
+  const generatedPassword = `${crypto.randomBytes(16).toString('base64url')}V!9a`;
+  const createResult = await supabase.auth.admin.createUser({
+    email,
+    password: generatedPassword,
+    email_confirm: false,
+    user_metadata: {
+      full_name: patientName,
+      role: 'patient',
+      type: patientType,
+      clinic_id: clinicId,
+      invited_email: email,
+      patient_activation_required: true,
+      first_login_completed: false,
+      repaired_from_patient_record: true,
+    },
+  });
+
+  if (createResult.error) {
+    const message = String(createResult.error?.message || '').toLowerCase();
+    const duplicate = /already\s+(registered|exists)|user\s+already\s+registered|email.*already/i.test(message);
+    if (duplicate) {
+      invalidateAuthUserEmailCache(email);
+      const recovered = await findAuthUserByEmail(email);
+      if (recovered?.id) {
+        await ensurePublicProfile(recovered);
+        return { user: recovered, created: false };
+      }
+      const conflict: any = new Error('PATIENT_AUTH_IDENTITY_CONFLICT');
+      conflict.code = 'PATIENT_AUTH_IDENTITY_CONFLICT';
+      throw conflict;
+    }
+    throw createResult.error;
+  }
+
+  const createdUser = createResult.data?.user || null;
+  if (!createdUser?.id) {
+    const missing: any = new Error('PATIENT_AUTH_IDENTITY_CREATE_FAILED');
+    missing.code = 'PATIENT_AUTH_IDENTITY_CREATE_FAILED';
+    throw missing;
+  }
+
+  await ensurePublicProfile(createdUser);
+  invalidateAuthUserEmailCache(email);
+  authUserByEmailCache.set(email, {
+    user: createdUser,
+    expiresAt: Date.now() + AUTH_USER_EMAIL_CACHE_TTL_MS,
+  });
+  console.warn('[Patients] Identidade Auth ausente foi reconstruída a partir do cadastro canônico do paciente.', {
+    patientId: sanitizeString(patient?.id, 120) || null,
+    email: maskEmail(email),
+    authUserId: sanitizeString(createdUser.id, 120),
+  });
+  return { user: createdUser, created: true };
+}
+
 function compactClinicSettingsForSession(settings: any) {
   if (!settings || typeof settings !== 'object') return null;
   return cleanObject({
@@ -16722,6 +17074,8 @@ function buildSessionUserPayload(input: any) {
     planName: sanitizeString(input?.planName, 80) || null,
     planPrice: asSafeNumber(input?.planPrice, 0, 100000) || null,
     billingModel: resolvedBillingModel || null,
+    stripePaymentFailedAt: sanitizeString(input?.stripePaymentFailedAt || input?.stripe_payment_failed_at || input?.onboardingContext?.clinic?.stripePaymentFailedAt, 80) || null,
+    stripeAccessBlockAt: sanitizeString(input?.stripeAccessBlockAt || input?.stripe_access_block_at || input?.onboardingContext?.clinic?.stripeAccessBlockAt, 80) || null,
     isDemoUser: resolvedIsDemoUser,
     demoRole: sanitizeString(input?.demoRole || input?.demo_role, 80) || null,
     demoAccessMode: sanitizeString(input?.demoAccessMode || input?.demo_access_mode, 80).toLowerCase() || null,
@@ -16853,52 +17207,55 @@ function buildSessionUserPayload(input: any) {
   };
 }
 
-async function derivePatientTreatmentStatus(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
+async function derivePatientTreatmentStatus(
+  user: any,
+  preResolvedScope?: CanonicalPatientPortalScope | null
+): Promise<'active' | 'inactive' | 'waiting_treatment'> {
   const role = sanitizeString(user?.role, 40).toLowerCase();
   if (role !== 'patient') return 'active';
 
-  const safeEmail = sanitizeEmail(user?.email);
-  const fallbackHasClinic = Boolean(sanitizeString(user?.clinicId || user?.activeWorkspaceId, 120));
-  const hasWorkspace = Array.isArray(user?.workspaces) && user.workspaces.length > 0;
-  if (hasWorkspace) return 'active';
+  const portalScope = preResolvedScope === undefined
+    ? await resolveCanonicalPatientPortalScope(user)
+    : preResolvedScope;
+  if (!portalScope) return 'waiting_treatment';
 
-  let patientRows: any[] = [];
-  if (safeEmail) {
-    const { data } = await supabase
-      .from('patients')
-      .select('id, clinic_id, status')
-      .ilike('email', safeEmail)
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .limit(1000);
-    patientRows = Array.isArray(data) ? data : [];
-  }
+  const patientResult = await supabase
+    .from('patients')
+    .select('id,clinic_id,status')
+    .eq('id', portalScope.patientId)
+    .eq('clinic_id', portalScope.clinicId)
+    .eq('is_active', true)
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle();
 
-  const hasLinkedClinic = patientRows.some((row: any) => Boolean(sanitizeString(row?.clinic_id, 120))) || fallbackHasClinic;
-  const hasActivePatientStatus = patientRows.some((row: any) => sanitizeString(row?.status, 40).toLowerCase() === 'active');
-  const patientIds = patientRows
-    .map((row: any) => sanitizeString(row?.id, 120))
-    .filter((id: string) => isUuid(id));
+  if (patientResult.error || !patientResult.data?.id) return 'waiting_treatment';
+
+  const hasActivePatientStatus =
+    sanitizeString(patientResult.data.status, 40).toLowerCase() === 'active';
 
   let hasAssignedTasks = false;
-  if (patientIds.length > 0) {
-    const { count } = await supabase
+  const assignedTaskCountResult = await supabase
+    .from('assigned_tasks')
+    .select('id', { count: 'exact', head: true })
+    .eq('patient_id', portalScope.patientId)
+    .eq('clinic_id', portalScope.clinicId);
+  if (!assignedTaskCountResult.error) {
+    hasAssignedTasks = Number(assignedTaskCountResult.count || 0) > 0;
+  } else if (extractMissingColumnName(assignedTaskCountResult.error) === 'clinic_id') {
+    const legacyCountResult = await supabase
       .from('assigned_tasks')
       .select('id', { count: 'exact', head: true })
-      .in('patient_id', patientIds);
-    hasAssignedTasks = Number(count || 0) > 0;
-  }
-  if (!hasAssignedTasks && safeEmail) {
-    const { count } = await supabase
-      .from('assigned_tasks')
-      .select('id', { count: 'exact', head: true })
-      .eq('patient_email', safeEmail);
-    hasAssignedTasks = Number(count || 0) > 0;
+      .eq('patient_id', portalScope.patientId);
+    hasAssignedTasks = !legacyCountResult.error && Number(legacyCountResult.count || 0) > 0;
   }
 
-  // Regra de vínculo: paciente já vinculado à clínica não deve cair como "sem tratamento ativo"
-  // imediatamente após ativação/login, mesmo sem tarefas atribuídas ainda.
-  if (hasActivePatientStatus || hasLinkedClinic || hasAssignedTasks) return 'active';
+  // A selected, active patient record in the selected clinic is already an
+  // authoritative treatment link. Assigned tasks remain only a compatibility
+  // signal and are never discovered by e-mail.
+  if (hasActivePatientStatus || hasAssignedTasks || patientResult.data.clinic_id === portalScope.clinicId) {
+    return 'active';
+  }
   return 'waiting_treatment';
 }
 
@@ -17210,24 +17567,25 @@ async function canPortalSessionAccessPatient(patientId: string, user: any): Prom
 
   const userId = sanitizeString(user?.id, 120);
   const userEmail = sanitizeEmail(user?.email);
-  if (isUuid(userId) && userId === patientId) return true;
+  const clinicId = sanitizeString(currentClinicId(user), 120);
+  if (!isUuid(clinicId)) return false;
 
-  let query = supabase
+  const { data, error } = await supabase
     .from('patients')
     .select('id, email, responsible_email, responsible_user_id, clinic_id')
     .eq('id', patientId)
+    .eq('clinic_id', clinicId)
     .eq('is_active', true)
     .is('deleted_at', null)
-    .limit(1);
-  const clinicId = sanitizeString(currentClinicId(user), 120);
-  if (isUuid(clinicId)) query = query.eq('clinic_id', clinicId);
-  const { data, error } = await query.maybeSingle();
+    .limit(1)
+    .maybeSingle();
   if (error || !data?.id) return false;
 
   const responsibleUserId = sanitizeString(data?.responsible_user_id, 120);
   const patientEmail = sanitizeEmail(data?.email);
   const responsibleEmail = sanitizeEmail(data?.responsible_email);
   return Boolean(
+    (isUuid(userId) && userId === patientId) ||
     (isUuid(userId) && responsibleUserId === userId) ||
     (userEmail && patientEmail && userEmail === patientEmail) ||
     (userEmail && responsibleEmail && userEmail === responsibleEmail)
@@ -18021,6 +18379,191 @@ function getAppPortalPathUrl(pathname: string, params: Record<string, string> = 
   return url.toString();
 }
 
+const EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION = 'external_share_v1';
+const EXTERNAL_EVOLUTION_SHARE_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function externalEvolutionShareSessionSecret(): string {
+  const secret = sanitizeString(
+    process.env.EXTERNAL_CLINICAL_SHARE_SECRET ||
+      process.env.SESSION_SECRET ||
+      process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      '',
+    4000
+  );
+  if (secret.length < 32) throw new Error('EXTERNAL_CLINICAL_SHARE_SECRET_INVALID');
+  return secret;
+}
+
+function externalEvolutionShareCookieName(publicId: string): string {
+  return `verto_external_evolution_${hashIdentifier(publicId).slice(0, 16)}`;
+}
+
+function signExternalEvolutionShareSession(params: { publicId: string; email: string; expiresAt: number }): string {
+  const payload = Buffer.from(JSON.stringify({
+    publicId: sanitizeString(params.publicId, 120),
+    email: sanitizeEmail(params.email),
+    expiresAt: Math.trunc(params.expiresAt)
+  }), 'utf8').toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', externalEvolutionShareSessionSecret())
+    .update(payload)
+    .digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function verifyExternalEvolutionShareSession(token: unknown): { publicId: string; email: string; expiresAt: number } | null {
+  const safe = sanitizeString(token, 4000);
+  const [payload, signature, extra] = safe.split('.');
+  if (!payload || !signature || extra) return null;
+  const expected = crypto
+    .createHmac('sha256', externalEvolutionShareSessionSecret())
+    .update(payload)
+    .digest('base64url');
+  const left = Buffer.from(signature);
+  const right = Buffer.from(expected);
+  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const publicId = sanitizeString(parsed?.publicId, 120);
+    const email = sanitizeEmail(parsed?.email);
+    const expiresAt = Number(parsed?.expiresAt || 0);
+    if (!isUuid(publicId) || !email || !Number.isFinite(expiresAt) || Date.now() >= expiresAt) return null;
+    return { publicId, email, expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+function setExternalEvolutionShareCookie(res: any, publicId: string, email: string) {
+  const expiresAt = Date.now() + EXTERNAL_EVOLUTION_SHARE_SESSION_TTL_MS;
+  const token = signExternalEvolutionShareSession({ publicId, email, expiresAt });
+  res.cookie(externalEvolutionShareCookieName(publicId), token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT),
+    sameSite: 'lax',
+    path: '/',
+    maxAge: EXTERNAL_EVOLUTION_SHARE_SESSION_TTL_MS,
+  });
+}
+
+function externalEvolutionShareRequestHash(req: any, kind: 'ip' | 'ua'): string | null {
+  const raw = kind === 'ip'
+    ? sanitizeString(req?.ip || req?.socket?.remoteAddress || '', 200)
+    : sanitizeString(req?.headers?.['user-agent'] || '', 800);
+  if (!raw) return null;
+  try {
+    return crypto.createHmac('sha256', externalEvolutionShareSessionSecret()).update(`${kind}:${raw}`).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+async function persistExternalEvolutionAccessAudit(params: {
+  req: any;
+  grant?: any;
+  item?: any;
+  action: 'INVITE_SENT' | 'OTP_REQUESTED' | 'OTP_VERIFIED' | 'VIEWED' | 'FILE_ACCESSED' | 'REVOKED' | 'ITEM_ARCHIVED';
+  metadata?: Record<string, any>;
+}) {
+  try {
+    const grant = params.grant || {};
+    const item = params.item || {};
+    const { error } = await supabase.from('patient_evolution_external_access_audit').insert({
+      grant_id: isUuid(grant?.id) ? grant.id : null,
+      timeline_item_id: isUuid(item?.id || grant?.timeline_item_id) ? (item?.id || grant?.timeline_item_id) : null,
+      clinic_id: isUuid(item?.clinic_id || grant?.clinic_id) ? (item?.clinic_id || grant?.clinic_id) : null,
+      patient_id: isUuid(item?.patient_id || grant?.patient_id) ? (item?.patient_id || grant?.patient_id) : null,
+      recipient_email: sanitizeEmail(grant?.recipient_email) || null,
+      action: params.action,
+      request_ip_hash: externalEvolutionShareRequestHash(params.req, 'ip'),
+      user_agent_hash: externalEvolutionShareRequestHash(params.req, 'ua'),
+      metadata: params.metadata && typeof params.metadata === 'object' ? params.metadata : {},
+    });
+    if (error && !isMissingRelationError(error)) {
+      console.warn('[ExternalEvolutionShare] audit insert warning:', sanitizeString(error.message, 220));
+    }
+  } catch (error: any) {
+    console.warn('[ExternalEvolutionShare] audit exception:', sanitizeString(error?.message || String(error), 220));
+  }
+}
+
+async function loadActiveExternalEvolutionShare(publicId: string) {
+  if (!isUuid(publicId)) return null;
+  const { data: grant, error: grantError } = await supabase
+    .from('patient_evolution_share_grants')
+    .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_at,last_invited_at,created_at,updated_at')
+    .eq('public_id', publicId)
+    .eq('status', 'ACTIVE')
+    .maybeSingle();
+  if (grantError) {
+    if (isMissingRelationError(grantError)) return null;
+    throw grantError;
+  }
+  if (!grant?.id) return null;
+
+  const [{ data: item, error: itemError }, { data: clinic, error: clinicError }, { data: patient, error: patientError }] = await Promise.all([
+    supabase
+      .from('patient_evolution_timeline_items')
+      .select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at')
+      .eq('id', grant.timeline_item_id)
+      .eq('clinic_id', grant.clinic_id)
+      .eq('patient_id', grant.patient_id)
+      .is('archived_at', null)
+      .maybeSingle(),
+    supabase.from('clinics').select('id,name').eq('id', grant.clinic_id).maybeSingle(),
+    supabase.from('patients').select('id,name').eq('id', grant.patient_id).eq('clinic_id', grant.clinic_id).maybeSingle(),
+  ]);
+  if (itemError || clinicError || patientError) {
+    const firstError = itemError || clinicError || patientError;
+    if (isMissingRelationError(firstError)) return null;
+    throw firstError;
+  }
+  if (!item?.id || !patient?.id) return null;
+  return { grant, item, clinic: clinic || {}, patient };
+}
+
+function buildExternalEvolutionInviteEmail(params: { clinicName: string; shareUrl: string }) {
+  const clinicName = escapeHtml(params.clinicName || 'Clínica');
+  const shareUrl = escapeHtml(params.shareUrl);
+  return {
+    subject: `${clinicName} compartilhou uma atualização clínica com você`,
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
+          <h1 style="font-size:21px;margin:0 0 14px;">Atualização clínica compartilhada</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
+            ${clinicName} disponibilizou um conteúdo clínico para continuidade do cuidado. O link abaixo não libera o conteúdo sozinho: o acesso exige confirmação do e-mail autorizado por código de uso único.
+          </p>
+          <a href="${shareUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Acessar com segurança</a>
+        </div>
+      </div>
+    `
+  };
+}
+
+function buildExternalEvolutionOtpEmail(params: { clinicName: string; code: string; shareUrl: string }) {
+  const clinicName = escapeHtml(params.clinicName || 'Clínica');
+  const code = escapeHtml(params.code);
+  const shareUrl = escapeHtml(params.shareUrl);
+  return {
+    subject: `Código de acesso ao compartilhamento clínico — ${clinicName}`,
+    html: `
+      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
+          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
+          <h1 style="font-size:21px;margin:0 0 14px;">Confirme seu e-mail</h1>
+          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 14px;">
+            Use o código abaixo para acessar o conteúdo compartilhado por ${clinicName}. O código expira em 10 minutos.
+          </p>
+          <div style="font-size:30px;font-weight:900;letter-spacing:8px;color:#7a32fc;margin:18px 0;">${code}</div>
+          <a href="${shareUrl}" style="font-size:13px;color:#7a32fc;">Voltar para a página de acesso</a>
+        </div>
+      </div>
+    `
+  };
+}
+
 async function createRelationshipConfirmationRequest(params: {
   patientId: string;
   clinicId: string;
@@ -18784,38 +19327,51 @@ async function persistPatientFinancialPlans(params: {
 }
 
 async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
-  const status = await derivePatientTreatmentStatus(user);
-  if (sanitizeString(user?.role, 40).toLowerCase() !== 'patient' || !sanitizeString(user?.id, 120)) {
+  const role = sanitizeString(user?.role, 40).toLowerCase();
+  const portalScope = role === 'patient'
+    ? await resolveCanonicalPatientPortalScope(user)
+    : null;
+  const status = await derivePatientTreatmentStatus(user, portalScope);
+
+  if (role !== 'patient' || !sanitizeString(user?.id, 120)) {
     return status;
   }
+
   try {
-    const safeEmail = sanitizeEmail(user?.email);
     await supabase
       .from('users')
       .update({ status })
       .eq('id', sanitizeString(user.id, 120));
-      if (status === 'active' && safeEmail) {
-        const patientActivationResult = await supabase
+
+    if (status === 'active' && portalScope) {
+      const patientActivationResult = await supabase
+        .from('patients')
+        .update({ status: 'active' })
+        .eq('id', portalScope.patientId)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .in('status', ['pending', 'waiting_treatment', 'inactive'])
+        .or('onboarding_status.is.null,onboarding_status.in.(READY_FOR_CARE,ANAMNESIS_REVIEWED)');
+
+      if (
+        patientActivationResult.error &&
+        extractMissingColumnName(patientActivationResult.error) === 'onboarding_status'
+      ) {
+        await supabase
           .from('patients')
           .update({ status: 'active' })
-          .ilike('email', safeEmail)
+          .eq('id', portalScope.patientId)
+          .eq('clinic_id', portalScope.clinicId)
           .eq('is_active', true)
           .is('deleted_at', null)
-          .in('status', ['pending', 'waiting_treatment', 'inactive'])
-          .or('onboarding_status.is.null,onboarding_status.in.(READY_FOR_CARE,ANAMNESIS_REVIEWED)');
-        if (patientActivationResult.error && extractMissingColumnName(patientActivationResult.error) === 'onboarding_status') {
-          await supabase
-            .from('patients')
-            .update({ status: 'active' })
-            .ilike('email', safeEmail)
-            .eq('is_active', true)
-            .is('deleted_at', null)
-            .in('status', ['waiting_treatment', 'inactive']);
-        }
+          .in('status', ['waiting_treatment', 'inactive']);
       }
+    }
   } catch (error) {
     console.warn('[Auth] Não foi possível atualizar status clínico do paciente:', (error as any)?.message || error);
   }
+
   return status;
 }
 
@@ -26473,6 +27029,7 @@ async function startServer() {
       "/auth/logout",
       "/auth/resend-confirmation",
       "/auth/activation/bootstrap",
+      "/auth/patient-activation/password",
       "/auth/invitation/password",
       "/auth/password/recovery/bootstrap",
       "/auth/password/recovery/email/request",
@@ -27271,6 +27828,181 @@ async function startServer() {
     }
   });
 
+  app.post('/api/auth/patient-activation/password', authMfaLimiter, async (req, res) => {
+    const token = sanitizeString(req.body?.token, 4096);
+    const password = validateStrongPassword(req.body?.newPassword);
+    if (!token || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_INVALID',
+        message: 'Link de ativação inválido ou senha fora da política de segurança.'
+      });
+    }
+
+    let claims: PatientActivationTokenClaims | null = null;
+    try {
+      claims = verifyPatientActivationToken(token);
+    } catch (error: any) {
+      console.error('[Auth] patient activation signing unavailable:', {
+        message: sanitizeString(error?.message || String(error), 180)
+      });
+      return res.status(503).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_UNAVAILABLE',
+        message: 'A ativação está temporariamente indisponível. Tente novamente em alguns instantes.'
+      });
+    }
+
+    if (!claims || !isUuid(claims.userId)) {
+      return res.status(400).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_EXPIRED',
+        message: 'Este link de ativação é inválido ou expirou. Solicite um novo link.'
+      });
+    }
+
+    let leaseAcquired = false;
+    const leaseKey = `patient-activate:${claims.userId}`;
+    try {
+      if (requiresDistributedRuntimeState()) {
+        leaseAcquired = await tryAcquireDistributedJobLease({
+          supabase,
+          jobKey: leaseKey,
+          ownerId: runtimeOwnerId,
+          leaseSeconds: 30,
+        });
+        if (!leaseAcquired) {
+          return res.status(409).json({
+            success: false,
+            error: 'PATIENT_ACTIVATION_IN_PROGRESS',
+            message: 'Esta ativação já está sendo processada. Aguarde alguns instantes e tente novamente.'
+          });
+        }
+      }
+
+      const { data: authUserResult, error: authUserError } = await supabase.auth.admin.getUserById(claims.userId);
+      const authUser = authUserResult?.user || null;
+      if (authUserError || !authUser?.id) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_USER_NOT_FOUND',
+          message: 'Não foi possível validar esta conta de paciente.'
+        });
+      }
+
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: claims.userId,
+        logger: console,
+      });
+      if (profileResult.error) throw profileResult.error;
+      const profile = profileResult.data as any;
+      const metadata: Record<string, any> = authUser.user_metadata && typeof authUser.user_metadata === 'object'
+        ? { ...authUser.user_metadata }
+        : {};
+      if (!patientActivationIsPending(authUser, profile)) {
+        return res.status(409).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_NOT_PENDING',
+          message: 'Esta conta já foi ativada. Entre normalmente com seu e-mail e senha.'
+        });
+      }
+
+      const metadataNonce = sanitizeString(metadata?.patient_activation_nonce, 200);
+      const suppliedNonce = sanitizeString(claims.nonce, 200);
+      const metadataNonceBuffer = Buffer.from(metadataNonce, 'utf8');
+      const suppliedNonceBuffer = Buffer.from(suppliedNonce, 'utf8');
+      const nonceMatches = Boolean(
+        metadataNonce &&
+        suppliedNonce &&
+        metadataNonceBuffer.length === suppliedNonceBuffer.length &&
+        crypto.timingSafeEqual(metadataNonceBuffer, suppliedNonceBuffer)
+      );
+      if (!nonceMatches) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_LINK_REPLACED',
+          message: 'Este link foi substituído por um link de ativação mais recente. Abra o último e-mail recebido.'
+        });
+      }
+
+      const email = sanitizeEmail(authUser.email);
+      if (!email) {
+        return res.status(403).json({
+          success: false,
+          error: 'PATIENT_ACTIVATION_EMAIL_MISSING',
+          message: 'Não foi possível validar o e-mail desta conta.'
+        });
+      }
+
+      delete metadata.patient_activation_nonce;
+      await invalidateAllActiveSessions(claims.userId);
+      const { error: updateAuthError } = await supabase.auth.admin.updateUserById(claims.userId, {
+        password,
+        email_confirm: true,
+        user_metadata: {
+          ...metadata,
+          patient_activation_required: false,
+          first_login_completed: true,
+        },
+      });
+      if (updateAuthError) throw updateAuthError;
+      await invalidateAllActiveSessions(claims.userId);
+
+      const profileUpdate = await updateRowsWithSchemaFallback({
+        tableName: 'users',
+        payload: {
+          status: 'active',
+          first_login_completed: true,
+          updated_at: new Date().toISOString(),
+        },
+        filters: [{ column: 'id', value: claims.userId }],
+        context: 'patient-activation-password-profile',
+      });
+      if (!profileUpdate.success) throw profileUpdate.error;
+
+      await persistIdentityAuditLog({
+        title: 'Conta de paciente ativada por link seguro',
+        content: `Paciente ${maskEmail(email)} definiu a senha e concluiu a ativação da identidade.`,
+        identifier: email,
+        channel: 'email',
+        userId: claims.userId,
+        request: req,
+        status: 'success'
+      });
+
+      return res.json({
+        success: true,
+        loginEmail: email,
+      });
+    } catch (error: any) {
+      console.error('[Auth] patient activation password failed:', {
+        userId: sanitizeString(claims?.userId, 120),
+        message: sanitizeString(error?.message || String(error), 240)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'PATIENT_ACTIVATION_FAILED',
+        message: 'Não foi possível concluir a ativação agora. Tente novamente.'
+      });
+    } finally {
+      if (leaseAcquired) {
+        try {
+          await releaseDistributedJobLease({
+            supabase,
+            jobKey: leaseKey,
+            ownerId: runtimeOwnerId,
+          });
+        } catch (releaseError: any) {
+          console.warn('[Auth] patient activation lease release failed:', {
+            userId: sanitizeString(claims?.userId, 120),
+            message: sanitizeString(releaseError?.message || String(releaseError), 180)
+          });
+        }
+      }
+    }
+  });
+
   app.post('/api/auth/invitation/password', authMfaLimiter, async (req, res) => {
     const token = sanitizeString(req.body?.token, 4096);
     const password = validateStrongPassword(req.body?.newPassword);
@@ -27450,16 +28182,13 @@ async function startServer() {
 
       const authUser = await findAuthUserByEmail(email);
       if (!authUser?.id) return res.json(genericResponse);
-      const isAlreadyConfirmed = Boolean(
-        (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
-      );
-      if (isAlreadyConfirmed) return res.json(genericResponse);
-
-      const { data: profile } = await supabase
-        .from('users')
-        .select('name,role')
-        .eq('id', authUser.id)
-        .maybeSingle();
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase,
+        userId: authUser.id,
+        logger: console,
+      });
+      if (profileResult.error) throw profileResult.error;
+      const profile = profileResult.data as any;
       const authMetadata: Record<string, any> = (authUser as any)?.user_metadata && typeof (authUser as any).user_metadata === 'object'
         ? { ...(authUser as any).user_metadata }
         : {};
@@ -27468,13 +28197,20 @@ async function startServer() {
         40
       );
       const templateProfile = resolveTemplateProfileByRole(persistedRole);
+      const isAlreadyConfirmed = Boolean(
+        (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
+      );
+      const pendingPatientActivation = patientActivationIsPending(authUser, profile);
+      if (isAlreadyConfirmed && !pendingPatientActivation) return res.json(genericResponse);
       const metadataInvitationId = sanitizeString(
         authMetadata?.invitation_id || authMetadata?.clinic_invitation_id,
         120
       );
       let activationLink: string | null = null;
 
-      if (isUuid(metadataInvitationId)) {
+      if (pendingPatientActivation) {
+        activationLink = await createPatientActivationLink(authUser);
+      } else if (isUuid(metadataInvitationId)) {
         const { data: pendingInvitation, error: pendingInvitationError } = await supabase
           .from('invitations')
           .select('id,email,status')
@@ -28934,19 +29670,16 @@ async function startServer() {
             delete safeUserUpdates[missingColumn];
           }
 
-          if (safePatientEmail) {
+          if (safePatientEmail && isUuid(clinicForSession)) {
             const patientUpdates = cleanObject({
               status: 'active',
               updated_at: new Date().toISOString()
             });
-            let patientQuery = supabase
+            const { error: activatePatientError } = await supabase
               .from('patients')
               .update(patientUpdates)
-              .ilike('email', safePatientEmail);
-            if (isUuid(clinicForSession)) {
-              patientQuery = patientQuery.eq('clinic_id', clinicForSession);
-            }
-            const { error: activatePatientError } = await patientQuery;
+              .ilike('email', safePatientEmail)
+              .eq('clinic_id', clinicForSession);
             if (activatePatientError) {
               console.warn('[Auth] Patient activation status update warning:', activatePatientError.message || String(activatePatientError));
             }
@@ -28974,11 +29707,17 @@ async function startServer() {
 
       const treatmentStatus = await updatePatientStatusIfNeeded({
         id: user.id,
+        email: user.email,
         role: roleForSession,
         clinicId: clinicForSession,
         activeWorkspaceId: clinicForSession,
         workspaces
       });
+
+      const loginAccessContexts = await fetchUserAccessContexts(user.id, workspaces);
+      const hasClinicLoginContext = loginAccessContexts.some((context) => context.kind === 'clinic_workspace');
+      const hasPatientLoginContext = loginAccessContexts.some((context) => context.kind === 'patient_portal');
+      const mustChooseLoginMode = !invitedWorkspaceId && hasClinicLoginContext && hasPatientLoginContext;
 
       const userData = {
         id: user.id,
@@ -28999,6 +29738,8 @@ async function startServer() {
         billingModel: clinicManagedBilling
           ? onboardingContext.clinic?.billingModel || profile.billing_model
           : profile.billing_model,
+        stripePaymentFailedAt: onboardingContext.clinic?.stripePaymentFailedAt || (profile as any)?.stripe_payment_failed_at || null,
+        stripeAccessBlockAt: onboardingContext.clinic?.stripeAccessBlockAt || (profile as any)?.stripe_access_block_at || null,
         isDemoUser: profile.is_demo_user,
         demoRole: profile.demo_role,
         demoAccessMode: profile.demo_access_mode,
@@ -29018,12 +29759,15 @@ async function startServer() {
           ? mergeAuthoritativeClinicSettings(user.user_metadata?.clinic_settings, onboardingContext)
           : user.user_metadata?.clinic_settings || null,
         onboardingContext,
+        accessContexts: loginAccessContexts,
         activeAccessContextId: invitedWorkspaceId
           ? clinicAccessContextId(invitedWorkspaceId)
-          : sanitizeString(req.session?.user?.activeAccessContextId, 380) || null,
-        accessContextSelectionExplicit: Boolean(
-          invitedWorkspaceId || req.session?.user?.accessContextSelectionExplicit
-        ),
+          : mustChooseLoginMode
+            ? null
+            : sanitizeString(req.session?.user?.activeAccessContextId, 380) || null,
+        accessContextSelectionExplicit: mustChooseLoginMode
+          ? false
+          : Boolean(invitedWorkspaceId || req.session?.user?.accessContextSelectionExplicit),
         workspaces
       };
 
@@ -32465,6 +33209,271 @@ async function startServer() {
     }
   });
 
+  app.post('/api/clinic/protocols/reusable-adult', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'CLINIC_SCOPE_INVALID', message: 'Clínica inválida para salvar o protocolo.' });
+      }
+
+      const operation = sanitizeString(req.body?.operation, 40).toLowerCase();
+      if (!['create_protocol', 'append_skill'].includes(operation)) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_OPERATION_INVALID', message: 'Operação de protocolo inválida.' });
+      }
+
+      const requestedCategory = sanitizeString(req.body?.category, 40).toLowerCase();
+      const category = requestedCategory === 'intervention' ? 'intervention' : requestedCategory === 'evaluation' ? 'evaluation' : '';
+      if (!category) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_CATEGORY_INVALID', message: 'Informe se o protocolo é de avaliação ou intervenção.' });
+      }
+
+      const rawSkill = req.body?.skill && typeof req.body.skill === 'object' ? req.body.skill : {};
+      const skillName = sanitizeTextField(rawSkill?.name || rawSkill?.title, 240);
+      if (!skillName) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_SKILL_REQUIRED', message: 'Informe o nome da tarefa antes de salvar o protocolo.' });
+      }
+      const skillId = sanitizeString(rawSkill?.id, 120) || crypto.randomUUID();
+      const rawMaxScore = Number(rawSkill?.maxScore ?? rawSkill?.max_score ?? 4);
+      const maxScore = Number.isFinite(rawMaxScore) ? Math.max(1, Math.min(100, Math.round(rawMaxScore))) : 4;
+      const skill = sanitizeClinicalPayload(cleanObject({
+        id: skillId,
+        name: skillName,
+        code: sanitizeString(rawSkill?.code, 120) || undefined,
+        maxScore,
+        objective: sanitizeTextField(rawSkill?.objective, 4000) || undefined,
+        question: sanitizeTextField(rawSkill?.question, 4000) || undefined,
+        example: sanitizeTextField(rawSkill?.example, 4000) || undefined,
+        criteria: sanitizeTextField(rawSkill?.criteria, 4000) || undefined,
+        comment: sanitizeTextField(rawSkill?.comment, 4000) || undefined,
+        createdAt: sanitizeString(rawSkill?.createdAt || rawSkill?.created_at, 80) || new Date().toISOString(),
+        createdBy: actorId || undefined
+      }));
+
+      const requestedProtocolId = sanitizeString(req.body?.protocolId || req.body?.protocol_id, 120);
+      const requestedDomainId = sanitizeString(req.body?.domainId || req.body?.domain_id, 120);
+      const requestedProtocolTitle = sanitizeTextField(req.body?.protocolTitle || req.body?.protocol_title, 240);
+      const requestedDomainName = sanitizeTextField(req.body?.domainName || req.body?.domain_name, 240);
+      const requestedAgeGroup = sanitizeString(req.body?.ageGroup || req.body?.age_group, 30).toLowerCase();
+      const ageGroup = requestedAgeGroup === 'senior' ? 'senior' : 'adult';
+      const ageRange = ageGroup === 'senior' ? { min: 60, max: null as number | null } : { min: 19, max: 59 as number | null };
+      const stableProtocolId = requestedProtocolId || crypto.randomUUID();
+      const stableDomainId = requestedDomainId || crypto.randomUUID();
+
+      if (operation === 'append_skill' && (!requestedProtocolId || !requestedDomainId)) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_TARGET_REQUIRED', message: 'Selecione o protocolo e o domínio onde a tarefa será salva.' });
+      }
+      if (operation === 'create_protocol' && (!requestedProtocolTitle || !requestedDomainName)) {
+        return res.status(400).json({ success: false, error: 'REUSABLE_PROTOCOL_FIELDS_REQUIRED', message: 'Informe o nome do protocolo e do domínio.' });
+      }
+
+      const buildResponse = (params: { protocols: any[]; protocol: any; domain: any; skill: any; persisted?: any; idempotent?: boolean }) => ({
+        success: true,
+        data: {
+          clinicId,
+          protocols: params.protocols,
+          protocol: params.protocol,
+          domain: params.domain,
+          skill: params.skill,
+          revision: Number(params.persisted?.revision || 0) || 0,
+          sectionVersions:
+            params.persisted?.sectionVersions && typeof params.persisted.sectionVersions === 'object'
+              ? params.persisted.sectionVersions
+              : {},
+          idempotent: Boolean(params.idempotent)
+        }
+      });
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const current = await supabase
+          .from('clinic_state')
+          .select('protocols,section_versions')
+          .eq('clinic_id', clinicId)
+          .maybeSingle();
+        if (current.error) {
+          const missingColumn = extractMissingColumnName(current.error);
+          if (missingColumn === 'section_versions' || isMissingRelationError(current.error)) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
+            });
+          }
+          throw current.error;
+        }
+
+        const currentProtocols = normalizeProtocolArrayForRoute(current.data?.protocols);
+        const nextProtocols = currentProtocols.map((protocol: any) => cloneJsonValue(protocol));
+        let persistedProtocol: any = null;
+        let persistedDomain: any = null;
+        let persistedSkill: any = null;
+
+        if (operation === 'create_protocol') {
+          const existingById = nextProtocols.find((protocol: any) => sanitizeString(protocol?.id, 120) === stableProtocolId);
+          if (existingById) {
+            const domain = normalizeJsonArrayForRoute(existingById?.data, ['domains', 'items', 'data', 'value'])
+              .find((item: any) => sanitizeString(item?.id, 120) === stableDomainId) || null;
+            const existingSkill = domain
+              ? normalizeJsonArrayForRoute(domain?.skills, ['skills', 'items', 'data', 'value'])
+                  .find((item: any) => sanitizeString(item?.id, 120) === skillId) || null
+              : null;
+            if (domain && existingSkill) {
+              return res.json(buildResponse({ protocols: nextProtocols, protocol: existingById, domain, skill: existingSkill, idempotent: true }));
+            }
+          }
+
+          const titleKey = normalizeProtocolKey(requestedProtocolTitle);
+          const duplicate = nextProtocols.find((protocol: any) => {
+            const protocolCategory = sanitizeString(protocol?.category, 40).toLowerCase() || 'evaluation';
+            const protocolAgeGroup = sanitizeString(protocol?.ageGroup || protocol?.age_group, 30).toLowerCase() || 'all';
+            return protocolCategory === category &&
+              (protocolAgeGroup === ageGroup || protocolAgeGroup === 'all') &&
+              normalizeProtocolKey(sanitizeString(protocol?.title || protocol?.name, 240)) === titleKey;
+          });
+          if (duplicate) {
+            return res.status(409).json({
+              success: false,
+              error: 'REUSABLE_PROTOCOL_ALREADY_EXISTS',
+              message: 'Já existe um protocolo com esse nome nesta categoria. Selecione o protocolo existente para adicionar a tarefa.',
+              data: { protocol: duplicate }
+            });
+          }
+
+          persistedDomain = sanitizeClinicalPayload({
+            id: stableDomainId,
+            name: requestedDomainName,
+            skills: [skill]
+          });
+          persistedProtocol = sanitizeClinicalPayload({
+            id: stableProtocolId,
+            title: requestedProtocolTitle,
+            category,
+            ageGroup,
+            age_group: ageGroup,
+            age_minima: ageRange.min,
+            age_maxima: ageRange.max,
+            min_age: ageRange.min,
+            max_age: ageRange.max,
+            data: [persistedDomain],
+            origin: 'manual_adult_task_schedule',
+            isManualProtocol: true,
+            createdAt: new Date().toISOString(),
+            createdBy: actorId || null
+          });
+          persistedSkill = skill;
+          nextProtocols.push(persistedProtocol);
+        } else {
+          const protocolIndex = nextProtocols.findIndex((protocol: any) => sanitizeString(protocol?.id, 120) === requestedProtocolId);
+          if (protocolIndex < 0) {
+            return res.status(404).json({ success: false, error: 'REUSABLE_PROTOCOL_NOT_FOUND', message: 'O protocolo selecionado não está mais disponível nesta clínica.' });
+          }
+          const protocol = nextProtocols[protocolIndex];
+          const domains = normalizeJsonArrayForRoute(protocol?.data, ['domains', 'items', 'data', 'value']).map((domain: any) => cloneJsonValue(domain));
+          const domainIndex = domains.findIndex((domain: any) => sanitizeString(domain?.id, 120) === requestedDomainId);
+          if (domainIndex < 0) {
+            return res.status(404).json({ success: false, error: 'REUSABLE_PROTOCOL_DOMAIN_NOT_FOUND', message: 'O domínio selecionado não está mais disponível neste protocolo.' });
+          }
+          const domain = domains[domainIndex];
+          const skills = normalizeJsonArrayForRoute(domain?.skills, ['skills', 'items', 'data', 'value']).map((item: any) => cloneJsonValue(item));
+          const existingSkill = skills.find((item: any) =>
+            sanitizeString(item?.id, 120) === skillId ||
+            normalizeProtocolKey(sanitizeString(item?.name || item?.title, 240)) === normalizeProtocolKey(skillName)
+          );
+          if (existingSkill) {
+            return res.json(buildResponse({ protocols: nextProtocols, protocol, domain, skill: existingSkill, idempotent: true }));
+          }
+          skills.push(skill);
+          persistedDomain = sanitizeClinicalPayload({ ...domain, skills });
+          domains[domainIndex] = persistedDomain;
+          persistedProtocol = sanitizeClinicalPayload({ ...protocol, data: domains });
+          nextProtocols[protocolIndex] = persistedProtocol;
+          persistedSkill = skill;
+        }
+
+        const currentProtocolVersion = Math.max(0, Number(current.data?.section_versions?.protocols || 0) || 0);
+        const operationKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) ||
+          `reusable-adult-protocol:${operation}:${stableProtocolId}:${stableDomainId}:${skillId}`;
+        const { data: persistenceResult, error: persistenceError } = await supabase.rpc('verto_save_clinic_state_sections', {
+          p_clinic_id: clinicId,
+          p_updated_by: isUuid(actorId) ? actorId : null,
+          p_expected_section_versions: { protocols: currentProtocolVersion },
+          p_rooms: null,
+          p_appointments: null,
+          p_protocols: nextProtocols,
+          p_specialty_settings: null,
+          p_idempotency_key: `${operationKey}:v${currentProtocolVersion}`
+        });
+        if (persistenceError) {
+          const message = String(persistenceError?.message || '').toLowerCase();
+          if (sanitizeString(persistenceError?.code, 40) === '42883' || message.includes('verto_save_clinic_state_sections')) {
+            return res.status(503).json({
+              success: false,
+              code: 'PERSISTENCE_GUARANTEES_MIGRATION_REQUIRED',
+              error: 'A migração de garantias de persistência ainda não foi aplicada no Supabase.'
+            });
+          }
+          throw persistenceError;
+        }
+        if (persistenceResult?.success === false && persistenceResult?.conflict === true) {
+          if (attempt === 0) continue;
+          return res.status(409).json({
+            success: false,
+            error: 'REUSABLE_PROTOCOL_CONCURRENT_EDIT',
+            message: 'A biblioteca de protocolos foi alterada por outra pessoa. Atualize e tente novamente.'
+          });
+        }
+
+        const persistedState = persistenceResult?.data || {};
+        const persistedProtocols = normalizeProtocolArrayForRoute(persistedState?.protocols);
+        const finalProtocol = persistedProtocols.find((protocol: any) => sanitizeString(protocol?.id, 120) === sanitizeString(persistedProtocol?.id, 120)) || persistedProtocol;
+        const finalDomain = normalizeJsonArrayForRoute(finalProtocol?.data, ['domains', 'items', 'data', 'value'])
+          .find((domain: any) => sanitizeString(domain?.id, 120) === sanitizeString(persistedDomain?.id, 120)) || persistedDomain;
+        const finalSkill = normalizeJsonArrayForRoute(finalDomain?.skills, ['skills', 'items', 'data', 'value'])
+          .find((item: any) => sanitizeString(item?.id, 120) === skillId) || persistedSkill;
+
+        try {
+          await persistActivityLog({
+            userId: actorId,
+            clinicId,
+            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Profissional', 180),
+            title: 'Protocolos atualizados',
+            content: operation === 'create_protocol'
+              ? `Protocolo reutilizável "${sanitizeString(finalProtocol?.title, 180)}" criado a partir do agendamento de uma tarefa adulta.`
+              : `Tarefa "${skillName}" adicionada ao protocolo reutilizável "${sanitizeString(finalProtocol?.title, 180)}".`,
+            type: 'clinical',
+            actionType: 'update_protocols',
+            payloadDetails: JSON.stringify({
+              operation,
+              protocolId: sanitizeString(finalProtocol?.id, 120),
+              domainId: sanitizeString(finalDomain?.id, 120),
+              skillId,
+              category,
+              reusableAdultLibrary: true
+            })
+          });
+        } catch (auditError: any) {
+          console.warn('[ReusableAdultProtocol] audit warning:', auditError?.message || String(auditError));
+        }
+
+        return res.json(buildResponse({
+          protocols: persistedProtocols.length > 0 ? persistedProtocols : nextProtocols,
+          protocol: finalProtocol,
+          domain: finalDomain,
+          skill: finalSkill,
+          persisted: persistedState
+        }));
+      }
+
+      return res.status(409).json({ success: false, error: 'REUSABLE_PROTOCOL_CONCURRENT_EDIT', message: 'A biblioteca de protocolos foi alterada. Atualize e tente novamente.' });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinic/protocols/reusable-adult [POST]', error, {
+        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        requestId: requestIdForLogs(req),
+        fallbackMessage: 'Não foi possível salvar o protocolo reutilizável agora.'
+      });
+    }
+  });
+
   app.post('/api/clinic/state', checkAuth, async (req: any, res) => {
     try {
       const clinicId = currentClinicId(req.session.user);
@@ -34681,12 +35690,1112 @@ async function startServer() {
     },
   );
 
+  const normalizePatientCareNetworkPayload = (body: any) => {
+    const clinicName = sanitizeString(body?.clinicName || body?.clinic_name, 180) || null;
+    const professionalName = sanitizeString(body?.professionalName || body?.professional_name, 180);
+    const specialty = sanitizeString(body?.specialty, 120) || null;
+    const phone = sanitizeString(body?.phone || body?.telephone || body?.whatsapp, 60);
+    const rawEmail = sanitizeString(body?.email, 254);
+    const email = rawEmail ? sanitizeEmail(rawEmail) : '';
+    const phoneDigitCount = phone.replace(/\D/g, '').length;
+
+    if (!professionalName) {
+      return { ok: false as const, error: 'Informe o nome do profissional.' };
+    }
+    if (!phone || phoneDigitCount < 6) {
+      return { ok: false as const, error: 'Informe um telefone válido para o profissional.' };
+    }
+    if (rawEmail && !email) {
+      return { ok: false as const, error: 'Informe um e-mail válido ou deixe o campo em branco.' };
+    }
+
+    return {
+      ok: true as const,
+      value: {
+        clinic_name: clinicName,
+        professional_name: professionalName,
+        specialty,
+        phone,
+        email: email || null,
+      }
+    };
+  };
+
+  const patientCareNetworkColumns = 'id,clinic_id,patient_id,clinic_name,professional_name,specialty,phone,email,source,created_at,updated_at';
+
+  const sendPatientCareNetworkError = (res: any, error: any, route: string) => {
+    if (isMissingRelationError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: 'PATIENT_CARE_NETWORK_SCHEMA_UNAVAILABLE',
+        error: 'A estrutura da rede de cuidado ainda não foi aplicada.'
+      });
+    }
+    return sendRouteDbError(res, route, error);
+  };
+
+  app.get('/api/patient/self/care-network', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .select(patientCareNetworkColumns)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null)
+        .order('created_at', { ascending: true })
+        .limit(100);
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [GET]');
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [GET]');
+    }
+  });
+
+  app.post('/api/patient/self/care-network', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Cadastro da rede de cuidado')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const normalized = normalizePatientCareNetworkPayload(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
+
+      const countResult = await supabase
+        .from('patient_care_network_contacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null);
+      if (countResult.error) return sendPatientCareNetworkError(res, countResult.error, '/api/patient/self/care-network [POST count]');
+      if (Number(countResult.count || 0) >= 100) {
+        return res.status(409).json({ success: false, code: 'PATIENT_CARE_NETWORK_LIMIT_REACHED', error: 'O limite de profissionais cadastrados nesta rede de cuidado foi atingido.' });
+      }
+
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .insert({
+          id: crypto.randomUUID(),
+          clinic_id: portalScope.clinicId,
+          patient_id: portalScope.patientId,
+          ...normalized.value,
+          source: 'PATIENT_PORTAL',
+          created_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+          created_at: now,
+          updated_at: now,
+          archived_at: null,
+        })
+        .select(patientCareNetworkColumns)
+        .single();
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [POST]');
+      return res.status(201).json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [POST]');
+    }
+  });
+
+  app.patch('/api/patient/self/care-network/:contactId', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Atualização da rede de cuidado')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const contactId = sanitizeString(req.params?.contactId, 120);
+      if (!isUuid(contactId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      const normalized = normalizePatientCareNetworkPayload(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .update({
+          ...normalized.value,
+          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', contactId)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null)
+        .select(patientCareNetworkColumns)
+        .maybeSingle();
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [PATCH]');
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [PATCH]');
+    }
+  });
+
+  app.delete('/api/patient/self/care-network/:contactId', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+      const contactId = sanitizeString(req.params?.contactId, 120);
+      if (!isUuid(contactId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const now = new Date().toISOString();
+      const { data, error } = await supabase
+        .from('patient_care_network_contacts')
+        .update({
+          archived_at: now,
+          updated_at: now,
+          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
+        })
+        .eq('id', contactId)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .is('archived_at', null)
+        .select('id')
+        .maybeSingle();
+      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [DELETE]');
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+      return res.json({ success: true, data: { id: data.id, archived: true } });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [DELETE]');
+    }
+  });
+
+  app.get(
+    '/api/patients/:patientId/care-network',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('clinical.record.view', 'clinical.history.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) {
+          return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        }
+        const { data, error } = await supabase
+          .from('patient_care_network_contacts')
+          .select(patientCareNetworkColumns)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .is('archived_at', null)
+          .order('created_at', { ascending: true })
+          .limit(100);
+        if (error) return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
+        return res.json({ success: true, data: data || [] });
+      } catch (error: any) {
+        return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
+      }
+    }
+  );
+
+
+  const patientEvolutionTimelineColumns = 'id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_by_user_id,created_at,updated_at,archived_at';
+  const patientEvolutionGrantColumns = 'id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_by,authorization_declared_at,created_by_user_id,created_at,updated_at,last_invited_at,revoked_at,revoked_by_user_id';
+
+  const normalizeEvolutionTimelineMonthKey = (value: unknown): string => {
+    const raw = sanitizeString(value, 20);
+    const match = raw.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+    if (!match) return '';
+    const month = Number(match[2]);
+    const year = Number(match[1]);
+    if (year < 2000 || year > 2200 || month < 1 || month > 12) return '';
+    return `${match[1]}-${match[2]}-01`;
+  };
+
+  const sendEvolutionTimelineError = (res: any, error: any, route: string) => {
+    const message = sanitizeString(error?.message || String(error), 260);
+    if (isMissingRelationError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: 'EVOLUTION_TIMELINE_SCHEMA_UNAVAILABLE',
+        error: 'A estrutura da timeline de evolução ainda não foi aplicada.'
+      });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_STANDARD_MONTH_LIMIT')) {
+      return res.status(409).json({
+        success: false,
+        code: 'EVOLUTION_TIMELINE_STANDARD_MONTH_LIMIT',
+        error: 'O limite incluído é de um registro compartilhável por paciente/mês. Ative o adicional de R$ 2,00 por paciente/mês para usar até três.'
+      });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_PLUS3_MONTH_LIMIT') || message.includes('EVOLUTION_TIMELINE_MONTH_LIMIT')) {
+      return res.status(409).json({ success: false, code: 'EVOLUTION_TIMELINE_PLUS3_MONTH_LIMIT', error: 'Este mês já atingiu o limite de três registros na timeline.' });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_FILE_SCOPE_INVALID')) {
+      return res.status(400).json({ success: false, code: 'EVOLUTION_TIMELINE_FILE_SCOPE_INVALID', error: 'O documento não pertence a este paciente e clínica.' });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_CONTENT_OR_FILE_REQUIRED')) {
+      return res.status(400).json({ success: false, code: 'EVOLUTION_TIMELINE_CONTENT_OR_FILE_REQUIRED', error: 'Preencha o conteúdo ou anexe um documento.' });
+    }
+    if (message.includes('EVOLUTION_SHARE_EMAIL_INVALID')) {
+      return res.status(400).json({ success: false, code: 'EVOLUTION_SHARE_EMAIL_INVALID', error: 'Informe um e-mail válido para o destinatário.' });
+    }
+    if (message.includes('EVOLUTION_TIMELINE_ITEM_NOT_FOUND') || message.includes('EVOLUTION_SHARE_GRANT_NOT_FOUND')) {
+      return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
+    }
+    return sendRouteDbError(res, route, error);
+  };
+
+  const EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS = 200;
+
+  const resolvePatientEvolutionTimelineEntitlement = async (clinicId: string, patientId: string) => {
+    const fallback = {
+      tier: 'STANDARD',
+      billingStatus: 'INCLUDED',
+      monthlyLimit: 1,
+      unitAmountCents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+      currency: 'BRL',
+      canUseThreeItems: false,
+    };
+    const { data, error } = await supabase
+      .from('patient_evolution_timeline_entitlements')
+      .select('tier,billing_status,monthly_limit,unit_amount_cents,stripe_subscription_item_id,stripe_price_id,activated_at,last_billing_sync_at')
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .maybeSingle();
+    if (error) {
+      if (isMissingRelationError(error)) return fallback;
+      throw error;
+    }
+    if (!data) return fallback;
+    const activePlus = data.tier === 'PLUS3' && data.billing_status === 'ACTIVE' && Number(data.monthly_limit) === 3;
+    return {
+      tier: activePlus ? 'PLUS3' : 'STANDARD',
+      billingStatus: sanitizeString(data.billing_status, 40) || (activePlus ? 'ACTIVE' : 'INCLUDED'),
+      monthlyLimit: activePlus ? 3 : 1,
+      unitAmountCents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+      currency: 'BRL',
+      canUseThreeItems: activePlus,
+      activatedAt: data.activated_at || null,
+      lastBillingSyncAt: data.last_billing_sync_at || null,
+    };
+  };
+
+  const resolveEvolutionTimelinePlusStripePriceId = () =>
+    sanitizeString(process.env.STRIPE_EVOLUTION_TIMELINE_PLUS_PRICE_ID, 200);
+
+  const countEvolutionTimelinePlusBillingQuantity = async (clinicId: string) => {
+    const { count, error } = await supabase
+      .from('patient_evolution_timeline_entitlements')
+      .select('patient_id', { count: 'exact', head: true })
+      .eq('clinic_id', clinicId)
+      .eq('tier', 'PLUS3')
+      .in('billing_status', ['ACTIVE', 'PENDING']);
+    if (error) throw error;
+    return Math.max(0, Number(count || 0));
+  };
+
+  const syncEvolutionTimelinePlusStripeQuantity = async (clinicId: string) => {
+    const priceId = resolveEvolutionTimelinePlusStripePriceId();
+    if (!priceId) {
+      throw Object.assign(new Error('Preço Stripe do adicional da timeline não configurado.'), { code: 'TIMELINE_PLUS_PRICE_NOT_CONFIGURED' });
+    }
+    const quantity = await countEvolutionTimelinePlusBillingQuantity(clinicId);
+    if (quantity < 1) {
+      throw Object.assign(new Error('Nenhum paciente aguardando ativação do adicional da timeline.'), { code: 'TIMELINE_PLUS_NO_BILLABLE_PATIENTS' });
+    }
+
+    const stripe = getStripe();
+    const price = await stripe.prices.retrieve(priceId);
+    const amount = Number((price as any)?.unit_amount || 0);
+    const currency = sanitizeString((price as any)?.currency, 20).toLowerCase();
+    const interval = sanitizeString((price as any)?.recurring?.interval, 30).toLowerCase();
+    if ((price as any)?.active === false || amount !== EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS || currency !== 'brl' || interval !== 'month') {
+      throw Object.assign(new Error('O preço Stripe da Timeline PLUS3 deve ser recorrente mensal de R$ 2,00 em BRL.'), {
+        code: 'TIMELINE_PLUS_PRICE_INVALID'
+      });
+    }
+
+    const billingState = await readClinicActivePatientBillingState(clinicId);
+    const subscriptionId = sanitizeString(billingState.stripeSubscriptionId, 200);
+    if (!subscriptionId) {
+      throw Object.assign(new Error('Assinatura Stripe da clínica não encontrada.'), { code: 'SUBSCRIPTION_NOT_READY' });
+    }
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId, { expand: ['items.data.price'] });
+    const existingItem = subscription.items.data.find((item: any) => sanitizeString(item?.price?.id, 200) === priceId) || null;
+    const idempotencySuffix = `${clinicId}:${priceId}:${quantity}`;
+    let item: any;
+    if (existingItem?.id) {
+      item = await stripe.subscriptionItems.update(
+        existingItem.id,
+        { quantity, proration_behavior: 'create_prorations' } as any,
+        { idempotencyKey: crypto.createHash('sha256').update(`timeline-plus-update:${idempotencySuffix}`).digest('hex') }
+      );
+    } else {
+      item = await stripe.subscriptionItems.create(
+        { subscription: subscriptionId, price: priceId, quantity, proration_behavior: 'create_prorations' } as any,
+        { idempotencyKey: crypto.createHash('sha256').update(`timeline-plus-create:${idempotencySuffix}`).digest('hex') }
+      );
+    }
+
+    await supabase.from('clinic_evolution_timeline_addon_billing').upsert({
+      clinic_id: clinicId,
+      stripe_subscription_id: subscriptionId,
+      stripe_subscription_item_id: item.id,
+      stripe_price_id: priceId,
+      quantity,
+      unit_amount_cents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+      status: 'ACTIVE',
+      last_error: null,
+      last_synced_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'clinic_id' });
+
+    return { subscriptionId, subscriptionItemId: sanitizeString(item.id, 200), priceId, quantity };
+  };
+
+  const loadPatientEvolutionTimeline = async (clinicId: string, patientId: string) => {
+    const { data: items, error: itemsError } = await supabase
+      .from('patient_evolution_timeline_items')
+      .select(patientEvolutionTimelineColumns)
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .is('archived_at', null)
+      .order('month_key', { ascending: false })
+      .order('slot', { ascending: true })
+      .limit(60);
+    if (itemsError) throw itemsError;
+
+    const itemRows = items || [];
+    const itemIds = itemRows.map((item: any) => sanitizeString(item?.id, 120)).filter(isUuid);
+    const fileIds = itemRows.map((item: any) => sanitizeString(item?.patient_file_id, 120)).filter(isUuid);
+
+    const [grantResult, fileResult] = await Promise.all([
+      itemIds.length
+        ? supabase
+            .from('patient_evolution_share_grants')
+            .select(patientEvolutionGrantColumns)
+            .in('timeline_item_id', itemIds)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('status', 'ACTIVE')
+            .order('created_at', { ascending: true })
+        : Promise.resolve({ data: [], error: null } as any),
+      fileIds.length
+        ? supabase
+            .from('patient_files')
+            .select('id,file_name,mime_type,file_size_bytes,storage_path,source,created_at')
+            .in('id', fileIds)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    if (grantResult.error) throw grantResult.error;
+    if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
+
+    const grantsByItem = new Map<string, any[]>();
+    for (const grant of grantResult.data || []) {
+      const key = sanitizeString(grant?.timeline_item_id, 120);
+      const current = grantsByItem.get(key) || [];
+      current.push({
+        id: grant.id,
+        publicId: grant.public_id,
+        recipientEmail: grant.recipient_email,
+        status: grant.status,
+        authorizationDeclaredAt: grant.authorization_declared_at,
+        lastInvitedAt: grant.last_invited_at,
+        shareUrl: isUuid(grant.public_id) ? getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`) : null,
+      });
+      grantsByItem.set(key, current);
+    }
+    const fileById = new Map((fileResult.data || []).map((file: any) => [String(file.id), file]));
+
+    return itemRows.map((item: any) => {
+      const file = item.patient_file_id ? fileById.get(String(item.patient_file_id)) : null;
+      return {
+        id: item.id,
+        clinicId: item.clinic_id,
+        patientId: item.patient_id,
+        monthKey: item.month_key,
+        slot: item.slot,
+        subject: item.subject,
+        content: item.content || '',
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+        attachment: file ? {
+          id: file.id,
+          fileName: file.file_name,
+          mimeType: file.mime_type,
+          sizeBytes: file.file_size_bytes,
+          source: file.source,
+          createdAt: file.created_at,
+        } : null,
+        grants: grantsByItem.get(String(item.id)) || [],
+      };
+    });
+  };
+
+  app.get(
+    '/api/patients/:patientId/evolution-timeline',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability('reports.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        const [data, entitlement] = await Promise.all([
+          loadPatientEvolutionTimeline(clinicId, patientId),
+          resolvePatientEvolutionTimelineEntitlement(clinicId, patientId),
+        ]);
+        return res.json({ success: true, data, entitlement });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [GET]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 20 * 1024, 'Registro da timeline de evolução')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const monthKey = normalizeEvolutionTimelineMonthKey(req.body?.monthKey || req.body?.month_key);
+        const subject = sanitizeString(req.body?.subject || req.body?.title, 180);
+        const content = sanitizeString(req.body?.content, 12000) || null;
+        const patientFileId = sanitizeString(req.body?.patientFileId || req.body?.patient_file_id, 120) || null;
+        if (!isUuid(patientId) || !isUuid(clinicId) || !isUuid(actorId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        if (!monthKey) return res.status(400).json({ success: false, error: 'Informe um mês válido.' });
+        if (!subject) return res.status(400).json({ success: false, error: 'Informe o assunto/tema do registro.' });
+        if (patientFileId && !isUuid(patientFileId)) return res.status(400).json({ success: false, error: 'Documento inválido.' });
+        if (!content && !patientFileId) return res.status(400).json({ success: false, error: 'Preencha o conteúdo ou anexe um documento.' });
+
+        const { data, error } = await supabase.rpc('create_patient_evolution_timeline_item_v2', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_month_key: monthKey,
+          p_subject: subject,
+          p_content: content,
+          p_patient_file_id: patientFileId,
+          p_actor_id: actorId,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [POST]');
+        const [timeline, entitlement] = await Promise.all([
+          loadPatientEvolutionTimeline(clinicId, patientId),
+          resolvePatientEvolutionTimelineEntitlement(clinicId, patientId),
+        ]);
+        return res.status(201).json({ success: true, data, timeline, entitlement });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/upgrade-plus3',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('finance.entries.manage'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (![patientId, clinicId, actorId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      try {
+        const current = await resolvePatientEvolutionTimelineEntitlement(clinicId, patientId);
+        if (current.canUseThreeItems) return res.json({ success: true, idempotent: true, entitlement: current });
+
+        const reservation = await supabase.rpc('reserve_patient_evolution_timeline_plus_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_actor_id: actorId,
+        });
+        if (reservation.error) return sendEvolutionTimelineError(res, reservation.error, '/api/patients/:patientId/evolution-timeline/upgrade-plus3 [reserve]');
+
+        let billing: any = null;
+        try {
+          billing = await syncEvolutionTimelinePlusStripeQuantity(clinicId);
+          const finalized = await supabase.rpc('finalize_patient_evolution_timeline_plus_v1', {
+            p_clinic_id: clinicId,
+            p_patient_id: patientId,
+            p_actor_id: actorId,
+            p_success: true,
+            p_stripe_subscription_item_id: billing.subscriptionItemId,
+            p_stripe_price_id: billing.priceId,
+          });
+          if (finalized.error) throw finalized.error;
+          // Best-effort reconciliation after activation. The reservation sync above already counts
+          // ACTIVE + PENDING patients, so a transient second Stripe failure must not revert a paid grant.
+          try {
+            billing = await syncEvolutionTimelinePlusStripeQuantity(clinicId);
+          } catch (reconcileError: any) {
+            console.warn('[EvolutionTimelinePlus] post-activation quantity reconciliation warning:', {
+              clinicId,
+              patientId,
+              code: sanitizeString(reconcileError?.code, 100) || null,
+              message: sanitizeString(reconcileError?.message || String(reconcileError), 260),
+            });
+          }
+          const entitlement = await resolvePatientEvolutionTimelineEntitlement(clinicId, patientId);
+          return res.json({
+            success: true,
+            entitlement,
+            billing: {
+              unitAmountCents: EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS,
+              currency: 'BRL',
+              quantity: billing.quantity,
+              prorationBehavior: 'create_prorations',
+            }
+          });
+        } catch (billingError: any) {
+          await supabase.rpc('finalize_patient_evolution_timeline_plus_v1', {
+            p_clinic_id: clinicId,
+            p_patient_id: patientId,
+            p_actor_id: actorId,
+            p_success: false,
+            p_stripe_subscription_item_id: null,
+            p_stripe_price_id: resolveEvolutionTimelinePlusStripePriceId() || null,
+          }).catch(() => undefined);
+          console.error('[EvolutionTimelinePlus] billing activation failed:', {
+            clinicId,
+            patientId,
+            code: sanitizeString(billingError?.code, 100) || null,
+            message: sanitizeString(billingError?.message || String(billingError), 260),
+          });
+          const code = sanitizeString(billingError?.code, 100) || (isMissingStripeConfigError(billingError) ? 'MISSING_STRIPE_CONFIG' : 'TIMELINE_PLUS_BILLING_FAILED');
+          return res.status(code === 'TIMELINE_PLUS_PRICE_NOT_CONFIGURED' || code === 'MISSING_STRIPE_CONFIG' ? 503 : 502).json({
+            success: false,
+            code,
+            error: code === 'TIMELINE_PLUS_PRICE_NOT_CONFIGURED'
+              ? 'O adicional de até três registros ainda não está disponível para contratação.'
+              : 'Não foi possível ativar o adicional de R$ 2,00 por paciente agora. Nenhum limite adicional foi liberado.'
+          });
+        }
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/upgrade-plus3 [POST]');
+      }
+    }
+  );
+
+  app.delete(
+    '/api/patients/:patientId/evolution-timeline/:itemId',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        if (![patientId, clinicId, actorId, itemId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const { data, error } = await supabase.rpc('archive_patient_evolution_timeline_item_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_item_id: itemId,
+          p_actor_id: actorId,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId [DELETE]');
+        await persistExternalEvolutionAccessAudit({ req, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'ITEM_ARCHIVED' });
+        return res.json({ success: true, data });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId [DELETE]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 8 * 1024, 'Compartilhamento de evolução')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const recipientEmail = sanitizeEmail(req.body?.recipientEmail || req.body?.recipient_email);
+        const authorizationConfirmed = req.body?.authorizationConfirmed === true || req.body?.authorization_confirmed === true;
+        if (![patientId, clinicId, actorId, itemId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        if (!recipientEmail) return res.status(400).json({ success: false, error: 'Informe um e-mail válido para o destinatário.' });
+        if (!authorizationConfirmed) {
+          return res.status(400).json({
+            success: false,
+            code: 'EVOLUTION_SHARE_AUTHORIZATION_DECLARATION_REQUIRED',
+            error: 'Confirme que existe autorização válida do paciente ou responsável antes de compartilhar.'
+          });
+        }
+
+        const { data: rpcData, error } = await supabase.rpc('upsert_patient_evolution_share_grant_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_item_id: itemId,
+          p_recipient_email: recipientEmail,
+          p_actor_id: actorId,
+          p_authorization_statement_version: EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants [POST]');
+        const publicId = sanitizeString(rpcData?.publicId || rpcData?.public_id, 120);
+        const grantId = sanitizeString(rpcData?.id, 120);
+        const shareUrl = isUuid(publicId) ? getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`) : '';
+
+        let clinicName = 'Clínica';
+        const clinicResult = await supabase.from('clinics').select('name').eq('id', clinicId).maybeSingle();
+        if (!clinicResult.error && clinicResult.data?.name) clinicName = sanitizeString(clinicResult.data.name, 180) || clinicName;
+        let emailSent = false;
+        if (shareUrl) {
+          const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl });
+          emailSent = await sendTransactionalEmailSafe({
+            to: recipientEmail,
+            subject: emailTemplate.subject,
+            html: emailTemplate.html,
+            context: 'external_clinical_evolution_invite',
+            from: OFFICIAL_FROM_NOREPLY,
+            replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+            metadata: { grantId, patientId, clinicId, recipientEmail: maskEmail(recipientEmail) }
+          });
+          if (emailSent && isUuid(grantId)) {
+            await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId).eq('clinic_id', clinicId).eq('patient_id', patientId);
+            await persistExternalEvolutionAccessAudit({
+              req,
+              grant: { id: grantId, timeline_item_id: itemId, clinic_id: clinicId, patient_id: patientId, recipient_email: recipientEmail },
+              item: { id: itemId, clinic_id: clinicId, patient_id: patientId },
+              action: 'INVITE_SENT',
+            });
+          }
+        }
+
+        return res.status(201).json({
+          success: true,
+          data: {
+            id: grantId,
+            publicId,
+            recipientEmail,
+            status: 'ACTIVE',
+            shareUrl: shareUrl || null,
+            emailSent,
+            authorizationStatementVersion: EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION,
+          }
+        });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const grantId = sanitizeString(req.params?.grantId, 120);
+        if (![patientId, clinicId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const { data: grant, error } = await supabase
+          .from('patient_evolution_share_grants')
+          .select(patientEvolutionGrantColumns)
+          .eq('id', grantId)
+          .eq('timeline_item_id', itemId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .eq('status', 'ACTIVE')
+          .maybeSingle();
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend [POST]');
+        if (!grant?.id) return res.status(404).json({ success: false, error: 'Compartilhamento não encontrado.' });
+        const shareUrl = getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`);
+        const clinicResult = await supabase.from('clinics').select('name').eq('id', clinicId).maybeSingle();
+        const clinicName = sanitizeString(clinicResult.data?.name, 180) || 'Clínica';
+        const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl });
+        const emailSent = await sendTransactionalEmailSafe({
+          to: sanitizeEmail(grant.recipient_email),
+          subject: emailTemplate.subject,
+          html: emailTemplate.html,
+          context: 'external_clinical_evolution_invite_resend',
+          from: OFFICIAL_FROM_NOREPLY,
+          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+          metadata: { grantId, patientId, clinicId, recipientEmail: maskEmail(grant.recipient_email) }
+        });
+        if (emailSent) {
+          await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId);
+          await persistExternalEvolutionAccessAudit({ req, grant, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'INVITE_SENT', metadata: { resend: true } });
+        }
+        return res.json({ success: true, data: { shareUrl, emailSent } });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const grantId = sanitizeString(req.params?.grantId, 120);
+        if (![patientId, clinicId, actorId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const grantLookup = await supabase
+          .from('patient_evolution_share_grants')
+          .select(patientEvolutionGrantColumns)
+          .eq('id', grantId)
+          .eq('timeline_item_id', itemId)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .maybeSingle();
+        if (grantLookup.error) return sendEvolutionTimelineError(res, grantLookup.error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [lookup]');
+        const { data, error } = await supabase.rpc('revoke_patient_evolution_share_grant_v1', {
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_item_id: itemId,
+          p_grant_id: grantId,
+          p_actor_id: actorId,
+        });
+        if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [POST]');
+        await persistExternalEvolutionAccessAudit({ req, grant: grantLookup.data, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'REVOKED' });
+        return res.json({ success: true, data });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [POST]');
+      }
+    }
+  );
+
+  app.get('/api/external/evolution/:publicId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível ou revogado.' });
+      return res.json({
+        success: true,
+        data: {
+          publicId,
+          clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
+          recipientEmailHint: maskEmail(loaded.grant.recipient_email),
+          requiresEmailVerification: true,
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível abrir este compartilhamento.' });
+    }
+  });
+
+  app.post('/api/external/evolution/:publicId/request-code', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    const genericResponse = { success: true, message: 'Se o e-mail estiver autorizado, enviaremos um código de acesso.' };
+    try {
+      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Código de acesso externo')) return;
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const email = sanitizeEmail(req.body?.email);
+      if (!isUuid(publicId) || !email) return res.json(genericResponse);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded || sanitizeEmail(loaded.grant.recipient_email) !== email) return res.json(genericResponse);
+
+      const identifier = `${publicId}:${email}`;
+      const key = makeOtpChallengeKey('email', 'external_clinical_share', identifier);
+      await consumeOtpChallenge(key, { requirePersistent: requiresDistributedRuntimeState() });
+      const code = generate6DigitOtp();
+      await setOtpChallenge({
+        key,
+        channel: 'email',
+        purpose: 'external_clinical_share',
+        identifier,
+        userId: null,
+        codeHash: hashIdentifier(code),
+        expiresAt: Date.now() + PORTAL_LOGIN_OTP_TTL_MS,
+        attempts: 0,
+        consumed: false,
+        createdAt: Date.now(),
+      });
+      const shareUrl = getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`);
+      const emailTemplate = buildExternalEvolutionOtpEmail({
+        clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
+        code,
+        shareUrl,
+      });
+      const sent = await sendTransactionalEmailSafe({
+        to: email,
+        subject: emailTemplate.subject,
+        html: emailTemplate.html,
+        context: 'external_clinical_evolution_otp',
+        from: OFFICIAL_FROM_NOREPLY,
+        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        metadata: { grantId: loaded.grant.id, publicId, recipientEmail: maskEmail(email) }
+      });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'OTP_REQUESTED', metadata: { emailSent: sent } });
+      return res.json(genericResponse);
+    } catch (error: any) {
+      console.warn('[ExternalEvolutionShare] request-code warning:', sanitizeString(error?.message || String(error), 220));
+      return res.json(genericResponse);
+    }
+  });
+
+  app.post('/api/external/evolution/:publicId/verify-code', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    const invalid = { success: false, error: 'INVALID_CODE', message: 'Código inválido ou expirado.' };
+    try {
+      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Verificação de acesso externo')) return;
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const email = sanitizeEmail(req.body?.email);
+      const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
+      if (!isUuid(publicId) || !email || !/^\d{6}$/.test(code)) return res.status(400).json(invalid);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded || sanitizeEmail(loaded.grant.recipient_email) !== email) return res.status(400).json(invalid);
+
+      const key = makeOtpChallengeKey('email', 'external_clinical_share', `${publicId}:${email}`);
+      const requirePersistent = requiresDistributedRuntimeState();
+      const challenge = await getOtpChallenge(key, { requirePersistent });
+      if (!challenge || challenge.consumed) return res.status(400).json(invalid);
+      const nextAttempts = Math.max(0, Number(challenge.attempts || 0)) + 1;
+      const attemptRecorded = await updateOtpChallengeAttempts(key, challenge.attempts, nextAttempts, { requirePersistent });
+      if (!attemptRecorded) return res.status(409).json({ success: false, error: 'OTP_RETRY_REQUIRED', message: 'Solicite um novo código e tente novamente.' });
+      if (nextAttempts > 5) {
+        await consumeOtpChallenge(key, { requirePersistent, expectedAttempts: nextAttempts });
+        return res.status(429).json({ success: false, error: 'TOO_MANY_ATTEMPTS', message: 'Muitas tentativas. Solicite um novo código.' });
+      }
+      if (hashIdentifier(code) !== challenge.codeHash || Date.now() > challenge.expiresAt) return res.status(400).json(invalid);
+      const consumed = await consumeOtpChallenge(key, { requirePersistent, expectedAttempts: nextAttempts });
+      if (!consumed) return res.status(409).json({ success: false, error: 'OTP_RETRY_REQUIRED', message: 'Solicite um novo código e tente novamente.' });
+
+      setExternalEvolutionShareCookie(res, publicId, email);
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'OTP_VERIFIED' });
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.warn('[ExternalEvolutionShare] verify-code warning:', sanitizeString(error?.message || String(error), 220));
+      return res.status(400).json(invalid);
+    }
+  });
+
+  const resolveExternalEvolutionAuthorizedShare = async (req: any, publicId: string) => {
+    const loaded = await loadActiveExternalEvolutionShare(publicId);
+    if (!loaded) return null;
+    const cookieName = externalEvolutionShareCookieName(publicId);
+    const sessionData = verifyExternalEvolutionShareSession(req.cookies?.[cookieName]);
+    if (!sessionData || sessionData.publicId !== publicId) return null;
+    if (sanitizeEmail(sessionData.email) !== sanitizeEmail(loaded.grant.recipient_email)) return null;
+    return loaded;
+  };
+
+  const loadExternalEvolutionTimelineForRecipient = async (loaded: any) => {
+    const email = sanitizeEmail(loaded?.grant?.recipient_email);
+    const clinicId = sanitizeString(loaded?.grant?.clinic_id, 120);
+    const patientId = sanitizeString(loaded?.grant?.patient_id, 120);
+    if (!email || !isUuid(clinicId) || !isUuid(patientId)) return [];
+
+    const { data: grants, error: grantsError } = await supabase
+      .from('patient_evolution_share_grants')
+      .select('id,timeline_item_id,recipient_email,status,created_at')
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .eq('status', 'ACTIVE')
+      .eq('recipient_email', email)
+      .order('created_at', { ascending: true });
+    if (grantsError) throw grantsError;
+
+    const grantByItem = new Map<string, any>();
+    for (const grant of grants || []) {
+      const itemId = sanitizeString(grant?.timeline_item_id, 120);
+      if (isUuid(itemId)) grantByItem.set(itemId, grant);
+    }
+    const itemIds = Array.from(grantByItem.keys());
+    if (!itemIds.length) return [];
+
+    const { data: items, error: itemsError } = await supabase
+      .from('patient_evolution_timeline_items')
+      .select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at')
+      .in('id', itemIds)
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .is('archived_at', null)
+      .order('month_key', { ascending: true })
+      .order('slot', { ascending: true });
+    if (itemsError) throw itemsError;
+
+    const fileIds = (items || []).map((item: any) => sanitizeString(item?.patient_file_id, 120)).filter(isUuid);
+    const fileResult = fileIds.length
+      ? await supabase
+          .from('patient_files')
+          .select('id,file_name,mime_type,file_size_bytes,created_at')
+          .in('id', fileIds)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+      : { data: [], error: null } as any;
+    if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
+    const fileById = new Map((fileResult.data || []).map((file: any) => [String(file.id), file]));
+
+    const months = new Map<string, any[]>();
+    for (const item of items || []) {
+      if (!grantByItem.has(String(item.id))) continue;
+      const monthKey = sanitizeString(item.month_key, 20).slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
+      const file = item.patient_file_id ? fileById.get(String(item.patient_file_id)) : null;
+      const row = {
+        id: item.id,
+        monthKey: item.month_key,
+        slot: item.slot,
+        subject: item.subject,
+        content: item.content || '',
+        createdAt: item.created_at,
+        attachment: file ? {
+          id: file.id,
+          fileName: file.file_name,
+          mimeType: file.mime_type,
+          sizeBytes: file.file_size_bytes,
+          createdAt: file.created_at,
+        } : null,
+      };
+      const current = months.get(monthKey) || [];
+      current.push(row);
+      months.set(monthKey, current);
+    }
+
+    return Array.from(months.entries())
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([monthKey, monthItems]) => ({
+        monthKey,
+        items: monthItems.sort((left: any, right: any) => Number(left.slot || 0) - Number(right.slot || 0)),
+      }));
+  };
+
+  app.get('/api/external/evolution/:publicId/content', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
+      const timeline = await loadExternalEvolutionTimelineForRecipient(loaded);
+      if (!timeline.length) return res.status(404).json({ success: false, error: 'Nenhum conteúdo compartilhado está disponível para este acesso.' });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'VIEWED', metadata: { visibleMonthCount: timeline.length } });
+      return res.json({
+        success: true,
+        data: {
+          clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
+          patientName: sanitizeString(loaded.patient?.name, 180) || 'Paciente',
+          sharedWith: sanitizeEmail(loaded.grant.recipient_email),
+          entryItemId: loaded.item.id,
+          timeline,
+          readOnly: true,
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar a timeline compartilhada.' });
+    }
+  });
+
+  const openExternalEvolutionAuthorizedFile = async (req: any, res: any, publicId: string, requestedItemId?: string | null) => {
+    try {
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+      const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
+      const itemId = sanitizeString(requestedItemId || loaded.item?.id, 120);
+      if (!isUuid(itemId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+
+      const email = sanitizeEmail(loaded.grant.recipient_email);
+      const { data: authorizedGrant, error: grantError } = await supabase
+        .from('patient_evolution_share_grants')
+        .select('id,timeline_item_id,clinic_id,patient_id,recipient_email,status')
+        .eq('timeline_item_id', itemId)
+        .eq('clinic_id', loaded.grant.clinic_id)
+        .eq('patient_id', loaded.grant.patient_id)
+        .eq('status', 'ACTIVE')
+        .eq('recipient_email', email)
+        .maybeSingle();
+      if (grantError || !authorizedGrant?.id) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+
+      const { data: item, error: itemError } = await supabase
+        .from('patient_evolution_timeline_items')
+        .select('id,patient_file_id,clinic_id,patient_id,archived_at')
+        .eq('id', itemId)
+        .eq('clinic_id', loaded.grant.clinic_id)
+        .eq('patient_id', loaded.grant.patient_id)
+        .is('archived_at', null)
+        .maybeSingle();
+      if (itemError || !item?.id || !isUuid(item.patient_file_id)) return res.status(404).json({ success: false, error: 'Este registro não possui documento anexado.' });
+
+      const { data: file, error } = await supabase
+        .from('patient_files')
+        .select('id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes')
+        .eq('id', item.patient_file_id)
+        .eq('clinic_id', loaded.grant.clinic_id)
+        .eq('patient_id', loaded.grant.patient_id)
+        .maybeSingle();
+      if (error || !file?.id || !file.storage_path) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+      const bucket = sanitizeString(file.storage_bucket, 120) || 'patient-files-private';
+      const { data: signed, error: signedError } = await supabase.storage.from(bucket).createSignedUrl(sanitizeString(file.storage_path, 800), 60 * 5);
+      if (signedError || !signed?.signedUrl) return res.status(503).json({ success: false, error: 'Não foi possível abrir o documento agora.' });
+      await persistExternalEvolutionAccessAudit({ req, grant: authorizedGrant, item, action: 'FILE_ACCESSED' });
+      return res.json({ success: true, data: { url: sanitizeUrl(signed.signedUrl), fileName: file.file_name, expiresInSeconds: 300 } });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível abrir o documento.' });
+    }
+  };
+
+  app.get('/api/external/evolution/:publicId/file/:itemId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    return openExternalEvolutionAuthorizedFile(
+      req,
+      res,
+      sanitizeString(req.params?.publicId, 120),
+      sanitizeString(req.params?.itemId, 120)
+    );
+  });
+
+  // Backward compatibility for links opened before Timeline v2: the original
+  // item remains addressable while its grant is active.
+  app.get('/api/external/evolution/:publicId/file', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    return openExternalEvolutionAuthorizedFile(req, res, sanitizeString(req.params?.publicId, 120), null);
+  });
+
   app.patch('/api/patient/self/profile', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const userId = sanitizeString(req.session.user?.id, 120);
-      const email = sanitizeEmail(req.session.user?.email);
       if (!userId) {
         return res.status(401).json({ success: false, error: 'Sessão inválida.' });
+      }
+
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
       }
 
       const requestedName = sanitizeString(req.body?.name, 180);
@@ -34700,74 +36809,42 @@ async function startServer() {
           180
         ) || null;
       const requestedPatientId = sanitizeString(req.body?.patientId || req.body?.patient_id, 120);
-      let linkedPatientForProfile: any = null;
-      const activeClinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      if (isUuid(requestedPatientId)) {
-        const readLinkedPatient = (columns: string) => {
-          let query = supabase
-            .from('patients')
-            .select(columns)
-            .eq('id', requestedPatientId)
-            .eq('is_active', true)
-            .is('deleted_at', null);
-          if (isUuid(activeClinicId)) query = query.eq('clinic_id', activeClinicId);
-          return query.maybeSingle();
-        };
-        let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id, metadata');
-        if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'responsible_user_id') {
-          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, metadata');
-        }
-        if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'metadata') {
-          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, responsible_user_id');
-        }
-        if (
-          linkedPatientResult.error &&
-          ['metadata', 'responsible_user_id'].includes(String(extractMissingColumnName(linkedPatientResult.error) || ''))
-        ) {
-          linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id');
-        }
-        if (!linkedPatientResult.error && linkedPatientResult.data?.id) {
-          const patientEmailMatches = email && sanitizeEmail(linkedPatientResult.data.email) === email;
-          const responsibleMatches = sanitizeString(linkedPatientResult.data.responsible_user_id, 120) === userId;
-          if (patientEmailMatches || responsibleMatches) {
-            linkedPatientForProfile = linkedPatientResult.data;
-          } else {
-            return res.status(403).json({ success: false, error: 'Paciente não pertence a este acesso do portal.' });
-          }
-        } else if (linkedPatientResult.error && !isMissingRelationError(linkedPatientResult.error)) {
-          console.warn('[PatientProfile] linked patient id lookup warning:', linkedPatientResult.error?.message || String(linkedPatientResult.error));
-        }
+      if (requestedPatientId && requestedPatientId !== portalScope.patientId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Paciente não pertence ao acesso selecionado no portal.'
+        });
       }
-      if (!linkedPatientForProfile && email) {
-        let linkedPatientQuery = supabase
+
+      let linkedPatientForProfile: any = null;
+      const activeClinicId = portalScope.clinicId;
+      const readLinkedPatient = (columns: string) =>
+        supabase
           .from('patients')
-          .select('id, name, email, clinic_id, metadata')
-          .eq('email', email)
+          .select(columns)
+          .eq('id', portalScope.patientId)
+          .eq('clinic_id', portalScope.clinicId)
           .eq('is_active', true)
           .is('deleted_at', null)
-          .order('updated_at', { ascending: false })
-          .limit(1);
-        if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
-        let linkedPatientLookup = await linkedPatientQuery.maybeSingle();
-        if (linkedPatientLookup.error && extractMissingColumnName(linkedPatientLookup.error) === 'metadata') {
-          linkedPatientQuery = supabase
-            .from('patients')
-            .select('id, name, email, clinic_id')
-            .eq('email', email)
-            .eq('is_active', true)
-            .is('deleted_at', null)
-            .order('updated_at', { ascending: false })
-            .limit(1);
-          if (isUuid(activeClinicId)) linkedPatientQuery = linkedPatientQuery.eq('clinic_id', activeClinicId);
-          linkedPatientLookup = await linkedPatientQuery.maybeSingle();
-        }
-        const { data: linkedPatient, error: linkedPatientError } = linkedPatientLookup;
-        if (!linkedPatientError && linkedPatient?.id) {
-          linkedPatientForProfile = linkedPatient;
-        } else if (linkedPatientError && !isMissingRelationError(linkedPatientError)) {
-          console.warn('[PatientProfile] linked patient lookup warning:', linkedPatientError?.message || String(linkedPatientError));
-        }
+          .limit(1)
+          .maybeSingle();
+
+      let linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id, metadata');
+      if (linkedPatientResult.error && extractMissingColumnName(linkedPatientResult.error) === 'metadata') {
+        linkedPatientResult = await readLinkedPatient('id, name, email, clinic_id');
       }
+      if (linkedPatientResult.error && !isMissingRelationError(linkedPatientResult.error)) {
+        throw linkedPatientResult.error;
+      }
+      if (!linkedPatientResult.data?.id) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_STALE',
+          error: 'O vínculo selecionado com a clínica não está mais ativo.'
+        });
+      }
+      linkedPatientForProfile = linkedPatientResult.data;
+
       const linkedPatientName = normalizeCanonicalPatientName(linkedPatientForProfile?.name);
       const preserveLinkedPatientName = shouldPreserveExistingPatientFullName(linkedPatientName, requestedName);
       const name =
@@ -34813,7 +36890,7 @@ async function startServer() {
         updated_at: updatedAt
       });
 
-      if (linkedPatientForProfile?.id || email) {
+      if (linkedPatientForProfile?.id) {
         const currentPatientMetadata = parseStoredJsonObject(linkedPatientForProfile?.metadata);
         const nextPatientMetadata = portalDisplayName
           ? cleanObject({
@@ -34837,9 +36914,7 @@ async function startServer() {
         };
         await patchTableSafely(
           'patients',
-          linkedPatientForProfile?.id
-            ? { column: 'id', value: sanitizeString(linkedPatientForProfile.id, 120) }
-            : { column: 'email', value: email as string },
+          { column: 'id', value: portalScope.patientId },
           patientProfilePatch
         );
       }
@@ -38581,7 +40656,7 @@ async function startServer() {
           void (async () => {
             try {
               const emailResult = await Promise.race([
-                sendPatientActivationEmail(),
+                sendPatientActivationEmail(input.authUserId || null),
                 new Promise<{ sent: false; reason: string }>((resolve) => {
                   setTimeout(() => {
                     resolve({ sent: false, reason: 'Timeout no envio do e-mail de ativação.' });
@@ -38888,20 +40963,17 @@ async function startServer() {
         return linkedPatientId;
       };
 
-      const sendPatientActivationEmail = async (): Promise<{ sent: boolean; reason?: string }> => {
-        const signupLink = await generateSupabaseActionLink({
-          type: 'signup',
-          email: normalizedEmail,
-          redirectTo: getActivationRedirectUrl('patient', normalizedEmail)
-        });
-        const fallbackRecoveryLink = signupLink
-          ? null
-          : await generateSupabaseActionLink({
-              type: 'recovery',
-              email: normalizedEmail,
-              redirectTo: getRecoveryRedirectUrl()
-            });
-        const activationLink = signupLink || fallbackRecoveryLink || getActivationRedirectUrl('patient', normalizedEmail);
+      const sendPatientActivationEmail = async (authUserId?: string | null): Promise<{ sent: boolean; reason?: string }> => {
+        const safeAuthUserId = sanitizeString(authUserId, 120);
+        const authUserResult = isUuid(safeAuthUserId)
+          ? await supabase.auth.admin.getUserById(safeAuthUserId)
+          : { data: { user: await findAuthUserByEmail(normalizedEmail) }, error: null as any };
+        if (authUserResult?.error) throw authUserResult.error;
+        const activationAuthUser = authUserResult?.data?.user || null;
+        if (!activationAuthUser?.id || sanitizeEmail(activationAuthUser.email) !== normalizedEmail) {
+          throw new Error('PATIENT_ACTIVATION_AUTH_USER_NOT_FOUND');
+        }
+        const activationLink = await createPatientActivationLink(activationAuthUser);
 
         const activationEmail = buildActivationEmailTemplate({
           nome: safeName,
@@ -39240,12 +41312,26 @@ async function startServer() {
   });
 
   const patientStorageUploadGuard = requireAnyClinicCapabilityOrPatientPortal('patient.files.upload', 'clinical.documents.upload');
+  const patientProfilePhotoUploadGuard = requireClinicCapability('patient.demographics.edit');
+  const isCanonicalPatientProfilePhotoUploadPath = (value: unknown) => {
+    const path = sanitizeString(value, 260).replace(/^\/+/, '');
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/profile\/(?:profile-[a-f0-9]{32}|clinic-profile)(?:-[0-9]+)?\.(?:webp|png|jpe?g|gif)$/i.test(path);
+  };
   const requireStorageUploadAccess = async (req: any, res: any, next: any) => {
+    const requestedBucket = sanitizeString(req.body?.bucket, 80);
     const requestedObjectPath = sanitizeString(req.body?.path, 260);
     const requestedPathParts = requestedObjectPath.split('/').filter(Boolean);
     const accessObjectPath = requestedPathParts[0] === 'demo'
       ? requestedPathParts.slice(2).join('/')
       : requestedObjectPath;
+    const sessionRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+    const isClinicManagedPatientProfileUpload =
+      sessionRole !== 'patient' &&
+      requestedBucket === 'patient-photos' &&
+      isCanonicalPatientProfilePhotoUploadPath(accessObjectPath);
+    if (isClinicManagedPatientProfileUpload) {
+      return patientProfilePhotoUploadGuard(req, res, next);
+    }
     if (!accessObjectPath.startsWith('onboarding/')) {
       return patientStorageUploadGuard(req, res, next);
     }
@@ -39331,6 +41417,51 @@ async function startServer() {
           if (!canAccess) {
             return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
           }
+
+          const isClinicManagedPatientProfileUpload = isCanonicalPatientProfilePhotoUploadPath(accessObjectPath);
+          if (isClinicManagedPatientProfileUpload) {
+            const effectiveClinicRole = sanitizeString(
+              req.authorizationContext?.role || req.effectiveClinicRole || role,
+              40,
+            ).toLowerCase();
+            if (!['director', 'coordinator', 'receptionist'].includes(effectiveClinicRole)) {
+              return res.status(403).json({
+                success: false,
+                error: 'PATIENT_PROFILE_PHOTO_ROLE_DENIED',
+                message: 'Seu papel atual não permite gerenciar a foto cadastral do paciente.'
+              });
+            }
+            if (!isUuid(activeClinicId)) {
+              return res.status(403).json({ success: false, error: 'CLINIC_CONTEXT_REQUIRED' });
+            }
+            const clinicPhotoPolicyResult = await supabase
+              .from('clinics')
+              .select('patient_photo_policy')
+              .eq('id', activeClinicId)
+              .maybeSingle();
+            if (clinicPhotoPolicyResult.error) {
+              const missingColumn = extractMissingColumnName(clinicPhotoPolicyResult.error);
+              if (missingColumn === 'patient_photo_policy') {
+                return res.status(409).json({
+                  success: false,
+                  error: 'PATIENT_PHOTO_POLICY_SCHEMA_REQUIRED',
+                  message: 'A política de foto da clínica ainda não está disponível.'
+                });
+              }
+              throw clinicPhotoPolicyResult.error;
+            }
+            const clinicPhotoPolicy = sanitizeString(
+              clinicPhotoPolicyResult.data?.patient_photo_policy,
+              20,
+            ).toUpperCase();
+            if (clinicPhotoPolicy !== 'CLINIC') {
+              return res.status(403).json({
+                success: false,
+                error: 'PATIENT_PROFILE_PHOTO_POLICY_DENIED',
+                message: 'A foto do paciente é gerenciada pelo portal nesta clínica.'
+              });
+            }
+          }
         }
       }
       if (!dataUrl) {
@@ -39409,6 +41540,39 @@ async function startServer() {
     }
   });
 
+  app.post('/api/storage/patient-photos/cleanup-upload', checkAuth, requirePatientPortalModule('clinical_core'), async (req: any, res) => {
+    try {
+      const objectPath = extractPatientPhotosStoragePath(req.body?.path);
+      const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      if (role !== 'patient' || !objectPath || objectPath.includes('..')) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const parts = objectPath.split('/').filter(Boolean);
+      const ownerPatientId = sanitizeString(parts[0], 120);
+      const scope = sanitizeString(parts[1], 80).toLowerCase();
+      if (!isUuid(ownerPatientId) || scope !== 'family' || !(await canPortalSessionAccessPatient(ownerPatientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      const referenced = await supabase
+        .from('history')
+        .select('id')
+        .eq('patient_id', ownerPatientId)
+        .eq('image_path', objectPath)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .limit(1)
+        .maybeSingle();
+      if (referenced.error && !extractMissingColumnName(referenced.error)) throw referenced.error;
+      if (referenced.data) return res.json({ success: true, skipped: true, reason: 'REFERENCED' });
+      const removal = await supabase.storage.from('patient-photos').remove([objectPath]);
+      if (removal.error) throw removal.error;
+      return res.json({ success: true, removed: true });
+    } catch (error: any) {
+      console.warn('[PatientPortalPhoto] orphan cleanup failed:', sanitizeString(error?.message || String(error), 240));
+      return res.status(500).json({ success: false, error: 'Não foi possível limpar o upload incompleto.' });
+    }
+  });
+
   const canAccessCanonicalClinicLogo = async (params: {
     objectPath: string;
     user: any;
@@ -39419,23 +41583,9 @@ async function startServer() {
     const clinicIds = new Set<string>();
 
     if (role === 'patient') {
-      const actorId = sanitizeString(params.user?.id, 120);
-      const actorEmail = sanitizeEmail(params.user?.email);
-      const activeClinicId = sanitizeString(currentClinicId(params.user), 120);
-      const linkedPatientIds = actorEmail
-        ? await getPatientIdsByEmailAcrossClinics(actorEmail, actorId, activeClinicId)
-        : (isUuid(actorId) ? [actorId] : []);
-      if (linkedPatientIds.length === 0) return false;
-      const { data: linkedPatients, error: linkedPatientsError } = await supabase
-        .from('patients')
-        .select('id,clinic_id')
-        .in('id', linkedPatientIds)
-        .limit(Math.min(linkedPatientIds.length, 100));
-      if (linkedPatientsError) return false;
-      for (const patient of Array.isArray(linkedPatients) ? linkedPatients : []) {
-        const clinicId = sanitizeString(patient?.clinic_id, 120);
-        if (isUuid(clinicId)) clinicIds.add(clinicId);
-      }
+      const portalScope = await resolveCanonicalPatientPortalScope(params.user);
+      if (!portalScope) return false;
+      clinicIds.add(portalScope.clinicId);
     } else {
       const clinicId = sanitizeString(currentClinicId(params.user), 120);
       if (isUuid(clinicId)) clinicIds.add(clinicId);
@@ -39674,11 +41824,32 @@ async function startServer() {
         if (!patientEmail) {
           return res.status(400).json({ success: false, error: 'Paciente sem e-mail cadastrado.' });
         }
-        const authUser = await findRecoverableAuthUserByEmail(patientEmail);
+        let authIdentity: { user: any; created: boolean };
+        try {
+          authIdentity = await ensurePatientActivationAuthIdentityFromPatient(patient);
+        } catch (identityError: any) {
+          const identityCode = sanitizeString(identityError?.code || identityError?.message, 80);
+          if (['PATIENT_AUTH_IDENTITY_INCONSISTENT', 'PATIENT_AUTH_IDENTITY_CONFLICT'].includes(identityCode)) {
+            return res.status(409).json({
+              success: false,
+              code: identityCode,
+              error: 'O cadastro possui um conflito de identidade de acesso que precisa de revisão antes do reenvio.',
+            });
+          }
+          throw identityError;
+        }
+        const authUser = authIdentity.user;
+        const profileResult = await fetchProfileWithSchemaFallback({
+          supabase,
+          userId: authUser.id,
+          logger: console,
+        });
+        if (profileResult.error) throw profileResult.error;
+        const pendingActivation = patientActivationIsPending(authUser, profileResult.data);
         const isAlreadyConfirmed = Boolean(
           (authUser as any)?.email_confirmed_at || (authUser as any)?.confirmed_at,
         );
-        if (isAlreadyConfirmed) {
+        if (isAlreadyConfirmed && !pendingActivation) {
           return res.status(409).json({
             success: false,
             code: 'ALREADY_CONFIRMED',
@@ -39687,32 +41858,20 @@ async function startServer() {
         }
 
         const profileName = sanitizeString(patient?.name, 180) || patientEmail.split('@')[0];
-        if (authUser?.id) {
-          await supabase.auth.admin.updateUserById(authUser.id, {
-            user_metadata: {
-              ...((authUser as any)?.user_metadata || {}),
-              full_name: profileName,
-              role: 'patient',
-              type: sanitizeString(patient?.type, 80) || 'adult_conventional',
-              clinic_id: isUuid(patient?.clinic_id) ? patient.clinic_id : null,
-              invited_email: patientEmail,
-              patient_activation_required: true,
-              first_login_completed: false
-            }
-          });
-        }
-        const activationLink =
-          (await generateSupabaseActionLink({
-            type: 'signup',
-            email: patientEmail,
-            redirectTo: getActivationRedirectUrl('patient', patientEmail)
-          })) ||
-          (await generateSupabaseActionLink({
-            type: 'recovery',
-            email: patientEmail,
-            redirectTo: getActivationRedirectUrl('patient', patientEmail)
-          })) ||
-          getActivationRedirectUrl('patient', patientEmail);
+        const { data: refreshedAuthUserResult, error: refreshActivationIdentityError } = await supabase.auth.admin.updateUserById(authUser.id, {
+          user_metadata: {
+            ...((authUser as any)?.user_metadata || {}),
+            full_name: profileName,
+            role: 'patient',
+            type: sanitizeString(patient?.type, 80) || 'adult_conventional',
+            clinic_id: isUuid(patient?.clinic_id) ? patient.clinic_id : null,
+            invited_email: patientEmail,
+            patient_activation_required: true,
+            first_login_completed: false
+          }
+        });
+        if (refreshActivationIdentityError) throw refreshActivationIdentityError;
+        const activationLink = await createPatientActivationLink(refreshedAuthUserResult?.user || authUser);
 
         const activationEmail = buildActivationEmailTemplate({
           nome: profileName,
@@ -39747,9 +41906,12 @@ async function startServer() {
 
         return res.json({
           success: true,
+          identityRepaired: authIdentity.created,
           message: sent
-            ? 'E-mail de ativação reenviado com sucesso.'
-            : 'Reenvio solicitado, mas houve falha no envio do e-mail. Tente novamente.'
+            ? (authIdentity.created
+                ? 'Identidade de acesso sincronizada e e-mail de ativação enviado com sucesso.'
+                : 'E-mail de ativação reenviado com sucesso.')
+            : 'A identidade de acesso foi sincronizada, mas houve falha no envio do e-mail. Tente novamente.'
         });
       } catch (error: any) {
         console.error('[Patients] resend activation error:', error);
@@ -39885,8 +42047,15 @@ async function startServer() {
       const patients = isExplicitDemoUser(req.session.user)
         ? (result.data || []).filter((patient: any) => patient?.is_demo === true)
         : result.data || [];
+      const patientsAlphabetical = patients.slice().sort((left: any, right: any) =>
+        sanitizeString(left?.name || left?.nome, 180).localeCompare(
+          sanitizeString(right?.name || right?.nome, 180),
+          'pt-BR',
+          { sensitivity: 'base', numeric: true }
+        )
+      );
 
-      const returnedPatientIds = patients
+      const returnedPatientIds = patientsAlphabetical
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
       let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
@@ -39922,7 +42091,7 @@ async function startServer() {
 
       return res.json({
         success: true,
-        data: patients.map((patient: any) => {
+        data: patientsAlphabetical.map((patient: any) => {
           const serialized = serializePatientMediaForClient(patient);
           const withProfessionalLinks = activeProfessionalLinksByPatient
             ? {
@@ -44226,91 +46395,58 @@ async function startServer() {
 
   app.get('/api/patient/self/history', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const sessionUserId = sanitizeString(req.session.user?.id, 120);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sessionUserId, currentClinicId(req.session.user));
-      const scopedPatientIds = Array.from(
-        new Set(
-          patientIds
-            .map((id) => sanitizeString(id, 120))
-            .filter((id) => isUuid(id))
-        )
-      );
-      if (scopedPatientIds.length === 0) {
-        console.warn('[PatientSelfHistory] skipped: missing resolvedPatientId', {
-          actorId: sessionUserId || null,
-          requestId: requestIdForLogs(req)
-        });
-        return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
-      }
-
-      const historyByEmailResult = await fetchHistoryWithSchemaFallback({
+      const historyByIdResult = await fetchHistoryWithSchemaFallback({
         supabase,
-        patientEmail,
+        patientId: portalScope.patientId,
         limit,
         route: '/api/patient/self/history',
         logger: console
       });
-      if (historyByEmailResult.error) throw historyByEmailResult.error;
-      const historyByEmail = historyByEmailResult.data;
+      if (historyByIdResult.error) throw historyByIdResult.error;
+      const historyById = Array.isArray(historyByIdResult.data) ? historyByIdResult.data : [];
 
-      let historyById: any[] = [];
-      if (scopedPatientIds.length > 0) {
-        const historyByIdResult = await fetchHistoryWithSchemaFallback({
-          supabase,
-          patientIds: scopedPatientIds,
-          limit,
-          route: '/api/patient/self/history',
-          logger: console
-        });
-        if (historyByIdResult.error) throw historyByIdResult.error;
-        historyById = Array.isArray(historyByIdResult.data) ? historyByIdResult.data : [];
-      }
-
-      const mergedHistory = [...(Array.isArray(historyByEmail) ? historyByEmail : []), ...historyById];
       const dedupedHistory = Array.from(
         new Map(
-          mergedHistory.map((item: any) => {
+          historyById.map((item: any) => {
             const key = String(item?.id || `${item?.patient_id || ''}|${item?.type || ''}|${item?.title || ''}|${item?.created_at || ''}|${item?.score ?? ''}`);
             return [key, item];
           })
         ).values()
       );
 
-      const assignedRows: any[] = [];
-      const { data: assignedByEmail, error: assignedByEmailError } = await supabase
-        .from('assigned_tasks')
-        .select(ASSIGNED_TASK_SELECT)
-        .eq('status', 'completed')
-        .eq('patient_email', patientEmail)
-        .order('completed_at', { ascending: false })
-        .limit(limit);
-      if (assignedByEmailError) {
-        console.warn('[PatientSelfHistory] assigned_tasks by email warning:', assignedByEmailError.message || String(assignedByEmailError));
-      } else if (Array.isArray(assignedByEmail)) {
-        assignedRows.push(...assignedByEmail);
+      const assignedRowsResult = await fetchAssignedTasksWithSchemaFallback({
+        supabase,
+        patientId: portalScope.patientId,
+        clinicId: portalScope.clinicId,
+        status: 'completed',
+        orderBy: 'completed_at',
+        limit,
+        route: '/api/patient/self/history',
+        logger: console
+      });
+      if (assignedRowsResult.error && !isMissingRelationError(assignedRowsResult.error)) {
+        throw assignedRowsResult.error;
       }
-      if (scopedPatientIds.length > 0) {
-        const { data: assignedById, error: assignedByIdError } = await supabase
-          .from('assigned_tasks')
-          .select(ASSIGNED_TASK_SELECT)
-          .eq('status', 'completed')
-          .in('patient_id', scopedPatientIds)
-          .order('completed_at', { ascending: false })
-          .limit(limit);
-        if (assignedByIdError) {
-          console.warn('[PatientSelfHistory] assigned_tasks by id warning:', assignedByIdError.message || String(assignedByIdError));
-        } else if (Array.isArray(assignedById)) {
-          assignedRows.push(...assignedById);
-        }
-      }
+      const assignedRows = Array.isArray(assignedRowsResult.data) ? assignedRowsResult.data : [];
 
-      const mappedAssignedHistory = Array.from(new Map(assignedRows.map((task: any) => [String(task?.id || crypto.randomUUID()), task])).values()).map((task: any) => {
+      const persistedAssignedTaskHistoryIds = new Set(
+        dedupedHistory
+          .map((item: any) => sanitizeString(item?.assigned_task_id || item?.assignedTaskId, 120))
+          .filter(Boolean)
+      );
+      const mappedAssignedHistory = Array.from(new Map(assignedRows.map((task: any) => [String(task?.id || crypto.randomUUID()), task])).values())
+        .filter((task: any) => !persistedAssignedTaskHistoryIds.has(sanitizeString(task?.id, 120)))
+        .map((task: any) => {
         const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
         return {
           id: `assigned:${task.id}`,
@@ -44337,41 +46473,18 @@ async function startServer() {
         };
       });
 
-      const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+      const tasksByIdResult = await fetchTasksWithSchemaFallback({
         supabase,
-        patientEmail,
-        emailMatch: 'ilike',
+        patientId: portalScope.patientId,
         limit,
         route: '/api/patient/self/history',
         requestId: requestIdForLogs(req),
         logger: console
       });
-      const tasksByEmail = tasksByEmailResult.data;
-      if (tasksByEmailResult.error) {
-        console.warn('[PatientSelfHistory] tasks by email warning:', tasksByEmailResult.error.message || String(tasksByEmailResult.error));
+      if (tasksByIdResult.error) {
+        console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdResult.error.message || String(tasksByIdResult.error));
       }
-
-      let tasksById: any[] = [];
-      if (scopedPatientIds.length > 0) {
-        const tasksByIdResult = await fetchTasksWithSchemaFallback({
-          supabase,
-          patientIds: scopedPatientIds,
-          limit,
-          route: '/api/patient/self/history',
-          requestId: requestIdForLogs(req),
-          logger: console
-        });
-        if (tasksByIdResult.error) {
-          console.warn('[PatientSelfHistory] tasks by id warning:', tasksByIdResult.error.message || String(tasksByIdResult.error));
-        } else {
-          tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
-        }
-      }
-
-      const taskRows = [
-        ...(Array.isArray(tasksByEmail) ? tasksByEmail : []),
-        ...tasksById
-      ];
+      const taskRows = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
       const mappedTaskScoreHistory = Array.from(
         new Map(
           taskRows.map((t: any) => [String(t?.id || crypto.randomUUID()), t])
@@ -44391,7 +46504,14 @@ async function startServer() {
           created_at: t.updated_at || t.created_at
         }));
 
-      const consolidatedHistory = [...dedupedHistory, ...mappedAssignedHistory, ...mappedTaskScoreHistory]
+      const patientVisibleHistory = [...dedupedHistory, ...mappedAssignedHistory, ...mappedTaskScoreHistory].filter((row: any) => {
+        const type = sanitizeString(row?.type, 80).toLowerCase();
+        const source = sanitizeString(row?.source, 120).toLowerCase();
+        if (['audit', 'system', 'internal', 'supervision', 'professional_private'].includes(type)) return false;
+        if (/^(closure_|internal_|supervision_|technical_)/.test(source)) return false;
+        return true;
+      });
+      const consolidatedHistory = patientVisibleHistory
         .sort((a: any, b: any) => {
           const aTs = new Date(a?.created_at || 0).getTime();
           const bTs = new Date(b?.created_at || 0).getTime();
@@ -44413,33 +46533,16 @@ async function startServer() {
 
   app.get('/api/patient/self/protocols', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
       }
 
-      const { data: patientLinks, error: patientLinksError } = await supabase
-        .from('patients')
-        .select('clinic_id, status, created_at')
-        .eq('email', patientEmail)
-        .eq('is_active', true)
-        .is('deleted_at', null);
-
-      if (patientLinksError) throw patientLinksError;
-
-      const links = Array.isArray(patientLinks) ? patientLinks : [];
-      const activeClinicIds = links
-        .filter((row: any) => sanitizeString(row?.status, 40).toLowerCase() === 'active')
-        .map((row: any) => sanitizeString(row?.clinic_id, 120))
-        .filter((id: string) => isUuid(id));
-      const fallbackClinicIds = links
-        .map((row: any) => sanitizeString(row?.clinic_id, 120))
-        .filter((id: string) => isUuid(id));
-
-      const clinicIds = (activeClinicIds.length > 0 ? activeClinicIds : fallbackClinicIds);
-      if (clinicIds.length === 0) {
-        return res.json({ success: true, data: [] });
-      }
+      const clinicIds = [portalScope.clinicId];
 
       let { data: states, error: statesError } = await supabase
         .from('clinic_state')
@@ -44502,6 +46605,247 @@ async function startServer() {
     }
   });
 
+  const WELLBEING_CHECKIN_SELECT = 'id,organization_id,clinic_id,patient_id,actor_user_id,metric_kind,metric_value,tag_id,tag_label,note,icon,local_date,created_at,updated_at';
+
+  type WellbeingReadPeriod = 'day' | 'week' | 'month' | 'year';
+  const resolveWellbeingReadWindow = (value: unknown) => {
+    const requested = sanitizeString(value, 20).toLowerCase();
+    const period: WellbeingReadPeriod = ['day', 'week', 'month', 'year'].includes(requested)
+      ? requested as WellbeingReadPeriod
+      : 'month';
+    const durationMs: Record<WellbeingReadPeriod, number> = {
+      day: 24 * 60 * 60 * 1000,
+      week: 7 * 24 * 60 * 60 * 1000,
+      month: 31 * 24 * 60 * 60 * 1000,
+      year: 366 * 24 * 60 * 60 * 1000,
+    };
+    const limits: Record<WellbeingReadPeriod, number> = { day: 96, week: 336, month: 720, year: 2000 };
+    return {
+      period,
+      fromIso: new Date(Date.now() - durationMs[period]).toISOString(),
+      limit: limits[period],
+    };
+  };
+
+  const sendWellbeingSchemaError = (res: any, error: any, route: string) => {
+    if (isMissingRelationError(error)) {
+      return res.status(503).json({
+        success: false,
+        code: 'PATIENT_WELLBEING_SCHEMA_UNAVAILABLE',
+        error: 'A estrutura de check-in de humor/energia ainda não foi aplicada.'
+      });
+    }
+    return sendRouteDbError(res, route, error);
+  };
+
+  app.get('/api/patient/self/wellbeing-checkins', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const readWindow = resolveWellbeingReadWindow(req.query?.period);
+      const { data, error } = await supabase
+        .from('patient_wellbeing_checkins')
+        .select(WELLBEING_CHECKIN_SELECT)
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .gte('created_at', readWindow.fromIso)
+        .order('created_at', { ascending: false })
+        .limit(readWindow.limit);
+      if (error) return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [GET]');
+      return res.json({ success: true, data: data || [], period: readWindow.period });
+    } catch (error: any) {
+      return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [GET]');
+    }
+  });
+
+  app.post('/api/patient/self/wellbeing-checkins', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Check-in de humor/energia')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const metricKind = sanitizeString(req.body?.metricKind || req.body?.metric_kind, 20).toLowerCase();
+      const rawMetricValue = req.body?.metricValue ?? req.body?.metric_value;
+      const metricValue = typeof rawMetricValue === 'number'
+        ? rawMetricValue
+        : typeof rawMetricValue === 'string' && rawMetricValue.trim() !== ''
+          ? Number(rawMetricValue)
+          : Number.NaN;
+      if (
+        !['mood', 'energy'].includes(metricKind) ||
+        !Number.isFinite(metricValue) ||
+        metricValue < 0 ||
+        metricValue > 100
+      ) {
+        return res.status(400).json({ success: false, error: 'Informe um check-in de humor ou energia entre 0 e 100.' });
+      }
+      const rawClientEventId = sanitizeString(req.body?.clientEventId || req.body?.client_event_id, 120);
+      if (rawClientEventId && !isUuid(rawClientEventId)) {
+        return res.status(400).json({ success: false, error: 'Identificador do registro inválido.' });
+      }
+      const clientEventId = rawClientEventId || crypto.randomUUID();
+      const recordedAt = new Date();
+      const recordedAtIso = recordedAt.toISOString();
+      const localDate = dateGroupForClinic(recordedAt, req.session.user);
+      const actorUserId = sanitizeString(req.session.user?.id, 120);
+      const row = {
+        id: uuidFromStableString(`patient-wellbeing-event:v2:${portalScope.clinicId}:${portalScope.patientId}:${metricKind}:${clientEventId}`),
+        organization_id: portalScope.clinicId,
+        clinic_id: portalScope.clinicId,
+        patient_id: portalScope.patientId,
+        actor_user_id: isUuid(actorUserId) ? actorUserId : null,
+        metric_kind: metricKind,
+        metric_value: Math.round(metricValue),
+        tag_id: sanitizeString(req.body?.tagId || req.body?.tag_id, 80) || null,
+        tag_label: sanitizeString(req.body?.tagLabel || req.body?.tag_label, 120) || null,
+        note: sanitizeTextField(req.body?.note, 4000) || null,
+        icon: sanitizeString(req.body?.icon, 20) || null,
+        local_date: localDate,
+        created_at: recordedAtIso,
+        updated_at: recordedAtIso,
+      };
+      const insertResult = await supabase
+        .from('patient_wellbeing_checkins')
+        .insert(row)
+        .select(WELLBEING_CHECKIN_SELECT)
+        .single();
+      if (insertResult.error) {
+        const errorCode = sanitizeString(insertResult.error?.code, 40);
+        if (errorCode === '23505') {
+          const replay = await supabase
+            .from('patient_wellbeing_checkins')
+            .select(WELLBEING_CHECKIN_SELECT)
+            .eq('id', row.id)
+            .eq('clinic_id', portalScope.clinicId)
+            .eq('patient_id', portalScope.patientId)
+            .eq('metric_kind', metricKind)
+            .limit(1)
+            .maybeSingle();
+          if (!replay.error && replay.data) {
+            return res.json({ success: true, data: replay.data, duplicate: true });
+          }
+          return res.status(503).json({
+            success: false,
+            code: 'PATIENT_WELLBEING_APPEND_SCHEMA_REQUIRED',
+            error: 'A estrutura de registros múltiplos de humor/energia ainda não foi aplicada.'
+          });
+        }
+        return sendWellbeingSchemaError(res, insertResult.error, '/api/patient/self/wellbeing-checkins [POST]');
+      }
+      return res.json({ success: true, data: insertResult.data });
+    } catch (error: any) {
+      return sendWellbeingSchemaError(res, error, '/api/patient/self/wellbeing-checkins [POST]');
+    }
+  });
+
+  app.get(
+    '/api/patients/:patientId/wellbeing-checkins',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('clinical.record.view', 'clinical.history.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+        const readWindow = resolveWellbeingReadWindow(req.query?.period);
+        const { data, error } = await supabase
+          .from('patient_wellbeing_checkins')
+          .select(WELLBEING_CHECKIN_SELECT)
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .gte('created_at', readWindow.fromIso)
+          .order('created_at', { ascending: false })
+          .limit(readWindow.limit);
+        if (error) return sendWellbeingSchemaError(res, error, '/api/patients/:patientId/wellbeing-checkins [GET]');
+        return res.json({ success: true, data: data || [], period: readWindow.period });
+      } catch (error: any) {
+        return sendWellbeingSchemaError(res, error, '/api/patients/:patientId/wellbeing-checkins [GET]');
+      }
+    }
+  );
+
+  app.get('/api/patient/self/message-reads', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      const recipientUserId = sanitizeString(req.session.user?.id, 120);
+      if (!portalScope || !isUuid(recipientUserId)) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const { data, error } = await supabase
+        .from('patient_message_reads')
+        .select('note_id,read_at')
+        .eq('clinic_id', portalScope.clinicId)
+        .eq('patient_id', portalScope.patientId)
+        .eq('recipient_user_id', recipientUserId)
+        .order('read_at', { ascending: false })
+        .limit(300);
+      if (error) {
+        if (isMissingRelationError(error)) return res.status(503).json({ success: false, code: 'PATIENT_MESSAGE_READS_SCHEMA_UNAVAILABLE', error: 'A estrutura de leitura de mensagens ainda não foi aplicada.' });
+        return sendRouteDbError(res, '/api/patient/self/message-reads [GET]', error);
+      }
+      return res.json({ success: true, data: data || [] });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/message-reads [GET]', error);
+    }
+  });
+
+  app.post('/api/patient/self/messages/read', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Confirmação de leitura de mensagens')) return;
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      const recipientUserId = sanitizeString(req.session.user?.id, 120);
+      if (!portalScope || !isUuid(recipientUserId)) {
+        return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      }
+      const requestedIds = Array.from(new Set((Array.isArray(req.body?.noteIds) ? req.body.noteIds : [])
+        .map((value: any) => sanitizeString(value, 120))
+        .filter((value: string) => isUuid(value))))
+        .slice(0, 30);
+      if (requestedIds.length === 0) return res.json({ success: true, data: { noteIds: [] } });
+
+      const { data: notes, error: notesError } = await supabase
+        .from('notes')
+        .select('id,patient_id,visibility,type,portability_scope,shared_with_patient,shared_with_professionals,original_author_id,created_by,is_active,deleted_at')
+        .eq('patient_id', portalScope.patientId)
+        .eq('is_active', true)
+        .is('deleted_at', null)
+        .in('id', requestedIds);
+      if (notesError) throw notesError;
+      const authorizedIds = (notes || [])
+        .filter((note: any) => noteIsReadableByPatient(note))
+        .map((note: any) => sanitizeString(note?.id, 120))
+        .filter((value: string) => isUuid(value));
+      if (authorizedIds.length === 0) return res.json({ success: true, data: { noteIds: [] } });
+
+      const now = new Date().toISOString();
+      const rows = authorizedIds.map((noteId: string) => ({
+        id: uuidFromStableString(`patient-message-read:${portalScope.clinicId}:${portalScope.patientId}:${recipientUserId}:${noteId}`),
+        organization_id: portalScope.clinicId,
+        clinic_id: portalScope.clinicId,
+        patient_id: portalScope.patientId,
+        note_id: noteId,
+        recipient_user_id: recipientUserId,
+        read_at: now,
+        updated_at: now,
+      }));
+      const { error } = await supabase
+        .from('patient_message_reads')
+        .upsert(rows, { onConflict: 'clinic_id,patient_id,note_id,recipient_user_id', ignoreDuplicates: true });
+      if (error) {
+        if (isMissingRelationError(error)) return res.status(503).json({ success: false, code: 'PATIENT_MESSAGE_READS_SCHEMA_UNAVAILABLE', error: 'A estrutura de leitura de mensagens ainda não foi aplicada.' });
+        throw error;
+      }
+      return res.json({ success: true, data: { noteIds: authorizedIds, readAt: now } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/patient/self/messages/read [POST]', error);
+    }
+  });
+
   app.post('/api/history', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.evolution.create'), checkPatientAccess, async (req: any, res) => {
     const requestId = requestIdForLogs(req);
     const rawPatientId = sanitizeString(req.body?.patient_id || req.body?.patientId, 120);
@@ -44523,81 +46867,7 @@ async function startServer() {
           error: 'Este registro não pertence a um paciente vinculado ao seu acesso.'
         });
       }
-      if (role === 'patient' && safeType === 'photo') {
-        const safeEmail = sanitizeEmail(req.body?.patient_email || req.session.user?.email);
-        const incomingHistoryId = sanitizeString(req.body?.id || req.body?.clientRecordId || req.body?.localId, 120);
-        const incomingImagePath = sanitizeString(req.body?.image_path || req.body?.imagePath, 600);
-        const incomingImageUrl = sanitizeString(req.body?.image || req.body?.image_url || req.body?.imageUrl, 4000);
-        if (!safeEmail) {
-          return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível para validação de foto diária.' });
-        }
-        const now = new Date();
-        const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0).toISOString();
-        const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0).toISOString();
-        const selectTodayPhotos = async (field: 'patient_id' | 'patient_email', value: string) => {
-          let columns = ['id', 'patient_id', 'patient_email', 'type', 'title', 'score', 'note', 'icon', 'image', 'image_path', 'date_group', 'created_at', 'is_active', 'deleted_at'];
-          for (let attempt = 0; attempt < 4; attempt += 1) {
-            const { data, error } = await supabase
-              .from('history')
-              .select(columns.join(','))
-              .eq('type', 'photo')
-              .eq(field, value)
-              .eq('is_active', true)
-              .is('deleted_at', null)
-              .gte('created_at', startOfDay)
-              .lt('created_at', endOfDay)
-              .limit(FAMILY_DAILY_PHOTO_LIMIT);
-            if (!error) return Array.isArray(data) ? data : [];
-            const missingColumn = extractMissingColumnName(error);
-            if (missingColumn && columns.includes(missingColumn)) {
-              columns = columns.filter((column) => column !== missingColumn);
-              continue;
-            }
-            throw error;
-          }
-          return [];
-        };
-
-        const todayPhotosByPatient = await selectTodayPhotos('patient_id', resolvedPatientId);
-        const todayPhotosByEmail = await selectTodayPhotos('patient_email', safeEmail);
-
-        const todayPhotosById = new Map<string, any>();
-        [...(Array.isArray(todayPhotosByPatient) ? todayPhotosByPatient : []), ...(Array.isArray(todayPhotosByEmail) ? todayPhotosByEmail : [])]
-          .forEach((photo: any) => {
-            const photoId = sanitizeString(photo?.id, 120);
-            if (photoId) todayPhotosById.set(photoId, photo);
-          });
-        const todayPhotos = Array.from(todayPhotosById.values());
-        const sameRequestPhoto = todayPhotos.find((photo: any) =>
-          incomingHistoryId && String(photo?.id || '') === incomingHistoryId
-        );
-        const sameUploadedPhoto = todayPhotos.find((photo: any) => {
-          const storedPath = sanitizeString(photo?.image_path || photo?.imagePath, 600);
-          const storedImage = sanitizeString(photo?.image || photo?.image_url || photo?.imageUrl, 4000);
-          return (
-            (incomingImagePath && storedPath && incomingImagePath === storedPath) ||
-            (incomingImageUrl && storedImage && incomingImageUrl === storedImage)
-          );
-        });
-        if (sameUploadedPhoto && !sameRequestPhoto) {
-          return res.status(409).json({
-            success: true,
-            idempotent: true,
-            code: 'FAMILY_DAILY_PHOTO_ALREADY_SAVED',
-            status: 'RESOLVED_IDEMPOTENT',
-            message: 'Foto do diário já salva hoje.',
-            data: sameUploadedPhoto
-          });
-        }
-        const reachedDailyPhotoLimit = !sameRequestPhoto && todayPhotos.length >= FAMILY_DAILY_PHOTO_LIMIT;
-        if (reachedDailyPhotoLimit) {
-          return res.status(409).json({
-            success: false,
-            code: 'FAMILY_DAILY_PHOTO_LIMIT',
-            error: `Limite diário atingido: até ${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia podem ser enviadas no Portal da Família.`
-          });
-        }
-      }
+      // Patient-portal photo quota/idempotency is enforced atomically by create_patient_portal_history_entry_v1.
       const docCreatedAt = sanitizeString(req.body?.created_at || req.body?.createdAt, 40) || new Date().toISOString();
       const normalized = normalizeHistoryMutationPayload(req.body, {
         resolvedPatientId,
@@ -44619,15 +46889,67 @@ async function startServer() {
       if (!isUuid(docData.patient_id)) {
         return res.status(400).json({ success: false, error: 'patient_id inválido para salvar histórico.' });
       }
-      const { data, error } = await upsertHistoryWithSchemaFallback(docData, {
-        requestId,
-        userId: sanitizeString(req.session.user?.id, 120),
-        patientId: docData.patient_id,
-        payloadKeys: clinicalPayloadKeys(req.body),
-        table: 'history'
-      });
-      if (error) throw error;
-      if (sanitizeString(req.session.user?.role, 40).toLowerCase() !== 'patient') {
+      let data: any = null;
+      if (role === 'patient') {
+        let patientClinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientClinicId)) {
+          const patientScope = await supabase
+            .from('patients')
+            .select('clinic_id')
+            .eq('id', docData.patient_id)
+            .eq('is_active', true)
+            .is('deleted_at', null)
+            .limit(1)
+            .maybeSingle();
+          if (patientScope.error) throw patientScope.error;
+          patientClinicId = sanitizeString(patientScope.data?.clinic_id, 120);
+        }
+        if (!isUuid(patientClinicId) || !isUuid(docData.id)) {
+          return res.status(400).json({ success: false, error: 'Escopo persistente do registro do paciente inválido.' });
+        }
+        const portalWrite = await supabase.rpc('create_patient_portal_history_entry_v1', {
+          p_id: docData.id,
+          p_clinic_id: patientClinicId,
+          p_patient_id: docData.patient_id,
+          p_actor_user_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+          p_patient_email: docData.patient_email || sanitizeEmail(req.session.user?.email) || null,
+          p_type: docData.type,
+          p_title: docData.title,
+          p_score: docData.score ?? null,
+          p_energy: docData.energy ?? null,
+          p_note: docData.note || null,
+          p_icon: docData.icon || null,
+          p_image: docData.image || null,
+          p_image_path: docData.image_path || null,
+          p_date_group: docData.date_group || dateGroupForClinic(docData.created_at || new Date().toISOString(), req.session.user),
+          p_source: docData.source || 'patient_portal',
+          p_task_data: docData.task_data || {}
+        });
+        if (portalWrite.error) {
+          const portalMessage = String(portalWrite.error?.message || '');
+          if (portalMessage.includes('FAMILY_DAILY_PHOTO_LIMIT')) {
+            return res.status(409).json({
+              success: false,
+              code: 'FAMILY_DAILY_PHOTO_LIMIT',
+              error: `Limite diário atingido: até ${FAMILY_DAILY_PHOTO_LIMIT} fotos por dia podem ser enviadas no Portal do Paciente.`
+            });
+          }
+          if (/create_patient_portal_history_entry_v1|42883|function .* does not exist/i.test(portalMessage)) {
+            return res.status(503).json({ success: false, code: 'PATIENT_PORTAL_PERSISTENCE_MIGRATION_REQUIRED', error: 'Atualização de persistência do portal ainda não aplicada no banco.' });
+          }
+          throw portalWrite.error;
+        }
+        data = Array.isArray(portalWrite.data) ? portalWrite.data[0] : portalWrite.data;
+      } else {
+        const writeResult = await upsertHistoryWithSchemaFallback(docData, {
+          requestId,
+          userId: sanitizeString(req.session.user?.id, 120),
+          patientId: docData.patient_id,
+          payloadKeys: clinicalPayloadKeys(req.body),
+          table: 'history'
+        });
+        if (writeResult.error) throw writeResult.error;
+        data = writeResult.data;
         void persistActivityLog({
           userId: sanitizeString(req.session.user?.id, 120),
           clinicId: sanitizeString(req.session.user?.clinicId || req.session.user?.id, 120),
@@ -44723,7 +47045,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/patient-logs', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.evolution.create'), async (req: any, res) => {
+  app.post('/api/patient-logs', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 48 * 1024, 'Payload de log do paciente')) return;
       const resolvedPatientId = await resolvePatientIdForRequest(
@@ -44736,10 +47058,11 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'patient_id e type válido são obrigatórios.' });
       }
 
-      const isPatientPortalActor = sanitizeString(req.session.user?.role, 40).toLowerCase() === 'patient';
-      const canWritePatientLog = isPatientPortalActor
-        ? await canPortalSessionAccessPatient(resolvedPatientId, req.session.user)
-        : await canAccessPatientInCurrentClinic(resolvedPatientId, req.session.user, 'write');
+      const canWritePatientLog = await canAccessPatientInCurrentClinic(
+        resolvedPatientId,
+        req.session.user,
+        'write'
+      );
       if (!canWritePatientLog) {
         return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
       }
@@ -45308,8 +47631,11 @@ async function startServer() {
         : ['supervisor', 'coordinator', 'director'].includes(String(role || '').toLowerCase())
           ? authoritativeSpecialty || requestedSpecialty
           : requestedSpecialty;
-      const council = sanitizeString(req.body?.council, 80);
-      const councilNumber = sanitizeString(req.body?.councilNumber, 80);
+      if (!isProfessionalIdentifierInputValid(req.body?.council, 48) || !isProfessionalIdentifierInputValid(req.body?.councilNumber, 80)) {
+        return res.status(400).json({ success: false, error: 'Conselho ou registro profissional contém caracteres inválidos.' });
+      }
+      const council = sanitizeProfessionalIdentifier(req.body?.council, 48);
+      const councilNumber = sanitizeProfessionalIdentifier(req.body?.councilNumber, 80);
       const signatureDataUrl = sanitizeUrl(req.body?.signatureDataUrl);
       const signaturePath = sanitizeString(req.body?.signaturePath, 260);
       const profilePicture = sanitizeUrl(req.body?.profilePicture);
@@ -45749,15 +48075,36 @@ async function startServer() {
   });
 
   app.post('/api/profile/:userId', checkAuth, async (req: any, res) => {
+    let profileSaveStage = 'authorize_self';
     try {
-      // O perfil profissional é pessoal. Configurações da clínica são autorizadas
-      // separadamente pela capability da membership ativa.
+      // O perfil profissional é pessoal. Configurações institucionais exigem
+      // escopo explícito + capability da membership ativa. Um save profissional
+      // nunca deve depender da disponibilidade do resolver de módulos da clínica.
       if (req.session.user.id !== req.params.userId) {
         return res.status(403).json({ error: 'Acesso negado' });
       }
-      const authorizationContext = await resolveClinicCapabilityContext(req.session.user);
-      const activeClinicRole = sanitizeString(authorizationContext?.role, 40).toLowerCase();
-      const canEditClinicSettings = ['director', 'coordinator'].includes(activeClinicRole) && Boolean(authorizationContext?.capabilities?.has('clinic.settings.edit'));
+      const requestedProfileSaveScope = sanitizeString(
+        req.body?.profileSaveScope || req.body?.profile_save_scope,
+        24
+      ).toLowerCase();
+      const profileSaveScope = requestedProfileSaveScope === 'clinic' ? 'clinic' : 'professional';
+      let authorizationContext: ResolvedClinicCapabilityContext | null = null;
+      let activeClinicRole = '';
+      let canEditClinicSettings = false;
+      if (profileSaveScope === 'clinic') {
+        profileSaveStage = 'resolve_clinic_capability';
+        authorizationContext = await resolveClinicCapabilityContext(req.session.user);
+        activeClinicRole = sanitizeString(authorizationContext?.role, 40).toLowerCase();
+        canEditClinicSettings = ['director', 'coordinator'].includes(activeClinicRole)
+          && Boolean(authorizationContext?.capabilities?.has('clinic.settings.edit'));
+        if (!canEditClinicSettings) {
+          return res.status(403).json({
+            success: false,
+            error: 'CLINIC_SETTINGS_EDIT_DENIED',
+            message: 'Seu acesso atual nesta clínica não permite alterar as configurações institucionais.'
+          });
+        }
+      }
 
       const profilePicturePath = sanitizeString(req.body?.profilePicturePath || req.body?.profile_picture_path, 260);
       const signaturePath = sanitizeString(req.body?.signaturePath || req.body?.signature_path, 260);
@@ -45767,14 +48114,37 @@ async function startServer() {
           ? req.body.professionalProfile
           : {};
       const clinicSettingsInput =
-        canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
+        profileSaveScope === 'clinic' && canEditClinicSettings && req.body?.clinicSettings && typeof req.body.clinicSettings === 'object'
           ? req.body.clinicSettings
           : {};
-      const resolvedCrp = sanitizeString(req.body?.crp, 80);
-      const resolvedCouncil = sanitizeString(req.body?.council || clinicSettingsInput?.council, 80);
+      const rawResolvedCrp =
+        req.body?.crp ??
+        professionalProfileInput?.crp ??
+        professionalProfileInput?.councilNumber ??
+        professionalProfileInput?.council_number;
+      const rawResolvedCouncil =
+        req.body?.council ??
+        professionalProfileInput?.council ??
+        professionalProfileInput?.councilType ??
+        professionalProfileInput?.council_type ??
+        clinicSettingsInput?.council;
+      const rawResolvedCouncilNumber =
+        req.body?.councilNumber ??
+        professionalProfileInput?.councilNumber ??
+        professionalProfileInput?.council_number ??
+        professionalProfileInput?.crp ??
+        clinicSettingsInput?.councilNumber;
+      if (
+        !isProfessionalIdentifierInputValid(rawResolvedCrp, 80) ||
+        !isProfessionalIdentifierInputValid(rawResolvedCouncil, 48) ||
+        !isProfessionalIdentifierInputValid(rawResolvedCouncilNumber, 80)
+      ) {
+        return res.status(400).json({ success: false, error: 'Conselho ou registro profissional contém caracteres inválidos.' });
+      }
+      const resolvedCrp = sanitizeProfessionalIdentifier(rawResolvedCrp, 80);
+      const resolvedCouncil = sanitizeProfessionalIdentifier(rawResolvedCouncil, 48);
       const resolvedCouncilNumber =
-        sanitizeString(req.body?.councilNumber || clinicSettingsInput?.councilNumber, 80) ||
-        resolvedCrp;
+        sanitizeProfessionalIdentifier(rawResolvedCouncilNumber, 80) || resolvedCrp;
       const professionalCpf =
         normalizeCpf(req.body?.cpf) ||
         normalizeCpf(professionalProfileInput?.cpf || professionalProfileInput?.professionalCpf);
@@ -45816,10 +48186,13 @@ async function startServer() {
       const professionalDocumentType = ['CPF', 'CNPJ', 'OTHER'].includes(professionalDocumentTypeRaw)
         ? professionalDocumentTypeRaw
         : (professionalCpf ? 'CPF' : null);
-      const professionalDocumentNumber = sanitizeString(
-        professionalProfileInput?.documentNumber || professionalProfileInput?.document_number || professionalCpf,
-        40
-      ).replace(professionalDocumentType === 'OTHER' ? /[^A-Za-z0-9./-]/g : /\D/g, '');
+      const rawProfessionalDocumentNumber = professionalProfileInput?.documentNumber || professionalProfileInput?.document_number || professionalCpf;
+      if (professionalDocumentType === 'OTHER' && !isProfessionalIdentifierInputValid(rawProfessionalDocumentNumber, 80)) {
+        return res.status(400).json({ success: false, error: 'Identificação profissional contém caracteres inválidos.' });
+      }
+      const professionalDocumentNumber = professionalDocumentType === 'OTHER'
+        ? sanitizeProfessionalIdentifier(rawProfessionalDocumentNumber, 80)
+        : sanitizeString(rawProfessionalDocumentNumber, 40).replace(/\D/g, '');
       const professionalAddressInput = professionalProfileInput?.address && typeof professionalProfileInput.address === 'object'
         ? professionalProfileInput.address
         : {};
@@ -45905,9 +48278,82 @@ async function startServer() {
       let candidate: Record<string, any> = { ...safePayload };
       const removedColumns = new Set<string>();
       let lastError: any = null;
+      const profileUserId = sanitizeString(req.params.userId, 120);
 
+      // A rota de perfil é PATCH semântico, não criação de conta. O antigo upsert
+      // podia cair no caminho INSERT quando o shadow row de public.users estivesse
+      // ausente e então violar users.email NOT NULL. Primeiro detectamos o estado
+      // real: linhas existentes recebem UPDATE; somente um shadow row realmente
+      // ausente pode ser reconstruído a partir da identidade autenticada da sessão.
+      profileSaveStage = 'resolve_user_profile_row';
+      const existingUserResult = await supabase
+        .from('users')
+        .select('id,email,role')
+        .eq('id', profileUserId)
+        .maybeSingle();
+      if (existingUserResult.error) throw existingUserResult.error;
+      let recoverMissingUserRow = !existingUserResult.data?.id;
+      const recoveryEmail = sanitizeEmail(req.session.user?.email);
+      const recoveryRole = sanitizeString(req.session.user?.role, 40).toLowerCase();
+      const recoveryClinicId = currentClinicId(req.session.user);
+      const recoverySubscriptionStatus = sanitizeString(
+        req.session.user?.subscriptionStatus || req.session.user?.subscription_status,
+        40
+      );
+      const recoveryBillingModel = sanitizeString(
+        req.session.user?.billingModel || req.session.user?.billing_model,
+        40
+      );
+      if (recoverMissingUserRow && (!recoveryEmail || !recoveryRole)) {
+        return res.status(409).json({
+          success: false,
+          error: 'PROFILE_USER_SHADOW_MISSING',
+          message: 'A identidade autenticada precisa ser sincronizada antes de salvar o perfil.'
+        });
+      }
+
+      profileSaveStage = 'persist_user_profile';
       for (let attempt = 0; attempt < 12; attempt += 1) {
-        const { error } = await supabase.from('users').upsert(candidate, { onConflict: 'id' });
+        let error: any = null;
+        if (recoverMissingUserRow) {
+          const recoveryCandidate = cleanObject({
+            ...candidate,
+            id: profileUserId,
+            email: recoveryEmail,
+            role: recoveryRole,
+            clinic_id: recoveryClinicId || undefined,
+            subscription_status: recoverySubscriptionStatus || undefined,
+            billing_model: recoveryBillingModel || undefined,
+            created_at: new Date().toISOString(),
+          });
+          const recoveryResult = await supabase
+            .from('users')
+            .insert([recoveryCandidate])
+            .select('id')
+            .single();
+          error = recoveryResult.error;
+          // Corrida benigna: se outra requisição reconstruiu o shadow row entre
+          // o SELECT e o INSERT, mudamos para UPDATE sem tocar email/role.
+          if (error?.code === '23505') {
+            recoverMissingUserRow = false;
+            continue;
+          }
+        } else {
+          const { id: _profileUserId, ...updateCandidate } = candidate as any;
+          const updateResult = await supabase
+            .from('users')
+            .update(updateCandidate)
+            .eq('id', profileUserId)
+            .select('id')
+            .maybeSingle();
+          error = updateResult.error;
+          if (!error && !updateResult.data?.id) {
+            error = {
+              code: 'PROFILE_USER_ROW_NOT_UPDATED',
+              message: 'O perfil autenticado não possui shadow row atualizável em public.users.'
+            };
+          }
+        }
         if (!error) {
           const role = sanitizeString(req.session.user?.role, 40).toLowerCase();
           const clinicId = currentClinicId(req.session.user);
@@ -45983,6 +48429,9 @@ async function startServer() {
             professionalRoleTitle: professionalRoleTitle || existingMetadata?.professionalRoleTitle || undefined,
             council: resolvedCouncil || existingMetadata?.council || undefined,
             councilType: resolvedCouncil || existingMetadata?.councilType || undefined,
+            councilNumber: resolvedCouncilNumber || existingMetadata?.councilNumber || existingMetadata?.council_number || undefined,
+            council_number: resolvedCouncilNumber || existingMetadata?.council_number || existingMetadata?.councilNumber || undefined,
+            crp: resolvedCrp || resolvedCouncilNumber || existingMetadata?.crp || undefined,
             councilState: professionalCouncilState || existingMetadata?.councilState || undefined,
             cboCode: professionalCboCode || existingMetadata?.cboCode || undefined,
             specialtyName: professionalSpecialtyName || existingMetadata?.specialtyName || undefined,
@@ -46027,18 +48476,62 @@ async function startServer() {
             metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
             updated_at: new Date().toISOString()
           });
+          profileSaveStage = 'persist_professional_profile';
+          let professionalProfilePersisted = false;
+          let professionalProfileWriteError: any = null;
           for (let profileAttempt = 0; profileAttempt < 10; profileAttempt += 1) {
             const { error: profileError } = await supabase
               .from('professional_profiles')
               .upsert([profileCandidate], { onConflict: 'user_id' });
-            if (!profileError) break;
+            professionalProfileWriteError = profileError;
+            if (!profileError) {
+              professionalProfilePersisted = true;
+              break;
+            }
             const missingProfileColumn = extractMissingColumnName(profileError);
             if (!missingProfileColumn || !(missingProfileColumn in profileCandidate)) break;
             const { [missingProfileColumn]: _removed, ...rest } = profileCandidate as any;
             profileCandidate = rest;
           }
 
-          const nextClinicSettings = canEditClinicSettings
+          // Alguns bancos legados possuem constraints antigas nos campos tipados de
+          // conselho. Nesses casos, preservamos a autoridade no metadata JSONB, que já
+          // é lido pelo resolver canônico, sem descartar o restante do perfil.
+          if (!professionalProfilePersisted && professionalProfileWriteError) {
+            let metadataFallbackCandidate: Record<string, any> = cleanObject({
+              user_id: sanitizeString(req.params.userId, 120),
+              full_name: professionalFullName || undefined,
+              phone: professionalPhone || undefined,
+              specialty:
+                professionalSpecialtyName ||
+                sanitizeString(req.body?.specialties || professionalProfileInput?.specialties, 240) ||
+                undefined,
+              mini_curriculum:
+                sanitizeString(req.body?.miniCurriculum || professionalProfileInput?.miniCurriculum, 3000) ||
+                undefined,
+              metadata: Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined,
+              updated_at: new Date().toISOString()
+            });
+            for (let fallbackAttempt = 0; fallbackAttempt < 8; fallbackAttempt += 1) {
+              const { error: fallbackError } = await supabase
+                .from('professional_profiles')
+                .upsert([metadataFallbackCandidate], { onConflict: 'user_id' });
+              professionalProfileWriteError = fallbackError;
+              if (!fallbackError) {
+                professionalProfilePersisted = true;
+                break;
+              }
+              const missingFallbackColumn = extractMissingColumnName(fallbackError);
+              if (!missingFallbackColumn || !(missingFallbackColumn in metadataFallbackCandidate)) break;
+              const { [missingFallbackColumn]: _removed, ...rest } = metadataFallbackCandidate as any;
+              metadataFallbackCandidate = rest;
+            }
+          }
+          if (!professionalProfilePersisted) {
+            throw professionalProfileWriteError || new Error('Falha ao persistir o perfil profissional.');
+          }
+
+          const nextClinicSettings = profileSaveScope === 'clinic' && canEditClinicSettings
             ? compactClinicSettingsForSession({
             ...(req.session.user?.clinicSettings || {}),
             ...clinicSettingsInput,
@@ -46064,8 +48557,12 @@ async function startServer() {
             ...(clinicCnesCode ? { clinicCnesCode } : {}),
             patientPhotoPolicy: clinicPatientPhotoPolicy,
             ...(clinicProviderCode ? { clinicProviderCode } : {}),
-            ...(resolvedCouncil ? { council: resolvedCouncil } : {}),
-            ...(resolvedCouncilNumber ? { councilNumber: resolvedCouncilNumber } : {}),
+            ...(sanitizeProfessionalIdentifier(clinicSettingsInput?.council, 48)
+              ? { council: sanitizeProfessionalIdentifier(clinicSettingsInput?.council, 48) }
+              : {}),
+            ...(sanitizeProfessionalIdentifier(clinicSettingsInput?.councilNumber, 80)
+              ? { councilNumber: sanitizeProfessionalIdentifier(clinicSettingsInput?.councilNumber, 80) }
+              : {}),
             clinicLogoUrl: resolvedClinicLogoUrl || null,
             signatureDataUrl: resolvedSignatureUrl || null,
             therapistSpecialties:
@@ -46079,7 +48576,7 @@ async function startServer() {
           })
             : compactClinicSettingsForSession(req.session.user?.clinicSettings || {});
 
-          if (clinicId && canEditClinicSettings) {
+          if (clinicId && profileSaveScope === 'clinic' && canEditClinicSettings) {
             await patchTableSafely('clinics', { column: 'id', value: clinicId }, {
               name: clinicName || undefined,
               display_name: clinicName || undefined,
@@ -46181,7 +48678,9 @@ async function startServer() {
           req.session.user.clinicTimeZone = clinicTimeZone;
           req.session.user.clinic_timezone = clinicTimeZone;
           req.session.user.clinicSettings = nextClinicSettings;
-          req.session.user.workspaces = compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id));
+          req.session.user.workspaces = profileSaveScope === 'clinic'
+            ? compactWorkspacesForSession(await fetchUserWorkspaces(req.session.user.id))
+            : compactWorkspacesForSession(req.session.user?.workspaces || []);
           req.session.user.crp =
             resolvedCrp ||
             resolvedCouncilNumber ||
@@ -46196,6 +48695,7 @@ async function startServer() {
             req.session.user?.miniCurriculum ||
             null;
 
+          profileSaveStage = 'persist_session';
           await new Promise<void>((resolve, reject) => {
             req.session.save((sessionError: any) => {
               if (sessionError) {
@@ -46224,8 +48724,19 @@ async function startServer() {
       }
 
       throw lastError || new Error('Falha ao salvar perfil.');
-    } catch (error) {
-      res.status(500).json({ error: 'Erro interno do servidor.' });
+    } catch (error: any) {
+      logRouteDbError('/api/profile/:userId [POST]', error, {
+        stage: profileSaveStage,
+        userId: sanitizeString(req.params?.userId, 120),
+        requesterId: sanitizeString(req.session?.user?.id, 120),
+        profileSaveScope: sanitizeString(req.body?.profileSaveScope || req.body?.profile_save_scope, 24).toLowerCase() || 'professional',
+        requestId: requestIdForLogs(req)
+      });
+      return res.status(500).json({
+        success: false,
+        error: 'PROFILE_SAVE_FAILED',
+        message: 'Não foi possível salvar o perfil agora.'
+      });
     }
   });
 
@@ -46323,50 +48834,32 @@ async function startServer() {
 
   app.get('/api/patient/self/tasks', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
-      if (patientIds.length === 0) {
-        console.warn('[PatientSelfTasks] skipped: missing resolvedPatientId', {
-          actorId: sanitizeString(req.session.user?.id, 120) || null,
-          requestId: requestIdForLogs(req)
-        });
-        return res.json({ success: true, data: [], reason: 'missing_resolved_patient' });
-      }
-      const tasksByEmailResult = await fetchTasksWithSchemaFallback({
+      const tasksByIdResult = await fetchTasksWithSchemaFallback({
         supabase,
-        patientEmail,
+        patientId: portalScope.patientId,
         limit,
         route: '/api/patient/self/tasks',
         requestId: requestIdForLogs(req),
         logger: console
       });
-      if (tasksByEmailResult.error) throw tasksByEmailResult.error;
-      const tasksByEmail = tasksByEmailResult.data;
-
-      let tasksById: any[] = [];
-      if (patientIds.length > 0) {
-        const tasksByIdResult = await fetchTasksWithSchemaFallback({
-          supabase,
-          patientIds,
-          limit,
-          route: '/api/patient/self/tasks',
-          requestId: requestIdForLogs(req),
-          logger: console
-        });
-        if (tasksByIdResult.error) throw tasksByIdResult.error;
-        tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
-      }
+      if (tasksByIdResult.error) throw tasksByIdResult.error;
+      const tasksById = Array.isArray(tasksByIdResult.data) ? tasksByIdResult.data : [];
 
       const merged = Array.from(
         new Map(
-          [...(Array.isArray(tasksByEmail) ? tasksByEmail : []), ...tasksById].map((row: any) => [
+          tasksById.map((row: any) => [
             String(row?.id || crypto.randomUUID()),
-            row
+            { ...row, _source: 'tasks_legacy' }
           ])
         ).values()
       ).sort((a: any, b: any) => {
@@ -46775,6 +49268,185 @@ async function startServer() {
     }
   });
 
+  const clinicalLinkError = (code: string, message: string, status = 422) => {
+    const error: any = new Error(message);
+    error.code = code;
+    error.status = status;
+    return error;
+  };
+
+  const resolveAssignedTaskClinicalLink = async ({
+    patientId,
+    clinicId,
+    actorId,
+    actorRole,
+    body,
+  }: {
+    patientId: string;
+    clinicId: string;
+    actorId: string;
+    actorRole: string;
+    body: any;
+  }) => {
+    const taskData = body?.task_data && typeof body.task_data === 'object'
+      ? body.task_data
+      : body?.taskData && typeof body.taskData === 'object'
+        ? body.taskData
+        : {};
+    const first = (...values: any[]) => values.map((value) => sanitizeString(value, 180)).find(Boolean) || '';
+    const planId = first(body?.therapeutic_plan_id, body?.therapeuticPlanId, taskData?.therapeuticPlanId, taskData?.therapeutic_plan_id);
+    const objectiveId = first(body?.therapeutic_objective_id, body?.therapeuticObjectiveId, taskData?.therapeuticObjectiveId, taskData?.therapeutic_objective_id);
+    const programId = first(body?.therapeutic_program_id, body?.therapeuticProgramId, body?.programId, taskData?.therapeuticProgramId, taskData?.therapeutic_program_id, taskData?.programId, taskData?.program_id);
+    const targetId = first(body?.clinical_target_id, body?.clinicalTargetId, body?.targetId, taskData?.clinicalTargetId, taskData?.clinical_target_id, taskData?.targetId, taskData?.target_id);
+    if (!planId && !objectiveId && !programId && !targetId) return null;
+    if (!isUuid(planId)) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PLAN_INVALID', 'O vínculo clínico exige um plano terapêutico válido.');
+    if (objectiveId && !isUuid(objectiveId)) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_OBJECTIVE_INVALID', 'O objetivo terapêutico informado é inválido.');
+    if (!programId) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PROGRAM_REQUIRED', 'Uma atividade vinculada ao plano precisa informar o programa clínico de origem.');
+    if (!targetId) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_TARGET_REQUIRED', 'Uma atividade vinculada ao plano precisa informar o alvo clínico de origem.');
+
+    const [planResult, programResult, targetResult, objectiveResult, linkResult] = await Promise.all([
+      supabase
+        .from('patient_therapeutic_plans')
+        .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,status')
+        .eq('id', planId)
+        .eq('organization_id', clinicId)
+        .eq('clinic_id', clinicId)
+        .eq('patient_id', patientId)
+        .neq('status', 'archived')
+        .maybeSingle(),
+      programId
+        ? supabase
+            .from('aba_programs')
+            .select('id,organization_id,clinic_id,patient_id,therapeutic_plan_id,therapeutic_objective_id,domain_id,domain_name,name,status,measurement_type')
+            .eq('id', programId)
+            .eq('organization_id', clinicId)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('therapeutic_plan_id', planId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      targetId
+        ? supabase
+            .from('aba_targets')
+            .select('id,clinic_id,patient_id,program_id,domain_id,domain_name,name,description,target_type,measurement_type,phase')
+            .eq('id', targetId)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('program_id', programId)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      objectiveId
+        ? supabase
+            .from('patient_therapeutic_objectives')
+            .select('id,organization_id,clinic_id,patient_id,title,description,category,status')
+            .eq('id', objectiveId)
+            .eq('organization_id', clinicId)
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .neq('status', 'ARCHIVED')
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      supabase
+        .from('patient_professional_links')
+        .select('patient_id,professional_id,status,permissions')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('status', 'active')
+        .limit(20),
+    ]);
+
+    const unexpectedError = [planResult.error, programResult.error, targetResult.error, objectiveResult.error, linkResult.error].find(Boolean);
+    if (unexpectedError) throw unexpectedError;
+    const plan: any = planResult.data;
+    const program: any = programResult.data;
+    const target: any = targetResult.data;
+    const objective: any = objectiveResult.data;
+    if (!plan) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PLAN_SCOPE_INVALID', 'O plano terapêutico não pertence a este paciente e clínica.');
+    if (programId && (!program || String(program.status || '').toLowerCase() === 'archived')) {
+      throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_PROGRAM_SCOPE_INVALID', 'O programa clínico não pertence ao plano selecionado.');
+    }
+    if (targetId && !target) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_TARGET_SCOPE_INVALID', 'O alvo clínico não pertence ao programa selecionado.');
+    if (objectiveId && !objective) throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_OBJECTIVE_SCOPE_INVALID', 'O objetivo terapêutico não pertence a este paciente e clínica.');
+    if (objectiveId && program?.therapeutic_objective_id && String(program.therapeutic_objective_id) !== objectiveId) {
+      throw clinicalLinkError('ASSIGNED_TASK_CLINICAL_OBJECTIVE_PROGRAM_MISMATCH', 'O objetivo terapêutico não corresponde ao programa selecionado.');
+    }
+
+    const accessContext = {
+      actorId,
+      actorRole: sanitizeString(actorRole, 40).toLowerCase(),
+      professionalLinks: linkResult.data || [],
+    };
+    const planScopeAccess = resolveTherapeuticPlanScopeAccess(plan, accessContext);
+    if (!planScopeAccess.canEdit) {
+      throw clinicalLinkError(
+        'ASSIGNED_TASK_CLINICAL_PLAN_FORBIDDEN',
+        'Você não possui permissão de edição no plano terapêutico selecionado.',
+        403
+      );
+    }
+
+    const mode = sanitizeString(plan.mode, 40).toLowerCase();
+    const specialty = sanitizeTextField(plan.specialty, 120) || null;
+    const planLabel = mode === 'interdisciplinary'
+      ? 'PTS interdisciplinar'
+      : specialty
+        ? `Plano individual · ${specialty}`
+        : 'Plano individual de especialidade';
+    const domainId = sanitizeString(program?.domain_id || target?.domain_id, 180) || null;
+    const domainName = sanitizeTextField(program?.domain_name || target?.domain_name, 240) || null;
+    const programName = sanitizeTextField(program?.name, 240) || null;
+    const targetName = sanitizeTextField(target?.name, 240) || null;
+    const snapshot = cleanObject({
+      planId,
+      planMode: mode || null,
+      planLabel,
+      specialty,
+      objectiveId: objectiveId || null,
+      objectiveTitle: sanitizeTextField(objective?.title, 240) || null,
+      domainId,
+      domainName,
+      programId: programId || null,
+      programName,
+      targetId: targetId || null,
+      targetName,
+      targetDescription: sanitizeTextField(target?.description, 1000) || null,
+      measurementType: sanitizeString(target?.measurement_type || program?.measurement_type, 100) || null,
+      targetType: sanitizeString(target?.target_type, 80) || null,
+      targetPhase: sanitizeString(target?.phase, 80) || null,
+      linkVersion: 1,
+    });
+    return {
+      therapeutic_plan_id: planId,
+      therapeutic_objective_id: objectiveId || null,
+      therapeutic_program_id: programId || null,
+      clinical_target_id: targetId || null,
+      clinical_link_snapshot: snapshot,
+      clinical_link_version: 1,
+      taskData: cleanObject({
+        therapeuticPlanId: planId,
+        therapeutic_plan_id: planId,
+        therapeuticObjectiveId: objectiveId || undefined,
+        therapeutic_objective_id: objectiveId || undefined,
+        therapeuticProgramId: programId || undefined,
+        therapeutic_program_id: programId || undefined,
+        programId: programId || undefined,
+        clinicalTargetId: targetId || undefined,
+        clinical_target_id: targetId || undefined,
+        targetId: targetId || undefined,
+        therapeuticPlanName: planLabel,
+        planName: planLabel,
+        planMode: mode || undefined,
+        planSpecialty: specialty || undefined,
+        domainId: domainId || undefined,
+        domainName: domainName || undefined,
+        programName: programName || undefined,
+        clinicalTargetName: targetName || undefined,
+        targetName: targetName || undefined,
+        clinicalLinkVersion: 1,
+      }),
+    };
+  };
+
   // Assigned Tasks (adult homework workflow)
   app.get('/api/assigned-tasks/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, async (req: any, res) => {
     try {
@@ -46812,47 +49484,36 @@ async function startServer() {
 
   app.get('/api/patient/self/assigned-tasks', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
-      const patientEmail = sanitizeEmail(req.session.user?.email);
-      if (!patientEmail) {
-        return res.status(400).json({ success: false, error: 'E-mail do paciente não disponível.' });
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const patientIds = await getPatientIdsByEmailAcrossClinics(patientEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user));
-      const { data: byEmail, error: byEmailError } = await supabase
-        .from('assigned_tasks')
-        .select(ASSIGNED_TASK_SELECT)
-        .ilike('patient_email', patientEmail)
-        .order('scheduled_at', { ascending: false })
-        .limit(limit);
-      if (byEmailError) {
-        if (/assigned_tasks/i.test(String(byEmailError?.message || ''))) {
+      const assignedResult = await fetchAssignedTasksWithSchemaFallback({
+        supabase,
+        patientId: portalScope.patientId,
+        clinicId: portalScope.clinicId,
+        orderBy: 'scheduled_at',
+        limit,
+        route: '/api/patient/self/assigned-tasks',
+        logger: console
+      });
+      if (assignedResult.error) {
+        if (isMissingRelationError(assignedResult.error) || /assigned_tasks/i.test(String(assignedResult.error?.message || ''))) {
           return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
         }
-        throw byEmailError;
+        throw assignedResult.error;
       }
 
       const nowIso = new Date().toISOString();
-      let byId: any[] = [];
-      if (patientIds.length > 0) {
-        const { data: byIdData, error: byIdError } = await supabase
-          .from('assigned_tasks')
-          .select(ASSIGNED_TASK_SELECT)
-          .in('patient_id', patientIds)
-          .order('scheduled_at', { ascending: false })
-          .limit(limit);
-        if (byIdError) {
-          if (/assigned_tasks/i.test(String(byIdError?.message || ''))) {
-            return res.status(200).json({ success: true, data: [], warning: 'Tabela assigned_tasks não criada.' });
-          }
-          throw byIdError;
-        }
-        byId = Array.isArray(byIdData) ? byIdData : [];
-      }
-
       const mergedAssigned = Array.from(
         new Map(
-          [...(Array.isArray(byEmail) ? byEmail : []), ...byId].map((row: any) => [
+          (Array.isArray(assignedResult.data) ? assignedResult.data : []).map((row: any) => [
             String(row?.id || crypto.randomUUID()),
             row
           ])
@@ -46869,49 +49530,75 @@ async function startServer() {
         if (typeof task?.completed === 'boolean') return !task.completed;
         return true;
       };
-      const legacyTasksByEmailResult = await fetchTasksWithSchemaFallback({
+      const legacyTasksByIdResult = await fetchTasksWithSchemaFallback({
         supabase,
-        patientEmail,
-        emailMatch: 'ilike',
+        patientId: portalScope.patientId,
         limit,
         route: '/api/patient/self/assigned-tasks',
         requestId: requestIdForLogs(req),
         logger: console
       });
-      const legacyTasksByEmail = legacyTasksByEmailResult.data;
-      const legacyTasksByEmailError = legacyTasksByEmailResult.error;
-      if (legacyTasksByEmailError) {
-        console.warn('[PatientSelfAssignedTasks] fallback tasks by email warning:', legacyTasksByEmailError.message || String(legacyTasksByEmailError));
+      if (legacyTasksByIdResult.error) {
+        console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdResult.error.message || String(legacyTasksByIdResult.error));
       }
+      const legacyTasksById = Array.isArray(legacyTasksByIdResult.data) ? legacyTasksByIdResult.data : [];
 
-      let legacyTasksById: any[] = [];
-      if (patientIds.length > 0) {
-        const legacyTasksByIdResult = await fetchTasksWithSchemaFallback({
-          supabase,
-          patientIds,
-          limit,
-          route: '/api/patient/self/assigned-tasks',
-          requestId: requestIdForLogs(req),
-          logger: console
-        });
-        const legacyTasksByIdData = legacyTasksByIdResult.data;
-        const legacyTasksByIdError = legacyTasksByIdResult.error;
-        if (legacyTasksByIdError) {
-          console.warn('[PatientSelfAssignedTasks] fallback tasks by id warning:', legacyTasksByIdError.message || String(legacyTasksByIdError));
-        } else {
-          legacyTasksById = Array.isArray(legacyTasksByIdData) ? legacyTasksByIdData : [];
-        }
-      }
-
-      const mergedLegacyTasks = Array.from(
+      const legacyTaskRows = Array.from(
         new Map(
-          [...(Array.isArray(legacyTasksByEmail) ? legacyTasksByEmail : []), ...legacyTasksById].map((row: any) => [
+          legacyTasksById.map((row: any) => [
             String(row?.id || crypto.randomUUID()),
             row
           ])
         ).values()
-      )
+      );
+      const legacyBridgeIdByTaskId = new Map(
+        legacyTaskRows
+          .map((task: any) => {
+            const legacyTaskId = sanitizeString(task?.id, 120);
+            if (!legacyTaskId) return null;
+            return [
+              legacyTaskId,
+              uuidFromStableString(`legacy-assigned-task:${portalScope.clinicId}:${portalScope.patientId}:${legacyTaskId}`)
+            ] as const;
+          })
+          .filter(Boolean) as Array<readonly [string, string]>
+      );
+      const deterministicBridgeIds = Array.from(new Set(legacyBridgeIdByTaskId.values()));
+      const existingBridgeAssignedIds = new Set<string>();
+      if (deterministicBridgeIds.length > 0) {
+        const { data: bridgeRows, error: bridgeRowsError } = await supabase
+          .from('assigned_tasks')
+          .select('id')
+          .eq('clinic_id', portalScope.clinicId)
+          .eq('patient_id', portalScope.patientId)
+          .in('id', deterministicBridgeIds);
+        if (bridgeRowsError) throw bridgeRowsError;
+        for (const bridgeRow of Array.isArray(bridgeRows) ? bridgeRows : []) {
+          const bridgeId = sanitizeString(bridgeRow?.id, 120);
+          if (bridgeId) existingBridgeAssignedIds.add(bridgeId);
+        }
+      }
+
+      const bridgedLegacyTaskIds = new Set(
+        mergedAssigned
+          .map((row: any) => {
+            const taskData = row?.task_data && typeof row.task_data === 'object' ? row.task_data : {};
+            return sanitizeString(taskData?.legacyTaskId || taskData?.legacy_task_id, 120);
+          })
+          .filter(Boolean)
+      );
+
+      const mergedLegacyTasks = legacyTaskRows
         .filter(isPendingLegacyTask)
+        .filter((task: any) => {
+          const legacyTaskId = sanitizeString(task?.id, 120);
+          const bridgeId = legacyBridgeIdByTaskId.get(legacyTaskId);
+          return Boolean(
+            legacyTaskId &&
+            !bridgedLegacyTaskIds.has(legacyTaskId) &&
+            (!bridgeId || !existingBridgeAssignedIds.has(bridgeId))
+          );
+        })
         .map((task: any) => ({
         id: String(task?.id || crypto.randomUUID()),
         patient_id: sanitizeString(task?.patient_id, 120) || null,
@@ -46924,7 +49611,11 @@ async function startServer() {
           icon: sanitizeString(task?.icon, 40) || '🎯',
           color: sanitizeString(task?.color, 80) || 'bg-blue-100 text-blue-600',
           linkedTask: sanitizeString(task?.linked_task, 120) || undefined,
-          maxScore: asSafeNumber(task?.max_score, 1, 100) ?? 4
+          maxScore: asSafeNumber(task?.max_score, 1, 100) ?? 4,
+          legacyTaskId: sanitizeString(task?.id, 120) || undefined,
+          legacy_task_id: sanitizeString(task?.id, 120) || undefined,
+          legacySource: 'tasks',
+          legacy_source: 'tasks'
         },
         scheduled_at: sanitizeString((task as any)?.scheduled_at, 80) || sanitizeString(task?.created_at, 80) || null,
         status: 'pending',
@@ -46955,6 +49646,8 @@ async function startServer() {
     }
   });
 
+
+
   app.post('/api/assigned-tasks', checkAuth, requireClinicCapability('clinical.evolution.create'), async (req: any, res) => {
     try {
       const resolvedPatientId = await resolvePatientIdForRequest(
@@ -46981,6 +49674,24 @@ async function startServer() {
           ? new Date(normalizedScheduledAtMs).toISOString()
           : incomingScheduledAt || new Date().toISOString();
 
+      if (!resolvedPatientId || !professionalId || !isUuid(resolvedPatientId)) {
+        return res.status(400).json({ success: false, error: 'patient_id e professional_id são obrigatórios.' });
+      }
+      if (!(await canAccessPatientInCurrentClinic(resolvedPatientId, req.session.user, 'write'))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
+      }
+      const clinicalLink = clinicId
+        ? await resolveAssignedTaskClinicalLink({
+            patientId: resolvedPatientId,
+            clinicId,
+            actorId: professionalId,
+            actorRole: sanitizeString(req.effectiveClinicRole || req.session.user?.role, 40),
+            body: req.body,
+          })
+        : null;
+      const trustedTaskData = clinicalLink
+        ? { ...safeTaskData, ...clinicalLink.taskData }
+        : safeTaskData;
       const payload = cleanObject({
         id: sanitizeString(req.body?.id, 120) || undefined,
         clinic_id: clinicId || undefined,
@@ -46988,18 +49699,17 @@ async function startServer() {
         patient_email: sanitizeEmail(req.body?.patient_email),
         professional_id: professionalId || undefined,
         task_type: taskType,
-        task_data: safeTaskData,
+        task_data: trustedTaskData,
         scheduled_at: normalizedScheduledAt,
         status: safeStatus,
-        parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined
+        parent_assigned_task_id: sanitizeString(req.body?.parent_assigned_task_id, 120) || undefined,
+        therapeutic_plan_id: clinicalLink?.therapeutic_plan_id || undefined,
+        therapeutic_objective_id: clinicalLink?.therapeutic_objective_id || undefined,
+        therapeutic_program_id: clinicalLink?.therapeutic_program_id || undefined,
+        clinical_target_id: clinicalLink?.clinical_target_id || undefined,
+        clinical_link_snapshot: clinicalLink?.clinical_link_snapshot || undefined,
+        clinical_link_version: clinicalLink?.clinical_link_version || undefined,
       });
-
-      if (!payload.patient_id || !payload.professional_id || !isUuid(payload.patient_id)) {
-        return res.status(400).json({ success: false, error: 'patient_id e professional_id são obrigatórios.' });
-      }
-      if (!(await canAccessPatientInCurrentClinic(payload.patient_id, req.session.user, 'write'))) {
-        return res.status(403).json({ success: false, error: 'Acesso negado ao paciente informado.' });
-      }
 
       const { data, error } = await supabase
         .from('assigned_tasks')
@@ -47019,6 +49729,10 @@ async function startServer() {
 
       return res.json({ success: true, data });
     } catch (error: any) {
+      const status = Number(error?.status || 0);
+      if (status >= 400 && status < 500) {
+        return res.status(status).json({ success: false, code: error?.code || 'ASSIGNED_TASK_CLINICAL_LINK_INVALID', error: error?.message || String(error) });
+      }
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
   });
@@ -47056,6 +49770,12 @@ async function startServer() {
             color: sanitizeString(incomingTaskData?.color, 80) || existingTaskData?.color || undefined,
             linkedTask: sanitizeString(incomingTaskData?.linkedTask, 120) || existingTaskData?.linkedTask || undefined,
             linkedProtocolId: sanitizeString(incomingTaskData?.linkedProtocolId, 120) || existingTaskData?.linkedProtocolId || undefined,
+            isDailyReminder: incomingTaskData?.isDailyReminder !== undefined || incomingTaskData?.is_daily_reminder !== undefined
+              ? Boolean(incomingTaskData?.isDailyReminder ?? incomingTaskData?.is_daily_reminder)
+              : Boolean(existingTaskData?.isDailyReminder ?? existingTaskData?.is_daily_reminder),
+            is_daily_reminder: incomingTaskData?.isDailyReminder !== undefined || incomingTaskData?.is_daily_reminder !== undefined
+              ? Boolean(incomingTaskData?.isDailyReminder ?? incomingTaskData?.is_daily_reminder)
+              : Boolean(existingTaskData?.isDailyReminder ?? existingTaskData?.is_daily_reminder),
             maxScore: asSafeNumber(incomingTaskData?.maxScore ?? incomingTaskData?.max_score, 1, 10) ?? existingTaskData?.maxScore ?? existingTaskData?.max_score
           }
         : undefined;
@@ -47090,6 +49810,136 @@ async function startServer() {
     }
   });
 
+  app.post('/api/patient/self/legacy-tasks/:taskId/complete', checkAuth, requireRoles('patient'), async (req: any, res) => {
+    try {
+      const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
+      if (!portalScope) {
+        return res.status(409).json({
+          success: false,
+          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
+          error: 'Selecione novamente o acesso do paciente para continuar.'
+        });
+      }
+
+      const legacyTaskId = sanitizeString(req.params.taskId, 120);
+      if (!legacyTaskId) {
+        return res.status(400).json({ success: false, error: 'taskId legado inválido.' });
+      }
+
+      const taskSchema = await resolveTaskSchemaCapabilities(supabase);
+      const { data: legacyTask, error: legacyTaskError } = await supabase
+        .from('tasks')
+        .select(taskSchema.select)
+        .eq('id', legacyTaskId)
+        .eq('patient_id', portalScope.patientId)
+        .maybeSingle();
+      if (legacyTaskError) throw legacyTaskError;
+      if (!legacyTask) {
+        return res.status(404).json({ success: false, error: 'Tarefa legada não encontrada.' });
+      }
+      if (!(await canPortalSessionAccessPatient(portalScope.patientId, req.session.user))) {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const submittedEffort = asSafeNumber(
+        req.body?.patient_effort ?? req.body?.energy ?? req.body?.effort,
+        0,
+        100
+      );
+      const submittedComment = sanitizeTextField(req.body?.patient_comment, 4000);
+      const effortEmoji =
+        sanitizeString(req.body?.patient_effort_emoji || req.body?.effort_emoji, 20) ||
+        effortEmojiForPercent(submittedEffort);
+      const effortLabel =
+        sanitizeString(req.body?.patient_effort_label || req.body?.effort_label, 80) ||
+        effortLabelForPercent(submittedEffort);
+      const completedAt = new Date().toISOString();
+      const assignedTaskId = uuidFromStableString(
+        `legacy-assigned-task:${portalScope.clinicId}:${portalScope.patientId}:${legacyTaskId}`
+      );
+      const historyId = uuidFromStableString(`adult-assigned-task-completion-history:${assignedTaskId}`);
+      const professionalId =
+        sanitizeString(legacyTask?.therapist_id, 120) ||
+        sanitizeString(legacyTask?.professional_id, 120) ||
+        'legacy-task-migration';
+      const taskType = sanitizeString(legacyTask?.type, 60) || 'task';
+      const taskData = cleanObject({
+        title: sanitizeString(legacyTask?.title, 240) || 'Tarefa agendada',
+        description: sanitizeTextField(legacyTask?.description, 4000) || '',
+        icon: sanitizeString(legacyTask?.icon, 40) || '🎯',
+        color: sanitizeString(legacyTask?.color, 80) || 'bg-blue-100 text-blue-600',
+        linkedTask: sanitizeString(legacyTask?.linked_task, 120) || undefined,
+        linked_task: sanitizeString(legacyTask?.linked_task, 120) || undefined,
+        maxScore: asSafeNumber(legacyTask?.max_score, 1, 100) ?? 4,
+        max_score: asSafeNumber(legacyTask?.max_score, 1, 100) ?? 4,
+        legacyTaskId,
+        legacy_task_id: legacyTaskId,
+        legacySource: 'tasks',
+        legacy_source: 'tasks'
+      });
+      const scheduledAt =
+        sanitizeString(legacyTask?.scheduled_at, 80) ||
+        sanitizeString(legacyTask?.created_at, 80) ||
+        completedAt;
+
+      const bridgeResult = await supabase.rpc('complete_patient_legacy_task_v1', {
+        p_legacy_task_id: legacyTaskId,
+        p_assigned_task_id: assignedTaskId,
+        p_actor_user_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        p_expected_patient_id: portalScope.patientId,
+        p_expected_clinic_id: portalScope.clinicId,
+        p_patient_email: sanitizeEmail(req.session.user?.email),
+        p_professional_id: professionalId,
+        p_task_type: taskType,
+        p_task_data: taskData,
+        p_scheduled_at: scheduledAt,
+        p_patient_effort: submittedEffort,
+        p_patient_effort_emoji: effortEmoji || null,
+        p_patient_effort_label: effortLabel || null,
+        p_effort_semantics: ADULT_EFFORT_SEMANTICS_V2,
+        p_patient_comment: submittedComment,
+        p_completed_at: completedAt,
+        p_history_id: historyId,
+        p_date_group: dateGroupForClinic(completedAt, req.session.user)
+      });
+      if (bridgeResult.error) {
+        const bridgeMessage = String(bridgeResult.error?.message || bridgeResult.error?.details || '');
+        if (/complete_patient_legacy_task_v1|42883|function .* does not exist|schema cache/i.test(bridgeMessage)) {
+          return res.status(503).json({
+            success: false,
+            error: 'A ponte canônica para tarefas adultas legadas ainda não foi aplicada no banco.',
+            code: 'LEGACY_TASK_BRIDGE_MIGRATION_REQUIRED'
+          });
+        }
+        if (/LEGACY_TASK_NOT_FOUND/.test(bridgeMessage)) {
+          return res.status(404).json({ success: false, error: 'Tarefa legada não encontrada.' });
+        }
+        if (/LEGACY_TASK_SCOPE_CHANGED|LEGACY_TASK_PATIENT_CLINIC_SCOPE_INVALID|ASSIGNED_TASK_SCOPE_CHANGED/.test(bridgeMessage)) {
+          return res.status(409).json({
+            success: false,
+            code: 'LEGACY_TASK_SCOPE_CHANGED',
+            error: 'A tarefa mudou de escopo. Atualize o portal antes de tentar novamente.'
+          });
+        }
+        throw bridgeResult.error;
+      }
+
+      const bridgeData = bridgeResult.data && typeof bridgeResult.data === 'object'
+        ? bridgeResult.data
+        : {};
+      return res.json({
+        success: true,
+        data: bridgeData?.task || null,
+        historyEntry: bridgeData?.history || null,
+        migratedFromLegacy: true,
+        legacyTaskId
+      });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: error?.message || String(error) });
+    }
+  });
+
+
   app.post('/api/assigned-tasks/:taskId/complete', checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const taskId = sanitizeString(req.params.taskId, 120);
@@ -47103,13 +49953,7 @@ async function startServer() {
       if (fetchError) throw fetchError;
       if (!existing) return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
 
-      const sessionEmail = sanitizeEmail(req.session.user?.email);
-      const linkedPatientIds = sessionEmail
-        ? await getPatientIdsByEmailAcrossClinics(sessionEmail, sanitizeString(req.session.user?.id, 120), currentClinicId(req.session.user))
-        : [];
-      const canAccessByEmail = sessionEmail && sessionEmail === sanitizeEmail(existing.patient_email);
-      const canAccessByPatientId = linkedPatientIds.includes(String(existing.patient_id));
-      if (!canAccessByEmail && !canAccessByPatientId) {
+      if (!(await canPortalSessionAccessPatient(sanitizeString(existing.patient_id, 120), req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
 
@@ -47137,86 +49981,53 @@ async function startServer() {
         effortLabelForPercent(submittedEffort) ||
         effortLabelForPercent(asSafeNumber(existing?.patient_effort, 0, 100));
       const completedAt = existing?.completed_at || new Date().toISOString();
-      const updatePayload = cleanObject({
-        patient_effort: submittedEffort,
-        patient_effort_emoji: effortEmoji || null,
-        patient_effort_label: effortLabel || null,
-        patient_comment: submittedComment,
-        task_data: {
-          ...existingTaskData,
-          patientEffort: submittedEffort,
-          patient_effort: submittedEffort,
-          patientEffortEmoji: effortEmoji || null,
-          patient_effort_emoji: effortEmoji || null,
-          patientEffortLabel: effortLabel || null,
-          patient_effort_label: effortLabel || null
-        },
-        status: 'completed',
-        completed_at: completedAt
+      const historyId = uuidFromStableString(`adult-assigned-task-completion-history:${taskId}`);
+      const completionResult = await supabase.rpc('complete_patient_assigned_task_v2', {
+        p_task_id: taskId,
+        p_actor_user_id: isUuid(sanitizeString(req.session.user?.id, 120)) ? sanitizeString(req.session.user?.id, 120) : null,
+        p_expected_patient_id: sanitizeString(existing.patient_id, 120),
+        p_patient_effort: submittedEffort,
+        p_patient_effort_emoji: effortEmoji || null,
+        p_patient_effort_label: effortLabel || null,
+        p_effort_semantics: ADULT_EFFORT_SEMANTICS_V2,
+        p_patient_comment: submittedComment,
+        p_completed_at: completedAt,
+        p_history_id: historyId,
+        p_date_group: dateGroupForClinic(completedAt, req.session.user)
       });
-
-      const { data, error } = await updateAssignedTaskWithSchemaFallback(taskId, updatePayload);
-      if (error) throw error;
-
-      const taskData = data?.task_data && typeof data.task_data === 'object' ? data.task_data : {};
-      let historyEntry: any = null;
-      try {
-        historyEntry = cleanObject({
-          id: uuidFromStableString(`adult-assigned-task-completion-history:${taskId}`),
-          patient_id: sanitizeString(data?.patient_id, 120),
-          patient_email: sanitizeEmail(data?.patient_email),
-          type: sanitizeString(data?.task_type, 80) || 'task',
-          title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
-          score: null,
-          energy: asSafeNumber(data?.patient_effort, 0, 100),
-          note: sanitizeTextField(data?.patient_comment, 12000),
-          icon: sanitizeString(taskData?.icon, 40) || '📌',
-          therapist_id: sanitizeString(data?.professional_id, 120),
-          created_at: data?.completed_at || new Date().toISOString(),
-          date_group: dateGroupForClinic(data?.completed_at || new Date().toISOString(), req.session.user),
-          assigned_task_id: sanitizeString(data?.id, 120),
-          source: 'assigned_task_completion',
-          task_data: cleanObject({
-            ...taskData,
-            patientEffortEmoji: effortEmoji || taskData?.patientEffortEmoji || null,
-            patient_effort_emoji: effortEmoji || taskData?.patient_effort_emoji || null,
-            patientEffortLabel: effortLabel || taskData?.patientEffortLabel || null,
-            patient_effort_label: effortLabel || taskData?.patient_effort_label || null
-          })
-        });
-        const historyResult = await upsertHistoryWithSchemaFallback(historyEntry);
-        if (historyResult.error) throw historyResult.error;
-        historyEntry = historyResult.data || historyEntry;
-      } catch (historyInsertError: any) {
-        console.warn('[AssignedTasks] Falha ao criar histórico automático:', historyInsertError?.message || String(historyInsertError));
+      if (completionResult.error) {
+        const completionMessage = String(completionResult.error?.message || completionResult.error?.details || '');
+        if (/complete_patient_assigned_task_v2|42883|function .* does not exist|schema cache/i.test(completionMessage)) {
+          return res.status(503).json({
+            success: false,
+            error: 'A persistência atômica de tarefas do portal ainda não foi aplicada no banco.',
+            code: 'PATIENT_TASK_COMPLETION_MIGRATION_REQUIRED'
+          });
+        }
+        if (/ASSIGNED_TASK_NOT_FOUND/.test(completionMessage)) {
+          return res.status(404).json({ success: false, error: 'Tarefa não encontrada.' });
+        }
+        if (/ASSIGNED_TASK_SCOPE_CHANGED|ASSIGNED_TASK_PATIENT_CLINIC_SCOPE_INVALID|ASSIGNED_TASK_CLINIC_INVALID/.test(completionMessage)) {
+          return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_SCOPE_CHANGED', error: 'A tarefa mudou de escopo. Atualize o portal antes de tentar novamente.' });
+        }
+        if (/ASSIGNED_TASK_HISTORY_THERAPIST_UNRESOLVED/.test(completionMessage)) {
+          return res.status(409).json({
+            success: false,
+            code: 'ASSIGNED_TASK_HISTORY_THERAPIST_UNRESOLVED',
+            error: 'Não foi possível identificar o profissional responsável pelo histórico desta tarefa. Atualize o vínculo do paciente e tente novamente.'
+          });
+        }
+        if (/ASSIGNED_TASK_CLINICAL_LINK_|ASSIGNED_TASK_CLINICAL_(PLAN|PROGRAM|TARGET|OBJECTIVE|SNAPSHOT)/.test(completionMessage)) {
+          return res.status(409).json({ success: false, code: 'ASSIGNED_TASK_CLINICAL_CONTEXT_CONFLICT', error: 'O contexto clínico histórico da tarefa não pôde ser confirmado. Atualize a tela e tente novamente.' });
+        }
+        throw completionResult.error;
       }
-
-      let patientLogEntry: any = null;
-      try {
-        patientLogEntry = cleanObject({
-          id: crypto.randomUUID(),
-          patient_id: sanitizeString(data?.patient_id, 120),
-          professional_id: sanitizeString(data?.professional_id, 120),
-          type: sanitizeString(data?.task_type, 80) || 'task',
-          value: cleanObject({
-            task_id: sanitizeString(data?.id, 120),
-            title: sanitizeTextField(taskData?.title || 'Tarefa concluída', 180),
-            completed: true,
-            effort: asSafeNumber(data?.patient_effort, 0, 100),
-            energy: asSafeNumber(data?.patient_effort, 0, 100),
-            effortEmoji: effortEmoji || null,
-            effortLabel: effortLabel || null,
-            note: sanitizeTextField(data?.patient_comment, 4000),
-            icon: sanitizeString(taskData?.icon, 40) || '📌'
-          }),
-          timestamp: data?.completed_at || new Date().toISOString()
-        });
-        await supabase.from('patient_logs').insert([patientLogEntry]);
-      } catch (patientLogError: any) {
-        console.warn('[AssignedTasks] Falha ao criar log automático do paciente:', patientLogError?.message || String(patientLogError));
-      }
-
-      return res.json({ success: true, data, historyEntry, patientLogEntry });
+      const completionData = completionResult.data && typeof completionResult.data === 'object'
+        ? completionResult.data
+        : {};
+      const data = completionData?.task || existing;
+      const historyEntry = completionData?.history || null;
+      return res.json({ success: true, data, historyEntry });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || String(error) });
     }
@@ -47271,22 +50082,40 @@ async function startServer() {
         0,
         100
       );
+      const patientEffortSemantics = sanitizeString(
+        existingTaskData?.patientEffortSemantics || existingTaskData?.patient_effort_semantics,
+        80
+      );
+      const hasCanonicalEffortSemantics = patientEffortSemantics === ADULT_EFFORT_SEMANTICS_V2;
       const patientEffortEmoji =
         sanitizeString(existing?.patient_effort_emoji || existingTaskData?.patientEffortEmoji || existingTaskData?.patient_effort_emoji, 20) ||
-        effortEmojiForPercent(patientEffort);
+        (hasCanonicalEffortSemantics ? effortEmojiForPercent(patientEffort) : null);
       const patientEffortLabel =
         sanitizeString(existing?.patient_effort_label || existingTaskData?.patientEffortLabel || existingTaskData?.patient_effort_label, 80) ||
-        effortLabelForPercent(patientEffort);
+        (hasCanonicalEffortSemantics ? effortLabelForPercent(patientEffort) : null);
+      const clinicalLinkSnapshot = existing?.clinical_link_snapshot && typeof existing.clinical_link_snapshot === 'object'
+        ? existing.clinical_link_snapshot
+        : {};
       const reviewMetadata = cleanObject({
         protocolId: sanitizeString(existingTaskData?.protocolId || existingTaskData?.protocol_id, 120) || null,
         protocolTitle: sanitizeTextField(existingTaskData?.protocolTitle || existingTaskData?.protocol_name, 240) || null,
         protocolCategory: sanitizeString(existingTaskData?.protocolCategory, 80) || null,
-        domainId: sanitizeString(existingTaskData?.domainId || existingTaskData?.domain_id, 120) || null,
-        domainName: sanitizeTextField(existingTaskData?.domainName || existingTaskData?.domain_name || existingTaskData?.sourceDomain || existingTaskData?.source_domain, 240) || null,
+        therapeuticPlanId: sanitizeString(existing?.therapeutic_plan_id, 120) || null,
+        therapeuticObjectiveId: sanitizeString(existing?.therapeutic_objective_id, 120) || null,
+        therapeuticProgramId: sanitizeString(existing?.therapeutic_program_id, 180) || null,
+        clinicalTargetId: sanitizeString(existing?.clinical_target_id, 180) || null,
+        planName: sanitizeTextField(clinicalLinkSnapshot?.planLabel, 240) || null,
+        planMode: sanitizeString(clinicalLinkSnapshot?.planMode, 60) || null,
+        planSpecialty: sanitizeTextField(clinicalLinkSnapshot?.specialty, 120) || null,
+        domainId: sanitizeString(clinicalLinkSnapshot?.domainId || existingTaskData?.domainId || existingTaskData?.domain_id, 180) || null,
+        domainName: sanitizeTextField(clinicalLinkSnapshot?.domainName || existingTaskData?.domainName || existingTaskData?.domain_name || existingTaskData?.sourceDomain || existingTaskData?.source_domain, 240) || null,
+        programName: sanitizeTextField(clinicalLinkSnapshot?.programName, 240) || null,
+        targetName: sanitizeTextField(clinicalLinkSnapshot?.targetName, 240) || null,
         skillId: sanitizeString(existingTaskData?.skillId || existingTaskData?.skill_id, 120) || null,
         skillName: sanitizeTextField(existingTaskData?.skillName || existingTaskData?.skill_name || existingTaskData?.title, 240) || null,
         skillCode: sanitizeString(existingTaskData?.skillCode || existingTaskData?.code, 80) || null,
-        sourcePage: existingTaskData?.sourcePage || existingTaskData?.source_page || null
+        sourcePage: existingTaskData?.sourcePage || existingTaskData?.source_page || null,
+        clinicalLinkVersion: Number(existing?.clinical_link_version || clinicalLinkSnapshot?.linkVersion || 1),
       });
       let reviewPayload: any = {
         pro_score: proScore,
@@ -47307,7 +50136,9 @@ async function startServer() {
           patientEffortEmoji,
           patient_effort_emoji: patientEffortEmoji,
           patientEffortLabel,
-          patient_effort_label: patientEffortLabel
+          patient_effort_label: patientEffortLabel,
+          patientEffortSemantics: patientEffortSemantics || undefined,
+          patient_effort_semantics: patientEffortSemantics || undefined
         },
         reviewed_at: reviewedAt,
         reviewed_by: sanitizeString(req.session.user?.id, 120)
@@ -47336,7 +50167,9 @@ async function startServer() {
         patientEffortEmoji,
         patient_effort_emoji: patientEffortEmoji,
         patientEffortLabel,
-        patient_effort_label: patientEffortLabel
+        patient_effort_label: patientEffortLabel,
+        patientEffortSemantics: patientEffortSemantics || undefined,
+        patient_effort_semantics: patientEffortSemantics || undefined
       };
       const normalizedReviewedTask = {
         ...existing,
@@ -47357,10 +50190,19 @@ async function startServer() {
       const reviewTextLines = [
         'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
         `Tarefa: ${taskTitle}`,
-        reviewMetadata.protocolTitle ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
+        reviewMetadata.planName ? `Plano: ${reviewMetadata.planName}` : '',
         reviewMetadata.domainName ? `Domínio: ${reviewMetadata.domainName}` : '',
+        reviewMetadata.programName ? `Programa: ${reviewMetadata.programName}` : '',
+        reviewMetadata.targetName ? `Alvo clínico: ${reviewMetadata.targetName}` : '',
+        reviewMetadata.protocolTitle && !reviewMetadata.planName ? `Protocolo: ${reviewMetadata.protocolTitle}` : '',
         `Pontuação profissional: ${proScore} / ${maxScoreFromTask}`,
-        patientEffort !== null ? `Energia após a atividade: ${patientEffort}% ${patientEffortEmoji || ''}`.trim() : '',
+        patientEffort !== null
+          ? (
+              hasCanonicalEffortSemantics
+                ? `Esforço percebido após a atividade: ${patientEffort}% ${patientEffortEmoji || ''}`.trim()
+                : `Valor histórico de esforço (semântica anterior não padronizada): ${patientEffort}%`
+            )
+          : '',
         sanitizeTextField(existing?.patient_comment, 4000) ? `Comentário do paciente: ${sanitizeTextField(existing?.patient_comment, 4000)}` : '',
         reviewNote ? `Anotação técnica: ${reviewNote}` : 'Anotação técnica: Sem anotação técnica registrada.'
       ].filter(Boolean);
@@ -47389,6 +50231,11 @@ async function startServer() {
           domain_name: reviewMetadata.domainName,
           skill_id: reviewMetadata.skillId,
           skill_name: reviewMetadata.skillName,
+          therapeutic_plan_id: reviewMetadata.therapeuticPlanId,
+          therapeutic_objective_id: reviewMetadata.therapeuticObjectiveId,
+          therapeutic_program_id: reviewMetadata.therapeuticProgramId,
+          clinical_target_id: reviewMetadata.clinicalTargetId,
+          clinical_link_snapshot: Object.keys(clinicalLinkSnapshot).length ? clinicalLinkSnapshot : undefined,
           task_data: {
             ...savedTaskData,
             ...reviewMetadata,
@@ -47402,6 +50249,8 @@ async function startServer() {
             patient_effort_emoji: patientEffortEmoji,
             patientEffortLabel,
             patient_effort_label: patientEffortLabel,
+            patientEffortSemantics: patientEffortSemantics || undefined,
+            patient_effort_semantics: patientEffortSemantics || undefined,
             reviewNote
           }
         });
@@ -47451,6 +50300,12 @@ async function startServer() {
             domain_name: reviewMetadata.domainName,
             skill_id: reviewMetadata.skillId,
             skill_name: reviewMetadata.skillName,
+            therapeutic_plan_id: reviewMetadata.therapeuticPlanId,
+            therapeutic_objective_id: reviewMetadata.therapeuticObjectiveId,
+            therapeutic_program_id: reviewMetadata.therapeuticProgramId,
+            clinical_target_id: reviewMetadata.clinicalTargetId,
+            clinical_link_snapshot: Object.keys(clinicalLinkSnapshot).length ? clinicalLinkSnapshot : {},
+            evidence_kind: 'contextual_task_review',
             task_title: taskTitle,
             patient_effort: patientEffort,
             patient_effort_emoji: patientEffortEmoji,
@@ -47465,7 +50320,8 @@ async function startServer() {
             note_id: privateNote?.id || noteId,
             review_payload: {
               taskData: savedTaskData,
-              metadata: reviewMetadata
+              metadata: reviewMetadata,
+              patientEffortSemantics: patientEffortSemantics || null
             },
             updated_at: reviewedAt
           })], { onConflict: 'assigned_task_id' });
@@ -47502,8 +50358,28 @@ async function startServer() {
             description: suggestionDescription,
             linkedProtocolId: linkedProtocolId || undefined,
             autoSuggested: true,
-            sourceAssignedTaskId: taskId
+            sourceAssignedTaskId: taskId,
+            ...cleanObject({
+              therapeuticPlanId: reviewMetadata.therapeuticPlanId || undefined,
+              therapeuticObjectiveId: reviewMetadata.therapeuticObjectiveId || undefined,
+              therapeuticProgramId: reviewMetadata.therapeuticProgramId || undefined,
+              programId: reviewMetadata.therapeuticProgramId || undefined,
+              clinicalTargetId: reviewMetadata.clinicalTargetId || undefined,
+              targetId: reviewMetadata.clinicalTargetId || undefined,
+              planName: reviewMetadata.planName || undefined,
+              domainId: reviewMetadata.domainId || undefined,
+              domainName: reviewMetadata.domainName || undefined,
+              programName: reviewMetadata.programName || undefined,
+              targetName: reviewMetadata.targetName || undefined,
+              clinicalLinkVersion: reviewMetadata.therapeuticPlanId ? 1 : undefined,
+            })
           },
+          therapeutic_plan_id: reviewMetadata.therapeuticPlanId || null,
+          therapeutic_objective_id: reviewMetadata.therapeuticObjectiveId || null,
+          therapeutic_program_id: reviewMetadata.therapeuticProgramId || null,
+          clinical_target_id: reviewMetadata.clinicalTargetId || null,
+          clinical_link_snapshot: Object.keys(clinicalLinkSnapshot).length ? clinicalLinkSnapshot : {},
+          clinical_link_version: reviewMetadata.therapeuticPlanId ? 1 : undefined,
           scheduled_at: null,
           status: 'pending',
           parent_assigned_task_id: taskId
@@ -50584,6 +53460,14 @@ async function startServer() {
     const userId = sanitizeString(user?.id, 120);
     const userEmail = sanitizeEmail(user?.email);
     const clinicId = sanitizeString(currentClinicId(user), 120);
+    // The selected patient-portal access context was already resolved and authorized at session bootstrap.
+    // Reuse it on hot polling/read paths instead of rediscovering the same patient through email/user lookups.
+    const scopedPatientId = sanitizeString(
+      user?.patientPortalPatientId ||
+      (user?.activeAccessContext?.kind === 'patient_portal' ? user?.activeAccessContext?.patientId : ''),
+      120
+    );
+    if (isUuid(scopedPatientId)) return [scopedPatientId];
     const ids = await resolvePatientIdsForPush({
       supabase,
       patientEmail: userEmail,
@@ -50614,14 +53498,15 @@ async function startServer() {
     if (isUuid(userId)) await appendLinkedPatientIds('responsible_user_id', userId);
     if (userEmail) await appendLinkedPatientIds('responsible_email', userEmail);
     if (isUuid(userId)) {
-      const direct = await supabase
+      let directQuery = supabase
         .from('patients')
         .select('id')
         .eq('id', userId)
         .eq('is_active', true)
         .is('deleted_at', null)
-        .limit(1)
-        .maybeSingle();
+        .limit(1);
+      if (isUuid(clinicId)) directQuery = directQuery.eq('clinic_id', clinicId);
+      const direct = await directQuery.maybeSingle();
       if (!direct.error && direct.data?.id) ids.push(sanitizeString(direct.data.id, 120));
     }
     return Array.from(new Set(ids.filter((id) => isUuid(id)))).slice(0, 50);
@@ -62330,15 +65215,27 @@ async function startServer() {
     );
     const now = new Date().toISOString();
     const documentType = sanitizeString(body?.documentType ?? body?.document_type, 20).toUpperCase();
+    const rawBillingDocument = body?.documentNumber ?? body?.document_number;
+    const rawBillingCouncilType = body?.councilType ?? body?.council_type;
+    const rawBillingCouncilNumber = body?.councilNumber ?? body?.council_number;
+    if (
+      (documentType === 'OTHER' && !isProfessionalIdentifierInputValid(rawBillingDocument, 80)) ||
+      !isProfessionalIdentifierInputValid(rawBillingCouncilType, 48) ||
+      !isProfessionalIdentifierInputValid(rawBillingCouncilNumber, 80)
+    ) {
+      throw Object.assign(new Error('PROFESSIONAL_IDENTIFIER_INVALID'), { code: 'PROFESSIONAL_IDENTIFIER_INVALID' });
+    }
     const payload = cleanObject({
       organization_id: organizationId,
       clinic_id: organizationId,
       professional_id: professionalId,
       display_name: sanitizeString(body?.displayName ?? body?.display_name, 180) || null,
       document_type: ['CPF', 'CNPJ', 'OTHER'].includes(documentType) ? documentType : null,
-      document_number: sanitizeString(body?.documentNumber ?? body?.document_number, 40).replace(/\D/g, '') || null,
-      council_type: sanitizeString(body?.councilType ?? body?.council_type, 40) || null,
-      council_number: sanitizeString(body?.councilNumber ?? body?.council_number, 80) || null,
+      document_number: documentType === 'OTHER'
+        ? sanitizeProfessionalIdentifier(rawBillingDocument, 80) || null
+        : sanitizeString(rawBillingDocument, 40).replace(/\D/g, '') || null,
+      council_type: sanitizeProfessionalIdentifier(rawBillingCouncilType, 48) || null,
+      council_number: sanitizeProfessionalIdentifier(rawBillingCouncilNumber, 80) || null,
       council_state: sanitizeString(body?.councilState ?? body?.council_state, 2).toUpperCase() || null,
       cbo_code: sanitizeString(body?.cboCode ?? body?.cbo_code, 40).replace(/\D/g, '') || null,
       specialty_name: sanitizeString(body?.specialtyName ?? body?.specialty_name, 120) || null,
@@ -62402,6 +65299,9 @@ async function startServer() {
       return sendNoStoreJson(res, { success: true, data: result.data, tissPipeline: result.tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] own professional profile update failed:', error?.message || String(error));
+      if (sanitizeString(error?.code || error?.message, 120) === 'PROFESSIONAL_IDENTIFIER_INVALID') {
+        return res.status(400).json({ success: false, error: 'Registro profissional contém caracteres inválidos.' });
+      }
       return res.status(500).json(payerSafeError(500));
     }
   });
@@ -62464,6 +65364,9 @@ async function startServer() {
       return sendNoStoreJson(res, { success: true, data: result.data, tissPipeline: result.tissPipeline });
     } catch (error: any) {
       console.warn('[TissPreGuide] professional profile update failed:', error?.message || String(error));
+      if (sanitizeString(error?.code || error?.message, 120) === 'PROFESSIONAL_IDENTIFIER_INVALID') {
+        return res.status(400).json({ success: false, error: 'Registro profissional contém caracteres inválidos.' });
+      }
       return res.status(500).json(payerSafeError(500));
     }
   });
@@ -67943,13 +70846,11 @@ async function startServer() {
       const inferredOperationalPhase =
         data?.phase ||
         normalizedChecklist.find((item: any) => item?.operationalPhase)?.operationalPhase ||
-        (readinessStatus === 'NOT_BILLABLE'
-          ? 'cancelled'
-          : data?.actual_end || ['READY', 'PENDING', 'WARNING'].includes(readinessStatus)
-            ? 'completed_pending_closure'
-            : data?.actual_start
-              ? 'in_session'
-              : 'scheduled_pre_session');
+        (data?.actual_end || ['READY', 'PENDING', 'WARNING'].includes(readinessStatus)
+          ? 'completed_pending_closure'
+          : data?.actual_start
+            ? 'in_session'
+            : 'scheduled_pre_session');
       const operationalView = buildAppointmentClosureOperationalView(
         normalizedChecklist,
         inferredOperationalPhase
@@ -71798,8 +74699,13 @@ async function startServer() {
       .maybeSingle();
     if (planError) throw planError;
     if (!plan) return { plan: null, allowed: false, reason: 'not_found' as const };
-    if (sanitizeString(plan.mode, 40).toLowerCase() === 'interdisciplinary' || sanitizeString(plan.status, 40).toLowerCase() === 'archived') {
+    const planMode = sanitizeString(plan.mode, 40).toLowerCase();
+    const planStatus = sanitizeString(plan.status, 40).toLowerCase();
+    if (planMode === 'interdisciplinary' || planStatus === 'archived') {
       return { plan, allowed: false, reason: 'invalid_scope' as const };
+    }
+    if (planStatus !== 'active') {
+      return { plan, allowed: false, reason: 'inactive_scope' as const };
     }
     if (isTherapeuticPlanManager(params.actorRole)) {
       return { plan, allowed: true, reason: null };
@@ -73223,9 +76129,26 @@ async function startServer() {
       if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== Number(existing.edit_version)) {
         return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_VERSION_CONFLICT', message: 'Este plano foi atualizado por outra pessoa. Recarregue antes de salvar.' });
       }
+      const currentStatus = sanitizeString(existing.status, 40).toLowerCase();
       const nextStatus = sanitizeString(req.body?.status ?? existing.status, 40).toLowerCase();
       if (!['draft', 'active', 'paused', 'completed', 'archived'].includes(nextStatus)) {
         return res.status(400).json({ success: false, error: 'THERAPEUTIC_PLAN_STATUS_INVALID' });
+      }
+      const allowedPlanTransitions: Record<string, string[]> = {
+        draft: ['draft', 'active', 'archived'],
+        active: ['active', 'paused', 'completed', 'archived'],
+        paused: ['paused', 'active', 'completed', 'archived'],
+        completed: ['completed', 'archived'],
+        archived: ['archived'],
+      };
+      if (!(allowedPlanTransitions[currentStatus] || [currentStatus]).includes(nextStatus)) {
+        return res.status(409).json({
+          success: false,
+          error: 'THERAPEUTIC_PLAN_STATUS_TRANSITION_INVALID',
+          message: currentStatus === 'paused'
+            ? 'Um plano pausado pode ser retomado como ativo, concluído ou arquivado.'
+            : 'Esta transição de estado não é permitida para o plano clínico.',
+        });
       }
 
       const hasSpecialtyObjectivesUpdate =
@@ -73295,8 +76218,11 @@ async function startServer() {
       const reviewDueDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedReviewDueDate)
         ? requestedReviewDueDate
         : null;
+      const derivedLastReviewedAt = isPts
+        ? ptsLastReviewedAt(ptsPayload)
+        : existing.last_reviewed_at;
       const requestedLastReviewedAt = sanitizeString(
-        req.body?.lastReviewedAt ?? req.body?.last_reviewed_at ?? ptsLastReviewedAt(ptsPayload) ?? existing.last_reviewed_at,
+        req.body?.lastReviewedAt ?? req.body?.last_reviewed_at ?? derivedLastReviewedAt,
         40,
       );
       const lastReviewedAt = requestedLastReviewedAt && !Number.isNaN(new Date(requestedLastReviewedAt).getTime())
@@ -73892,17 +76818,34 @@ async function startServer() {
         }
         return res.status(400).json({ success: false, error: therapeuticProgramErrorMessage(error) });
       }
+      const parentPlanIsDraft = sanitizeString(therapeuticPlanScope?.status, 40).toLowerCase() === 'draft';
       void persistActivityLog({
         userId: actorId,
         clinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email, 180) || 'Equipe',
-        title: status === 'awaiting_approval' ? 'Programa enviado para aprovação' : status === 'draft' ? 'Rascunho de programa criado' : 'Programa terapêutico ativado',
+        title: parentPlanIsDraft
+          ? 'Programa configurado em plano rascunho'
+          : status === 'awaiting_approval'
+            ? 'Programa enviado para aprovação'
+            : status === 'draft'
+              ? 'Rascunho de programa criado'
+              : 'Programa terapêutico ativado',
         content: `${sanitizeTextField(req.body?.name, 240)} foi registrado no Plano terapêutico do paciente.`,
         type: 'clinical',
         actionType: 'THERAPEUTIC_PROGRAM_CREATED',
-        payload: { patientId, originType, status }
+        payload: { patientId, originType, status, parentPlanStatus: therapeuticPlanScope?.status || null }
       });
-      return res.status(201).json({ success: true, data, message: status === 'awaiting_approval' ? 'Programa enviado para aprovação.' : status === 'draft' ? 'Rascunho salvo.' : 'Programa ativado e disponível nas próximas sessões.' });
+      return res.status(201).json({
+        success: true,
+        data,
+        message: parentPlanIsDraft
+          ? 'Programa configurado no rascunho; ativação clínica após publicação do plano.'
+          : status === 'awaiting_approval'
+            ? 'Programa enviado para aprovação.'
+            : status === 'draft'
+              ? 'Rascunho salvo.'
+              : 'Programa ativado e disponível nas próximas sessões.'
+      });
     } catch (error) {
       return sendRouteDbError(res, '/api/aba/patients/:patientId/therapeutic-programs [POST]', error, {
         fallbackMessage: 'Não foi possível criar o programa terapêutico.'
@@ -73919,6 +76862,10 @@ async function startServer() {
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const role = sanitizeString(req.effectiveClinicRole, 80).toLowerCase();
       const status = sanitizeString(req.body?.status, 40).toLowerCase();
+      const allowedProgramStatuses = ['draft', 'awaiting_approval', 'teaching', 'maintenance', 'paused', 'completed', 'archived'];
+      if (!allowedProgramStatuses.includes(status)) {
+        return res.status(400).json({ success: false, error: 'THERAPEUTIC_PROGRAM_STATUS_INVALID' });
+      }
       if (!isTherapeuticPlanManager(role) && status !== 'awaiting_approval') {
         return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
       }
@@ -73939,12 +76886,71 @@ async function startServer() {
           });
         }
       }
+      const { data: currentProgram, error: currentProgramError } = await supabase
+        .from('aba_programs')
+        .select('id,status,version,therapeutic_plan_id')
+        .eq('id', programId)
+        .eq('organization_id', organizationId)
+        .eq('patient_id', patientId)
+        .limit(1)
+        .maybeSingle();
+      if (currentProgramError) throw currentProgramError;
+      if (!currentProgram?.id) return res.status(404).json({ success: false, error: 'THERAPEUTIC_PROGRAM_NOT_FOUND' });
+
+      const currentProgramStatus = sanitizeString(currentProgram.status, 40).toLowerCase();
+      const allowedProgramTransitions: Record<string, string[]> = {
+        draft: ['draft', 'awaiting_approval', 'teaching'],
+        awaiting_approval: ['awaiting_approval', 'draft', 'teaching'],
+        teaching: ['teaching', 'maintenance', 'paused', 'completed'],
+        maintenance: ['maintenance', 'teaching', 'paused', 'completed'],
+        paused: ['paused', 'teaching', 'maintenance', 'completed'],
+        completed: ['completed', 'archived'],
+        archived: ['archived'],
+      };
+      if (!(allowedProgramTransitions[currentProgramStatus] || [currentProgramStatus]).includes(status)) {
+        return res.status(409).json({
+          success: false,
+          error: 'THERAPEUTIC_PROGRAM_STATUS_TRANSITION_INVALID',
+          message: currentProgramStatus === 'paused'
+            ? 'Um programa pausado pode retomar o ensino, voltar à manutenção ou ser concluído.'
+            : 'Esta transição de fase não é permitida para o programa clínico.',
+        });
+      }
+
+      const therapeuticPlanId = sanitizeString(currentProgram.therapeutic_plan_id, 120);
+      if (therapeuticPlanId && ['teaching', 'maintenance'].includes(status)) {
+        const { data: parentPlan, error: parentPlanError } = await supabase
+          .from('patient_therapeutic_plans')
+          .select('id,status')
+          .eq('id', therapeuticPlanId)
+          .eq('organization_id', organizationId)
+          .eq('patient_id', patientId)
+          .limit(1)
+          .maybeSingle();
+        if (parentPlanError) throw parentPlanError;
+        if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
+        const parentPlanStatus = sanitizeString(parentPlan.status, 40).toLowerCase();
+        if (parentPlanStatus !== 'active') {
+          return res.status(409).json({
+            success: false,
+            error: 'THERAPEUTIC_PROGRAM_PARENT_PLAN_NOT_ACTIVE',
+            message: parentPlanStatus === 'paused'
+              ? 'Retome o plano antes de reativar este programa.'
+              : 'Publique ou ative o plano antes de colocar o programa em ensino ou manutenção.',
+          });
+        }
+      }
+
+      const requestedExpectedVersion = Number(req.body?.expectedVersion ?? req.body?.expected_version);
+      const expectedProgramVersion = Number.isSafeInteger(requestedExpectedVersion)
+        ? requestedExpectedVersion
+        : Number(currentProgram.version);
       const { data, error } = await supabase.rpc('update_therapeutic_program_status', {
         p_organization_id: organizationId,
         p_patient_id: patientId,
         p_program_id: programId,
         p_status: status,
-        p_expected_version: Number.isFinite(Number(req.body?.expectedVersion ?? req.body?.expected_version)) ? Number(req.body?.expectedVersion ?? req.body?.expected_version) : null,
+        p_expected_version: Number.isSafeInteger(expectedProgramVersion) ? expectedProgramVersion : null,
         p_reason: sanitizeTextField(req.body?.reason, 500) || null,
         p_idempotency_key: sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 180) || `therapeutic-program-status:${programId}:${status}:${crypto.randomUUID()}`,
         p_actor_id: actorId
@@ -81008,7 +84014,7 @@ async function startServer() {
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
-      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult] = await Promise.all([
+      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult, taskReviewResult] = await Promise.all([
         supabase
           .from('patient_therapeutic_plans')
           .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
@@ -81025,7 +84031,7 @@ async function startServer() {
           .limit(20),
         supabase
           .from('aba_programs')
-          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
+          .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,domain_id,domain_name,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
           .limit(300),
@@ -81087,7 +84093,16 @@ async function startServer() {
               .gte('context_opened_at', dateFromIso)
               .lte('context_opened_at', dateToIso)
               .limit(2000)
-          : Promise.resolve({ data: [], error: null })
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from('adult_task_reviews')
+          .select('assigned_task_id,therapeutic_plan_id,therapeutic_objective_id,therapeutic_program_id,clinical_target_id,clinical_link_snapshot,evidence_kind,task_title,patient_effort,patient_effort_label,patient_comment,pro_score,max_score,pro_review_note,completed_at,reviewed_at')
+          .eq('clinic_id', clinicId)
+          .eq('patient_id', patientId)
+          .gte('reviewed_at', dateFromIso)
+          .lte('reviewed_at', dateToIso)
+          .order('reviewed_at', { ascending: true })
+          .limit(500)
       ]);
 
       const criticalError = [planResult.error, linkResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
@@ -81098,6 +84113,10 @@ async function startServer() {
       if (unexpectedClinicalError) throw unexpectedClinicalError;
       if (ptsContextResult.error && !isMissingRelationError(ptsContextResult.error) && !hasMissingFinancialSchema(ptsContextResult.error)) {
         throw ptsContextResult.error;
+      }
+      const taskReviewSchemaAvailable = !taskReviewResult.error;
+      if (taskReviewResult.error && !isMissingRelationError(taskReviewResult.error) && !hasMissingFinancialSchema(taskReviewResult.error) && !/column .* does not exist|adult_task_reviews/i.test(String(taskReviewResult.error?.message || ''))) {
+        throw taskReviewResult.error;
       }
       const ptsVersionBySessionPlan = new Map<string, number>();
       for (const contextRow of ptsContextResult.error ? [] : ptsContextResult.data || []) {
@@ -81269,6 +84288,28 @@ async function startServer() {
       const legacyOutcomeRows = [...structuredObservations, ...abaObservations];
       const mergedOutcomes = mergeClinicalOutcomeRowsV3First(v3PlanOutcomeRows, legacyOutcomeRows);
       const legacyObservationCount = mergedOutcomes.rows.filter((row: any) => row?.sourceAuthority !== 'canonical').length;
+      const activityEvidence = (taskReviewSchemaAvailable ? taskReviewResult.data || [] : [])
+        .filter((row: any) => visiblePlanIds.has(String(row?.therapeutic_plan_id || '')))
+        .map((row: any) => ({
+          assignedTaskId: row.assigned_task_id,
+          planId: row.therapeutic_plan_id,
+          goalId: row.therapeutic_objective_id || null,
+          programId: row.therapeutic_program_id || null,
+          targetId: row.clinical_target_id || null,
+          clinicalLinkSnapshot: row.clinical_link_snapshot && typeof row.clinical_link_snapshot === 'object' ? row.clinical_link_snapshot : {},
+          evidenceKind: 'contextual_task_review',
+          taskTitle: row.task_title,
+          patientEffort: row.patient_effort,
+          patientEffortLabel: row.patient_effort_label || null,
+          patientComment: row.patient_comment || null,
+          professionalScore: row.pro_score,
+          maxScore: row.max_score,
+          professionalReviewNote: row.pro_review_note || null,
+          completedAt: row.completed_at || null,
+          reviewedAt: row.reviewed_at || null,
+          sourceAuthority: 'contextual',
+          isClinicalMetric: false,
+        }));
       const specialties = Array.from(new Set([
         ...visiblePlans.map((plan: any) => sanitizeTextField(plan.specialty, 120)),
         ...mergedOutcomes.rows.map((row: any) => sanitizeTextField(row?.specialty, 120))
@@ -81284,20 +84325,24 @@ async function startServer() {
             status: program.status,
             therapeuticPlanId: program.therapeutic_plan_id || null,
             therapeuticObjectiveId: program.therapeutic_objective_id || null,
+            domainId: program.domain_id || null,
+            domainName: program.domain_name || null,
             measurementType: program.measurement_type || null,
             masteryCriteria: program.mastery_criteria || null
           })),
           observations: mergedOutcomes.rows,
+          activityEvidence,
           contributions: visibleContributions,
           phases: visiblePhases,
           specialties,
           schemaAvailable: clinicalSchemaAvailable || v3ReadModelAvailable,
+          activityEvidenceAvailable: taskReviewSchemaAvailable,
           v3Available: v3ReadModelAvailable,
           v3ObservationCount: v3PlanOutcomeRows.length,
           legacyObservationCount
         },
         meta: {
-          queryCount: 9 + v3RpcCount + (ptsContextResult.error ? 0 : 1),
+          queryCount: 10 + v3RpcCount + (ptsContextResult.error ? 0 : 1),
           rpcCount: v3RpcCount,
           batched: true,
           periodDays: requestedDays,
@@ -82519,7 +85564,10 @@ async function startServer() {
           return res.status(404).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_NOT_FOUND', error: 'Plano por especialidade não encontrado para este paciente.' });
         }
         if (planContext.reason === 'invalid_scope') {
-          return res.status(422).json({ success: false, code: 'SESSION_SPECIALTY_PLAN_REQUIRED', error: 'A sessão deve ser iniciada a partir de um plano por especialidade, não do PTS compartilhado.' });
+          return res.status(422).json({ success: false, code: 'SESSION_SPECIALTY_PLAN_REQUIRED', error: 'A sessão deve ser iniciada a partir de um plano por especialidade ativo, não do PTS compartilhado.' });
+        }
+        if (planContext.reason === 'inactive_scope') {
+          return res.status(409).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_NOT_ACTIVE', error: 'Apenas planos ativos podem iniciar sessão. Publique ou retome o plano antes de começar a coleta.' });
         }
         if (!planContext.allowed) {
           return res.status(403).json({ success: false, code: 'SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED', error: 'Você não possui vínculo clínico de escrita com este plano.' });

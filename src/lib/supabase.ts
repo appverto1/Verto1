@@ -36,37 +36,127 @@ const fetchConfig = async (retries = 3, delay = 1000) => {
 let supabaseClient: any = null;
 let initPromise: Promise<any> | null = null;
 let sessionRetryPromise: Promise<any> | null = null;
+let authUrlExchangePromise: Promise<any> | null = null;
+let authUrlExchangeCode = '';
+
+const AUTH_SESSION_READ_TIMEOUT_MS = 1600;
+const AUTH_URL_EXCHANGE_TIMEOUT_MS = 8000;
 
 const isSupabaseLockContention = (error: any): boolean => {
   const message = String(error?.message || error || '').toLowerCase();
   return message.includes('lock "') && message.includes('stole it');
 };
 
-const shouldDetectSessionInUrl = (): boolean => {
-  if (typeof window === 'undefined') return false;
-  const path = window.location.pathname.toLowerCase();
-  const hash = window.location.hash.toLowerCase();
-  const search = window.location.search.toLowerCase();
-  const authSignals = ['access_token=', 'refresh_token=', 'code=', 'token_hash='];
-  const hasAuthSignal = authSignals.some((signal) => hash.includes(signal) || search.includes(signal));
-  if (hasAuthSignal) return true;
-  const authAction = String(new URLSearchParams(window.location.search).get('auth_action') || '').toLowerCase();
-  return authAction === 'activate' || authAction === 'recovery' || path.includes('/auth/callback') || path.includes('/ativar') || path.includes('/reset-password');
+const withAuthTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, fallbackValue: T): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((resolve) => {
+        timeoutId = setTimeout(() => resolve(fallbackValue), Math.max(1, timeoutMs));
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== null) clearTimeout(timeoutId);
+  }
 };
 
-export const ensureFreshSession = async () => {
+const currentOAuthCodeFromUrl = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const url = new URL(window.location.href);
+    const code = String(url.searchParams.get('code') || '').trim();
+    if (!code) return '';
+    const authAction = String(url.searchParams.get('auth_action') || '').trim().toLowerCase();
+    const path = url.pathname.toLowerCase();
+    const isKnownAuthCallback =
+      path === '/' ||
+      path.startsWith('/ativar') ||
+      path.startsWith('/reset-password') ||
+      path.startsWith('/ativacao-comercial/') ||
+      authAction === 'activate' ||
+      authAction === 'recovery' ||
+      authAction === 'accept_invitation';
+    return isKnownAuthCallback ? code : '';
+  } catch {
+    return '';
+  }
+};
+
+const removeOAuthCodeFromUrl = (expectedCode: string) => {
+  if (typeof window === 'undefined' || !expectedCode) return;
+  try {
+    const currentUrl = new URL(window.location.href);
+    if (String(currentUrl.searchParams.get('code') || '').trim() !== expectedCode) return;
+    currentUrl.searchParams.delete('code');
+    const next = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}` || '/';
+    window.history.replaceState(window.history.state, document.title, next);
+  } catch {
+    // URL cleanup is UX-only; the authenticated session remains authoritative.
+  }
+};
+
+const exchangeOAuthCodeOnce = async (client: any, timeoutMs: number) => {
+  const code = currentOAuthCodeFromUrl();
+  if (!code) return null;
+
+  if (!authUrlExchangePromise || authUrlExchangeCode !== code) {
+    authUrlExchangeCode = code;
+    const exchangePromise = client.auth
+      .exchangeCodeForSession(code)
+      .then((result: any) => {
+        if (!result?.error && result?.data?.session) removeOAuthCodeFromUrl(code);
+        return result;
+      })
+      .catch((error: any) => ({ data: { session: null }, error }));
+    authUrlExchangePromise = exchangePromise.finally(() => {
+      if (authUrlExchangePromise === exchangePromise || authUrlExchangeCode === code) {
+        authUrlExchangePromise = null;
+        authUrlExchangeCode = '';
+      }
+    });
+  }
+
+  const result = await withAuthTimeout(authUrlExchangePromise, timeoutMs, null as any);
+  if (!result) {
+    if (import.meta.env.DEV) console.warn('Troca OAuth ainda em andamento; liberando a interface sem aguardar indefinidamente.');
+    return null;
+  }
+  if (result?.error) {
+    if (import.meta.env.DEV) console.warn('Troca OAuth falhou:', sanitizeTechnicalErrorMessage(result.error?.message || String(result.error)));
+    return null;
+  }
+  return result?.data?.session || null;
+};
+
+export const ensureFreshSession = async (
+  options: { sessionTimeoutMs?: number; urlExchangeTimeoutMs?: number } = {},
+) => {
   const client = await getSupabase();
   if (!client) return null;
 
+  const sessionTimeoutMs = Math.max(250, Number(options.sessionTimeoutMs || AUTH_SESSION_READ_TIMEOUT_MS));
+  const urlExchangeTimeoutMs = Math.max(1000, Number(options.urlExchangeTimeoutMs || AUTH_URL_EXCHANGE_TIMEOUT_MS));
+
   try {
-    const { data, error } = await client.auth.getSession();
+    // OAuth/PKCE URL exchange has a single owner. Supabase automatic URL detection is
+    // disabled below so an activation callback cannot race a second manual exchange.
+    const urlSession = await exchangeOAuthCodeOnce(client, urlExchangeTimeoutMs);
+    if (urlSession) return urlSession;
+
+    // A stalled refresh request must never block ordinary app mutations. The backend
+    // also authenticates the existing HTTP-only session cookie, so a short local
+    // session timeout can safely fall back to cookie auth.
+    const result = await withAuthTimeout(client.auth.getSession(), sessionTimeoutMs, null as any);
+    if (!result) {
+      if (import.meta.env.DEV) console.warn('Leitura da sessão Supabase excedeu o limite; seguindo com sessão HTTP quando disponível.');
+      return null;
+    }
+    const { data, error } = result;
     if (error) {
       if (import.meta.env.DEV) console.warn('Aviso ao validar sessao:', sanitizeTechnicalErrorMessage(error.message));
       return null;
     }
-    // We keep this lightweight and avoid forced manual refresh here.
-    // Supabase autoRefreshToken handles renewal internally; forcing refresh with a stale
-    // token can trigger SIGNED_OUT loops in production.
     return data?.session || null;
   } catch (error: any) {
     if (isSupabaseLockContention(error)) {
@@ -74,7 +164,7 @@ export const ensureFreshSession = async () => {
         if (!sessionRetryPromise) {
           sessionRetryPromise = (async () => {
             await new Promise((resolve) => setTimeout(resolve, 120));
-            return client.auth.getSession();
+            return withAuthTimeout(client.auth.getSession(), sessionTimeoutMs, null as any);
           })();
         }
         const retried = await sessionRetryPromise;
@@ -111,7 +201,7 @@ export const getSupabase = async () => {
         auth: {
           autoRefreshToken: true,
           persistSession: true,
-          detectSessionInUrl: shouldDetectSessionInUrl()
+          detectSessionInUrl: false
         }
       });
       
@@ -144,8 +234,10 @@ export const testSupabaseConnection = async () => {
   try {
     const client = await getSupabase();
     if (!client) return { success: false, error: 'Servico de autenticacao indisponivel' };
-    
-    const { data, error } = await client.auth.getSession();
+
+    const result = await withAuthTimeout(client.auth.getSession(), AUTH_SESSION_READ_TIMEOUT_MS, null as any);
+    if (!result) return { success: false, error: 'Tempo esgotado ao validar o serviço de autenticação.' };
+    const { error } = result;
     if (error) return { success: false, error: sanitizeTechnicalErrorMessage(error.message) };
     return { success: true };
   } catch (err: any) {

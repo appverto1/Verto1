@@ -10,6 +10,14 @@ import { formatDocument, maskCep, maskPhoneBR, onlyDigits, parseDocumentForStora
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from "../constants/organizationModules";
 import { isAbaV2Enabled, isAbaV3UiEnabled } from "../utils/featureFlags";
 import {
+  PROFESSIONAL_COUNCIL_OPTIONS,
+  formatProfessionalCouncil,
+  formatProfessionalRegistry,
+  getProfessionalRegistryGuidance,
+  getProfessionalRegistryPlaceholder,
+  isNoFormalCouncil,
+} from "../utils/professionalRegistry";
+import {
   BRAZIL_CLINIC_TIME_ZONE_OPTIONS,
   inferBrazilClinicTimeZoneFromState,
 } from "../utils/clinicTimeZone";
@@ -1371,12 +1379,15 @@ export function ClinicGlobalSettingsPanel({
   const clinicFiscalComplete = Boolean(values.clinicLegalName?.trim() && clinicDocumentDigits && values.clinicCnesCode?.trim());
   const contactComplete = Boolean(values.clinicEmail?.trim() || values.clinicPhone?.trim() || values.clinicWhatsapp?.trim());
   const responsibleComplete = Boolean(values.therapistFullName?.trim() && values.therapistRoleTitle?.trim() && (values.therapistEmail?.trim() || values.therapistPhone?.trim()));
-  const professionalBillingComplete = Boolean(
-    values.therapistCouncilType?.trim() &&
-    values.therapistCrp?.trim() &&
-    values.therapistCouncilState?.trim() &&
-    values.therapistCboCode?.trim(),
-  );
+  const professionalCouncilIsInformal = isNoFormalCouncil(values.therapistCouncilType);
+  const professionalBillingComplete = professionalCouncilIsInformal
+    ? Boolean(values.therapistCouncilType?.trim())
+    : Boolean(
+        values.therapistCouncilType?.trim() &&
+        values.therapistCrp?.trim() &&
+        values.therapistCouncilState?.trim() &&
+        values.therapistCboCode?.trim(),
+      );
   const mediaComplete = Boolean(values.therapistSignatureDataUrl || values.therapistProfilePhotoUrl);
 
   const professionalFields = (
@@ -1430,12 +1441,30 @@ export function ClinicGlobalSettingsPanel({
         <input type="text" value={values.therapistRoleTitle} onChange={(event) => setters.setTherapistRoleTitle(event.target.value)} placeholder="Ex.: Fonoaudiólogo clínico" className={inputClass} />
       </label>
       <label className={labelClass}>
-        Conselho profissional
-        <input type="text" value={values.therapistCouncilType} onChange={(event) => setters.setTherapistCouncilType(event.target.value)} placeholder="CRP, CREFITO, CRM..." className={inputClass} />
+        Conselho / tipo de registro
+        <select
+          value={values.therapistCouncilType}
+          onChange={(event) => setters.setTherapistCouncilType(formatProfessionalCouncil(event.target.value))}
+          className={inputClass}
+        >
+          <option value="">Selecione o conselho ou tipo de registro</option>
+          {PROFESSIONAL_COUNCIL_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          {values.therapistCouncilType && !PROFESSIONAL_COUNCIL_OPTIONS.some((option) => option.value === values.therapistCouncilType) && (
+            <option value={values.therapistCouncilType}>{values.therapistCouncilType} · registro existente</option>
+          )}
+        </select>
       </label>
       <label className={labelClass}>
-        Número do conselho / Registro
-        <input type="text" value={values.therapistCrp} onChange={(event) => setters.setTherapistCrp(event.target.value)} placeholder="Ex: CRP 06/123456" className={inputClass} />
+        Registro profissional / identificação
+        <input
+          type="text"
+          maxLength={80}
+          value={values.therapistCrp}
+          onChange={(event) => setters.setTherapistCrp(formatProfessionalRegistry(event.target.value, values.therapistCouncilType))}
+          placeholder={getProfessionalRegistryPlaceholder(values.therapistCouncilType, values.therapistSpecialtyName)}
+          className={inputClass}
+        />
+        <span className="mt-1 block text-[11px] font-normal leading-5 text-slate-500">{getProfessionalRegistryGuidance(values.therapistCouncilType)}</span>
       </label>
       <label className={labelClass}>
         UF do conselho

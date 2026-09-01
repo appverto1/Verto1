@@ -470,7 +470,7 @@ async function getAuthHeaders(includeBearer = true) {
   if (!includeBearer) return headers;
 
   try {
-    const session = await ensureFreshSession();
+    const session = await ensureFreshSession({ sessionTimeoutMs: 1200, urlExchangeTimeoutMs: 8000 });
     const token = session?.access_token;
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
@@ -2902,6 +2902,310 @@ export const dataService = {
       return await safeJson(response);
     } catch {
       return { success: false, data: [], error: 'Não foi possível carregar suas sessões agora.' };
+    }
+  },
+
+  async getPatientSelfWellbeingCheckins(period: 'day' | 'week' | 'month' | 'year' = 'month') {
+    try {
+      const safePeriod = ['day', 'week', 'month', 'year'].includes(period) ? period : 'month';
+      const response = await fetchWithAuthRetry(`/api/patient/self/wellbeing-checkins?period=${encodeURIComponent(safePeriod)}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient wellbeing check-ins:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar o histórico de humor/energia.' };
+    }
+  },
+
+  async savePatientSelfWellbeingCheckin(payload: {
+    metricKind: 'mood' | 'energy';
+    metricValue: number;
+    tagId?: string | null;
+    tagLabel?: string | null;
+    note?: string;
+    icon?: string;
+    clientEventId?: string;
+  }) {
+    try {
+      const requestPayload = { ...payload, clientEventId: payload.clientEventId || crypto.randomUUID() };
+      const response = await fetchWithAuthRetry('/api/patient/self/wellbeing-checkins', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error saving patient wellbeing check-in:', error);
+      return { success: false, error: 'Não foi possível salvar o check-in.' };
+    }
+  },
+
+  async getPatientWellbeingCheckins(patientId: string, period: 'day' | 'week' | 'month' | 'year' = 'month') {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, data: [], error: 'Paciente inválido.' };
+      const safePeriod = ['day', 'week', 'month', 'year'].includes(period) ? period : 'month';
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/wellbeing-checkins?period=${encodeURIComponent(safePeriod)}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching professional patient wellbeing check-ins:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar os registros de humor/energia.' };
+    }
+  },
+
+  async getPatientSelfMessageReads() {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/message-reads', {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient message reads:', error);
+      return { success: false, data: [], error: 'Não foi possível atualizar as mensagens lidas.' };
+    }
+  },
+
+  async markPatientSelfMessagesRead(noteIds: string[]) {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/messages/read', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ noteIds: Array.from(new Set((noteIds || []).filter(Boolean))).slice(0, 30) })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error marking patient messages as read:', error);
+      return { success: false, error: 'Não foi possível confirmar a leitura das mensagens.' };
+    }
+  },
+
+  async getPatientSelfCareNetwork() {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/care-network', {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient self care network:', error);
+      return { success: false, error: 'Não foi possível carregar a rede de cuidado agora.', data: [] };
+    }
+  },
+
+  async createPatientSelfCareNetworkContact(payload: {
+    clinicName?: string;
+    professionalName: string;
+    specialty?: string;
+    phone: string;
+    email?: string;
+  }) {
+    try {
+      const response = await fetchWithAuthRetry('/api/patient/self/care-network', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating patient care network contact:', error);
+      return { success: false, error: 'Não foi possível adicionar este profissional.' };
+    }
+  },
+
+  async updatePatientSelfCareNetworkContact(contactId: string, payload: {
+    clinicName?: string;
+    professionalName: string;
+    specialty?: string;
+    phone: string;
+    email?: string;
+  }) {
+    try {
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patient/self/care-network/${safeContactId}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating patient care network contact:', error);
+      return { success: false, error: 'Não foi possível atualizar este profissional.' };
+    }
+  },
+
+  async archivePatientSelfCareNetworkContact(contactId: string) {
+    try {
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patient/self/care-network/${safeContactId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error archiving patient care network contact:', error);
+      return { success: false, error: 'Não foi possível remover este profissional.' };
+    }
+  },
+
+  async getPatientCareNetwork(patientId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.', data: [] };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient care network:', error);
+      return { success: false, error: 'Não foi possível carregar a rede de cuidado agora.', data: [] };
+    }
+  },
+
+
+  async getPatientEvolutionTimeline(patientId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.', data: [] };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching patient evolution timeline:', error);
+      return { success: false, error: 'Não foi possível carregar a timeline de evolução agora.', data: [] };
+    }
+  },
+
+  async createPatientEvolutionTimelineItem(patientId: string, payload: {
+    monthKey: string;
+    subject: string;
+    content?: string;
+    patientFileId?: string | null;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating patient evolution timeline item:', error);
+      return { success: false, error: 'Não foi possível criar este registro da timeline.' };
+    }
+  },
+
+  async upgradePatientEvolutionTimelinePlus3(patientId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/upgrade-plus3`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error upgrading patient evolution timeline:', error);
+      return { success: false, error: 'Não foi possível ativar o adicional da timeline.' };
+    }
+  },
+
+  async archivePatientEvolutionTimelineItem(patientId: string, itemId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      if (!safePatientId || !safeItemId) return { success: false, error: 'Registro inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}`, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error archiving patient evolution timeline item:', error);
+      return { success: false, error: 'Não foi possível remover este registro.' };
+    }
+  },
+
+  async grantPatientEvolutionTimelineAccess(patientId: string, itemId: string, payload: {
+    recipientEmail: string;
+    authorizationConfirmed: boolean;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      if (!safePatientId || !safeItemId) return { success: false, error: 'Registro inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error granting patient evolution timeline access:', error);
+      return { success: false, error: 'Não foi possível criar o compartilhamento.' };
+    }
+  },
+
+  async revokePatientEvolutionTimelineAccess(patientId: string, itemId: string, grantId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      const safeGrantId = encodeURIComponent(String(grantId || '').trim());
+      if (!safePatientId || !safeItemId || !safeGrantId) return { success: false, error: 'Compartilhamento inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants/${safeGrantId}/revoke`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error revoking patient evolution timeline access:', error);
+      return { success: false, error: 'Não foi possível revogar o acesso.' };
+    }
+  },
+
+  async resendPatientEvolutionTimelineAccess(patientId: string, itemId: string, grantId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      const safeGrantId = encodeURIComponent(String(grantId || '').trim());
+      if (!safePatientId || !safeItemId || !safeGrantId) return { success: false, error: 'Compartilhamento inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants/${safeGrantId}/resend`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error resending patient evolution timeline access:', error);
+      return { success: false, error: 'Não foi possível reenviar o acesso.' };
     }
   },
 
@@ -7551,6 +7855,10 @@ export const dataService = {
     scheduled_at?: string;
     status?: 'pending' | 'completed';
     parent_assigned_task_id?: string;
+    therapeutic_plan_id?: string | null;
+    therapeutic_objective_id?: string | null;
+    therapeutic_program_id?: string | null;
+    clinical_target_id?: string | null;
   }) {
     const id = String(payload?.id || generateId()).trim();
     return await saveOfflineFirst(
@@ -7576,6 +7884,26 @@ export const dataService = {
       return await safeJson(response);
     } catch (error) {
       console.error('Error completing assigned task:', error);
+      return { success: false, error: String(error) };
+    }
+  },
+
+  async completeLegacyPatientTask(taskId: string, payload: {
+    patient_effort?: number;
+    patient_comment?: string;
+  }) {
+    try {
+      const safeTaskId = encodeURIComponent(String(taskId || '').trim());
+      if (!safeTaskId) return { success: false, error: 'Tarefa legada inválida.' };
+      const response = await fetchWithAuthRetry(`/api/patient/self/legacy-tasks/${safeTaskId}/complete`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error completing legacy patient task:', error);
       return { success: false, error: String(error) };
     }
   },
@@ -8013,6 +8341,22 @@ export const dataService = {
     }
 
     return { success: true, data: null };
+  },
+
+  async cleanupPatientPhotoUpload(path: string) {
+    const safePath = String(path || '').trim();
+    if (!safePath) return { success: true, skipped: true };
+    try {
+      const response = await fetch('/api/storage/patient-photos/cleanup-upload', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({ path: safePath })
+      });
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
   },
 
   async uploadFile(bucket: string, path: string, file: File) {
@@ -8786,6 +9130,45 @@ export const dataService = {
     } catch (error) {
       console.error('Error fetching clinic state:', error);
       return await buildFromLocal(error);
+    }
+  },
+
+  async saveReusableAdultProtocol(payload: {
+    operation: 'create_protocol' | 'append_skill';
+    category: 'evaluation' | 'intervention';
+    protocolId?: string;
+    protocolTitle?: string;
+    domainId?: string;
+    domainName?: string;
+    ageGroup?: 'adult' | 'senior';
+    skill: {
+      id?: string;
+      name: string;
+      code?: string;
+      maxScore?: number;
+      objective?: string;
+      question?: string;
+      example?: string;
+      criteria?: string;
+      comment?: string;
+    };
+    idempotencyKey?: string;
+  }) {
+    try {
+      const response = await fetchWithAuthRetry('/api/clinic/protocols/reusable-adult', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      const result = await safeJson(response);
+      if (result?.success && Array.isArray(result?.data?.protocols)) {
+        writeClinicProtocolsBackup(result?.data?.clinicId, result.data.protocols);
+      }
+      return result;
+    } catch (error) {
+      console.error('Error saving reusable adult protocol:', error);
+      return { success: false, error: String(error) };
     }
   },
 

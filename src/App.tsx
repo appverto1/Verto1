@@ -32,6 +32,7 @@ import {
 import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
+  resolvePatientPortalKind,
 } from './utils/patientProfileType';
 import { normalizePatientInsuranceEligibility } from './utils/patientInsuranceEligibility';
 import {
@@ -208,6 +209,9 @@ const ClinicInvitationAcceptance = React.lazy(() =>
 );
 const PortalRelationshipConfirmation = React.lazy(() =>
   import('./components/PortalRelationshipConfirmation').then((m) => ({ default: m.PortalRelationshipConfirmation }))
+);
+const ExternalEvolutionShare = React.lazy(() =>
+  import('./components/ExternalEvolutionShare').then((m) => ({ default: m.ExternalEvolutionShare }))
 );
 const PublicSalesOffer = React.lazy(() =>
   import('./components/PublicSalesOffer').then((m) => ({ default: m.PublicSalesOffer }))
@@ -419,6 +423,19 @@ export default function App() {
   const isPortalRelationshipRoute =
     typeof window !== 'undefined' &&
     /^\/portal\/confirmar-vinculo\/?$/i.test(window.location.pathname);
+  const externalEvolutionRouteMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/evolucao-compartilhada\/([^/]+)\/?$/i)
+      : null;
+  const isExternalEvolutionRoute = Boolean(externalEvolutionRouteMatch);
+  const externalEvolutionPublicId = (() => {
+    if (!externalEvolutionRouteMatch) return '';
+    try {
+      return decodeURIComponent(externalEvolutionRouteMatch[1]);
+    } catch {
+      return '';
+    }
+  })();
   const salesOfferRouteMatch =
     typeof window !== 'undefined'
       ? window.location.pathname.match(/^\/oferta\/([^/]+)\/?$/i)
@@ -3735,6 +3752,17 @@ export default function App() {
   };
 
   const [protocols, setProtocols] = useState<any[]>([]);
+  const handleProtocolsPersisted = (nextProtocols: any[], sectionVersions?: Record<string, number>) => {
+    const persistedProtocols = Array.isArray(nextProtocols) ? nextProtocols : [];
+    clinicStatePersistedSnapshotRef.current.protocols = JSON.stringify(persistedProtocols);
+    if (sectionVersions && typeof sectionVersions === 'object') {
+      clinicStateSectionVersionsRef.current = {
+        ...clinicStateSectionVersionsRef.current,
+        ...sectionVersions,
+      };
+    }
+    setProtocols(persistedProtocols);
+  };
   const [allPatients, setAllPatients] = useState<any[]>([]);
   const [patientListError, setPatientListError] = useState('');
   const patientListEnsureRequestRef = useRef<{ workspaceId: string; promise: Promise<void> } | null>(null);
@@ -4318,9 +4346,12 @@ export default function App() {
         setPatientContextLoaded(true);
       }
 
+      const patientPortalTaskKind = resolvePatientPortalKind(user);
+      const shouldLoadLegacyTasks = clinicalPortalEnabled && patientPortalTaskKind === 'KIDS';
+      const shouldLoadAssignedTasks = clinicalPortalEnabled && patientPortalTaskKind !== 'KIDS';
       const [tasksRes, assignedTasksRes, protocolsRes] = await Promise.allSettled([
-        clinicalPortalEnabled ? dataService.getPatientSelfTasks() : Promise.resolve({ success: true, data: [] }),
-        clinicalPortalEnabled ? dataService.getPatientSelfAssignedTasks() : Promise.resolve({ success: true, data: [] }),
+        shouldLoadLegacyTasks ? dataService.getPatientSelfTasks() : Promise.resolve({ success: true, data: [] }),
+        shouldLoadAssignedTasks ? dataService.getPatientSelfAssignedTasks() : Promise.resolve({ success: true, data: [] }),
         clinicalPortalEnabled ? dataService.getPatientSelfProtocols() : Promise.resolve({ success: true, data: [] })
       ]);
       if (!mounted || requestId !== requestGeneration) return;
@@ -4348,9 +4379,16 @@ export default function App() {
               .map((t: any) => {
                 const taskData = t?.task_data && typeof t.task_data === 'object' ? t.task_data : {};
                 const status = String(t?.status || 'pending').toLowerCase();
+                const taskSource = String(t?._source || 'assigned_tasks');
+                const isLegacyFallback = taskSource === 'tasks_fallback';
+                const legacyTaskId = isLegacyFallback
+                  ? String(taskData?.legacyTaskId || taskData?.legacy_task_id || t?.id || '').trim()
+                  : '';
                 return {
-                  id: `assigned-${t.id}`,
-                  assignedTaskId: t.id,
+                  id: isLegacyFallback ? `legacy-${legacyTaskId || t.id}` : `assigned-${t.id}`,
+                  assignedTaskId: isLegacyFallback ? null : t.id,
+                  legacyTaskId: legacyTaskId || null,
+                  _source: taskSource,
                   patientId: t?.patient_id || user.id,
                   title: taskData.title || 'Tarefa agendada',
                   description: taskData.description || '',
@@ -4589,7 +4627,7 @@ export default function App() {
 
   const handleAddTask = async (t: any) => {
     const patient = allPatients.find(p => p.id === t.patientId);
-    const isAdultTask = Number(patient?.age || 0) > 12;
+    const isAdultTask = resolvePatientPortalKind(patient) !== 'KIDS';
     let taskToPersist = { ...t, id: (isUuidLike(String(t?.id || '')) ? String(t.id) : crypto.randomUUID()) };
     let persistedRemotely = false;
 
@@ -4613,6 +4651,8 @@ export default function App() {
             domainName: t.domainName || '',
             skillId: t.skillId || '',
             skillName: t.skillName || t.title || '',
+            isDailyReminder: Boolean(t.isDailyReminder || t.is_daily_reminder),
+            is_daily_reminder: Boolean(t.isDailyReminder || t.is_daily_reminder),
             maxScore: Number.isFinite(Number(t.maxScore)) ? Number(t.maxScore) : 4
           },
           scheduled_at: t.scheduledAt || new Date().toISOString(),
@@ -4627,44 +4667,14 @@ export default function App() {
           };
           persistedRemotely = true;
         } else {
-          console.warn('assigned_tasks não confirmou persistência, tentando fallback em tasks:', assignedResult);
+          console.warn('assigned_tasks não confirmou persistência da tarefa adulta:', assignedResult);
         }
       } catch (error) {
-        console.error('Falha ao criar assigned task, tentando fallback em tasks:', error);
+        console.error('Falha ao criar assigned task:', error);
       }
 
       if (!persistedRemotely) {
-        try {
-          const fallbackPersisted = await dataService.addTask({
-            ...taskToPersist,
-            id: String(taskToPersist.id),
-            patient_id: String(taskToPersist.patientId),
-            patient_email: patient?.email || null,
-            title: taskToPersist.title,
-            description: taskToPersist.description || '',
-            type: taskToPersist.type || 'task',
-            max_score:
-              Number.isFinite(Number(taskToPersist.maxScore))
-                ? Math.max(1, Math.min(100, Number(taskToPersist.maxScore)))
-                : 4,
-            icon: taskToPersist.icon || '🎯',
-            color: taskToPersist.color || 'bg-blue-100 text-blue-600',
-            completed: false,
-            is_daily_reminder: false,
-            linked_task: taskToPersist.linkedTask || null,
-            scheduled_at: taskToPersist.scheduledAt || new Date().toISOString()
-          });
-          if (fallbackPersisted?.success) {
-            persistedRemotely = true;
-            if (fallbackPersisted?.data?.id) {
-              taskToPersist = { ...taskToPersist, id: fallbackPersisted.data.id };
-            }
-          } else {
-            console.error('Fallback em tasks falhou:', fallbackPersisted);
-          }
-        } catch (fallbackError) {
-          console.error('Erro no fallback de persistência em tasks:', fallbackError);
-        }
+        console.error('assigned_tasks não confirmou persistência da tarefa adulta. O write legado em tasks foi desativado para preservar uma única autoridade.');
       }
     }
 
@@ -4701,7 +4711,7 @@ export default function App() {
     if (!currentTask) return { success: false, error: 'Tarefa não encontrada.' };
     const mergedTask: any = { ...currentTask, ...fields };
     const patient = allPatients.find(p => p.id === mergedTask.patientId);
-    const isAdultTask = Number(patient?.age || 0) > 12;
+    const isAdultTask = resolvePatientPortalKind(patient) !== 'KIDS';
 
     let persistenceResult: any = null;
     if (isAdultTask) {
@@ -4716,6 +4726,8 @@ export default function App() {
           color: mergedTask.color || '',
           linkedTask: mergedTask.linkedTask || mergedTask.linked_task || '',
           linkedProtocolId: mergedTask.linkedProtocolId || '',
+          isDailyReminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
+          is_daily_reminder: Boolean(mergedTask.isDailyReminder || mergedTask.is_daily_reminder),
           maxScore:
             Number.isFinite(Number(mergedTask.maxScore))
               ? Math.max(1, Math.min(10, Number(mergedTask.maxScore)))
@@ -5032,10 +5044,10 @@ export default function App() {
     const normalizedStatus = status === 'cancelled' ? 'canceled' : status;
     const note = String(details?.note ?? details?.notes ?? details?.observation ?? '').trim();
     const recurrenceScope = String(details?.recurrenceScope || 'single').toLowerCase() === 'future' ? 'future' : 'single';
-    const currentAppointment = therapistAgenda.find(item => String(item.id) === String(id));
-    if (!currentAppointment) {
-      return { success: false, error: 'Agendamento não encontrado.' };
-    }
+    // A existência/autorização do agendamento é autoridade do backend.
+    // O ClinicalAgendaBoard também pode abrir eventos vindos da leitura canônica remota
+    // antes de eles estarem materializados no array legado therapistAgenda.
+    // Não bloqueie uma escrita válida apenas por ausência nessa projeção local.
     const actionSequence = nextAppointmentActionSequence();
     try {
       const response = await fetch(`/api/appointments/${encodeURIComponent(String(id))}/status`, {
@@ -6871,87 +6883,145 @@ export default function App() {
 
   const handleMoodCheckin = async (l: number | null, n: string, i: string, t: any) => {
     const identity = resolvePatientIdentityForPortal();
-    const userType = String(user?.type || '').toLowerCase();
-    const isConventionalAdult = userType === 'conventional' || userType === 'adult_conventional';
-    const normalizedEnergy = typeof l === 'number' && Number.isFinite(l) ? l : null;
-    const persistedEnergy = isConventionalAdult ? null : normalizedEnergy;
-    const historyId = crypto.randomUUID();
-    const patientId = String(identity.patientId || user.id);
-    const item = {
-      id: historyId,
-      patientId,
-      type: 'checkin',
-      title: "Check-in",
-      time: new Date().toLocaleTimeString(),
-      energy: persistedEnergy,
-      note: n,
-      icon: i,
-      dateGroup: "Hoje",
-      tag: t
-    };
+    const portalKind = resolvePatientPortalKind(user);
+    const isConventionalAdult = portalKind === 'ADULT_CONVENTIONAL';
+    const metricKind: 'mood' | 'energy' = isConventionalAdult ? 'mood' : 'energy';
+    const normalizedValue = typeof l === 'number' && Number.isFinite(l) ? Math.max(0, Math.min(100, l)) : null;
+    if (normalizedValue === null) return { success: false, error: 'Informe um valor válido para o check-in.' };
+    const patientId = String(identity.patientId || user?.patientPortalPatientId || '').trim();
+    if (!patientId) return { success: false, error: 'Paciente não identificado para o check-in.' };
+
+    const tagId = typeof t === 'string' ? t : String(t?.id || '').trim() || null;
+    const tagSource = isConventionalAdult ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS;
+    const tagLabel = tagId
+      ? String((Array.isArray(tagSource) ? tagSource : []).find((tag: any) => String(tag?.id || '') === tagId)?.label || tagId)
+      : null;
+
     try {
-      const historyResult = await dataService.addHistoryItem({
-        id: historyId,
-        patient_id: patientId,
-        patient_email: identity.patientEmail,
-        patient_name: identity.patientName,
-        type: 'checkin',
-        title: 'Check-in',
-        energy: persistedEnergy,
+      const result = await dataService.savePatientSelfWellbeingCheckin({
+        metricKind,
+        metricValue: normalizedValue,
+        tagId,
+        tagLabel,
         note: n,
-        icon: i
+        icon: i,
       });
-      if (!historyResult?.success) {
-        console.error('Falha ao persistir histórico do check-in:', historyResult?.error || historyResult?.warning);
-        return;
+      if (!result?.success || !result?.data) {
+        return { success: false, error: result?.error || 'Não foi possível persistir o check-in.' };
       }
 
-      const logResult = await dataService.addPatientLog({
-        patient_id: patientId,
-        professional_id: identity.professionalId || user?.professional_id || user?.therapist_id || null,
-        type: 'mood',
-        value: {
-          score: normalizedEnergy,
-          energy: persistedEnergy,
-          note: n,
-          icon: i,
-          tag: t?.label || t?.id || null
-        },
-        timestamp: new Date().toISOString()
-      });
-      if (!logResult?.success) {
-        await dataService.deleteHistoryItem(historyId);
-        console.error('Falha ao persistir log do check-in:', logResult?.error || logResult?.warning);
-        return;
-      }
-
-      setHistory(prev => [item, ...prev]);
-    } catch (error) {
+      const persisted = result.data;
+      return { success: true, data: persisted };
+    } catch (error: any) {
       console.error('Falha ao persistir check-in do paciente:', error);
+      return { success: false, error: error?.message || 'Não foi possível persistir o check-in.' };
     }
   };
-  const handleCompleteTask = async (t: any, e: number | null, n: string) => { 
+
+  const handleCompleteTask = async (t: any, e: number | null, n: string) => {
     const identity = resolvePatientIdentityForPortal(t);
     const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
-    const time = new Date().toLocaleTimeString();
-    const isKid = user.age <= 12;
-    const userType = String(user?.type || '').toLowerCase();
-    const isConventionalAdult = (userType === 'conventional' || userType === 'adult_conventional') && !isKid;
+    const portalKind = resolvePatientPortalKind(user);
+    const isKid = portalKind === 'KIDS';
     const normalizedEffort = typeof e === 'number' && Number.isFinite(e) ? e : null;
     const energyValue = isKid
       ? ((normalizedEffort ?? 0) / (t.maxScore || 1) * 100)
       : normalizedEffort;
-    const newHistoryItem = { 
-      id: Date.now(), 
-      patientId: targetPatientId, 
-      type: t.type || 'task', 
-      title: t.title, 
-      time, 
+    const assignedTaskId = String(t?.assignedTaskId || '').trim();
+    const legacyTaskId = String(
+      t?.legacyTaskId ||
+      t?.task_data?.legacyTaskId ||
+      t?.task_data?.legacy_task_id ||
+      ''
+    ).trim();
+    const isTaskIdUuid = isUuidLike(String(t?.id || ''));
+    const completionTargetId = assignedTaskId || (!legacyTaskId && isTaskIdUuid ? String(t.id) : '');
+
+    if (!isKid && !completionTargetId && !legacyTaskId) {
+      return { success: false, error: 'A tarefa não possui identidade persistida. Atualize a tela e tente novamente.' };
+    }
+
+    if (!isKid) {
+      try {
+        const completionPayload: any = { patient_comment: n || '' };
+        completionPayload.patient_effort = typeof normalizedEffort === 'number'
+          ? Math.max(0, Math.min(100, normalizedEffort))
+          : null;
+        const completionResult = legacyTaskId
+          ? await dataService.completeLegacyPatientTask(legacyTaskId, completionPayload)
+          : await dataService.completeAssignedTask(completionTargetId, completionPayload);
+        if (!completionResult?.success) {
+          return { success: false, error: completionResult?.error || 'Não foi possível concluir a tarefa.' };
+        }
+
+        const persistedTask = completionResult?.data || {};
+        const persistedHistory = completionResult?.historyEntry || null;
+        const persistedAssignedTaskId = String(persistedTask?.id || completionTargetId || '').trim();
+        setTasks(prev => prev.map((x: any) => {
+          const matchesLegacyTask =
+            Boolean(legacyTaskId) &&
+            String(
+              x?.legacyTaskId ||
+              x?.task_data?.legacyTaskId ||
+              x?.task_data?.legacy_task_id ||
+              ''
+            ).trim() === legacyTaskId;
+          const matchesAssignedTask =
+            Boolean(completionTargetId) && (
+              String(x?.assignedTaskId || '') === completionTargetId ||
+              String(x?.id || '') === completionTargetId ||
+              String(x?.id || '') === `assigned-${completionTargetId}`
+            );
+          return matchesLegacyTask || matchesAssignedTask
+            ? {
+                ...x,
+                ...persistedTask,
+                id: persistedAssignedTaskId ? `assigned-${persistedAssignedTaskId}` : x.id,
+                assignedTaskId: persistedAssignedTaskId || x?.assignedTaskId || null,
+                legacyTaskId: legacyTaskId || x?.legacyTaskId || null,
+                _source: legacyTaskId ? 'assigned_tasks_legacy_bridge' : 'assigned_tasks',
+                completed: true,
+                status: 'completed',
+                patient_effort: persistedTask?.patient_effort ?? energyValue,
+                energy: persistedTask?.patient_effort ?? energyValue,
+                patient_comment: persistedTask?.patient_comment ?? n ?? '',
+                completed_at: persistedTask?.completed_at || new Date().toISOString()
+              }
+            : x;
+        }));
+        if (persistedHistory?.id) {
+          setHistory(prev => [
+            {
+              ...persistedHistory,
+              patientId: persistedHistory?.patient_id || targetPatientId,
+              time: new Date(persistedHistory?.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              dateGroup: persistedHistory?.date_group || 'Hoje'
+            },
+            ...prev.filter((item: any) =>
+              String(item?.id || '') !== String(persistedHistory.id) &&
+              (!persistedAssignedTaskId || String(item?.assigned_task_id || '') !== persistedAssignedTaskId)
+            )
+          ]);
+        }
+        return { success: true, data: persistedTask, historyEntry: persistedHistory };
+      } catch (error: any) {
+        console.error('Falha ao concluir tarefa adulta:', error);
+        return { success: false, error: error?.message || 'Não foi possível concluir a tarefa.' };
+      }
+    }
+
+    const time = new Date().toLocaleTimeString();
+    const newHistoryItem = {
+      id: Date.now(),
+      patientId: targetPatientId,
+      type: t.type || 'task',
+      title: t.title,
+      time,
       energy: energyValue,
-      score: isKid ? normalizedEffort : undefined,
-      note: n, 
-      icon: t.icon, 
-      dateGroup: "Hoje",
+      score: normalizedEffort,
+      note: n,
+      icon: t.icon,
+      dateGroup: 'Hoje',
       isDailyReminder: t.isDailyReminder,
       linkedTask: t.linkedTask,
       protocol_id: t.protocol_id || t.protocolId || null,
@@ -6960,98 +7030,13 @@ export default function App() {
       protocol_name: t.protocol_name || t.protocolTitle || null,
       domainName: t.domainName || t.domain_name || null
     };
-    setTasks(prev => prev.map(x => {
-      const matchesAssignedTask =
-        String(x?.assignedTaskId || '') === String(t?.assignedTaskId || '') ||
-        String(x?.id || '') === String(t?.id || '') ||
-        String(x?.id || '') === `assigned-${String(t?.assignedTaskId || '')}`;
-      return matchesAssignedTask
-        ? {
-            ...x,
-            completed: true,
-            status: 'completed',
-            patient_effort: energyValue,
-            energy: energyValue,
-            patient_comment: n || '',
-            completed_at: new Date().toISOString()
-          }
-        : x;
-    })); 
-    
-    if (isKid) {
-      const noteText = `TAREFA CONCLUÍDA PELO PACIENTE\nAtividade: ${t.title}\n${
-        typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort) ? `Pontuação: ${normalizedEffort}\n` : ''
-      }Anotações do Paciente: ${n || "Nenhuma observação."}`;
-      handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
-    }
-
-    // Sync to Backend
-    const { dataService } = await import('./services/dataService');
-    const assignedTaskId = String(t?.assignedTaskId || '');
-    const isTaskIdUuid = isUuidLike(String(t?.id || ''));
-    const completionTargetId = assignedTaskId || (isTaskIdUuid ? String(t.id) : '');
-    if (completionTargetId) {
-      try {
-        const completionPayload: any = {
-          patient_comment: n || ''
-        };
-        if (typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort)) {
-          completionPayload.patient_effort = Math.max(0, Math.min(100, normalizedEffort));
-        } else {
-          completionPayload.patient_effort = null;
-        }
-        const completionResult = await dataService.completeAssignedTask(completionTargetId, completionPayload);
-        const persistedHistory = completionResult?.historyEntry;
-        setHistory(prev => {
-          const duplicateKey = [
-            String(targetPatientId || ''),
-            String(t?.type || 'task'),
-            String(t?.title || ''),
-            String(n || ''),
-            String(persistedHistory?.created_at || ''),
-          ].join('|');
-
-          const withoutDuplicates = prev.filter((item: any) => {
-            const itemKey = [
-              String(item?.patient_id || item?.patientId || ''),
-              String(item?.type || ''),
-              String(item?.title || ''),
-              String(item?.note || ''),
-              String(item?.created_at || ''),
-            ].join('|');
-            return itemKey !== duplicateKey;
-          });
-
-          if (persistedHistory?.id) {
-            return [
-              {
-                ...persistedHistory,
-                patientId: persistedHistory?.patient_id || targetPatientId,
-                time: persistedHistory?.created_at
-                  ? new Date(persistedHistory.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                  : time,
-                dateGroup:
-                  persistedHistory?.date_group ||
-                  persistedHistory?.dateGroup ||
-                  (persistedHistory?.created_at && new Date(persistedHistory.created_at).toDateString() === new Date().toDateString()
-                    ? 'Hoje'
-                    : persistedHistory?.created_at
-                      ? new Date(persistedHistory.created_at).toLocaleDateString()
-                      : 'Hoje')
-              },
-              ...withoutDuplicates
-            ];
-          }
-
-          return [newHistoryItem, ...withoutDuplicates];
-        });
-      } catch (error) {
-        console.error('Falha ao concluir assigned task (nÃ£o bloqueante):', error);
-        setHistory(prev => [newHistoryItem, ...prev]);
-      }
-    } else {
-      setHistory(prev => [newHistoryItem, ...prev]);
-    }
+    setTasks(prev => prev.map((x: any) => String(x?.id || '') === String(t?.id || '') ? { ...x, completed: true, status: 'completed' } : x));
+    setHistory(prev => [newHistoryItem, ...prev]);
+    const noteText = `TAREFA CONCLUÍDA PELO PACIENTE\nAtividade: ${t.title}\n${
+      typeof normalizedEffort === 'number' && Number.isFinite(normalizedEffort) ? `Pontuação: ${normalizedEffort}\n` : ''
+    }Anotações do Paciente: ${n || 'Nenhuma observação.'}`;
+    await handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
+    return { success: true, data: newHistoryItem };
   };
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
     const targetPatient = allPatients.find(p => p.id === pid);
@@ -7589,6 +7574,10 @@ export default function App() {
         );
         if (isUuid(String(note.id))) {
           const delResult = await dataService.deleteNote(String(note.id));
+          if (delResult?.pending === true || delResult?.offline === true) {
+            alert('Remoção salva neste dispositivo e aguardando sincronização. O compartilhamento só será removido no servidor após a sincronização.');
+            return;
+          }
           if (!delResult?.success) {
             console.warn('[notes-share] falha ao remover cÃ³pia:', delResult);
             setTherapistNotes(normalizeAndDecorateNotes(notesSnapshot));
@@ -7635,6 +7624,10 @@ export default function App() {
         );
         if (isUuid(String(existingCopy.id))) {
           const delResult = await dataService.deleteNote(String(existingCopy.id));
+          if (delResult?.pending === true || delResult?.offline === true) {
+            alert('Remoção salva neste dispositivo e aguardando sincronização. O compartilhamento só será removido no servidor após a sincronização.');
+            return;
+          }
           if (!delResult?.success) {
             console.warn('[notes-share] falha ao remover compartilhamento:', delResult);
             setTherapistNotes(normalizeAndDecorateNotes(notesSnapshot));
@@ -7679,11 +7672,18 @@ export default function App() {
         original_id: String(id),
       });
 
+      if (result?.pending === true || result?.offline === true) {
+        setTherapistNotes((current: any[]) =>
+          normalizeAndDecorateNotes(current.map((n: any) => (n.id === newCopyId ? { ...n, sync_status: 'queued' } : n))),
+        );
+        alert('Compartilhamento salvo neste dispositivo e aguardando sincronização. O paciente só receberá após a confirmação do servidor.');
+        return;
+      }
       if (result?.success && result?.data?.id) {
         setTherapistNotes((current: any[]) =>
-          normalizeAndDecorateNotes(current.map((n: any) => (n.id === newCopyId ? { ...n, id: result.data.id } : n))),
+          normalizeAndDecorateNotes(current.map((n: any) => (n.id === newCopyId ? { ...n, id: result.data.id, sync_status: 'synced' } : n))),
         );
-      } else if (result?.success === false && !(result?.offline && result?.pending)) {
+      } else if (result?.success === false) {
         console.warn('[notes-share] falha ao salvar compartilhamento:', result);
         setTherapistNotes((prev: any[]) =>
           normalizeAndDecorateNotes(
@@ -7726,79 +7726,90 @@ export default function App() {
     const createdAt = new Date().toISOString();
     const isPhotoRecord = Boolean(image);
     const isSimpleNote = entryKind === 'note';
-    // Evita duplicidade: família persiste via histórico clínico (fonte única de verdade).
-    
+    const actorKind = resolvePatientPortalKind(user) === 'KIDS' ? 'responsible' : 'patient';
+    const patientAuthoredType = actorKind === 'patient' ? 'patient_note' : 'family_note';
+    const patientAuthoredSource = actorKind === 'patient' ? 'patient_portal' : 'family_portal';
+    const title = isPhotoRecord
+      ? 'Foto enviada'
+      : actorKind === 'patient'
+        ? (isSimpleNote ? 'Anotação do Paciente' : 'Registro do Paciente')
+        : (isSimpleNote ? 'Anotação da Família' : 'Registro da Família');
+    const type = isPhotoRecord ? 'photo' : patientAuthoredType;
+    const source = isSimpleNote ? `${patientAuthoredSource}_note` : patientAuthoredSource;
+
     const newHistoryItem = {
       id: recordId,
       patientId: targetPatientId,
       patient_id: targetPatientId,
       patient_email: identity.patientEmail,
-      type: isPhotoRecord ? 'photo' : 'family_note',
-      title: isPhotoRecord ? "Foto enviada" : isSimpleNote ? "Anotação da Família" : "Registro da Família",
+      type,
+      title,
       score: 0,
       time: new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       note: txt,
-      image: image,
+      image,
       image_path: imagePath || null,
-      icon: isPhotoRecord ? "📷" : isSimpleNote ? "📝" : "🏠",
-      dateGroup: "Hoje",
+      icon: isPhotoRecord ? '📷' : isSimpleNote ? '📝' : '🏠',
+      dateGroup: 'Hoje',
       date: createdAt,
       created_at: createdAt,
-      source: isSimpleNote ? 'family_portal_note' : 'family_portal'
+      source,
+      task_data: { actorKind, entryKind, submissionKind: isPhotoRecord ? 'photo' : 'text' },
+      sync_status: 'syncing'
     };
 
-    // Also add to history timeline
     setHistory(prev => [newHistoryItem, ...prev.filter((item: any) => String(item.id) !== recordId)]);
 
-    onAddActivityLog(
-      isSimpleNote ? "Anotação da Família" : "Registro da Família",
-      `Nova anotação da família adicionada para ${formatPatientLabel({ name: identity.patientName, id: targetPatientId })}.`
-    );
-
-    // Sync to Backend
     const { dataService } = await import('./services/dataService');
     const historySaveResult = await dataService.addHistoryItem({
       id: recordId,
       patient_id: targetPatientId,
       patient_email: identity.patientEmail,
       patient_name: identity.patientName,
-      type: isPhotoRecord ? 'photo' : 'family_note',
-      title: isPhotoRecord ? "Foto enviada" : isSimpleNote ? "Anotação da Família" : "Registro da Família",
+      type,
+      title,
       score: 0,
       note: txt,
-      image: image,
+      image,
       image_path: imagePath || null,
-      icon: isPhotoRecord ? "📷" : isSimpleNote ? "📝" : "🏠",
-      created_at: createdAt,
-      date_group: createdAt.slice(0, 10),
-      source: isSimpleNote ? 'family_portal_note' : 'family_portal'
+      icon: isPhotoRecord ? '📷' : isSimpleNote ? '📝' : '🏠',
+      source,
+      task_data: { actorKind, entryKind, submissionKind: isPhotoRecord ? 'photo' : 'text' }
     });
 
-    if (!historySaveResult?.success) {
-      console.warn('[family-note] Falha ao persistir histórico da família:', historySaveResult);
-      setHistory(prev => prev.filter((item: any) => item.id !== newHistoryItem.id));
-      return { success: false, error: historySaveResult?.error || 'Falha ao persistir histórico da família.' };
-    } else if (historySaveResult?.data?.id) {
-      const persistedPatientId = String(historySaveResult.data.patient_id || historySaveResult.data.patientId || '').trim();
-      if (persistedPatientId) {
-        setResolvedPatientPortalId(persistedPatientId);
-      }
-      setHistory(prev =>
-        prev.map((item: any) =>
-          item.id === newHistoryItem.id
-            ? {
-                ...item,
-                ...historySaveResult.data,
-                patientId: historySaveResult.data.patient_id || item.patientId,
-                date: historySaveResult.data.created_at || item.date,
-                image: historySaveResult.data.image || item.image,
-                image_path: historySaveResult.data.image_path || item.image_path || null
-              }
-            : item
-        )
-      );
+    if (historySaveResult?.pending === true || historySaveResult?.offline === true) {
+      setHistory(prev => prev.map((item: any) => item.id === recordId ? { ...item, sync_status: 'queued' } : item));
+      return {
+        success: true,
+        pending: true,
+        offline: Boolean(historySaveResult?.offline),
+        data: newHistoryItem,
+        message: 'Registro salvo neste dispositivo e aguardando sincronização.'
+      };
     }
-    return { success: true, data: historySaveResult?.data || newHistoryItem };
+
+    if (!historySaveResult?.success) {
+      console.warn('[patient-portal-entry] Falha ao persistir histórico:', historySaveResult);
+      setHistory(prev => prev.filter((item: any) => item.id !== newHistoryItem.id));
+      return { success: false, error: historySaveResult?.error || 'Falha ao persistir registro do paciente.' };
+    }
+
+    const persistedPatientId = String(historySaveResult?.data?.patient_id || historySaveResult?.data?.patientId || '').trim();
+    if (persistedPatientId) setResolvedPatientPortalId(persistedPatientId);
+    setHistory(prev => prev.map((item: any) =>
+      item.id === newHistoryItem.id
+        ? {
+            ...item,
+            ...historySaveResult.data,
+            patientId: historySaveResult.data.patient_id || item.patientId,
+            date: historySaveResult.data.created_at || item.date,
+            image: historySaveResult.data.image || item.image,
+            image_path: historySaveResult.data.image_path || item.image_path || null,
+            sync_status: 'synced'
+          }
+        : item
+    ));
+    return { success: true, pending: false, data: historySaveResult?.data || newHistoryItem };
   };
 
   const handleLogout = async () => {
@@ -8047,10 +8058,33 @@ export default function App() {
       ? 'Demo de apresentacao.'
       : 'Dados ficticios para demonstracao.';
   const appointmentConfirmationViewModel = appointmentConfirmation ? buildAppointmentConfirmationViewModel() : null;
+  const billingStatus = String(user?.subscriptionStatus || user?.subscription_status || '').trim().toLowerCase();
+  const billingAccessBlockAtRaw = String(user?.stripeAccessBlockAt || user?.stripe_access_block_at || user?.onboardingContext?.clinic?.stripeAccessBlockAt || '').trim();
+  const billingAccessBlockAtMs = billingAccessBlockAtRaw ? new Date(billingAccessBlockAtRaw).getTime() : Number.NaN;
+  const billingWarningRole = String(user?.role || '').trim().toLowerCase();
+  const showBillingGraceWarning = Boolean(
+    user &&
+    ['owner', 'admin', 'director', 'biller'].includes(billingWarningRole) &&
+    ['delinquent', 'past_due', 'unpaid'].includes(billingStatus) &&
+    Number.isFinite(billingAccessBlockAtMs) &&
+    billingAccessBlockAtMs > Date.now()
+  );
+  const billingGraceDaysRemaining = showBillingGraceWarning
+    ? Math.max(1, Math.ceil((billingAccessBlockAtMs - Date.now()) / (24 * 60 * 60 * 1000)))
+    : 0;
+  const billingGraceDeadlineLabel = showBillingGraceWarning
+    ? new Date(billingAccessBlockAtMs).toLocaleDateString('pt-BR')
+    : '';
 
   return (
     <React.Fragment>
       <GlobalStyles />
+      {showBillingGraceWarning && (
+        <div className="fixed bottom-4 left-1/2 z-[9500] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 shadow-2xl" role="alert">
+          <p className="text-sm font-bold text-amber-900">Pagamento pendente: {billingGraceDaysRemaining} dia(s) para regularizar.</p>
+          <p className="mt-1 text-xs leading-5 text-amber-800">Regularize até {billingGraceDeadlineLabel}. Se o pagamento continuar pendente, a assinatura e o acesso pago serão suspensos/cancelados após o período de 7 dias. Os dados clínicos não são apagados.</p>
+        </div>
+      )}
       {appointmentConfirmation && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-950/55 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_28px_80px_rgba(15,23,42,0.24)]">
@@ -8201,7 +8235,9 @@ export default function App() {
       )}
       <LazyImportBoundary fallback={lazyFallback}>
         <Suspense fallback={lazyFallback}>
-        {isSalesOfferRoute ? (
+        {isExternalEvolutionRoute ? (
+          <ExternalEvolutionShare publicId={externalEvolutionPublicId} />
+        ) : isSalesOfferRoute ? (
           <PublicSalesOffer token={salesOfferToken} />
         ) : isSalesActivationRoute && !user ? (
           <SalesActivationAccess token={salesActivationToken} onLogin={handleLoginSuccess} />
@@ -8359,7 +8395,7 @@ export default function App() {
 
                 {patientAccessContexts.length > 0 && (
                   <div>
-                    <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Meu cuidado</h2>
+                    <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Cuidar de mim</h2>
                     <div className="mt-2 space-y-2">
                       {patientAccessContexts.map((context) => {
                         const isSelecting = selectingAccessContextId === context.id;
@@ -8499,6 +8535,7 @@ export default function App() {
             }}
             protocols={protocols}
             setProtocols={setProtocols}
+            onProtocolsPersisted={handleProtocolsPersisted}
             activityLogs={activityLogs}
             onAddActivityLog={onAddActivityLog}
             onScheduleSession={handleScheduleSession}
@@ -8662,22 +8699,61 @@ export default function App() {
                   if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
                   setUser(nextUser);
 
-                  await dataService.saveUserProfile(user.id, {
-                    ...nextUser,
-                    profilePicturePath: profileUpload.path,
-                    signaturePath: signatureUpload.path,
-                    clinicLogoPath: clinicLogoUpload.path,
-                    workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-                  });
+                  const profileSaveScope = data?.profileSaveScope === 'clinic' ? 'clinic' : 'professional';
+                  const persistencePayload = profileSaveScope === 'clinic'
+                    ? {
+                        profileSaveScope,
+                        clinicSettings: nextUser.clinicSettings,
+                        clinicLogoPath: clinicLogoUpload.path,
+                        signaturePath: signatureUpload.path,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      }
+                    : {
+                        profileSaveScope,
+                        name: nextUser.name,
+                        cpf: nextUser.cpf,
+                        phone: nextUser.phone,
+                        professionalRoleTitle: nextUser.professionalRoleTitle,
+                        crp: nextUser.crp,
+                        specialties: nextUser.specialties,
+                        miniCurriculum: nextUser.miniCurriculum,
+                        profilePicture: nextUser.profilePicture,
+                        profile_picture: nextUser.profile_picture,
+                        profilePicturePath: profileUpload.path,
+                        signatureDataUrl: nextUser.signatureDataUrl,
+                        signaturePath: signatureUpload.path,
+                        professionalProfile: nextUser.professionalProfile,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      };
+                  await dataService.saveUserProfile(user.id, persistencePayload);
                 } catch (error) {
                   console.error('Profile asset upload error:', error);
                   if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
                   if (baseUser.crp !== undefined) setCrp(formatProfessionalRegistry(baseUser.crp));
                   setUser(baseUser);
-                  await dataService.saveUserProfile(user.id, {
-                    ...baseUser,
-                    workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
-                  });
+                  const fallbackSaveScope = data?.profileSaveScope === 'clinic' ? 'clinic' : 'professional';
+                  const fallbackPersistencePayload = fallbackSaveScope === 'clinic'
+                    ? {
+                        profileSaveScope: fallbackSaveScope,
+                        clinicSettings: baseUser.clinicSettings,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      }
+                    : {
+                        profileSaveScope: fallbackSaveScope,
+                        name: baseUser.name,
+                        cpf: baseUser.cpf,
+                        phone: baseUser.phone,
+                        professionalRoleTitle: baseUser.professionalRoleTitle,
+                        crp: baseUser.crp,
+                        specialties: baseUser.specialties,
+                        miniCurriculum: baseUser.miniCurriculum,
+                        profilePicture: baseUser.profilePicture,
+                        profile_picture: baseUser.profile_picture,
+                        signatureDataUrl: baseUser.signatureDataUrl,
+                        professionalProfile: baseUser.professionalProfile,
+                        workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
+                      };
+                  await dataService.saveUserProfile(user.id, fallbackPersistencePayload);
                 }
               })();
             }}

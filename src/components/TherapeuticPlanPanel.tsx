@@ -306,7 +306,7 @@ const sourceCardClass = (dark: boolean) => `group flex min-h-[150px] flex-col it
     : 'border-slate-200 bg-white text-slate-800 hover:border-violet-300 hover:shadow-sm'
 }`;
 
-export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], caseTeamLinks = [], masteryEvaluations = [], userRole, currentUserId, clinicTimeZone, isDark = false, onStartSession }: any) => {
+export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], caseTeamLinks = [], masteryEvaluations = [], userRole, currentUserId, clinicTimeZone, isDark = false, onStartSession, onAssignActivity }: any) => {
   const patientId = String(patient?.id || '').trim();
   const patientName = String(patient?.name || patient?.nome || 'Paciente').trim() || 'Paciente';
   const normalizedRole = String(userRole || '').trim().toLowerCase();
@@ -481,6 +481,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const ptsLegacyEvidence = useMemo(() => (
     Array.isArray(planData?.ptsLegacyEvidence) ? planData.ptsLegacyEvidence : []
   ), [planData?.ptsLegacyEvidence]);
+  const ptsWorkspacePrograms = useMemo(() => {
+    if (!workspaceScope?.id || workspaceScope?.mode !== 'interdisciplinary') return [];
+    return programs.filter((program: any) =>
+      String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(workspaceScope.id)
+    );
+  }, [programs, workspaceScope]);
   const historicalPrograms = Array.isArray(planData?.historicalPrograms)
     ? planData.historicalPrograms
     : [];
@@ -509,6 +515,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         name: link?.professional?.name || serverLink?.name || link?.professional?.email || 'Profissional',
         profile_photo_url: link?.professional?.profile_photo_url || serverLink?.profile_photo_url || null,
         specialty,
+        caseRole: link.case_role || link.caseRole || null,
+        relationshipType: link.relationship_type || link.relationshipType || null,
         planEligible: (hasServerEligibility ? serverLink.planEligible === true : liveEligibility) && link?.accessEnabled !== false,
         planEligibilityReason: link?.accessEnabled === false
           ? 'Vínculo clínico com pendência de integridade.'
@@ -591,6 +599,35 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     () => programs.find((program: any) => String(program.id) === selectedProgramId) || null,
     [programs, selectedProgramId],
   );
+  const selectedProgramPlanScope = useMemo(
+    () => selectedProgram ? planScopes.find((scope: any) => String(scope?.id || '') === String(selectedProgram?.therapeutic_plan_id || selectedProgram?.therapeuticPlanId || '')) || null : null,
+    [planScopes, selectedProgram],
+  );
+  const selectedProgramPlanStatus = String(selectedProgramPlanScope?.status || '').trim().toLowerCase();
+  const selectedProgramRawStatus = String(selectedProgram?.status || '').trim().toLowerCase();
+  const selectedProgramIsDraftContext = Boolean(selectedProgramPlanScope && selectedProgramPlanStatus === 'draft');
+  const selectedProgramIsPausedContext = Boolean(selectedProgramPlanScope && selectedProgramPlanStatus === 'paused') || selectedProgramRawStatus === 'paused';
+  const selectedProgramIsCompletedContext = selectedProgramPlanStatus === 'completed' || ['completed', 'archived'].includes(selectedProgramRawStatus);
+  const selectedProgramIsCancelledContext = ['cancelled', 'canceled', 'cancelado', 'cancelada'].includes(selectedProgramPlanStatus) || ['cancelled', 'canceled', 'cancelado', 'cancelada'].includes(selectedProgramRawStatus);
+  const selectedProgramDisplayStatus = selectedProgramIsCancelledContext
+    ? 'cancelled'
+    : selectedProgramIsCompletedContext
+      ? 'completed'
+      : selectedProgramIsDraftContext
+        ? 'draft'
+        : selectedProgramIsPausedContext
+          ? 'paused'
+          : selectedProgramRawStatus;
+  const selectedProgramDisplayLabel = selectedProgramDisplayStatus === 'cancelled'
+    ? 'Cancelado'
+    : selectedProgramDisplayStatus === 'completed'
+      ? 'Concluído'
+      : selectedProgramDisplayStatus === 'draft'
+        ? 'Rascunho'
+        : selectedProgramDisplayStatus === 'paused'
+          ? 'Pausado'
+          : THERAPEUTIC_PROGRAM_STATUS_LABELS[normalizeTherapeuticProgramStatus(selectedProgramDisplayStatus)] || selectedProgramDisplayStatus;
+  const selectedProgramIsLockedContext = selectedProgramIsCompletedContext || selectedProgramIsCancelledContext;
   const canEditProgram = (program: any) => {
     if (canManageStructure) return true;
     const scopeId = String(
@@ -662,6 +699,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       historicalPlanVersions: [],
       historicalPrograms: [],
       ptsSharedEvidence: [],
+      ptsLegacyEvidence: [],
       readOnlyHistory: false,
     });
     setSelectedProgramId('');
@@ -1330,6 +1368,35 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     });
   };
 
+  const changePlanScopeStatus = async (scope: any, nextStatus: 'active' | 'paused') => {
+    const scopeId = String(scope?.id || '');
+    if (!scopeId || scopeSaving) return;
+    const currentStatus = String(scope?.status || 'draft').trim().toLowerCase();
+    if (currentStatus === nextStatus) return;
+    setError('');
+    setScopeSaving(true);
+    const response = await dataService.updatePatientTherapeuticPlanScope(patientId, scopeId, {
+      expectedVersion: Number(scope?.edit_version || 1),
+      status: nextStatus,
+    });
+    setScopeSaving(false);
+    if (response?.success === false) {
+      setError(response?.message || response?.error || (nextStatus === 'active'
+        ? 'Não foi possível ativar este plano.'
+        : 'Não foi possível pausar este plano.'));
+      return;
+    }
+    setEditingScopeId('');
+    setNotice(
+      nextStatus === 'active'
+        ? currentStatus === 'draft'
+          ? 'Plano publicado e ativado. Os programas configurados podem seguir o ciclo clínico salvo.'
+          : 'Plano retomado como ativo. A coleta clínica pode continuar nos programas elegíveis.'
+        : 'Plano pausado. Programas e alvos permanecem preservados sem coleta clínica ativa.',
+    );
+    await loadPlan(true);
+  };
+
   const savePlanScope = async () => {
     if (!editingScopeId || scopeSaving) return;
     setError('');
@@ -1640,20 +1707,56 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     );
   };
 
+  const isCancelledLifecycleStatus = (statusValue: any) => ['cancelled', 'canceled', 'cancelado', 'cancelada'].includes(String(statusValue || '').trim().toLowerCase());
+
+  const planScopeForProgram = (program: any) => planScopes.find((scope: any) =>
+    String(scope?.id || '') === String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '')
+  ) || null;
+
+  const isDraftPlanScope = (scope: any) => Boolean(scope) && String(scope?.status || '').trim().toLowerCase() === 'draft';
+
+  const effectiveProgramStatus = (program: any) => {
+    const scope = planScopeForProgram(program);
+    const scopeStatus = String(scope?.status || '').trim().toLowerCase();
+    const rawProgramStatus = normalizeTherapeuticProgramStatus(program?.status);
+    if (isCancelledLifecycleStatus(program?.status) || isCancelledLifecycleStatus(scopeStatus)) return 'cancelled';
+    if (rawProgramStatus === 'completed' || rawProgramStatus === 'archived') return rawProgramStatus;
+    if (scopeStatus === 'completed') return 'completed';
+    if (scopeStatus === 'paused') return 'paused';
+    if (isDraftPlanScope(scope)) return 'draft';
+    return rawProgramStatus;
+  };
+
+  const programStatusLabel = (program: any) => {
+    const status = effectiveProgramStatus(program);
+    if (status === 'cancelled') return 'Cancelado';
+    return THERAPEUTIC_PROGRAM_STATUS_LABELS[status as keyof typeof THERAPEUTIC_PROGRAM_STATUS_LABELS] || status;
+  };
+
+  const scopeStateAccentClass = (statusValue: any) => {
+    const rawStatus = String(statusValue || '').trim().toLowerCase();
+    if (rawStatus === 'paused') return 'border-l-4 !border-l-amber-400';
+    if (rawStatus === 'completed') return 'border-l-4 !border-l-emerald-500';
+    if (isCancelledLifecycleStatus(rawStatus)) return 'border-l-4 !border-l-red-500';
+    return '';
+  };
+
   const statusClass = (statusValue: any) => {
+    if (isCancelledLifecycleStatus(statusValue)) return isDark ? 'bg-red-500/15 text-red-200 border-red-400/30' : 'bg-red-50 text-red-700 border-red-200';
     const status = normalizeTherapeuticProgramStatus(statusValue);
     if (status === 'teaching') return isDark ? 'bg-violet-500/15 text-violet-200 border-violet-400/30' : 'bg-violet-50 text-violet-700 border-violet-200';
-    if (status === 'maintenance') return isDark ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
-    if (status === 'completed') return isDark ? 'bg-sky-500/15 text-sky-200 border-sky-400/30' : 'bg-sky-50 text-sky-700 border-sky-200';
+    if (status === 'maintenance') return isDark ? 'bg-sky-500/15 text-sky-200 border-sky-400/30' : 'bg-sky-50 text-sky-700 border-sky-200';
+    if (status === 'completed') return isDark ? 'bg-emerald-500/15 text-emerald-200 border-emerald-400/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
     if (status === 'paused') return isDark ? 'bg-amber-500/15 text-amber-200 border-amber-400/30' : 'bg-amber-50 text-amber-700 border-amber-200';
     return isDark ? 'bg-slate-700 text-slate-300 border-slate-600' : 'bg-slate-100 text-slate-600 border-slate-200';
   };
 
   const statusAccentClass = (statusValue: any) => {
+    if (isCancelledLifecycleStatus(statusValue)) return 'bg-red-500';
     const status = normalizeTherapeuticProgramStatus(statusValue);
     if (status === 'teaching') return 'bg-violet-500';
-    if (status === 'maintenance') return 'bg-emerald-500';
-    if (status === 'completed') return 'bg-sky-500';
+    if (status === 'maintenance') return 'bg-sky-500';
+    if (status === 'completed') return 'bg-emerald-500';
     if (status === 'paused') return 'bg-amber-500';
     return isDark ? 'bg-slate-500' : 'bg-slate-300';
   };
@@ -2032,7 +2135,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     if (creationStep === 'form') {
       return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={requestCloseCreation}>Cancelar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700 disabled:opacity-50" disabled={saving} onClick={continueToReview}>Revisar programa <ChevronLeft size={16} className="rotate-180" /></button></div></div>;
     }
-    return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} {editingProgramId ? 'Salvar alterações' : 'Salvar como rascunho'}</button>{!editingProgramId && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('teaching')}>{saving ? <Loader2 size={16} className="animate-spin" /> : canManageStructure ? <Play size={16} /> : <Check size={16} />}{canManageStructure ? 'Ativar programa' : 'Enviar para aprovação'}</button>}</div></div>;
+    return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} {editingProgramId ? 'Salvar alterações' : 'Salvar como rascunho'}</button>{!editingProgramId && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('teaching')}>{saving ? <Loader2 size={16} className="animate-spin" /> : isDraftPlanScope(planScopes.find((scope: any) => String(scope?.id || '') === String(selectedPlanScopeId || ''))) ? <FileText size={16} /> : canManageStructure ? <Play size={16} /> : <Check size={16} />}{isDraftPlanScope(planScopes.find((scope: any) => String(scope?.id || '') === String(selectedPlanScopeId || ''))) ? 'Salvar no rascunho' : canManageStructure ? 'Ativar programa' : 'Enviar para aprovação'}</button>}</div></div>;
   };
 
   const creationTitle = editingProgramId
@@ -2054,12 +2157,52 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const activeProgressIndex = Math.max(0, progressSteps.indexOf(creationStage));
   const creationProgress = <nav className="flex items-center gap-1 overflow-hidden" aria-label="Progresso da criação do programa">{progressSteps.map((step, index) => <React.Fragment key={step}><span className={`shrink-0 text-xs ${index === activeProgressIndex ? 'font-medium text-violet-500' : index < activeProgressIndex ? isDark ? 'text-emerald-300' : 'text-emerald-600' : muted}`} aria-current={index === activeProgressIndex ? 'step' : undefined}>{step}</span>{index < progressSteps.length - 1 && <span className={`min-w-2 flex-1 border-t ${index < activeProgressIndex ? 'border-emerald-400' : isDark ? 'border-slate-700' : 'border-slate-200'}`} aria-hidden="true" />}</React.Fragment>)}</nav>;
 
+  const buildAssignedActivityContext = (program: any, target: any) => {
+    const planId = String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim();
+    const scope = planScopes.find((item: any) => String(item?.id || '') === planId) || null;
+    const mode = String(scope?.mode || '').trim().toLowerCase();
+    const specialty = String(scope?.specialty || '').trim();
+    const planLabel = mode === 'interdisciplinary'
+      ? 'PTS interdisciplinar'
+      : specialty
+        ? `Plano individual · ${specialty}`
+        : 'Plano individual de especialidade';
+    return {
+      therapeuticPlanId: planId || null,
+      therapeuticObjectiveId: String(program?.therapeutic_objective_id || program?.therapeuticObjectiveId || '').trim() || null,
+      therapeuticProgramId: String(program?.id || '').trim() || null,
+      clinicalTargetId: String(target?.id || target?.target_id || target?.targetId || '').trim() || null,
+      planMode: mode || null,
+      planSpecialty: specialty || null,
+      planLabel,
+      domainId: String(program?.domain_id || target?.domain_id || '').trim() || null,
+      domainName: String(program?.domain_name || target?.domain_name || '').trim() || null,
+      programName: String(program?.name || '').trim() || null,
+      targetName: String(target?.name || target?.target_name || '').trim() || null,
+      targetDescription: String(target?.description || '').trim() || null,
+      measurementType: String(target?.measurement_type || program?.measurement_type || '').trim() || null,
+    };
+  };
+
   const renderProgramCard = (program: any) => {
-    const status = normalizeTherapeuticProgramStatus(program.status);
+    const rawStatus = normalizeTherapeuticProgramStatus(program.status);
+    const programScope = planScopeForProgram(program);
+    const programScopeStatus = String(programScope?.status || '').trim().toLowerCase();
+    const draftContext = isDraftPlanScope(programScope);
+    const status = effectiveProgramStatus(program);
+    const pausedContext = status === 'paused';
+    const completedContext = status === 'completed' || status === 'archived';
+    const cancelledContext = status === 'cancelled';
+    const scopeAllowsClinicalLifecycle = !programScope || programScopeStatus === 'active';
+    const clinicalLifecycleEnabled = scopeAllowsClinicalLifecycle && !draftContext && !completedContext && !cancelledContext;
     const targets = Array.isArray(program.targets) ? program.targets : [];
     const targetCount = targets.length;
     const mastered = Number(program.masteredTargetCount || 0);
-    const currentTarget = targets.find((target: any) => target.normalizedStatus === 'teaching') || (status === 'maintenance' ? targets.find((target: any) => target.normalizedStatus === 'maintenance') : null);
+    const currentTarget = draftContext || completedContext || cancelledContext
+      ? null
+      : targets.find((target: any) => target.normalizedStatus === 'teaching')
+        || targets.find((target: any) => target.normalizedStatus === 'maintenance')
+        || null;
     const teachingTargets = targets.filter((target: any) => target.normalizedStatus === 'teaching').length;
     const waitingTargets = targets.filter((target: any) => target.normalizedStatus === 'not_started').length;
     const pausedTargets = targets.filter((target: any) => target.normalizedStatus === 'paused').length;
@@ -2075,16 +2218,27 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const criterionLabel = hasConfiguredCriterion ? masteryCriterionLabel(criteria) : 'Critério ainda não configurado';
     const hasRecordedApplications = Boolean(program.lastAppliedAt);
     const responsibleLabel = program?.advanced_settings?.responsibleNotes || program?.advancedSettings?.responsibleNotes || (Array.isArray(program.responsible_professional_ids) && program.responsible_professional_ids.length ? `${program.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica');
+    const targetSummary = draftContext
+      ? (targetCount ? `${targetCount} alvo(s) configurado(s) no rascunho` : 'Nenhum alvo cadastrado')
+      : pausedContext
+        ? (targetCount ? `${targetCount} alvo(s) vinculados · programa pausado` : 'Programa pausado sem alvos cadastrados')
+        : completedContext
+          ? (targetCount ? `${targetCount} alvo(s) vinculados · programa concluído` : 'Programa concluído sem alvos cadastrados')
+          : cancelledContext
+            ? (targetCount ? `${targetCount} alvo(s) vinculados · programa cancelado` : 'Programa cancelado sem alvos cadastrados')
+            : targetCount
+              ? `${mastered} dominados · ${teachingTargets} em ensino${waitingTargets ? ` · ${waitingTargets} aguardando` : ''}${pausedTargets ? ` · ${pausedTargets} pausados` : ''}`
+              : 'Nenhum alvo cadastrado';
 
     return (
-      <article key={program.id} className={`relative flex min-h-full flex-col rounded-2xl border shadow-sm ${panel}`} data-therapeutic-program-card data-program-status={status}>
+      <article key={program.id} className={`relative flex min-h-full flex-col rounded-2xl border shadow-sm ${panel}`} data-therapeutic-program-card data-program-status={status} data-plan-status={String(programScope?.status || '')}>
         <span className={`absolute inset-y-4 left-0 w-1 rounded-r-full ${statusAccentClass(status)}`} aria-hidden="true" />
         <header className={`flex items-start justify-between gap-3 border-b px-5 py-4 pl-6 ${isDark ? 'border-slate-700/80' : 'border-slate-100'}`}>
           <div className="min-w-0">
             <p className={`text-xs ${muted}`}>Programa</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <h4 className={`break-words text-lg font-medium leading-snug ${text}`}>{program.name}</h4>
-              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[status]}</span>
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>{programStatusLabel(program)}</span>
             </div>
             <p className={`mt-1 text-xs ${muted}`}>{CATEGORY_LABELS[normalizeCategory(program.category)] || program.category} · {SOURCE_LABELS[String(program.origin_type || 'manual')] || 'Programa individual'}</p>
           </div>
@@ -2092,24 +2246,25 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         </header>
 
         {openMenuId === String(program.id) && <div className={`absolute right-5 top-14 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
-          {canEditProgram(program) && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
-          {canManageStructure && status !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
-          {canManageStructure && status !== 'maintenance' && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
-          {canManageStructure && status !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}
+          {canEditProgram(program) && !cancelledContext && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
+          {canManageStructure && clinicalLifecycleEnabled && rawStatus === 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'teaching')}><Play size={15} /> Retomar ensino</button>}
+          {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
+          {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'maintenance' && !['completed', 'archived'].includes(rawStatus) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
+          {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}
           <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void saveAsTemplate(program)}><Copy size={15} /> Salvar como modelo</button>
         </div>}
 
         <div className="flex-1 space-y-4 px-5 py-4 pl-6">
           <div className={`rounded-xl border px-4 py-3 ${isDark ? 'border-slate-700 bg-slate-800/40' : 'border-violet-100 bg-violet-50/45'}`} data-therapeutic-current-target>
             <p className={`text-xs ${muted}`}>Alvo atual</p>
-            <p className={`mt-1 break-words text-sm font-medium leading-relaxed ${text}`}>{currentTarget?.name || currentTarget?.target_name || 'Nenhum alvo ativo selecionado'}</p>
-            {currentTarget?.normalizedStatus && <p className={`mt-1 text-xs ${muted}`}>{currentTarget.normalizedStatus === 'maintenance' ? 'Em manutenção' : 'Em ensino'}</p>}
+            <p className={`mt-1 break-words text-sm font-medium leading-relaxed ${text}`}>{draftContext ? 'Ativação clínica após publicação do plano' : completedContext ? 'Programa concluído' : cancelledContext ? 'Programa cancelado' : currentTarget?.name || currentTarget?.target_name || (pausedContext ? 'Programa pausado' : 'Nenhum alvo ativo selecionado')}</p>
+            {draftContext ? <p className={`mt-1 text-xs ${muted}`}>Programa configurado no rascunho, ainda sem fase clínica ativa.</p> : pausedContext ? <p className={`mt-1 text-xs ${muted}`}>Pausado · retome o ensino para reativar a coleta.</p> : currentTarget?.normalizedStatus && <p className={`mt-1 text-xs ${muted}`}>{currentTarget.normalizedStatus === 'maintenance' ? 'Em manutenção' : 'Em ensino'}</p>}
           </div>
 
           <dl className={`grid grid-cols-1 gap-x-5 gap-y-4 border-t pt-4 text-xs sm:grid-cols-2 ${isDark ? 'border-slate-700/80' : 'border-slate-100'}`}>
             <div><dt className={muted}>Objetivo</dt><dd className={`mt-1 break-words leading-relaxed ${text}`}>{program.objective || 'Objetivo não informado.'}</dd></div>
             <div><dt className={muted}>Critério</dt><dd className={`mt-1 break-words leading-relaxed ${text}`}>{criterionLabel}</dd></div>
-            <div><dt className={muted}>Alvos</dt><dd className={`mt-1 leading-relaxed ${text}`}>{targetCount ? `${mastered} dominados · ${teachingTargets} em ensino${waitingTargets ? ` · ${waitingTargets} aguardando` : ''}${pausedTargets ? ` · ${pausedTargets} pausados` : ''}` : 'Nenhum alvo cadastrado'}</dd></div>
+            <div><dt className={muted}>Alvos</dt><dd className={`mt-1 leading-relaxed ${text}`}>{targetSummary}</dd></div>
             <div><dt className={muted}>Responsável</dt><dd className={`mt-1 break-words leading-relaxed ${text}`}>{responsibleLabel}</dd></div>
           </dl>
         </div>
@@ -2131,7 +2286,139 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     );
   };
 
+  const renderPtsProgramCard = (program: any) => {
+    const rawStatus = normalizeTherapeuticProgramStatus(program?.status);
+    const programPlanScope = planScopeForProgram(program);
+    const programPlanScopeStatus = String(programPlanScope?.status || '').trim().toLowerCase();
+    const draftContext = isDraftPlanScope(programPlanScope);
+    const status = effectiveProgramStatus(program);
+    const pausedContext = status === 'paused';
+    const completedContext = status === 'completed' || status === 'archived';
+    const cancelledContext = status === 'cancelled';
+    const scopeAllowsClinicalLifecycle = !programPlanScope || programPlanScopeStatus === 'active';
+    const clinicalLifecycleEnabled = scopeAllowsClinicalLifecycle && !draftContext && !completedContext && !cancelledContext;
+    const targets = Array.isArray(program?.targets) ? program.targets : [];
+    const mastered = Number(program?.masteredTargetCount || targets.filter((target: any) => target?.normalizedStatus === 'mastered').length || 0);
+    const total = targets.length;
+    const masteryProgress = total > 0 ? Math.min(100, Math.round((mastered / total) * 100)) : 0;
+    const currentTarget = draftContext || completedContext || cancelledContext
+      ? null
+      : targets.find((target: any) => ['teaching', 'maintenance'].includes(String(target?.normalizedStatus || '')))
+        || targets[0]
+        || null;
+    const currentCriterionProgress = Math.min(100, Math.max(0, Number(currentTarget?.criterionProgressPercent || 0)));
+    const responsibleIds = Array.isArray(program?.responsible_professional_ids)
+      ? program.responsible_professional_ids.map(String)
+      : [];
+    const responsibleNames = responsibleIds
+      .map((professionalId: string) => linkedProfessionals.find((professional: any) => String(professional.id) === professionalId)?.name)
+      .filter(Boolean);
+    const fallbackScope = programPlanScope || primaryPtsScope;
+    const fallbackResponsible = fallbackScope
+      ? linkedProfessionals.find((professional: any) => String(professional.id) === String(fallbackScope.responsible_professional_id || ''))?.name
+      : '';
+    const responsibleLabel = responsibleNames.length > 0 ? responsibleNames.join(', ') : fallbackResponsible || 'Equipe clínica';
+    const specialtyLabel = responsibleIds
+      .map((professionalId: string) => linkedProfessionals.find((professional: any) => String(professional.id) === professionalId)?.specialty)
+      .filter(Boolean)[0]
+      || program?.specialty
+      || programPlanScope?.specialty
+      || (Array.isArray(fallbackScope?.participant_specialties) ? fallbackScope.participant_specialties.filter(Boolean).join(', ') : '')
+      || 'Interdisciplinar';
+    const reviewDate = program?.review_due_date || program?.reviewDueDate;
+    const reviewOverdue = Boolean(
+      reviewDate
+      && !['completed', 'archived'].includes(status)
+      && new Date(`${String(reviewDate).slice(0, 10)}T23:59:59`).getTime() < Date.now(),
+    );
+    const missingEvidence = !program?.lastAppliedAt && ['teaching', 'maintenance'].includes(status);
+    const attention = reviewOverdue || missingEvidence;
 
+    return (
+      <article
+        key={program.id}
+        className={`relative rounded-2xl border p-4 shadow-sm transition-shadow hover:shadow-md ${
+          attention
+            ? isDark ? 'border-amber-400/35 bg-slate-900/60' : 'border-amber-200 bg-white'
+            : panel
+        }`}
+        data-pts-program-card
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className={`text-xs ${muted}`}>Programa</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <h4 className={`text-base font-semibold leading-6 ${text}`}>{program?.name || 'Programa sem título'}</h4>
+              {attention && <span className="text-amber-500" title={reviewOverdue ? 'Reavaliação vencida' : 'Programa sem evidência registrada'}>△</span>}
+              <span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(status)}`}>
+                {programStatusLabel(program)}
+              </span>
+            </div>
+          </div>
+          <button
+            type="button"
+            aria-label={`Mais ações para ${program?.name || 'programa'}`}
+            className={`min-h-9 min-w-9 rounded-lg p-2 ${isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-100'}`}
+            onClick={() => setOpenMenuId((current) => current === String(program.id) ? '' : String(program.id))}
+          >
+            <MoreHorizontal size={18} />
+          </button>
+        </div>
+
+        {openMenuId === String(program.id) && (
+          <div className={`absolute right-4 top-12 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
+            <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); setOpenMenuId(''); }}><FileText size={15} /> Abrir programa</button>
+            {canEditProgram(program) && !cancelledContext && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
+            {canManageStructure && clinicalLifecycleEnabled && rawStatus === 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'teaching')}><Play size={15} /> Retomar ensino</button>}
+            {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
+            {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'maintenance' && !['completed', 'archived'].includes(rawStatus) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
+            {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'completed' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'completed')}><CheckCircle2 size={15} /> Concluir</button>}
+            <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void saveAsTemplate(program)}><Copy size={15} /> Salvar como modelo</button>
+          </div>
+        )}
+
+        <div className="mt-3" data-pts-program-mastery-progress>
+          <div className={`mb-1.5 flex flex-wrap items-center justify-between gap-2 text-xs ${muted}`}>
+            <span>Domínio do programa</span>
+            <span>{mastered} de {total || 0} alvos dominados · {masteryProgress}%</span>
+          </div>
+          <div className={`h-2 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${masteryProgress}%` }} />
+          </div>
+          {currentTarget?.criterionProgressLabel && Number(currentTarget?.criterionRequiredCount || 0) > 1 && currentTarget?.normalizedStatus !== 'mastered' && (
+            <div className="mt-3" data-pts-current-target-criterion-progress>
+              <div className={`mb-1.5 flex flex-wrap items-center justify-between gap-2 text-[11px] ${muted}`}>
+                <span>Critério do alvo atual</span>
+                <span>{currentTarget.criterionProgressLabel}</span>
+              </div>
+              <div className={`h-1.5 overflow-hidden rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                <div className="h-full rounded-full bg-violet-500 transition-all" style={{ width: `${currentCriterionProgress}%` }} />
+              </div>
+              <p className={`mt-1.5 text-[11px] ${muted}`}>
+                {currentTarget?.name || currentTarget?.target_name || 'Alvo'} · progresso do critério da habilidade, sem contabilizar domínio antes da conclusão.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className={`mt-4 rounded-xl border px-3.5 py-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-slate-100 bg-slate-50/70'}`}>
+          <p className={`text-[11px] ${muted}`}>Alvo atual</p>
+          <p className={`mt-1 text-sm leading-5 ${text}`}>{draftContext ? 'Ativação clínica após publicação do plano' : completedContext ? 'Programa concluído' : cancelledContext ? 'Programa cancelado' : currentTarget?.name || currentTarget?.target_name || (pausedContext ? 'Programa pausado' : 'Nenhum alvo ativo selecionado')}</p>
+          {draftContext && <p className={`mt-1 text-[11px] ${muted}`}>Programa configurado no rascunho, ainda sem fase clínica ativa.</p>}
+          {pausedContext && <p className={`mt-1 text-[11px] ${muted}`}>Pausado · retome o ensino para reativar a coleta.</p>}
+        </div>
+
+        <dl className={`mt-4 grid gap-3 border-t pt-4 text-xs sm:grid-cols-2 lg:grid-cols-5 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+          <div><dt className={muted}>Responsável</dt><dd className={`mt-1 text-sm ${text}`}>{responsibleLabel}</dd></div>
+          <div><dt className={muted}>Especialidade</dt><dd className={`mt-1 text-sm ${text}`}>{specialtyLabel}</dd></div>
+          <div><dt className={muted}>Última evidência</dt><dd className={`mt-1 text-sm ${missingEvidence ? 'text-amber-600' : text}`}>{program?.lastAppliedAt ? formatTherapeuticPlanDate(program.lastAppliedAt) : 'Não registrada'}</dd></div>
+          <div><dt className={muted}>Próxima revisão</dt><dd className={`mt-1 text-sm ${reviewOverdue ? 'text-rose-600' : text}`}>{reviewDate ? formatTherapeuticPlanDate(reviewDate) : 'Não definida'}</dd></div>
+          <div className="flex items-end sm:col-span-2 lg:col-span-1"><button type="button" className="min-h-9 text-sm text-violet-600 hover:underline" onClick={() => { setSelectedProgramId(String(program.id)); setDetailTab('overview'); }}>Abrir programa</button></div>
+        </dl>
+        {actionProgramId === String(program.id) && <div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-slate-950/25 backdrop-blur-[1px]"><Loader2 size={22} className="animate-spin text-white" /></div>}
+      </article>
+    );
+  };
 
   if (!loading && planData.readOnlyHistory === true) {
     const historicalVersions = Array.isArray(planData.historicalPlanVersions)
@@ -2273,6 +2560,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   }
 
   const statusLabelForScope = (scope: any) => {
+    if (isCancelledLifecycleStatus(scope?.status)) return 'Cancelado';
     if (scope?.mode === 'interdisciplinary') {
       if (scope?.pts_lineage?.activeVersion?.id) return 'Ativo';
       if (scope?.pts_lineage?.draftVersion?.id) return 'Rascunho';
@@ -2283,6 +2571,23 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           : scope?.status === 'archived' ? 'Arquivado'
             : 'Rascunho';
   };
+
+  const scopeStatusOptionsFor = (scope: any) => {
+    const currentStatus = String(scope?.status || 'draft').trim().toLowerCase();
+    if (currentStatus === 'draft') return ['draft', 'active', 'archived'];
+    if (currentStatus === 'active') return ['active', 'paused', 'completed', 'archived'];
+    if (currentStatus === 'paused') return ['paused', 'active', 'completed', 'archived'];
+    if (currentStatus === 'completed') return ['completed', 'archived'];
+    return [currentStatus];
+  };
+
+  const scopeStatusOptionLabel = (statusValue: string) => (
+    statusValue === 'active' ? 'Ativo'
+      : statusValue === 'paused' ? 'Pausado'
+        : statusValue === 'completed' ? 'Concluído'
+          : statusValue === 'archived' ? 'Arquivado'
+            : isCancelledLifecycleStatus(statusValue) ? 'Cancelado' : 'Rascunho'
+  );
 
   const scopeVersionNumber = (scope: any) => Number(
     scope?.mode === 'interdisciplinary'
@@ -2462,7 +2767,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     return (
       <section className="space-y-3" aria-label={title}>
         <div>
-          <h3 className={`text-sm ${muted}`}>{title}</h3>
+          <h3 className={`text-sm font-medium ${text}`}>{title}</h3>
           {description && <p className={`mt-1 text-xs leading-5 ${muted}`}>{description}</p>}
         </div>
         <div className="space-y-3">
@@ -2471,23 +2776,45 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             const scopeSummary = buildTherapeuticPlanSummary(scopePrograms, []);
             const specialtyLabel = specialtyDisplayLabel(scope.specialty);
             return (
-              <article key={scope.id} className={`rounded-2xl border p-4 sm:p-5 ${panel}`} data-testid="specialty-plan-list-item">
+              <article key={scope.id} className={`rounded-2xl border p-4 sm:p-5 ${panel} ${scopeStateAccentClass(scope?.status)}`} data-testid="specialty-plan-list-item">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className={`text-lg font-semibold ${text}`}>{specialtyLabel}</h4>
+                      <h4 className={`text-base font-medium ${text}`}>{specialtyLabel}</h4>
                       <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(scope)}`}>
                         {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
                       </span>
                     </div>
                     <p className={`mt-1 text-xs ${muted}`}>Responsável: {responsibleNameForScope(scope)}</p>
-                    <div className={`mt-4 flex flex-wrap gap-x-5 gap-y-2 border-t pt-3 text-xs ${isDark ? 'border-slate-700' : 'border-slate-100'} ${muted}`}>
-                      <span>{scopePrograms.length} programa(s)</span>
-                      <span>{scopeSummary.teaching} em ensino</span>
-                      <span>{scopeSummary.maintenance} em manutenção</span>
-                    </div>
+                    <p className={`mt-2 text-xs ${muted}`}>
+                      {String(scope?.status || 'draft').toLowerCase() === 'draft'
+                        ? `${scopePrograms.length} programa(s) configurado(s) no rascunho · ativação clínica após publicação`
+                        : `${scopeSummary.teaching} em ensino · ${scopeSummary.maintenance} em manutenção · ${scopePrograms.length} programa(s)`}
+                    </p>
                   </div>
-                  <button type="button" className={`${secondaryButton} ${isDark ? 'text-violet-300' : 'text-violet-700'}`} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                  <div className="flex flex-wrap gap-2">
+                    {scope?.canEdit === true && String(scope?.status || 'draft').toLowerCase() === 'draft' && (
+                      <button
+                        type="button"
+                        disabled={scopeSaving}
+                        className="inline-flex min-h-[40px] items-center gap-2 rounded-xl bg-violet-600 px-4 text-sm text-white hover:bg-violet-700 disabled:opacity-50"
+                        onClick={() => void changePlanScopeStatus(scope, 'active')}
+                      >
+                        <Play size={15} /> {scopeSaving ? 'Ativando...' : 'Publicar e ativar'}
+                      </button>
+                    )}
+                    {scope?.canEdit === true && String(scope?.status || '').toLowerCase() === 'paused' && (
+                      <button
+                        type="button"
+                        disabled={scopeSaving}
+                        className="inline-flex min-h-[40px] items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20"
+                        onClick={() => void changePlanScopeStatus(scope, 'active')}
+                      >
+                        <Play size={15} /> {scopeSaving ? 'Retomando...' : 'Retomar plano'}
+                      </button>
+                    )}
+                    <button type="button" className={secondaryButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                  </div>
                 </div>
               </article>
             );
@@ -2506,11 +2833,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const ptsActiveNumber = Number(primaryPtsScope?.pts_lineage?.activeVersion?.versionNumber || 0);
 
     return (
-      <div className="space-y-7" data-testid="therapeutic-plan-hub">
+      <div className="space-y-6" data-testid="therapeutic-plan-hub">
         <header>
-          <h2 className={`text-xl font-semibold ${text}`}>Planos terapêuticos</h2>
-          <p className={`mt-1 max-w-2xl text-sm leading-relaxed ${muted}`}>
-            Consulte o plano compartilhado da equipe e somente os planos por especialidade permitidos para o seu vínculo neste caso.
+          <h2 className={`text-lg font-medium ${text}`}>Planos terapêuticos</h2>
+          <p className={`mt-1 text-sm leading-relaxed ${muted}`}>
+            Acesse o plano compartilhado da equipe e os planos clínicos sob sua responsabilidade ou supervisão.
           </p>
         </header>
 
@@ -2519,8 +2846,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <section className="space-y-3" aria-label="Plano da equipe">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h3 className={`text-sm ${muted}`}>Plano da equipe</h3>
-              <p className={`mt-1 text-xs leading-5 ${muted}`}>Coordenação interdisciplinar compartilhada com a equipe assistencial autorizada.</p>
+              <h3 className={`text-sm font-medium ${text}`}>Plano da equipe</h3>
+              <p className={`mt-1 text-xs leading-5 ${muted}`}>Compartilhado com os profissionais ativos vinculados ao cuidado deste paciente.</p>
             </div>
             {canCreatePts && !scopeFormOpen && (
               <button type="button" className={secondaryButton} onClick={() => openPlanScopeForm('interdisciplinary')}>
@@ -2534,24 +2861,24 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h4 className={`text-lg font-semibold ${text}`}>Projeto Terapêutico Singular</h4>
+                    <h4 className={`text-base font-medium ${text}`}>Projeto Terapêutico Singular (PTS)</h4>
                     <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(primaryPtsScope)}`}>
                       {statusLabelForScope(primaryPtsScope)} · v{scopeVersionNumber(primaryPtsScope)}
                     </span>
                   </div>
-                  <p className={`mt-1 text-xs ${muted}`}>Plano compartilhado do cuidado</p>
+                  <p className={`mt-1 text-xs ${muted}`}>Plano integrado da equipe assistencial</p>
                   {ptsActiveNumber > 0 && ptsDraftNumber > 0 && (
                     <p className={`mt-2 text-xs ${isDark ? 'text-amber-200' : 'text-amber-700'}`}>
                       Rascunho v{ptsDraftNumber} em elaboração; a versão v{ptsActiveNumber} permanece ativa.
                     </p>
                   )}
-                  <dl className={`mt-4 grid gap-3 border-t pt-4 sm:grid-cols-3 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
-                    <div><dt className={`text-[11px] ${muted}`}>Participantes</dt><dd className={`mt-1 text-sm ${text}`}>{ptsParticipants.length}</dd></div>
-                    <div><dt className={`text-[11px] ${muted}`}>Metas compartilhadas</dt><dd className={`mt-1 text-sm ${text}`}>{pts ? pts.goals.filter((goal) => !['cancelled'].includes(goal.status)).length : 0}</dd></div>
-                    <div><dt className={`text-[11px] ${muted}`}>Próxima reavaliação</dt><dd className={`mt-1 text-sm ${text}`}>{pts?.nextReviewDate ? formatTherapeuticPlanDate(pts.nextReviewDate) : 'Não definida'}</dd></div>
-                  </dl>
+                  <div className={`mt-4 grid gap-3 rounded-xl border p-3 sm:grid-cols-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-violet-100 bg-violet-50/60'}`}>
+                    <div><p className={`text-[11px] ${muted}`}>Participantes</p><p className={`mt-1 text-sm ${text}`}>{ptsParticipants.length}</p></div>
+                    <div><p className={`text-[11px] ${muted}`}>Metas em acompanhamento</p><p className={`mt-1 text-sm ${text}`}>{pts ? pts.goals.filter((goal) => !['achieved', 'cancelled'].includes(goal.status)).length : 0}</p></div>
+                    <div><p className={`text-[11px] ${muted}`}>Próxima reavaliação</p><p className={`mt-1 text-sm ${text}`}>{pts?.nextReviewDate ? formatTherapeuticPlanDate(pts.nextReviewDate) : 'Não definida'}</p></div>
+                  </div>
                 </div>
-                <button type="button" className={`${secondaryButton} ${isDark ? 'text-violet-300' : 'text-violet-700'}`} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
+                <button type="button" className={secondaryButton} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
               </div>
             </article>
           ) : (
@@ -2566,11 +2893,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <section className="space-y-4" aria-label="Planos por especialidade">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h3 className={`text-sm ${muted}`}>Planos por especialidade</h3>
-              <p className={`mt-1 text-xs leading-5 ${muted}`}>A lista é filtrada pelo servidor conforme responsabilidade, participação, supervisão ativa e coordenação autorizada.</p>
+              <h3 className={`text-sm font-medium ${text}`}>Planos por especialidade</h3>
+              <p className={`mt-1 text-xs leading-5 ${muted}`}>A lista já respeita seu vínculo com o caso, participação no plano e relações ativas de supervisão.</p>
             </div>
             {canCreateSpecialty && !scopeFormOpen && (
-              <button type="button" className="inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm text-white transition-colors hover:bg-violet-700" onClick={() => openPlanScopeForm('specialty')}>
+              <button type="button" className={secondaryButton} onClick={() => openPlanScopeForm('specialty')}>
                 <Plus size={15} /> Novo plano por especialidade
               </button>
             )}
@@ -2583,7 +2910,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           ) : (
             <div className="space-y-6">
               {renderSpecialtyPlanList('Meu plano', ownSpecialtyScopes, 'Planos em que você é responsável ou participante autorizado.')}
-              {renderSpecialtyPlanList('Planos supervisionados', supervisedSpecialtyScopes, 'Somente planos cobertos por relações ativas de supervisão.')}
+              {renderSpecialtyPlanList('Planos supervisionados', supervisedSpecialtyScopes, 'Somente os planos vinculados às suas relações ativas de supervisão.')}
               {managedSpecialtyScopes.length > 0 && renderSpecialtyPlanList('Outros planos autorizados', managedSpecialtyScopes)}
               {specialtyScopes.length === 0 && (
                 <div className={`rounded-2xl border border-dashed p-6 text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
@@ -2599,17 +2926,32 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
   const renderSpecialtyPlanWorkspace = (scope: any) => {
     const scopePrograms = programs.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(scope?.id || ''));
+    const scopeStatus = String(scope?.status || '').trim().toLowerCase();
+    const scopeIsDraft = isDraftPlanScope(scope);
+    const scopeIsPaused = scopeStatus === 'paused';
+    const scopeIsCompleted = scopeStatus === 'completed';
+    const scopeIsCancelled = isCancelledLifecycleStatus(scopeStatus);
+    const scopeFilterOptions = scopeIsDraft
+      ? ['all', 'draft']
+      : scopeIsPaused
+        ? ['all', 'paused']
+        : scopeIsCompleted
+          ? ['all', 'completed']
+          : scopeIsCancelled
+            ? ['all', 'cancelled']
+            : ['all', 'teaching', 'maintenance', 'paused', 'completed'];
+    const activeFilter = scopeFilterOptions.includes(filter) ? filter : 'all';
     const needle = query.trim().toLocaleLowerCase('pt-BR');
     const scopedVisiblePrograms = scopePrograms.filter((program: any) => {
-      const status = normalizeTherapeuticProgramStatus(program?.status);
-      const filterMatch = filter === 'all' || status === filter;
+      const status = effectiveProgramStatus(program);
+      const filterMatch = activeFilter === 'all' || status === activeFilter;
       const searchable = `${program?.name || ''} ${program?.objective || ''} ${program?.category || ''} ${(program?.targets || []).map((target: any) => target?.name || '').join(' ')}`.toLocaleLowerCase('pt-BR');
       return filterMatch && (!needle || searchable.includes(needle));
     });
     const scopeSummary = buildTherapeuticPlanSummary(scopePrograms, []);
-    const canEditThisScope = scope?.canEdit === true && scope?.status !== 'archived';
+    const canEditThisScope = scope?.canEdit === true && scopeStatus !== 'archived' && !scopeIsCancelled;
     const canAddProgramHere = canCreateProgram && canEditThisScope;
-    const canStartSessionHere = typeof onStartSession === 'function' && canEditThisScope && scopePrograms.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status)));
+    const canStartSessionHere = typeof onStartSession === 'function' && canEditThisScope && String(scope?.status || '').toLowerCase() === 'active' && scopePrograms.some((program: any) => ['teaching', 'maintenance'].includes(normalizeTherapeuticProgramStatus(program.status)));
 
     return (
       <div className="space-y-5" data-testid="specialty-plan-workspace">
@@ -2617,11 +2959,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <ChevronLeft size={16} /> Voltar aos planos
         </button>
 
-        <header className={`rounded-2xl border p-4 sm:p-5 ${panel}`}>
+        <header className={`rounded-2xl border p-4 sm:p-5 ${panel} ${scopeStateAccentClass(scope?.status)}`}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className={`text-xl font-semibold ${text}`}>Plano de {specialtyDisplayLabel(scope?.specialty)}</h2>
+                <h2 className={`text-lg font-medium ${text}`}>Plano de {specialtyDisplayLabel(scope?.specialty)}</h2>
                 <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(scope)}`}>
                   {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
                 </span>
@@ -2630,6 +2972,36 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               {primaryPtsScope && <p className={`mt-2 text-xs ${muted}`}>Integrado ao PTS compartilhado da equipe.</p>}
             </div>
             <div className="flex flex-wrap gap-2">
+              {scopeIsDraft && canEditThisScope && (
+                <button
+                  type="button"
+                  disabled={scopeSaving}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700 disabled:opacity-50"
+                  onClick={() => void changePlanScopeStatus(scope, 'active')}
+                >
+                  <Play size={16} /> {scopeSaving ? 'Ativando...' : 'Publicar e ativar'}
+                </button>
+              )}
+              {scopeIsPaused && canEditThisScope && (
+                <button
+                  type="button"
+                  disabled={scopeSaving}
+                  className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-5 py-2.5 text-sm text-amber-800 hover:bg-amber-100 disabled:opacity-50 dark:border-amber-400/30 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/20"
+                  onClick={() => void changePlanScopeStatus(scope, 'active')}
+                >
+                  <Play size={16} /> {scopeSaving ? 'Retomando...' : 'Retomar plano'}
+                </button>
+              )}
+              {scopeStatus === 'active' && canEditThisScope && (
+                <button
+                  type="button"
+                  disabled={scopeSaving}
+                  className={secondaryButton}
+                  onClick={() => void changePlanScopeStatus(scope, 'paused')}
+                >
+                  <Pause size={16} /> {scopeSaving ? 'Pausando...' : 'Pausar plano'}
+                </button>
+              )}
               {canStartSessionHere && <button type="button" className={secondaryButton} onClick={() => onStartSession?.({ therapeuticPlanId: String(scope.id), specialty: scope.specialty || null })}><Play size={16} /> Iniciar sessão</button>}
               {canEditThisScope && <button type="button" className={secondaryButton} onClick={() => editingScopeId === String(scope.id) ? setEditingScopeId('') : startEditingScope(scope)}><Pencil size={15} /> {editingScopeId === String(scope.id) ? 'Fechar edição' : 'Editar plano'}</button>}
               {canAddProgramHere && <button ref={addProgramButtonRef} type="button" className="inline-flex min-h-[42px] items-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700" onClick={() => startCreationForScope(String(scope.id))}><Plus size={17} /> Adicionar programa</button>}
@@ -2653,11 +3025,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               <label className={`block text-xs ${muted}`}>
                 Estado
                 <select className={`${field} mt-1.5`} value={scopeEditDraft.status} onChange={(event) => setScopeEditDraft((current: any) => ({ ...current, status: event.target.value }))}>
-                  <option value="draft">Rascunho</option>
-                  <option value="active">Ativo</option>
-                  <option value="paused">Pausado</option>
-                  <option value="completed">Concluído</option>
-                  <option value="archived">Arquivado</option>
+                  {scopeStatusOptionsFor(scope).map((statusValue) => <option key={statusValue} value={statusValue}>{scopeStatusOptionLabel(statusValue)}</option>)}
                 </select>
               </label>
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
@@ -2671,16 +3039,26 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         )}
 
         <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-4 py-3 text-sm ${subpanel}`} data-therapeutic-plan-summary>
-          <span className={text}>{scopeSummary.teaching} em ensino</span><span className={muted}>·</span>
-          <span className={text}>{scopeSummary.maintenance} em manutenção</span><span className={muted}>·</span>
-          <span className={text}>{scopeSummary.masteredTargets} alvos dominados</span>
+          {scopeIsDraft ? (
+            <span className={text}>{scopePrograms.length} programa(s) configurado(s) no rascunho · ativação clínica após publicação</span>
+          ) : scopeIsPaused ? (
+            <span className={text}>{scopePrograms.length} programa(s) vinculados · plano pausado · retome o plano para reativar a coleta</span>
+          ) : scopeIsCompleted ? (
+            <span className={text}>{scopePrograms.length} programa(s) vinculados · plano concluído</span>
+          ) : scopeIsCancelled ? (
+            <span className={text}>{scopePrograms.length} programa(s) vinculados · plano cancelado</span>
+          ) : (<>
+            <span className={text}>{scopeSummary.teaching} em ensino</span><span className={muted}>·</span>
+            <span className={text}>{scopeSummary.maintenance} em manutenção</span><span className={muted}>·</span>
+            <span className={text}>{scopeSummary.masteredTargets} alvos dominados</span>
+          </>)}
         </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex flex-wrap gap-2">
-            {['all', 'teaching', 'maintenance', 'paused', 'completed'].map((value) => (
-              <button key={value} type="button" className={`rounded-full border px-3 py-1.5 text-xs ${filter === value ? 'border-violet-300 bg-violet-50 text-violet-700' : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`} onClick={() => setFilter(value)}>
-                {value === 'all' ? 'Todos' : THERAPEUTIC_PROGRAM_STATUS_LABELS[value as keyof typeof THERAPEUTIC_PROGRAM_STATUS_LABELS] || value}
+            {scopeFilterOptions.map((value) => (
+              <button key={value} type="button" className={`rounded-full border px-3 py-1.5 text-xs ${activeFilter === value ? 'border-violet-300 bg-violet-50 text-violet-700' : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`} onClick={() => setFilter(value)}>
+                {value === 'all' ? 'Todos' : value === 'cancelled' ? 'Cancelado' : THERAPEUTIC_PROGRAM_STATUS_LABELS[value as keyof typeof THERAPEUTIC_PROGRAM_STATUS_LABELS] || value}
               </button>
             ))}
           </div>
@@ -2697,8 +3075,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         ) : (
           <div className={`rounded-2xl border border-dashed py-12 text-center ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
             <Target size={30} className={`mx-auto ${isDark ? 'text-slate-600' : 'text-slate-300'}`} />
-            <p className={`mt-3 text-sm ${muted}`}>{query || filter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas neste plano por especialidade.'}</p>
-            {canAddProgramHere && !query && filter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={() => startCreationForScope(String(scope.id))}>Adicionar o primeiro programa</button>}
+            <p className={`mt-3 text-sm ${muted}`}>{query || activeFilter !== 'all' ? 'Nenhum programa encontrado com estes filtros.' : 'Ainda não há programas neste plano por especialidade.'}</p>
+            {canAddProgramHere && !query && activeFilter === 'all' && <button type="button" className="mt-4 text-sm text-violet-500" onClick={() => startCreationForScope(String(scope.id))}>Adicionar o primeiro programa</button>}
           </div>
         )}
       </div>
@@ -2827,7 +3205,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         isDark={isDark}
       />
 
-      {selectedProgram && <div className="fixed inset-0 z-[115] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-start justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-xl font-medium ${text}`}>{selectedProgram.name}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(selectedProgram.status)}`}>{THERAPEUTIC_PROGRAM_STATUS_LABELS[normalizeTherapeuticProgramStatus(selectedProgram.status)]}</span></div><p className={`mt-1 text-xs ${muted}`}>Origem: {SOURCE_LABELS[String(selectedProgram.origin_type || 'manual')] || 'Programa individual'} · Versão {selectedProgram.version || 1}</p></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={() => setSelectedProgramId('')}><X size={19} /></button></header><nav className={`flex gap-1 overflow-x-auto border-b px-5 py-2 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>{[['overview', 'Visão geral'], ['targets', 'Alvos'], ['procedure', 'Procedimento'], ['progress', 'Progresso'], ['history', 'Histórico']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-sm ${detailTab === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setDetailTab(value)}>{label}</button>)}</nav><div className="overflow-y-auto p-5 sm:p-6">{detailTab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className={`rounded-2xl border p-5 md:col-span-2 ${subpanel}`}><p className={`text-xs ${muted}`}>Objetivo</p><p className={`mt-2 leading-relaxed ${text}`}>{selectedProgram.objective || 'Não informado.'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Critério de domínio</p><p className={`mt-1 text-sm ${text}`}>{masteryCriterionLabel(selectedProgram.mastery_criteria)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Próxima revisão</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.review_due_date)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Responsáveis</p><p className={`mt-1 text-sm ${text}`}>{Array.isArray(selectedProgram.responsible_professional_ids) && selectedProgram.responsible_professional_ids.length ? `${selectedProgram.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Última aplicação</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.lastAppliedAt)}</p></div>{canEditProgram(selectedProgram) && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <button type="button" className={secondaryButton} onClick={() => editProgram(selectedProgram)}><Pencil size={16} /> Editar programa</button>}</div>}{detailTab === 'targets' && <div className="space-y-3">{(selectedProgram.targets || []).map((target: any, index: number) => <div key={target.id || `${target.name}-${index}`} className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${subpanel}`}><div><p className={`font-medium ${text}`}>{target.name}</p><p className={`mt-1 text-xs ${muted}`}>{target.normalizedStatus === 'mastered' ? 'Dominado' : target.normalizedStatus === 'maintenance' ? 'Em manutenção' : target.normalizedStatus === 'paused' ? 'Pausado' : target.normalizedStatus === 'teaching' ? 'Em ensino' : 'Não iniciado'}</p></div><span className={`rounded-full px-2.5 py-1 text-xs ${target.normalizedStatus === 'mastered' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span></div>)}{canEditProgram(selectedProgram) && !['completed', 'archived'].includes(normalizeTherapeuticProgramStatus(selectedProgram.status)) && <div className={`flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row ${subpanel}`}><input className={field} value={newTargetName} maxLength={240} onChange={(event) => setNewTargetName(event.target.value)} placeholder="Nome do novo alvo" /><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white disabled:opacity-50" disabled={!newTargetName.trim() || actionProgramId === String(selectedProgram.id)} onClick={() => void addTargetToProgram()}>{actionProgramId === String(selectedProgram.id) ? 'Adicionando...' : 'Adicionar alvo'}</button></div>}</div>}{detailTab === 'procedure' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Instrução / antecedente', 'antecedent'], ['Resposta esperada', 'expectedResponse'], ['Materiais', 'materials'], ['Hierarquia de ajuda', 'promptHierarchy'], ['Reforçamento', 'reinforcement'], ['Correção de erro', 'errorCorrection'], ['Generalização', 'generalization'], ['Manutenção', 'maintenance']].map(([label, key]) => <div key={key} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-2 whitespace-pre-wrap text-sm leading-relaxed ${text}`}>{selectedProgram?.advanced_settings?.[key] || 'Não informado.'}</p></div>)}</div>}{detailTab === 'progress' && <div className="space-y-4"><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[['Alvos', selectedProgram.targets.length], ['Dominados', selectedProgram.masteredTargetCount], ['Em ensino', selectedProgram.targets.filter((target: any) => target.normalizedStatus === 'teaching').length], ['Aplicações recentes', selectedProgram.lastAppliedAt ? 1 : 0]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-xl font-medium ${text}`}>{value}</p></div>)}</div><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-sm ${text}`}>Progresso por alvo</p><div className="mt-4 space-y-3">{selectedProgram.targets.map((target: any) => <div key={target.id}><div className={`mb-1 flex justify-between text-xs ${muted}`}><span>{target.name}</span><span>{target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : 'Em coleta'}</span></div><div className={`h-2 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : '15%' }} /></div></div>)}</div></div></div>}{detailTab === 'history' && <div className="space-y-3">{(selectedProgram.history || []).map((event: any) => <div key={event.id} className={`flex gap-3 rounded-2xl border p-4 ${subpanel}`}><div className={`mt-0.5 rounded-lg p-2 ${isDark ? 'bg-slate-800 text-violet-300' : 'bg-violet-50 text-violet-600'}`}><History size={15} /></div><div><p className={`text-sm ${text}`}>{String(event.event_type || 'UPDATED').replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</p><p className={`mt-1 text-xs ${muted}`}>{formatTherapeuticPlanDate(event.created_at)}</p></div></div>)}{!(selectedProgram.history || []).length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma alteração registrada.</p>}</div>}</div></div></div>}
+      {selectedProgram && <div className="fixed inset-0 z-[115] flex items-end justify-center bg-slate-950/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"><div className={`flex max-h-[94vh] w-full max-w-5xl flex-col rounded-t-3xl border shadow-2xl sm:rounded-3xl ${panel}`} role="dialog" aria-modal="true"><header className={`flex items-start justify-between gap-3 border-b px-5 py-4 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}><div><div className="flex flex-wrap items-center gap-2"><h3 className={`text-xl font-medium ${text}`}>{selectedProgram.name}</h3><span className={`rounded-full border px-2.5 py-1 text-[10px] ${statusClass(selectedProgramDisplayStatus)}`}>{selectedProgramDisplayLabel}</span></div><p className={`mt-1 text-xs ${muted}`}>Origem: {SOURCE_LABELS[String(selectedProgram.origin_type || 'manual')] || 'Programa individual'} · Versão {selectedProgram.version || 1}</p></div><button type="button" className={`rounded-xl p-2 ${isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`} onClick={() => setSelectedProgramId('')}><X size={19} /></button></header><nav className={`flex gap-1 overflow-x-auto border-b px-5 py-2 sm:px-6 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>{[['overview', 'Visão geral'], ['targets', 'Alvos'], ['procedure', 'Procedimento'], ['progress', 'Progresso'], ['history', 'Histórico']].map(([value, label]) => <button key={value} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-sm ${detailTab === value ? 'bg-violet-600 text-white' : isDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`} onClick={() => setDetailTab(value)}>{label}</button>)}</nav><div className="overflow-y-auto p-5 sm:p-6">{detailTab === 'overview' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2"><div className={`rounded-2xl border p-5 md:col-span-2 ${subpanel}`}><p className={`text-xs ${muted}`}>Objetivo</p><p className={`mt-2 leading-relaxed ${text}`}>{selectedProgram.objective || 'Não informado.'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Critério de domínio</p><p className={`mt-1 text-sm ${text}`}>{masteryCriterionLabel(selectedProgram.mastery_criteria)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Próxima revisão</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.review_due_date)}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Responsáveis</p><p className={`mt-1 text-sm ${text}`}>{Array.isArray(selectedProgram.responsible_professional_ids) && selectedProgram.responsible_professional_ids.length ? `${selectedProgram.responsible_professional_ids.length} profissional(is)` : 'Equipe clínica'}</p></div><div className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>Última aplicação</p><p className={`mt-1 text-sm ${text}`}>{formatTherapeuticPlanDate(selectedProgram.lastAppliedAt)}</p></div>{canEditProgram(selectedProgram) && !selectedProgramIsLockedContext && <button type="button" className={secondaryButton} onClick={() => editProgram(selectedProgram)}><Pencil size={16} /> Editar programa</button>}</div>}{detailTab === 'targets' && <div className="space-y-3">{(selectedProgram.targets || []).map((target: any, index: number) => <div key={target.id || `${target.name}-${index}`} className={`flex items-center justify-between gap-3 rounded-2xl border p-4 ${subpanel}`}><div className="min-w-0"><p className={`font-medium ${text}`}>{target.name}</p><p className={`mt-1 text-xs ${muted}`}>{selectedProgramIsDraftContext ? 'Configurado no rascunho' : selectedProgramIsCancelledContext ? 'Programa cancelado' : selectedProgramIsCompletedContext ? 'Programa concluído' : selectedProgramIsPausedContext ? 'Pausado com o programa' : target.normalizedStatus === 'mastered' ? 'Dominado' : target.normalizedStatus === 'maintenance' ? 'Em manutenção' : target.normalizedStatus === 'paused' ? 'Pausado' : target.normalizedStatus === 'teaching' ? 'Em ensino' : 'Não iniciado'}</p></div><div className="flex shrink-0 items-center gap-2">{onAssignActivity && !selectedProgramIsDraftContext && !selectedProgramIsPausedContext && !selectedProgramIsLockedContext && canEditProgram(selectedProgram) && <button type="button" className={`rounded-lg border px-3 py-2 text-xs ${isDark ? 'border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'}`} onClick={() => onAssignActivity(buildAssignedActivityContext(selectedProgram, target))}>Enviar ao portal</button>}<span className={`rounded-full px-2.5 py-1 text-xs ${target.normalizedStatus === 'mastered' ? isDark ? 'bg-emerald-500/15 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{index + 1}</span></div></div>)}{canEditProgram(selectedProgram) && !selectedProgramIsLockedContext && <div className={`flex flex-col gap-2 rounded-2xl border p-4 sm:flex-row ${subpanel}`}><input className={field} value={newTargetName} maxLength={240} onChange={(event) => setNewTargetName(event.target.value)} placeholder="Nome do novo alvo" /><button type="button" className="shrink-0 rounded-xl bg-violet-600 px-4 py-2.5 text-sm text-white disabled:opacity-50" disabled={!newTargetName.trim() || actionProgramId === String(selectedProgram.id)} onClick={() => void addTargetToProgram()}>{actionProgramId === String(selectedProgram.id) ? 'Adicionando...' : 'Adicionar alvo'}</button></div>}</div>}{detailTab === 'procedure' && <div className="grid grid-cols-1 gap-4 md:grid-cols-2">{[['Instrução / antecedente', 'antecedent'], ['Resposta esperada', 'expectedResponse'], ['Materiais', 'materials'], ['Hierarquia de ajuda', 'promptHierarchy'], ['Reforçamento', 'reinforcement'], ['Correção de erro', 'errorCorrection'], ['Generalização', 'generalization'], ['Manutenção', 'maintenance']].map(([label, key]) => <div key={key} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-2 whitespace-pre-wrap text-sm leading-relaxed ${text}`}>{selectedProgram?.advanced_settings?.[key] || 'Não informado.'}</p></div>)}</div>}{detailTab === 'progress' && <div className="space-y-4"><div className="grid grid-cols-2 gap-3 md:grid-cols-4">{[['Alvos', selectedProgram.targets.length], ['Dominados', selectedProgram.masteredTargetCount], [selectedProgramIsDraftContext ? 'Configurados' : selectedProgramIsPausedContext || selectedProgramIsLockedContext ? 'Vinculados' : 'Em ensino', selectedProgramIsDraftContext || selectedProgramIsPausedContext || selectedProgramIsLockedContext ? selectedProgram.targets.length : selectedProgram.targets.filter((target: any) => target.normalizedStatus === 'teaching').length], ['Aplicações recentes', selectedProgram.lastAppliedAt ? 1 : 0]].map(([label, value]) => <div key={String(label)} className={`rounded-2xl border p-4 ${subpanel}`}><p className={`text-xs ${muted}`}>{label}</p><p className={`mt-1 text-xl font-medium ${text}`}>{value}</p></div>)}</div><div className={`rounded-2xl border p-5 ${subpanel}`}><p className={`text-sm ${text}`}>Progresso por alvo</p><div className="mt-4 space-y-3">{selectedProgram.targets.map((target: any) => <div key={target.id}><div className={`mb-1 flex justify-between text-xs ${muted}`}><span>{target.name}</span><span>{selectedProgramIsDraftContext ? 'Aguardando publicação' : selectedProgramIsCancelledContext ? 'Cancelado' : selectedProgramIsCompletedContext ? 'Concluído' : selectedProgramIsPausedContext ? 'Pausado' : target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : 'Em coleta'}</span></div><div className={`h-2 rounded-full ${isDark ? 'bg-slate-800' : 'bg-slate-100'}`}><div className="h-full rounded-full bg-emerald-500" style={{ width: selectedProgramIsDraftContext ? '0%' : target.normalizedStatus === 'mastered' ? '100%' : target.normalizedStatus === 'maintenance' ? '90%' : '15%' }} /></div></div>)}</div></div></div>}{detailTab === 'history' && <div className="space-y-3">{(selectedProgram.history || []).map((event: any) => <div key={event.id} className={`flex gap-3 rounded-2xl border p-4 ${subpanel}`}><div className={`mt-0.5 rounded-lg p-2 ${isDark ? 'bg-slate-800 text-violet-300' : 'bg-violet-50 text-violet-600'}`}><History size={15} /></div><div><p className={`text-sm ${text}`}>{String(event.event_type || 'UPDATED').replaceAll('_', ' ').toLocaleLowerCase('pt-BR')}</p><p className={`mt-1 text-xs ${muted}`}>{formatTherapeuticPlanDate(event.created_at)}</p></div></div>)}{!(selectedProgram.history || []).length && <p className={`rounded-2xl border border-dashed p-8 text-center text-sm ${isDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma alteração registrada.</p>}</div>}</div></div></div>}
     </section>
   );
 };

@@ -904,8 +904,7 @@ async function updateClinicStateMarker(params: {
       ...row,
       notification_12h_sent_at: params.sentAt,
       notification12hSentAt: params.sentAt,
-      notification_12h_sent: true,
-      notification_12h_sent_at: params.sentAt
+      notification_12h_sent: true
     };
   });
 
@@ -1648,32 +1647,239 @@ async function runAppointmentReminderJob(
   return summary;
 }
 
-export function triggerAppointmentReminderScan(trigger = 'manual_trigger') {
-  if (!activeOptions) return false;
-  void runAppointmentReminderJob(activeOptions, trigger);
-  return true;
+async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigger: string): Promise<AppointmentReminderRunSummary> {
+  const claim = await options.supabase.rpc('claim_due_notification_jobs_v1', {
+    p_worker: options.runtimeOwnerId,
+    p_limit: 100,
+  });
+  if (claim.error) {
+    options.logger.error('[Notification Jobs] claim falhou; o scanner legado não será reativado.', {
+      trigger,
+      message: claim.error.message || String(claim.error),
+    });
+    return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 1 };
+  }
+  const jobs = Array.isArray(claim.data) ? claim.data : [];
+  if (jobs.length === 0) return { skipped: false, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
+
+  const appointmentIds = Array.from(new Set(jobs.filter((job: any) => job?.source_type === 'APPOINTMENT').map((job: any) => sanitizeText(job?.source_id, 120)).filter(isUuid)));
+  const taskIds = Array.from(new Set(jobs.filter((job: any) => job?.source_type === 'ASSIGNED_TASK').map((job: any) => sanitizeText(job?.source_id, 120)).filter(isUuid)));
+  const patientIds = Array.from(new Set(jobs.map((job: any) => sanitizeText(job?.patient_id, 120)).filter(isUuid)));
+
+  const [appointmentResult, taskResult, patientResult] = await Promise.all([
+    appointmentIds.length > 0
+      ? options.supabase.from('appointments').select('id,clinic_id,organization_id,patient_id,scheduled_at,status,patient_response,patient_confirmation_status,notification_24h_sent_at,notification_12h_sent_at,is_active,deleted_at').in('id', appointmentIds).limit(appointmentIds.length)
+      : Promise.resolve({ data: [], error: null }),
+    taskIds.length > 0
+      ? options.supabase.from('assigned_tasks').select('id,clinic_id,patient_id,patient_email,professional_id,task_type,task_data,scheduled_at,status,completed_at').in('id', taskIds).limit(taskIds.length)
+      : Promise.resolve({ data: [], error: null }),
+    patientIds.length > 0
+      ? options.supabase.from('patients').select('id,name,email,clinic_id,responsible_user_id,is_active,deleted_at').in('id', patientIds).limit(patientIds.length)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  if (appointmentResult.error || taskResult.error || patientResult.error) {
+    const message = appointmentResult.error?.message || taskResult.error?.message || patientResult.error?.message || 'notification job hydration failed';
+    await options.supabase.rpc('finalize_notification_jobs_v1', {
+      p_results: jobs.map((job: any) => ({ id: job.id, outcome: 'RETRY', error: message })),
+    });
+    return { skipped: false, totalCandidates: jobs.length, sent24h: 0, sent12h: 0, failed: jobs.length };
+  }
+
+  const appointmentsById = new Map((appointmentResult.data || []).map((row: any) => [String(row.id), row]));
+  const tasksById = new Map((taskResult.data || []).map((row: any) => [String(row.id), row]));
+  const patientsById = new Map((patientResult.data || []).map((row: any) => [String(row.id), row]));
+
+  const deliverable: any[] = [];
+  const finalResults: Array<{ id: string; outcome: string; error?: string }> = [];
+  for (const job of jobs) {
+    const patient = patientsById.get(String(job?.patient_id));
+    if (!patient || patient?.is_active === false || patient?.deleted_at) {
+      finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'PATIENT_INACTIVE' });
+      continue;
+    }
+    if (job?.source_type === 'APPOINTMENT') {
+      const appointment = appointmentsById.get(String(job?.source_id));
+      const status = sanitizeText(appointment?.status, 40).toLowerCase();
+      if (!appointment || appointment?.is_active === false || appointment?.deleted_at || ['cancelled','canceled','no_show','missed','completed'].includes(status)) {
+        finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'APPOINTMENT_INACTIVE' });
+        continue;
+      }
+      if (job?.notification_kind === 'APPOINTMENT_REMINDER_12H') {
+        const response = sanitizeText(appointment?.patient_response || appointment?.patient_confirmation_status, 40).toLowerCase();
+        if (['confirmed','confirmado','accepted','cancelled','canceled','reschedule_requested'].includes(response)) {
+          finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'PATIENT_ALREADY_RESPONDED' });
+          continue;
+        }
+      }
+      deliverable.push({ job, patient, appointment });
+      continue;
+    }
+    if (job?.source_type === 'ASSIGNED_TASK') {
+      const task = tasksById.get(String(job?.source_id));
+      const status = sanitizeText(task?.status, 40).toLowerCase();
+      if (!task || ['completed','done','cancelled','canceled'].includes(status)) {
+        finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'TASK_INACTIVE' });
+        continue;
+      }
+      deliverable.push({ job, patient, task });
+      continue;
+    }
+    finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'UNSUPPORTED_SOURCE' });
+  }
+
+  const recipients = deliverable.map(({ job, patient }: any) => ({
+    key: String(job.id),
+    patientIds: [String(patient.id)],
+    patientEmail: sanitizeEmail(patient.email),
+    legacyUserIds: isUuid(patient?.responsible_user_id) ? [String(patient.responsible_user_id)] : [],
+    clinicId: sanitizeText(job?.clinic_id || patient?.clinic_id, 120),
+  }));
+  const subscriptionBatch = await findPushSubscriptionsForRecipients({ supabase: options.supabase, recipients, logger: options.logger });
+
+  // Resolve branding once per clinic per claimed batch. Promise.all over jobs could
+  // otherwise miss the TTL cache concurrently and repeat the same clinic reads.
+  const clinicBrandingById = new Map<string, Awaited<ReturnType<typeof resolveReminderClinicBranding>>>();
+  const clinicIdsForBatch = Array.from(new Set(
+    deliverable
+      .map(({ job, patient }: any) => sanitizeText(job?.clinic_id || patient?.clinic_id, 120))
+      .filter((clinicId: string) => isUuid(clinicId))
+  ));
+  await Promise.all(clinicIdsForBatch.map(async (clinicId) => {
+    clinicBrandingById.set(clinicId, await resolveReminderClinicBranding(options, clinicId));
+  }));
+
+  const portalRows: any[] = [];
+  const prepared = await Promise.all(deliverable.map(async ({ job, patient, appointment, task }: any) => {
+    const clinicId = sanitizeText(job?.clinic_id || patient?.clinic_id, 120);
+    const clinicBranding = clinicBrandingById.get(clinicId) || { clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME, clinicLogoUrl: null };
+    const clinicName = clinicBranding.clinicName || DEFAULT_CLINIC_NOTIFICATION_NAME;
+    const clinicLogoUrl = clinicBranding.clinicLogoUrl || null;
+    const branding = resolveBrandingContext({ clinic: { id: clinicId || null, displayName: clinicName, logoUrl: clinicLogoUrl }, allowProfessionalFallback: false, fallbackName: DEFAULT_CLINIC_NOTIFICATION_NAME });
+    if (appointment) {
+      const scheduled = dayjs(appointment.scheduled_at).tz(BRAZIL_TIMEZONE);
+      const kind: ReminderKind = job.notification_kind === 'APPOINTMENT_REMINDER_12H' ? '12h' : '24h';
+      const payload = buildPatientReminderNotificationPayload({
+        appointmentId: String(appointment.id),
+        scheduledAt: appointment.scheduled_at,
+        dateLabel: scheduled.isValid() ? scheduled.format('DD/MM/YYYY') : null,
+        timeLabel: scheduled.isValid() ? scheduled.format('HH:mm') : null,
+        patientName: resolvePortalPatientDisplayName(patient),
+        reminderKind: kind,
+        branding,
+        canRequestReschedule: true,
+      });
+      const idempotencyKey = `notification-job:${job.id}`;
+      portalRows.push({
+        organization_id: isUuid(job?.organization_id) ? job.organization_id : (isUuid(clinicId) ? clinicId : null), clinic_id: isUuid(clinicId) ? clinicId : null,
+        recipient_user_id: isUuid(sanitizeText(patient?.responsible_user_id, 120)) ? patient.responsible_user_id : null, recipient_email: sanitizeEmail(patient.email) || null,
+        patient_id: patient.id, appointment_id: appointment.id, type: 'appointment_reminder', title: payload.title, message: payload.body,
+        sent_at: new Date().toISOString(), scheduled_for: job.scheduled_for, idempotency_key: idempotencyKey,
+        metadata: { appointmentId: appointment.id, reminderKind: kind, scheduledAt: appointment.scheduled_at, clinicName, clinicLogoUrl, patientName: resolvePortalPatientDisplayName(patient) }
+      });
+      return { job, patient, appointment, kind, title: payload.title, body: payload.body, clinicId, clinicName, clinicLogoUrl, branding };
+    }
+    const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+    const title = 'Lembrete de tarefa';
+    const body = sanitizeText(taskData?.title || 'Você tem uma atividade pendente da clínica.', 180);
+    portalRows.push({
+      organization_id: isUuid(job?.organization_id) ? job.organization_id : (isUuid(clinicId) ? clinicId : null), clinic_id: isUuid(clinicId) ? clinicId : null,
+      recipient_user_id: isUuid(sanitizeText(patient?.responsible_user_id, 120)) ? patient.responsible_user_id : null, recipient_email: sanitizeEmail(patient.email) || null,
+      patient_id: patient.id, appointment_id: null, type: 'task_reminder', title, message: body, sent_at: new Date().toISOString(), scheduled_for: job.scheduled_for,
+      idempotency_key: `notification-job:${job.id}:${dayjs(job.scheduled_for).tz(BRAZIL_TIMEZONE).format('YYYY-MM-DD')}`,
+      metadata: { taskId: task.id, scheduledAt: task.scheduled_at, clinicName, clinicLogoUrl, taskTitle: body, daily: job.recurrence_rule === 'DAILY_WHILE_PENDING' }
+    });
+    return { job, patient, task, title, body, clinicId, clinicName, clinicLogoUrl, branding };
+  }));
+
+  let portalPersisted = true;
+  if (portalRows.length > 0) {
+    const portalBatch = await options.supabase.rpc('upsert_portal_notifications_batch_v1', { p_rows: portalRows });
+    portalPersisted = !portalBatch.error;
+    if (portalBatch.error) options.logger.warn('[Notification Jobs] portal batch falhou.', { message: portalBatch.error.message });
+  }
+
+  let sent24h = 0; let sent12h = 0; let failed = 0;
+  const chunkSize = 8;
+  for (let offset = 0; offset < prepared.length; offset += chunkSize) {
+    const chunk = prepared.slice(offset, offset + chunkSize);
+    const chunkResults = await Promise.all(chunk.map(async (entry: any) => {
+      const preloaded = subscriptionBatch.complete ? subscriptionBatch.subscriptionsByRecipientKey.get(String(entry.job.id)) || [] : undefined;
+      try {
+        if (entry.appointment) {
+          const push = options.vapidPublicKey && options.vapidPrivateKey ? await sendAppointmentNotification({
+            supabase: options.supabase,
+            patientId: String(entry.patient.id),
+            prevalidatedPatientIds: [String(entry.patient.id)],
+            patientEmail: sanitizeEmail(entry.patient.email),
+            appointment: { id: entry.appointment.id, scheduledAt: entry.appointment.scheduled_at, reminderKind: entry.kind, clinicId: entry.clinicId, clinicName: entry.clinicName, clinicLogoUrl: entry.clinicLogoUrl, patientName: resolvePortalPatientDisplayName(entry.patient), canRequestReschedule: true },
+            clinicId: entry.clinicId,
+            reminderKind: entry.kind,
+            preloadedSubscriptions: preloaded,
+            logger: options.logger,
+          }) : { sent: 0, failed: 0, subscriptions: 0 };
+          return { entry, push, ok: portalPersisted };
+        }
+        const push = options.vapidPublicKey && options.vapidPrivateKey ? await sendPatientPortalNotification({
+          supabase: options.supabase,
+          patientId: String(entry.patient.id), patientEmail: sanitizeEmail(entry.patient.email), clinicId: entry.clinicId,
+          title: entry.title, body: entry.body, url: `/?task_id=${encodeURIComponent(String(entry.task.id))}`,
+          tag: `task-reminder-${entry.task.id}`,
+          branding: entry.branding,
+          data: { notificationType: 'task_reminder', taskId: entry.task.id },
+          preloadedSubscriptions: preloaded,
+          logger: options.logger,
+        }) : { sent: 0, failed: 0, subscriptions: 0 };
+        return { entry, push, ok: portalPersisted };
+      } catch (error: any) {
+        return { entry, push: { sent: 0, failed: 1 }, ok: false, error: error?.message || String(error) };
+      }
+    }));
+    for (const result of chunkResults) {
+      if (result.ok) {
+        finalResults.push({ id: result.entry.job.id, outcome: 'SENT' });
+        if (result.entry.kind === '24h') sent24h += 1;
+        if (result.entry.kind === '12h') sent12h += 1;
+      } else {
+        failed += 1;
+        finalResults.push({ id: result.entry.job.id, outcome: 'RETRY', error: result.error || 'PORTAL_NOTIFICATION_PERSIST_FAILED' });
+      }
+    }
+  }
+
+  if (portalPersisted) {
+    const sentAt = new Date().toISOString();
+    const sent24Ids = prepared.filter((entry: any) => entry.kind === '24h').map((entry: any) => String(entry.appointment?.id || '')).filter(isUuid);
+    const sent12Ids = prepared.filter((entry: any) => entry.kind === '12h').map((entry: any) => String(entry.appointment?.id || '')).filter(isUuid);
+    if (sent24Ids.length > 0) await options.supabase.from('appointments').update({ notification_24h_sent_at: sentAt }).in('id', sent24Ids);
+    if (sent12Ids.length > 0) await options.supabase.from('appointments').update({ notification_12h_sent_at: sentAt }).in('id', sent12Ids);
+  }
+
+  if (finalResults.length > 0) await options.supabase.rpc('finalize_notification_jobs_v1', { p_results: finalResults });
+  return { skipped: false, totalCandidates: jobs.length, sent24h, sent12h, failed };
+}
+
+export function triggerAppointmentReminderScan(_trigger = 'manual_trigger') {
+  // Appointment/task DB triggers already schedule precise notification_jobs.
+  // Do not launch a global scan after each mutation; the one-minute queue claim will pick due work.
+  return Boolean(activeOptions);
 }
 
 export async function runAppointmentReminderScan(trigger = 'internal_endpoint') {
-  if (!activeOptions) {
-    return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
-  }
-  return await runAppointmentReminderJob(activeOptions, trigger);
+  if (!activeOptions) return { skipped: true, totalCandidates: 0, sent24h: 0, sent12h: 0, failed: 0 };
+  return await runNotificationJobQueue(activeOptions, trigger);
 }
 
 export function startAppointmentReminderCron(options: CronServiceOptions) {
   const logger = options.logger || console;
-
   if (started) {
-    logger.warn('[Appointment Reminder Cron] Servico ja iniciado. Ignorando nova inicializacao.');
+    logger.warn('[Notification Jobs] Serviço já iniciado. Ignorando nova inicialização.');
     return;
   }
-
   if (!options.supabase) {
-    logger.warn('[Appointment Reminder Cron] Supabase ausente. Servico nao iniciado.');
+    logger.warn('[Notification Jobs] Supabase ausente. Serviço não iniciado.');
     return;
   }
-
   started = true;
   activeOptions = {
     supabase: options.supabase,
@@ -1681,26 +1887,11 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
     vapidPrivateKey: options.vapidPrivateKey || null,
     logger,
     runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
-    requireDistributedLease: options.requireDistributedLease === true
+    requireDistributedLease: false,
   };
-
-  cron.schedule(
-    '* * * * *',
-    () => {
-      void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'node_cron_1_minute');
-    },
-    { timezone: 'UTC' }
-  );
-
-  setTimeout(() => {
-    void runAppointmentReminderJob(activeOptions as ActiveCronServiceOptions, 'startup_warmup');
-  }, 5 * 1000);
-
-  logger.log('[Appointment Reminder Cron] Servico iniciado no backend Node.js a cada minuto.', {
-    timezone: 'UTC',
-    businessTimezone: BRAZIL_TIMEZONE,
-    pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey)
-  });
+  cron.schedule('* * * * *', () => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_cron_1_minute'); }, { timezone: 'UTC' });
+  setTimeout(() => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_startup'); }, 5 * 1000);
+  logger.log('[Notification Jobs] Fila de lembretes de sessão e tarefas iniciada.', { timezone: 'UTC', businessTimezone: BRAZIL_TIMEZONE, pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey) });
 }
 
 export type ClinicAnnouncementDispatchSummary = {

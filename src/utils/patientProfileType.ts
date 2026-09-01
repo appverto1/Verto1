@@ -56,3 +56,64 @@ export const mapPatientProfileTypeToLegacyPortalType = (value: any) => {
   if (normalized === 'ABA') return 'adult_tea';
   return 'adult_conventional';
 };
+
+
+export type PatientPortalKind = 'KIDS' | 'ADULT_ABA' | 'ADULT_CONVENTIONAL';
+
+const parseAgeValue = (value: any): number | null => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+};
+
+const ageFromBirthDate = (value: any): number | null => {
+  if (!value) return null;
+  const parsed = new Date(String(value));
+  if (Number.isNaN(parsed.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - parsed.getFullYear();
+  const monthDiff = today.getMonth() - parsed.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < parsed.getDate())) age -= 1;
+  return age >= 0 ? age : null;
+};
+
+export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
+  const explicitCandidates = [
+    patient?.patientProfileType,
+    patient?.patient_profile_type,
+    patient?.profileType,
+    patient?.profile_type,
+    patient?.type,
+    patient?.portalType,
+    patient?.portal_type,
+    patient?.anamnesisData?.patientProfileType,
+    patient?.anamnesisData?.profileType,
+    patient?.anamnesisData?.formType,
+  ];
+
+  for (const candidate of explicitCandidates) {
+    const raw = String(candidate ?? '').trim();
+    if (!raw) continue;
+    const key = cleanProfileKey(raw);
+    if (['kids_tea', 'kids', 'kid', 'child', 'infantil', 'crianca', 'crianca_tea', 'teen', 'adolescente', 'adolescent'].includes(key)) {
+      return 'KIDS';
+    }
+    if (['adult_tea', 'adulto_tea', 'adulto_aba', 'aba'].includes(key) || raw.toUpperCase() === 'ABA') {
+      return 'ADULT_ABA';
+    }
+    if (['adult_conventional', 'adulto_convencional', 'adult', 'adulto', 'conventional', 'neurotipico', 'neurotypical', 'general', 'geral'].includes(key) || raw.toUpperCase() === 'ADULT') {
+      return 'ADULT_CONVENTIONAL';
+    }
+    if (raw.toUpperCase() === 'KIDS') return 'KIDS';
+  }
+
+  const age =
+    parseAgeValue(patient?.age) ??
+    ageFromBirthDate(patient?.birth_date) ??
+    ageFromBirthDate(patient?.birthDate) ??
+    ageFromBirthDate(patient?.dataNascimento) ??
+    ageFromBirthDate(patient?.anamnesisData?.dataNascimento);
+
+  return age !== null && age <= 12 ? 'KIDS' : 'ADULT_CONVENTIONAL';
+};
+
+export const isAdultPatientPortal = (patient: any) => resolvePatientPortalKind(patient) !== 'KIDS';

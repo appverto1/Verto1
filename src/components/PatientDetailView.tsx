@@ -13,11 +13,16 @@ import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
+import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
+import { PatientEvolutionTimelinePanel } from './PatientEvolutionTimelinePanel';
+import { AdultWellbeingTrendChart, type WellbeingPeriod } from './AdultWellbeingTrendChart';
 import { ENERGY_TAGS } from './Common';
 import { dataService } from '../services/dataService';
 import { SecureImage, SecureIframe } from './SecureMedia';
 import { calculateDomainMastery, normalizeScoreToPercent } from '../utils/clinicalMath';
 import { prepareElementForPdfCapture } from '../utils/pdfCapture';
+import { useClinicalAnalyticsQuery } from '../services/clinicalAnalyticsQueryCache';
+import { buildClinicalProgressReportSections } from '../utils/clinicalProgressReport';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { resolveAbaPromptLevel } from '../utils/abaPromptLevels';
@@ -61,6 +66,7 @@ import { VBMAPP_LEVEL_3_CANONICAL_PROTOCOL } from '../constants/vbmappLevel3Prot
 import html2canvas from 'html2canvas';
 import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
+import { resolvePatientPortalKind } from '../utils/patientProfileType';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -84,7 +90,7 @@ const isVbMappProtocol = (protocol: any) => {
   return source.includes('vb-mapp') || source.includes('vbmapp') || source.includes('vb mapp');
 };
 
-type PatientDetailTab = 'history' | 'notes' | 'report' | 'plan' | 'session' | 'aba-charts' | 'school' | 'files';
+type PatientDetailTab = 'history' | 'notes' | 'care-network' | 'report' | 'plan' | 'session' | 'aba-charts' | 'school' | 'files';
 type PatientHistoryPeriod = 'all' | '30d' | '90d' | '180d' | '365d' | 'custom';
 type PatientHistoryPaginationState = {
   initialized: boolean;
@@ -207,9 +213,16 @@ const patientInitials = (value: unknown) => String(value || 'P')
   .map((part) => part.charAt(0).toUpperCase())
   .join('') || 'P';
 
-export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities, focusNoteId = '', onFocusNoteConsumed }: any) => {
+export const PatientDetailView = ({ patient, onBack, history, notes: externalNotes, onAddNote, onAddActivityLog, protocols, setProtocols, onProtocolsPersisted, onAddTask, patientTasks, onToggleNoteType, onEvaluateHistoryItem, onUpdateTask, isTutorialActive, tutorialStep, setTutorialStep, onUpdatePatient, onRecordTrial, onDeleteHistoryItem, onRefreshPatientHistory, initialTab = 'history', sessionReportId = '', onSessionReportConsumed, openAnamnesisOnLoad = false, onAnamnesisOpenConsumed, clinicContext, clinicProfessionals: preloadedClinicProfessionals = [], hideBackButton = false, anamnesisTemplate, allowedTabs, userRole, themeMode, scheduledSession, startScheduledSessionKey, capabilities, focusNoteId = '', onFocusNoteConsumed }: any) => {
   const safeSetProtocols =
     typeof setProtocols === 'function' ? setProtocols : null;
+  const applyPersistedProtocolCatalog = (nextProtocols: any[], sectionVersions?: Record<string, number>) => {
+    if (typeof onProtocolsPersisted === 'function') {
+      onProtocolsPersisted(nextProtocols, sectionVersions);
+      return;
+    }
+    safeSetProtocols?.(nextProtocols);
+  };
   const hasCapability = (capability: string) => {
     if (capabilities instanceof Set) return capabilities.has(capability);
     if (Array.isArray(capabilities)) return capabilities.includes(capability);
@@ -405,37 +418,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   };
   const anamnesisInitialData = useMemo(() => buildAnamnesisInitialData(patient), [patient]);
-  const rawProfileType = String(
-    patient?.type ||
-    patient?.profileType ||
-    patient?.patient_type ||
-    patient?.anamnesisData?.formType ||
-    ''
-  ).toLowerCase();
-  const isExplicitKidsType = ['kids_tea', 'kids', 'child', 'infantil', 'crianca', 'criança'].includes(rawProfileType);
-  const isExplicitAdultType = ['adult', 'adulto', 'conventional', 'adult_conventional'].includes(rawProfileType);
-  const rawPatientAge = patient?.age;
-  const hasExplicitAge =
-    rawPatientAge !== null &&
-    rawPatientAge !== undefined &&
-    String(rawPatientAge).trim() !== '';
-  const normalizedPatientAge = hasExplicitAge ? Number(rawPatientAge) : Number.NaN;
-  const hasNumericAge = Number.isFinite(normalizedPatientAge) && normalizedPatientAge >= 0;
-  const isKidsProfile =
-    isExplicitKidsType ||
-    (!isExplicitAdultType && (
-      patient?.anamnesisData?.formType === 'child' ||
-      (patient?.anamnesisData?.formType !== 'adult' && hasNumericAge && normalizedPatientAge <= 12)
-    ));
+  const patientPortalKind = useMemo(() => resolvePatientPortalKind(patient), [patient]);
+  const isKidsProfile = patientPortalKind === 'KIDS';
+  const isAdultAbaProfile = patientPortalKind === 'ADULT_ABA';
+  const hasAbaClinicalProfile = isKidsProfile || isAdultAbaProfile;
   const abaV2Enabled = isAbaV2Enabled();
   const abaV3UiEnabled = isAbaV3UiEnabled();
-  const patientApproachKey = String(patient?.approach || patient?.abordagem || patient?.treatmentApproach || '').toLowerCase();
-  const useCanonicalMasteryGrowth = abaV2Enabled && (
-    isKidsProfile ||
-    rawProfileType.includes('aba') ||
-    rawProfileType.includes('tea') ||
-    patientApproachKey.includes('aba')
-  );
+  const hasAbaSessionSurface = hasAbaClinicalProfile && (abaV2Enabled || abaV3UiEnabled);
+  const useCanonicalMasteryGrowth = abaV2Enabled && hasAbaClinicalProfile;
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
     if (typeof window === 'undefined') return {};
@@ -447,6 +437,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
   const initialChartFilters = readPersistedChartFilters();
   const [activeTab, setActiveTab] = useState(initialTab); 
+  const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
+  const [wellbeingPeriod, setWellbeingPeriod] = useState<WellbeingPeriod>('month');
+  const [wellbeingCheckinsError, setWellbeingCheckinsError] = useState('');
   const [historyPeriod, setHistoryPeriod] = useState<PatientHistoryPeriod>('all');
   const [historyCustomFrom, setHistoryCustomFrom] = useState('');
   const [historyCustomTo, setHistoryCustomTo] = useState('');
@@ -509,6 +502,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [isDailyReminder, setIsDailyReminder] = useState(false);
   const [linkedTask, setLinkedTask] = useState("");
   const [linkedInterventionProtocolId, setLinkedInterventionProtocolId] = useState("");
+  const [pendingAdultClinicalTaskContext, setPendingAdultClinicalTaskContext] = useState<any>(null);
   const [showConfirmation, setShowConfirmation] = useState(false); 
   const [editingTask, setEditingTask] = useState<any>(null); 
   const [isPlanFilterOpen, setIsPlanFilterOpen] = useState(false);
@@ -674,6 +668,26 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     void requestPatientHistoryPage();
   }, [activeTab, historyPagination.error, historyPagination.initialized, historyPagination.loading, historyRange.ready, requestPatientHistoryPage]);
 
+  useEffect(() => {
+    let active = true;
+    const patientId = String(patient?.id || '').trim();
+    if (activeTab !== 'history' || isKidsProfile || !patientId) {
+      if (isKidsProfile) setWellbeingCheckins([]);
+      return () => { active = false; };
+    }
+    setWellbeingCheckinsError('');
+    void dataService.getPatientWellbeingCheckins(patientId, wellbeingPeriod).then((result: any) => {
+      if (!active) return;
+      if (!result?.success) {
+        setWellbeingCheckinsError(result?.error || 'Não foi possível carregar humor/energia.');
+        setWellbeingCheckins([]);
+        return;
+      }
+      setWellbeingCheckins(Array.isArray(result?.data) ? result.data : []);
+    });
+    return () => { active = false; };
+  }, [activeTab, isKidsProfile, patient?.id, wellbeingPeriod]);
+
   const flashPEIConfirmation = (goalId: any, skillId: any) => {
     if (peiConfirmationTimerRef.current) {
       window.clearTimeout(peiConfirmationTimerRef.current);
@@ -717,6 +731,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const allTabs: PatientDetailTab[] = [
     'history',
     'notes',
+    'care-network',
     'report',
     'plan',
     'session',
@@ -732,12 +747,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             allTabs.includes(tab as PatientDetailTab),
           );
 
-    const filteredByProfile = isKidsProfile
-      ? tabsFromProps
-      : tabsFromProps.filter((tab: string) => tab !== 'session' && tab !== 'aba-charts');
+    const filteredByProfile = tabsFromProps.filter((tab: string) => {
+      if (tab === 'session' || tab === 'aba-charts') return hasAbaSessionSurface;
+      return true;
+    });
 
     return new Set(filteredByProfile as PatientDetailTab[]);
-  }, [allowedTabs, isKidsProfile]);
+  }, [allowedTabs, hasAbaSessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
   const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
@@ -1582,7 +1598,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPatientPhotoError('');
     try {
       const extension = file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : file.type.includes('webp') ? 'webp' : 'png';
-      const uploadPath = `${String(patient.id)}/clinic-profile-${Date.now()}.${extension}`;
+      const uploadPath = `${String(patient.id)}/profile/clinic-profile.${extension}`;
       const upload = await dataService.uploadFile('patient-photos', uploadPath, file);
       if (!upload?.success || !upload?.url) {
         throw new Error(upload?.error || 'Não foi possível enviar a foto.');
@@ -1806,7 +1822,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     const patientId = String(patient?.id || '').trim();
-    if (!patientId || !isKidsProfile || !(abaV2Enabled || abaV3UiEnabled) || activeTab !== 'history') return;
+    if (!patientId || !hasAbaSessionSurface || activeTab !== 'history') return;
     if (completedSessionReportsLoadedForRef.current === patientId) return;
     let cancelled = false;
     setCompletedSessionReportsLoading(true);
@@ -1833,7 +1849,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [activeTab, abaV2Enabled, abaV3UiEnabled, isKidsProfile, patient?.id]);
+  }, [activeTab, hasAbaSessionSurface, patient?.id]);
 
   const openCompletedSessionReport = (sessionId: any) => {
     const nextSessionId = String(sessionId || '').trim();
@@ -2044,7 +2060,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     planContext?: { therapeuticPlanId?: string | null; specialty?: string | null } | null,
   ) => {
     const resolvedAction = nextAction === 'tab' ? 'fullscreen' : nextAction;
-    if (!abaV2Enabled) {
+    if (!hasAbaSessionSurface) {
       setActiveTab(getSessionFallbackTab());
       return;
     }
@@ -2651,7 +2667,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     const startKey = String(startScheduledSessionKey || '').trim();
     if (!startKey || consumedScheduledSessionStartKeyRef.current === startKey) return;
-    if (!abaV2Enabled || !scheduledSessionForPatient || !patient?.id) return;
+    if (!hasAbaSessionSurface || !scheduledSessionForPatient || !patient?.id) return;
 
     consumedScheduledSessionStartKeyRef.current = startKey;
     setSessionDurationInput(String(scheduledSessionDurationMinutes));
@@ -2737,7 +2753,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     void handleConfirmSessionStart({ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true });
   }, [
-    abaV2Enabled,
+    hasAbaSessionSurface,
     activeSession,
     patient?.id,
     scheduledSessionDurationMinutes,
@@ -2926,9 +2942,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { min: 0, max: null };
   };
 
+
   useEffect(() => {
     const patientId = String(patient?.id || '');
-    if (!patientId || patientAgeYears === null || patientAgeYears <= 12) {
+    if (!patientId || patientPortalKind === 'KIDS') {
       assignedTasksLoadedForRef.current = '';
       setAssignedTasks([]);
       setIsLoadingAssignedTasks(false);
@@ -2975,7 +2992,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [assignedTasksReloadKey, patient?.id, patientAgeYears]);
+  }, [assignedTasksReloadKey, patient?.id, patientPortalKind]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -3039,6 +3056,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           String(media?.clinicLogoUrl || baseContext?.logoUrl || baseContext?.clinicLogoUrl || "").trim() ||
           baseContext?.logoUrl ||
           baseContext?.clinicLogoUrl ||
+          null,
+        clinicLogoUrl:
+          String(media?.clinicLogoUrl || baseContext?.clinicLogoUrl || baseContext?.logoUrl || "").trim() ||
+          baseContext?.clinicLogoUrl ||
+          baseContext?.logoUrl ||
           null,
         signatureUrl:
           String(media?.signatureUrl || baseContext?.signatureUrl || "").trim() ||
@@ -3855,6 +3877,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const selectedPEIProtocol = planProtocolCatalog.find((p: any) => String(p.id) === String(selectedPEIProtocolId));
   const selectedPEIDomain = selectedPEIProtocol?.data.find((d: any) => String(d.id) === String(selectedPEIDomainId));
 
+  const handleAssignAdultClinicalActivity = (context: any) => {
+    if (isKidsProfile) return;
+    const planId = String(context?.therapeuticPlanId || '').trim();
+    const programId = String(context?.therapeuticProgramId || '').trim();
+    const targetId = String(context?.clinicalTargetId || '').trim();
+    if (!planId || !programId || !targetId) {
+      alert('Este alvo ainda não possui vínculo clínico completo para envio ao portal.');
+      return;
+    }
+    setPendingAdultClinicalTaskContext(context);
+    setPlanType('intervention');
+    setIsCreatingNewTask(true);
+    setSelectedProtocolId('');
+    setSelectedDomainId('');
+    setSelectedSkillId('');
+    setNewTaskName(String(context?.targetName || context?.programName || 'Atividade clínica').trim());
+    setNewTaskObjective(String(context?.targetDescription || '').trim());
+    setNewTaskExample('');
+    setNewTaskCriteria('');
+    setNewTaskComment('');
+    setFinalTaskTitle(String(context?.targetName || context?.programName || 'Atividade clínica').trim());
+    setFinalTaskSubtitle(String(context?.targetDescription || '').trim());
+    window.setTimeout(() => document.getElementById('new-schedule-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
+  };
+
   useEffect(() => { 
     if (!isCreatingNewTask && selectedSkillId && selectedDomain) { 
       const skill = selectedDomain.skills.find((s: any) => String(s.id) === String(selectedSkillId)); 
@@ -4049,8 +4096,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/famÃ­lia/gi, 'família')
       .replace(/sessÃ£o/gi, 'sessão')
       .replace(/avaliaÃ§Ã£o/gi, 'avaliação')
-      .replace(/Energia restante após a tarefa/gi, 'Energia após a atividade')
-      .replace(/Esforço informado/gi, 'Energia após a atividade')
+      .replace(/Energia restante após a tarefa/gi, 'Esforço percebido após a atividade')
+      .replace(/Esforço informado/gi, 'Esforço percebido após a atividade')
       .replace(/Ã¡/g, 'á')
       .replace(/Ã©/g, 'é')
       .replace(/Ã­/g, 'í')
@@ -4870,14 +4917,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     annual: 'Anual'
   };
 
+  const ADULT_EFFORT_SEMANTICS_V2 = 'effort_min_0_max_100_v2';
+
   const getEffortEmoji = (value: any) => {
     const percent = Number(value);
     if (!Number.isFinite(percent)) return '😐';
-    if (percent < 20) return '😫';
-    if (percent < 40) return '😕';
+    if (percent < 20) return '🙂';
+    if (percent < 40) return '😌';
     if (percent < 60) return '😐';
-    if (percent < 80) return '🙂';
-    return '🤩';
+    if (percent < 80) return '😕';
+    return '😫';
   };
 
   const normalizeEffortPercent = (value: any) => {
@@ -4892,6 +4941,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       : task?.taskData && typeof task.taskData === 'object'
         ? task.taskData
         : {};
+
+  const resolveAdultEffortSemantics = (task: any, taskData: any = getAssignedTaskData(task)) =>
+    String(
+      taskData?.patientEffortSemantics ||
+      taskData?.patient_effort_semantics ||
+      task?.patientEffortSemantics ||
+      task?.patient_effort_semantics ||
+      ''
+    ).trim();
+
+  const hasCanonicalAdultEffortSemantics = (task: any, taskData?: any) =>
+    resolveAdultEffortSemantics(task, taskData) === ADULT_EFFORT_SEMANTICS_V2;
 
   const resolveAssignedTaskNumber = (...values: any[]) => {
     for (const value of values) {
@@ -4911,6 +4972,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       taskData?.proScore
     );
   };
+
+  const resolveAssignedTaskPatientEffort = (task: any, taskData: any = getAssignedTaskData(task)) =>
+    resolveAssignedTaskNumber(
+      task?.patient_effort,
+      task?.patientEffort,
+      taskData?.patientEffort,
+      taskData?.patient_effort,
+      task?.energy
+    );
 
   const resolveAssignedTaskReviewNote = (task: any) => {
     const taskData = getAssignedTaskData(task);
@@ -5005,6 +5075,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           1,
           Number(taskData?.maxScore ?? taskData?.max_score ?? task?.max_score ?? 4) || 4
         );
+        const patientEffortRaw = resolveAssignedTaskPatientEffort(task, taskData);
+        const patientEffort = patientEffortRaw === null ? null : normalizeEffortPercent(patientEffortRaw);
         return {
           ...task,
           taskData,
@@ -5017,9 +5089,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           taskTitle: String(taskData?.title || task?.title || 'Tarefa'),
           taskType: String(task?.task_type || task?.type || 'task'),
           maxScore: safeMaxScore,
-          patientEffort: normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0),
-          patientEffortEmoji: String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0)),
+          patientEffort,
+          patientEffortEmoji: patientEffort === null
+            ? ''
+            : String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(patientEffort)),
           patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
+          patientEffortSemantics: resolveAdultEffortSemantics(task, taskData),
           patientComment: String(task?.patient_comment || ''),
           professionalScore,
           evolutionNote: resolveAssignedTaskReviewNote(task)
@@ -5042,6 +5117,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           : task?.task_data && typeof task.task_data === 'object'
             ? task.task_data
             : {};
+        const patientEffortRaw = resolveAssignedTaskPatientEffort(task, taskData);
+        const patientEffort = patientEffortRaw === null ? null : normalizeEffortPercent(patientEffortRaw);
         return {
           ...task,
           taskData,
@@ -5054,9 +5131,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           taskTitle: String(task?.title || 'Tarefa'),
           taskType: String(task?.type || task?.task_type || 'task'),
           maxScore: safeMaxScore,
-          patientEffort: normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0),
-          patientEffortEmoji: String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? task?.energy ?? 0)),
+          patientEffort,
+          patientEffortEmoji: patientEffort === null
+            ? ''
+            : String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(patientEffort)),
           patientEffortLabel: String(task?.patient_effort_label || taskData?.patientEffortLabel || taskData?.patient_effort_label || ''),
+          patientEffortSemantics: resolveAdultEffortSemantics(task, taskData),
           patientComment: String(task?.patient_comment || task?.note || ''),
           professionalScore,
           evolutionNote: resolveAssignedTaskReviewNote(task) || String(task?.evolutionNote || task?.evalComment || '')
@@ -5209,6 +5289,49 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (Number.isNaN(date.getTime())) return '';
     return date.toISOString().slice(0, 10);
   };
+
+  const clinicalReportDateRange = useMemo(() => {
+    const dateFrom = resolvePeriodStart(reportPeriod);
+    const dateTo = new Date();
+    const dateFromKey = toDateKey(dateFrom);
+    const dateToKey = toDateKey(dateTo);
+    const days = Math.max(1, Math.ceil((dateTo.getTime() - dateFrom.getTime()) / 86_400_000) + 1);
+    return { dateFrom: dateFromKey, dateTo: dateToKey, days };
+  }, [reportPeriod]);
+
+  const clinicalReportOrganizationId = String(
+    resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || ''
+  ).trim();
+  const clinicalReportQuery = useClinicalAnalyticsQuery<any>({
+    organizationId: clinicalReportOrganizationId || null,
+    patientId: String(patient?.id || ''),
+    family: 'clinical-outcomes-dashboard',
+    params: {
+      dateFrom: clinicalReportDateRange.dateFrom,
+      dateTo: clinicalReportDateRange.dateTo,
+      days: clinicalReportDateRange.days,
+    },
+  }, async () => {
+    const response = await dataService.getClinicalOutcomesDashboard(String(patient?.id || ''), {
+      dateFrom: clinicalReportDateRange.dateFrom,
+      dateTo: clinicalReportDateRange.dateTo,
+      days: clinicalReportDateRange.days,
+    });
+    if (!response?.success) {
+      throw new Error(response?.message || response?.error || 'Não foi possível carregar a evolução dos planos terapêuticos.');
+    }
+    return response;
+  }, {
+    enabled: activeTab === 'report' && Boolean(patient?.id) && Boolean(clinicalReportOrganizationId),
+    staleMs: 30_000,
+    keepPreviousData: true,
+  });
+  const clinicalReportPayload = clinicalReportQuery.data?.success ? clinicalReportQuery.data.data || {} : {};
+  const progressReportClinicalSections = useMemo(
+    () => buildClinicalProgressReportSections(clinicalReportPayload),
+    [clinicalReportPayload]
+  );
+  const clinicalReportDataPending = clinicalReportQuery.isLoading || clinicalReportQuery.isRefreshing || clinicalReportQuery.isPreviousData;
 
   const adultProtocolSnapshotDates = useMemo(() => {
     if (isKidsProfile) return [];
@@ -5392,25 +5515,37 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (isKidsProfile) {
       return kidsReportSelectableNotes
         .filter((note: any) => selectedReportNotes.map(String).includes(String(note.id)))
-        .map((note: any) => ({
-          id: note.id,
-          date: String(note?.date || '-'),
-          type: 'NOVO REGISTRO',
-          activity: String(note?.subject || 'Observação clínica'),
-          score: '-',
-          notes: normalizeNoteText(note?.text || '')
-        }));
+        .map((note: any) => {
+          const metadata = note?.metadata && typeof note.metadata === 'object' ? note.metadata : {};
+          return {
+            id: note.id,
+            date: String(note?.date || '-'),
+            type: 'NOVO REGISTRO',
+            activity: String(note?.subject || 'Observação clínica'),
+            score: '-',
+            plan: String(note?.planName || metadata?.planName || metadata?.plan_name || '').trim() || undefined,
+            domain: String(note?.domainName || metadata?.domainName || metadata?.domain_name || '').trim() || undefined,
+            program: String(note?.programName || metadata?.programName || metadata?.program_name || '').trim() || undefined,
+            notes: normalizeNoteText(note?.text || '')
+          };
+        });
     }
 
-    return adultEvolutionSelectedTasks.map((task: any) => ({
-      id: task.id,
-      date: task.eventDate?.toLocaleString?.('pt-BR') || '-',
-      type: 'NOVO REGISTRO',
-      activity: task.taskTitle || 'Atividade clínica',
-      score: `${task.professionalScore ?? '-'} de ${task.maxScore ?? '-'} PTS`,
-      notes: task.evolutionNote || 'Sem anotação técnica registrada.'
-    }));
-  }, [isKidsProfile, kidsReportSelectableNotesInPeriod, selectedReportNotes, adultEvolutionSelectedTasks]);
+    return adultEvolutionSelectedTasks.map((task: any) => {
+      const taskData = getAssignedTaskData(task);
+      return {
+        id: task.id,
+        date: task.eventDate?.toLocaleString?.('pt-BR') || '-',
+        type: 'NOVO REGISTRO',
+        activity: task.taskTitle || 'Atividade clínica',
+        score: `${task.professionalScore ?? '-'} de ${task.maxScore ?? '-'} PTS`,
+        plan: String(taskData?.therapeuticPlanName || taskData?.therapeutic_plan_name || taskData?.planName || taskData?.plan_name || taskData?.protocolTitle || taskData?.protocol_name || '').trim() || undefined,
+        domain: String(taskData?.domainName || taskData?.domain_name || taskData?.sourceDomain || taskData?.source_domain || '').trim() || undefined,
+        program: String(taskData?.programName || taskData?.program_name || taskData?.skillName || taskData?.skill_name || '').trim() || undefined,
+        notes: task.evolutionNote || 'Sem anotação técnica registrada.'
+      };
+    });
+  }, [isKidsProfile, kidsReportSelectableNotes, selectedReportNotes, adultEvolutionSelectedTasks]);
 
   const progressReportPeriodLabel = isKidsProfile
     ? `${formatReportDateLabel(progressReportComparisonKeys[0] || comparisonDate1 || '') || 'Base'} VS ${formatReportDateLabel(progressReportComparisonKeys[1] || comparisonDate2 || '') || 'Final'}`
@@ -5450,55 +5585,60 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .replace(/_+/g, '_')
       .replace(/^_|_$/g, '');
 
+  const buildProgressReportPdfDocument = async () => {
+    if (!progressReportPdfRef.current) {
+      throw new Error('REPORT_PDF_LAYOUT_UNAVAILABLE');
+    }
+    await refreshClinicDocumentMedia();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())));
+    if (!progressReportPdfRef.current) throw new Error('REPORT_PDF_LAYOUT_UNAVAILABLE');
+
+    const { jsPDF } = await import('jspdf');
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const pages = Array.from(progressReportPdfRef.current.querySelectorAll('.progress-report-pdf-page')) as HTMLElement[];
+    const captureTargets = pages.length ? pages : [progressReportPdfRef.current];
+
+    for (let index = 0; index < captureTargets.length; index += 1) {
+      const captureNode = await prepareElementForPdfCapture(captureTargets[index]);
+      try {
+        const canvas = await html2canvas(captureNode, {
+          backgroundColor: '#ffffff',
+          scale: 2,
+          useCORS: true,
+          allowTaint: false,
+          logging: false,
+          windowWidth: captureNode.scrollWidth || 794,
+          windowHeight: captureNode.scrollHeight || 1123
+        });
+        const imgData = canvas.toDataURL('image/png', 1.0);
+        if (index > 0) pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
+      } finally {
+        captureNode.parentNode?.removeChild(captureNode);
+      }
+    }
+    return pdf;
+  };
+
   const handlePDFAction = async (action: 'view' | 'download') => {
-    if (!progressReportChartData.length) {
-      alert('Selecione períodos com dados suficientes para gerar o PDF.');
+    if (clinicalReportDataPending) {
+      alert('A evolução dos planos ainda está sendo atualizada. Tente gerar o PDF novamente assim que a atualização terminar.');
       return;
     }
-    if (!progressReportPdfRef.current) {
-      alert('Não foi possível preparar o layout do PDF. Tente novamente.');
+    if (!progressReportChartData.length && !progressReportClinicalSections.length && !progressReportObservations.length) {
+      alert('Não há dados clínicos suficientes no período selecionado para gerar o PDF.');
       return;
     }
 
     setIsGeneratingProgressPdf(true);
     try {
-      await refreshClinicDocumentMedia();
-      await new Promise((resolve) => window.setTimeout(resolve, 0));
-      const { jsPDF } = await import('jspdf');
-      const pdf = new jsPDF({ unit: 'pt', format: 'a4', orientation: 'portrait' });
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const pages = Array.from(progressReportPdfRef.current.querySelectorAll('.progress-report-pdf-page')) as HTMLElement[];
-      const captureTargets = pages.length ? pages : [progressReportPdfRef.current];
-
-      for (let index = 0; index < captureTargets.length; index += 1) {
-        const page = captureTargets[index];
-        const captureNode = await prepareElementForPdfCapture(page);
-        try {
-          const canvas = await html2canvas(captureNode, {
-            backgroundColor: '#ffffff',
-            scale: 2,
-            useCORS: true,
-            allowTaint: true,
-            logging: false,
-            windowWidth: captureNode.scrollWidth || 794,
-            windowHeight: captureNode.scrollHeight || 1123
-          });
-          const imgData = canvas.toDataURL('image/png', 1.0);
-          if (index > 0) pdf.addPage();
-          pdf.addImage(imgData, 'PNG', 0, 0, pageWidth, pageHeight);
-        } finally {
-          if (captureNode.parentNode) {
-            captureNode.parentNode.removeChild(captureNode);
-          }
-        }
-      }
-
+      const pdf = await buildProgressReportPdfDocument();
       if (action === 'view') {
         window.open(pdf.output('bloburl'), '_blank', 'noopener,noreferrer');
         return;
       }
-
       const generatedAt = new Date().toISOString().slice(0, 10);
       pdf.save(`Relatorio_Progresso_Verto_${sanitizePdfFileName(patient?.name)}_${generatedAt}.pdf`);
     } catch (error) {
@@ -5520,7 +5660,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const selectedSkillMasteryTarget = Number(
         selectedSkill?.meta_sucessos ?? selectedSkill?.metaSucessos ?? selectedSkill?.masteryTarget ?? selectedSkill?.mastery_target
       );
-      const resolvedTaskMaxScore = isCreatingNewTask
+      const resolvedTaskMaxScore = (isCreatingNewTask || pendingAdultClinicalTaskContext)
         ? Math.max(1, Number(newTaskMaxScore || 4) || 4)
         : Math.max(1, Number(selectedSkillMaxScore) || 4);
       const taskPayload = { 
@@ -5551,8 +5691,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         domainName: selectedDomain?.name || null,
         noRealtimeScoring: !isKidsProfile,
         isDailyReminder: planType === 'intervention' ? isDailyReminder : false,
+        is_daily_reminder: planType === 'intervention' ? isDailyReminder : false,
         linkedTask: planType === 'intervention' ? linkedTask : undefined,
-        linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId : undefined
+        linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId : undefined,
+        therapeuticPlanId: pendingAdultClinicalTaskContext?.therapeuticPlanId || null,
+        therapeuticObjectiveId: pendingAdultClinicalTaskContext?.therapeuticObjectiveId || null,
+        therapeuticProgramId: pendingAdultClinicalTaskContext?.therapeuticProgramId || null,
+        clinicalTargetId: pendingAdultClinicalTaskContext?.clinicalTargetId || null,
+        therapeuticPlanName: pendingAdultClinicalTaskContext?.planLabel || null,
+        clinicalDomainName: pendingAdultClinicalTaskContext?.domainName || null,
+        clinicalProgramName: pendingAdultClinicalTaskContext?.programName || null,
+        clinicalTargetName: pendingAdultClinicalTaskContext?.targetName || null
       }; 
       if (planType === 'task' && linkedInterventionProtocolId) {
         const updatedPatient = {
@@ -5574,10 +5723,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         };
         onUpdatePatient(updatedPatient);
       }
-      if (isCreatingNewTask) { 
-        if (!newTaskName) { alert("Digite o nome da tarefa."); return; } 
-        let finalSkill = {
-          id: Date.now(),
+      let resolvedScheduledProtocol: any = selectedProtocol || null;
+      let resolvedScheduledDomain: any = selectedDomain || null;
+      let resolvedScheduledSkill: any = selectedSkill || null;
+      if (isCreatingNewTask && !pendingAdultClinicalTaskContext) {
+        if (!newTaskName) { alert("Digite o nome da tarefa."); return; }
+        const finalSkill = {
+          id: isKidsProfile ? Date.now() : crypto.randomUUID(),
           name: newTaskName,
           code: newTaskCode,
           maxScore: resolvedTaskMaxScore,
@@ -5585,54 +5737,101 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           example: newTaskExample,
           criteria: newTaskCriteria,
           comment: newTaskComment
-        }; 
-        if (addToProtocolMode === 'existing') { 
-          if (!targetProtocolId || !targetDomainId) { alert("Selecione onde salvar a tarefa."); return; } 
-          const updatedProtocols = protocols.map((p: any) => { 
-            if (p.id && String(p.id) === targetProtocolId) { 
-              const updatedData = p.data.map((d: any) => { 
-                if (d.id && String(d.id) === targetDomainId) { 
-                  return { ...d, skills: [...d.skills, finalSkill] }; 
-                } 
-                return d; 
-              }); 
-              return { ...p, data: updatedData }; 
-            } 
-            return p; 
-          }); 
-          safeSetProtocols?.(updatedProtocols); 
-        } else { 
-          if (!newProtocolName || !newDomainName) { alert("Preencha os dados do novo protocolo."); return; } 
-          const inferredAgeGroup =
-            patientAgeYears === null
-              ? 'all'
-              : patientAgeYears <= 12
-                ? 'child'
-                : patientAgeYears <= 18
-                  ? 'teen'
-                  : patientAgeYears <= 59
-                    ? 'adult'
-                    : 'senior';
-          const minAge = patientAgeYears === null ? 0 : patientAgeYears;
-          const maxAge = patientAgeYears === null ? null : patientAgeYears;
-          const newProtocol = {
-            id: Date.now(),
-            title: newProtocolName,
-            data: [{ id: `dom-${Date.now()}`, name: newDomainName, skills: [finalSkill] }],
-            ageGroup: inferredAgeGroup,
-            age_minima: minAge,
-            age_maxima: maxAge,
-            min_age: minAge,
-            max_age: maxAge
-          }; 
-          safeSetProtocols?.([...protocols, newProtocol]); 
-        } 
-      } else { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } } 
+        };
+        if (addToProtocolMode === 'existing') {
+          if (!targetProtocolId || !targetDomainId) { alert("Selecione onde salvar a tarefa."); return; }
+          if (isKidsProfile) {
+            const updatedProtocols = protocols.map((p: any) => {
+              if (p.id && String(p.id) === targetProtocolId) {
+                const updatedData = p.data.map((d: any) => {
+                  if (d.id && String(d.id) === targetDomainId) {
+                    return { ...d, skills: [...d.skills, finalSkill] };
+                  }
+                  return d;
+                });
+                return { ...p, data: updatedData };
+              }
+              return p;
+            });
+            safeSetProtocols?.(updatedProtocols);
+          } else {
+            const targetProtocol = (protocols || []).find((p: any) => String(p?.id || '') === String(targetProtocolId));
+            const targetDomain = (targetProtocol?.data || []).find((d: any) => String(d?.id || '') === String(targetDomainId));
+            const persisted = await dataService.saveReusableAdultProtocol({
+              operation: 'append_skill',
+              category: String(targetProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase() === 'intervention' ? 'intervention' : 'evaluation',
+              protocolId: String(targetProtocolId),
+              domainId: String(targetDomainId),
+              skill: finalSkill,
+              idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${String(targetProtocolId)}:${String(targetDomainId)}:${String(finalSkill.id)}`
+            });
+            if (!persisted?.success || !persisted?.data?.protocol) {
+              alert(persisted?.message || persisted?.error || 'Não foi possível salvar a tarefa no protocolo. O agendamento não foi criado.');
+              return;
+            }
+            const persistedCatalog = Array.isArray(persisted?.data?.protocols) ? persisted.data.protocols : protocols;
+            applyPersistedProtocolCatalog(persistedCatalog, persisted?.data?.sectionVersions);
+            resolvedScheduledProtocol = persisted.data.protocol;
+            resolvedScheduledDomain = persisted.data.domain || targetDomain;
+            resolvedScheduledSkill = persisted.data.skill || finalSkill;
+          }
+        } else {
+          if (!newProtocolName || !newDomainName) { alert("Preencha os dados do novo protocolo."); return; }
+          if (isKidsProfile) {
+            const inferredAgeGroup =
+              patientAgeYears === null
+                ? 'all'
+                : patientAgeYears <= 12
+                  ? 'child'
+                  : patientAgeYears <= 18
+                    ? 'teen'
+                    : patientAgeYears <= 59
+                      ? 'adult'
+                      : 'senior';
+            const minAge = patientAgeYears === null ? 0 : patientAgeYears;
+            const maxAge = patientAgeYears === null ? null : patientAgeYears;
+            const newProtocol = {
+              id: Date.now(),
+              title: newProtocolName,
+              data: [{ id: `dom-${Date.now()}`, name: newDomainName, skills: [finalSkill] }],
+              ageGroup: inferredAgeGroup,
+              age_minima: minAge,
+              age_maxima: maxAge,
+              min_age: minAge,
+              max_age: maxAge
+            };
+            safeSetProtocols?.([...protocols, newProtocol]);
+          } else {
+            const reusableProtocolId = crypto.randomUUID();
+            const reusableDomainId = crypto.randomUUID();
+            const persisted = await dataService.saveReusableAdultProtocol({
+              operation: 'create_protocol',
+              category: planType === 'intervention' ? 'intervention' : 'evaluation',
+              protocolId: reusableProtocolId,
+              protocolTitle: newProtocolName,
+              domainId: reusableDomainId,
+              domainName: newDomainName,
+              ageGroup: patientAgeYears !== null && patientAgeYears >= 60 ? 'senior' : 'adult',
+              skill: finalSkill,
+              idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${reusableProtocolId}:${reusableDomainId}:${String(finalSkill.id)}`
+            });
+            if (!persisted?.success || !persisted?.data?.protocol) {
+              alert(persisted?.message || persisted?.error || 'Não foi possível salvar o novo protocolo. O agendamento não foi criado.');
+              return;
+            }
+            const persistedCatalog = Array.isArray(persisted?.data?.protocols) ? persisted.data.protocols : protocols;
+            applyPersistedProtocolCatalog(persistedCatalog, persisted?.data?.sectionVersions);
+            resolvedScheduledProtocol = persisted.data.protocol;
+            resolvedScheduledDomain = persisted.data.domain;
+            resolvedScheduledSkill = persisted.data.skill || finalSkill;
+          }
+        }
+      } else if (!pendingAdultClinicalTaskContext) { if (!selectedSkillId) { alert("Selecione uma tarefa."); return; } }
       if (isKidsProfile) {
         const saved = (await onAddTask(taskPayload)) !== false;
         if (!saved) return;
       } else {
-        const selectedProtocolCategory = String(selectedProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase();
+        const selectedProtocolCategory = String(resolvedScheduledProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase();
         const assignedPayload = {
           patient_id: String(patient.id),
           patient_email: patient?.email || null,
@@ -5646,13 +5845,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             color: taskPayload.color || 'bg-blue-100 text-blue-600',
             linkedTask: planType === 'intervention' ? linkedTask || undefined : undefined,
             linkedProtocolId: planType === 'task' ? linkedInterventionProtocolId || undefined : undefined,
-            protocolId: taskPayload.protocolId || undefined,
-            protocolTitle: taskPayload.protocolTitle || undefined,
+            protocolId: resolvedScheduledProtocol?.id || taskPayload.protocolId || undefined,
+            protocolTitle: resolvedScheduledProtocol?.title || resolvedScheduledProtocol?.name || taskPayload.protocolTitle || undefined,
             protocolCategory: selectedProtocolCategory,
-            domainId: taskPayload.domainId || undefined,
-            domainName: taskPayload.domainName || undefined,
-            skillId: selectedSkill?.id || undefined,
-            skillName: selectedSkill?.name || taskPayload.title || undefined,
+            domainId: pendingAdultClinicalTaskContext?.domainId || resolvedScheduledDomain?.id || taskPayload.domainId || undefined,
+            domainName: pendingAdultClinicalTaskContext?.domainName || resolvedScheduledDomain?.name || taskPayload.domainName || undefined,
+            skillId: resolvedScheduledSkill?.id || undefined,
+            skillName: resolvedScheduledSkill?.name || taskPayload.title || undefined,
             skillCode: taskPayload.code || undefined,
             objective: taskPayload.objective || undefined,
             question: taskPayload.question || undefined,
@@ -5664,8 +5863,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             maxScore: resolvedTaskMaxScore,
             max_score: resolvedTaskMaxScore,
             meta_sucessos: taskPayload.meta_sucessos,
+            therapeuticPlanId: pendingAdultClinicalTaskContext?.therapeuticPlanId || undefined,
+            therapeuticObjectiveId: pendingAdultClinicalTaskContext?.therapeuticObjectiveId || undefined,
+            therapeuticProgramId: pendingAdultClinicalTaskContext?.therapeuticProgramId || undefined,
+            programId: pendingAdultClinicalTaskContext?.therapeuticProgramId || undefined,
+            clinicalTargetId: pendingAdultClinicalTaskContext?.clinicalTargetId || undefined,
+            targetId: pendingAdultClinicalTaskContext?.clinicalTargetId || undefined,
+            planName: pendingAdultClinicalTaskContext?.planLabel || undefined,
+            planMode: pendingAdultClinicalTaskContext?.planMode || undefined,
+            planSpecialty: pendingAdultClinicalTaskContext?.planSpecialty || undefined,
+            programName: pendingAdultClinicalTaskContext?.programName || undefined,
+            targetName: pendingAdultClinicalTaskContext?.targetName || undefined,
+            clinicalLinkVersion: pendingAdultClinicalTaskContext ? 1 : undefined,
             noRealtimeScoring: true
-          }
+          },
+          therapeutic_plan_id: pendingAdultClinicalTaskContext?.therapeuticPlanId || undefined,
+          therapeutic_objective_id: pendingAdultClinicalTaskContext?.therapeuticObjectiveId || undefined,
+          therapeutic_program_id: pendingAdultClinicalTaskContext?.therapeuticProgramId || undefined,
+          clinical_target_id: pendingAdultClinicalTaskContext?.clinicalTargetId || undefined
         };
         const saved = await dataService.addAssignedTask(assignedPayload);
         if (!saved?.success || !saved?.data) {
@@ -5702,7 +5917,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         setAssignedTasks((prev) => [saved.data, ...(prev || [])]);
       }
     } 
-    setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId('');
+    setShowConfirmation(true); setMessage(''); setNewTaskName(''); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setNewProtocolName(''); setNewDomainName(''); setNewTaskCode(''); setNewTaskObjective(''); setNewTaskExample(''); setNewTaskCriteria(''); setNewTaskComment(''); setSelectedProtocolId(''); setSelectedDomainId(''); setSelectedSkillId(''); setLinkedTask(''); setLinkedInterventionProtocolId(''); setPendingAdultClinicalTaskContext(null);
   }; 
 
   const resolveAssignedTaskEvaluationContext = (task: any) => {
@@ -5749,7 +5964,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return { protocol: matchedProtocol, domain: matchedDomain, skill: matchedSkill };
   };
 
-  const isAssignedTaskReviewable = (task: any) => Boolean(resolveAssignedTaskEvaluationContext(task));
+  const isAssignedTaskReviewable = (task: any) => {
+    const taskData = getAssignedTaskData(task);
+    const hasCanonicalClinicalLink = Boolean(
+      task?.therapeutic_plan_id ||
+      taskData?.therapeuticPlanId ||
+      taskData?.therapeutic_plan_id
+    );
+    return hasCanonicalClinicalLink || Boolean(resolveAssignedTaskEvaluationContext(task));
+  };
 
   const resolveAssignedTaskMaxScore = (task: any) => {
     const taskData = getAssignedTaskData(task);
@@ -5771,9 +5994,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const domain = context?.domain || {};
     const protocol = context?.protocol || {};
     const clean = (value: any) => normalizeNoteText(String(value || ''));
+    const clinicalSnapshot = task?.clinical_link_snapshot && typeof task.clinical_link_snapshot === 'object'
+      ? task.clinical_link_snapshot
+      : {};
     return {
+      planName: clean(clinicalSnapshot?.planLabel || taskData?.planName || taskData?.therapeuticPlanName),
+      programName: clean(clinicalSnapshot?.programName || taskData?.programName),
+      targetName: clean(clinicalSnapshot?.targetName || taskData?.targetName || taskData?.clinicalTargetName),
       protocolTitle: clean(taskData?.protocolTitle || taskData?.protocol_name || protocol?.title || protocol?.name),
-      domainName: clean(taskData?.domainName || taskData?.domain_name || domain?.name || skill?.sourceDomain || skill?.source_domain),
+      domainName: clean(clinicalSnapshot?.domainName || taskData?.domainName || taskData?.domain_name || domain?.name || skill?.sourceDomain || skill?.source_domain),
       code: clean(taskData?.skillCode || taskData?.code || skill?.code),
       objective: clean(taskData?.objective || skill?.objective || taskData?.description),
       question: clean(taskData?.question || skill?.question),
@@ -5787,8 +6016,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const renderAssignedReviewCriteriaPanel = (task: any, context?: any) => {
     const details = resolveAssignedReviewDetails(task, context);
     const meta = [
-      details.protocolTitle,
+      details.planName,
       details.domainName,
+      details.programName,
+      details.targetName,
+      !details.planName ? details.protocolTitle : '',
       details.code ? `Código ${details.code}` : '',
       details.sourcePage ? `p. ${details.sourcePage}` : ''
     ].filter(Boolean).join(' • ');
@@ -5897,6 +6129,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     }
 
     const reviewedTask = normalizeReviewedAssignedTask(result.data, task);
+    const reviewedTaskEffortRaw = resolveAssignedTaskPatientEffort(reviewedTask, reviewedTask?.task_data);
+    const reviewedTaskEffort = reviewedTaskEffortRaw === null ? null : normalizeEffortPercent(reviewedTaskEffortRaw);
     setAssignedTasks((prev) => prev.map((item: any) => (String(item.id) === taskId ? reviewedTask : item)));
     setAssignedReviewDrafts((prev) => {
       const next = { ...prev };
@@ -5910,10 +6144,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       text: [
         'REVISÃO PROFISSIONAL DE TAREFA ADULTA',
         `Tarefa: ${String(reviewedTask?.task_data?.title || reviewedTask?.title || 'Tarefa adulta')}`,
+        reviewedTask?.clinical_link_snapshot?.planLabel ? `Plano: ${reviewedTask.clinical_link_snapshot.planLabel}` : '',
+        reviewedTask?.clinical_link_snapshot?.domainName ? `Domínio: ${reviewedTask.clinical_link_snapshot.domainName}` : '',
+        reviewedTask?.clinical_link_snapshot?.programName ? `Programa: ${reviewedTask.clinical_link_snapshot.programName}` : '',
+        reviewedTask?.clinical_link_snapshot?.targetName ? `Alvo clínico: ${reviewedTask.clinical_link_snapshot.targetName}` : '',
         `Pontuação profissional: ${numericScore} / ${dynamicMaxScore}`,
-        `Energia após a atividade: ${normalizeEffortPercent(reviewedTask?.patient_effort ?? reviewedTask?.task_data?.patientEffort ?? reviewedTask?.task_data?.patient_effort ?? 0)}%`,
+        reviewedTaskEffort === null
+          ? 'Esforço percebido após a atividade: Não informado'
+          : hasCanonicalAdultEffortSemantics(reviewedTask, reviewedTask?.task_data)
+            ? `Esforço percebido após a atividade: ${reviewedTaskEffort}%`
+            : `Valor histórico de esforço (semântica anterior não padronizada): ${reviewedTaskEffort}%`,
         draft.note ? `Anotação técnica: ${draft.note}` : 'Anotação técnica: Sem anotação técnica registrada.'
-      ].join('\n'),
+      ].filter(Boolean).join('\n'),
       content: '',
       created_at: reviewedTask?.reviewed_at || new Date().toISOString(),
       visibility: 'private',
@@ -5964,6 +6206,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const isFormValid = () => { 
     if (planType === 'task' || planType === 'intervention') { 
+      if (pendingAdultClinicalTaskContext) return newTaskName && scheduleDate && scheduleTime;
       if (isCreatingNewTask) return newTaskName && scheduleDate && scheduleTime; 
       return selectedSkillId && scheduleDate && scheduleTime; 
     } 
@@ -6460,40 +6703,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const handleGenerateAdultEvolutionReport = async () => {
     if (isKidsProfile) return;
-    if (!adultDomainComparisonData.length) {
-      alert('Não há dados suficientes no período para gerar o relatório adulto.');
+    if (clinicalReportDataPending) {
+      alert('A evolução dos planos ainda está sendo atualizada. Gere o PDF assim que a atualização terminar.');
+      return;
+    }
+    if (!progressReportChartData.length && !progressReportClinicalSections.length && !progressReportObservations.length) {
+      alert('Não há dados clínicos suficientes no período para gerar o relatório adulto.');
       return;
     }
     setIsGeneratingAdultReport(true);
     try {
-      const periodStart = adultPeriodStart.toLocaleDateString('pt-BR');
-      const periodEnd = new Date().toLocaleDateString('pt-BR');
-      const selectedNotes = adultEvolutionSelectedTasks;
-      const plainTextLines = [
-        `Relatório de Evolução Adulto - ${patient?.name || 'Paciente'}`,
-        `Período: ${periodStart} até ${periodEnd}`,
-        '',
-        'Comparativo por domínio (% Proficiência - Avaliação Inicial x Intervenção Atual):',
-        ...adultDomainComparisonData.map((item: any) =>
-          `${item.name}: Inicial ${item['Avaliação Inicial']}% | Atual ${item['Intervenção Atual']}%`
-        ),
-        '',
-        'Anotações de evolução selecionadas:',
-        ...(selectedNotes.length
-          ? selectedNotes.map((task: any) =>
-              `- ${task.taskTitle} | ${task.eventDate.toLocaleDateString('pt-BR')} | energia ${task.patientEffort}% | nota ${task.professionalScore ?? '-'} / ${task.maxScore} (${normalizeScoreToPercent(task.professionalScore ?? 0, task.maxScore).toFixed(1)}%) | ${task.evolutionNote || 'Sem anotação'}`
-            )
-          : ['- Nenhuma anotação selecionada']),
-        '',
-        `Anotação adicional do relatório: ${reportAdditionalNote || 'Sem observação adicional.'}`
-      ];
-
-      const { jsPDF } = await import('jspdf');
-      const pdfDoc = new jsPDF({ unit: 'pt', format: 'a4' });
-      const lines = pdfDoc.splitTextToSize(plainTextLines.join('\n'), 520);
-      pdfDoc.text(lines, 36, 48);
+      const pdfDoc = await buildProgressReportPdfDocument();
       const pdfBlob = new Blob([pdfDoc.output('arraybuffer')], { type: 'application/pdf' });
-      const fileName = `Relatorio_Evolucao_Adulto_${String(patient?.name || 'paciente').replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      const fileName = `Relatorio_Evolucao_Adulto_${sanitizePdfFileName(String(patient?.name || 'paciente'))}_${new Date().toISOString().slice(0, 10)}.pdf`;
 
       const uploadResult = await dataService.uploadPatientFile(String(patient.id), {
         fileName,
@@ -9348,12 +9570,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               comparisonKeys: progressReportComparisonKeys
             }}
             chartData={progressReportChartData}
+            clinicalSections={progressReportClinicalSections}
             observations={progressReportObservations}
             additionalNote={reportAdditionalNote}
           />
         </div>
       </div>
-      {(abaV2Enabled || abaV3UiEnabled) && isSessionModeOpen && (
+      {hasAbaSessionSurface && isSessionModeOpen && (
         <SessionMode 
           patient={{ ...sessionModePatient, history: history.filter((h: any) => h.patientId === patient.id) }} 
           onClose={closeSessionMode} 
@@ -10429,6 +10652,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           {canAccessTab('notes') && (
             <button id="tab-notes" aria-current={activeTab === 'notes' ? 'page' : undefined} onClick={() => setActiveTab('notes')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'notes' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Anotações</button>
           )}
+          {canAccessTab('care-network') && (
+            <button id="tab-care-network" aria-current={activeTab === 'care-network' ? 'page' : undefined} onClick={() => setActiveTab('care-network')} className={`min-h-12 min-w-[8.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'care-network' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Rede de cuidado</button>
+          )}
           {canAccessTab('report') && (
             <button id="tab-report" aria-current={activeTab === 'report' ? 'page' : undefined} onClick={() => setActiveTab('report')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'report' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Relatório</button>
           )}
@@ -10437,7 +10663,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
-          {canAccessTab('session') && isKidsProfile && (
+          {canAccessTab('session') && hasAbaSessionSurface && (
             <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
@@ -10457,6 +10683,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <div className="space-y-6"> 
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
+                <AdultWellbeingTrendChart
+                  records={wellbeingCheckins}
+                  metricKind={patientPortalKind === 'ADULT_CONVENTIONAL' ? 'mood' : 'energy'}
+                  dark={isPanelDark}
+                  period={wellbeingPeriod}
+                  onPeriodChange={setWellbeingPeriod}
+                />
+                {wellbeingCheckinsError && (
+                  <p className={`rounded-xl border px-3 py-2 text-xs ${isPanelDark ? 'border-amber-900/50 bg-amber-950/30 text-amber-300' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
+                    {wellbeingCheckinsError}
+                  </p>
+                )}
                 <div className={`border rounded-3xl p-5 shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
                   <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Histórico Adulto</p>
                   <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
@@ -10598,24 +10836,44 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             <div className={`rounded-2xl border p-3 ${isPanelDark ? 'bg-slate-900/60 border-slate-700' : 'bg-white border-slate-200'}`}>
                               <div className="flex items-center justify-between gap-3 mb-2">
                                 <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                                  Energia após a atividade
+                                  Esforço percebido após a atividade
                                 </span>
                                 <span className={`text-sm font-semibold flex items-center gap-2 ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>
-                                  <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
-                                  {event.patientEffort}%
+                                  {event.patientEffort === null ? (
+                                    <span className={isPanelDark ? 'text-slate-400' : 'text-slate-500'}>Não informado</span>
+                                  ) : (
+                                    <>
+                                      {hasCanonicalAdultEffortSemantics(event, event.taskData) && (
+                                        <span className="text-lg">{event.patientEffortEmoji || getEffortEmoji(event.patientEffort)}</span>
+                                      )}
+                                      {event.patientEffort}%
+                                    </>
+                                  )}
                                 </span>
                               </div>
-                              <div className={`h-2 rounded-full overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
-                                <div
-                                  className="h-full rounded-full bg-gradient-to-r from-[#fb5a4d] via-[#f6c04d] to-[#05CD99]"
-                                  style={{ width: `${normalizeEffortPercent(event.patientEffort)}%` }}
-                                />
-                              </div>
-                              <div className={`mt-2 flex justify-between text-[10px] font-semibold ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                                <span>Baixa</span>
-                                <span>Média</span>
-                                <span>Alta</span>
-                              </div>
+                              {event.patientEffort === null ? (
+                                <p className={`mt-2 text-[11px] font-medium ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                                  O paciente não informou esforço para este registro. Nenhum valor foi inferido.
+                                </p>
+                              ) : hasCanonicalAdultEffortSemantics(event, event.taskData) ? (
+                                <>
+                                  <div className={`h-2 rounded-full overflow-hidden ${isPanelDark ? 'bg-slate-800' : 'bg-slate-100'}`}>
+                                    <div
+                                      className="h-full rounded-full bg-gradient-to-r from-[#05CD99] via-[#f6c04d] to-[#fb5a4d]"
+                                      style={{ width: `${normalizeEffortPercent(event.patientEffort)}%` }}
+                                    />
+                                  </div>
+                                  <div className={`mt-2 flex justify-between text-[10px] font-semibold ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                                    <span>Pouco esforço</span>
+                                    <span>Moderado</span>
+                                    <span>Muito esforço</span>
+                                  </div>
+                                </>
+                              ) : (
+                                <p className={`mt-2 text-[11px] font-medium ${isPanelDark ? 'text-amber-300' : 'text-amber-700'}`}>
+                                  Registro anterior à padronização da escala. O valor histórico foi preservado, mas sua direção não é inferida.
+                                </p>
+                              )}
                             </div>
                             <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               Comentário do paciente: {normalizeNoteText(event.patientComment) || 'Sem comentário.'}
@@ -10673,7 +10931,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
               </div>
             )}
-            {isKidsProfile ? (
+            {hasAbaClinicalProfile ? (
               <React.Fragment>
                 <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -10713,17 +10971,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className={`rounded-xl border border-dashed px-4 py-4 text-sm ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Nenhuma sessão finalizada encontrada para este paciente.</div>
                   )}
                 </section>
-                <section className="space-y-4" aria-labelledby="patient-timeline-heading">
-                  <div>
-                    <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
-                      Linha do tempo
-                    </h2>
-                    <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      Registros da família e das sessões, organizados por data.
-                    </p>
-                  </div>
-                  {renderHistoryTimelineControls()}
-                </section>
+                {isKidsProfile && (
+                  <section className="space-y-4" aria-labelledby="patient-timeline-heading">
+                    <div>
+                      <h2 id="patient-timeline-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                        Linha do tempo
+                      </h2>
+                      <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        Registros da família e das sessões, organizados por data.
+                      </p>
+                    </div>
+                    {renderHistoryTimelineControls()}
+                  </section>
+                )}
               </React.Fragment>
             ) : null}
             {isKidsProfile && historyPagination.loading && (sortedDateKeys?.length || 0) === 0 ? (
@@ -10954,8 +11214,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ))) : (<p className="text-center text-gray-400 text-sm mt-10">Nenhuma anotação encontrada com os filtros atuais.</p>)} 
             </div> 
           </div> 
+        ) : activeTab === 'care-network' ? (
+          <div className="animate-fade-in">
+            <PatientCareNetworkPanel mode="professional" patientId={String(patient?.id || '')} dark={isPanelDark} />
+          </div>
         ) : activeTab === 'report' ? (
           <div className="space-y-6 animate-fade-in">
+            <PatientEvolutionTimelinePanel
+              patientId={String(patient?.id || '')}
+              dark={isPanelDark}
+              canCreate={hasCapability('reports.generate')}
+              canShare={hasCapability('reports.generate') && hasCapability('documents.patient_share')}
+              canManageBilling={hasCapability('finance.entries.manage')}
+            />
             <div id="report-config-card" className={`border p-6 rounded-[32px] shadow-sm transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-gray-100'}`}>
               <div className="flex items-center gap-3 mb-6">
                 <div className={`p-3 rounded-2xl text-[#7a32fc] ${isPanelDark ? 'bg-violet-500/10' : 'bg-indigo-50'}`}>
@@ -10963,7 +11234,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
                 <div>
                   <h3 className={`text-lg font-semibold tracking-tight ${isPanelDark ? 'text-slate-100' : 'text-gray-800'}`}>Relatório de Progresso</h3>
-                  <p className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Análise Comparativa para Clínicas e Operadores</p>
+                  <p className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>Planos, domínios, programas e evolução clínica</p>
                 </div>
               </div>
 
@@ -11072,10 +11343,98 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 )}
               </div>
 
+              <div className={`mt-8 rounded-[28px] border p-5 sm:p-6 ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`} data-testid="clinical-progress-report-hierarchy">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Planos terapêuticos e evolução</h4>
+                    <p className={`mt-1 max-w-3xl text-xs leading-relaxed ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                      PTS e planos individuais são apresentados por domínio, programa, métrica clínica e atividades vinculadas. Revisões de tarefa permanecem como evidência contextual e não são convertidas em score clínico artificial.
+                    </p>
+                  </div>
+                  {(clinicalReportQuery.isLoading || clinicalReportQuery.isRefreshing) && (
+                    <span className={`text-[10px] font-medium ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Atualizando evolução…</span>
+                  )}
+                </div>
+
+                {clinicalReportQuery.error && progressReportClinicalSections.length === 0 && (
+                  <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs ${isPanelDark ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                    A evolução estruturada dos planos não pôde ser carregada agora. O relatório legado abaixo continua disponível sem perda dos registros existentes.
+                  </div>
+                )}
+
+                {!clinicalReportQuery.isLoading && !clinicalReportQuery.error && progressReportClinicalSections.length === 0 && (
+                  <div className={`mt-4 rounded-2xl border border-dashed px-4 py-5 text-center text-xs ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-300 text-slate-500'}`}>
+                    Nenhuma evidência vinculada a PTS ou plano individual foi registrada neste período.
+                  </div>
+                )}
+
+                <div className="mt-5 space-y-5">
+                  {progressReportClinicalSections.map((planSection) => (
+                    <section key={planSection.planId} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/55' : 'border-slate-200 bg-white'}`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${planSection.planKind === 'PTS' ? (isPanelDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-50 text-violet-700') : (isPanelDark ? 'bg-sky-500/15 text-sky-200' : 'bg-sky-50 text-sky-700')}`}>
+                          {planSection.planKind === 'PTS' ? 'PTS' : 'Plano individual'}
+                        </span>
+                        <h5 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>{planSection.planLabel}</h5>
+                        <span className={`text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>{planSection.observationCount} medida(s) · {planSection.activityEvidenceCount || 0} atividade(s) vinculada(s)</span>
+                      </div>
+
+                      <div className="mt-4 space-y-4">
+                        {planSection.domains.map((domain) => (
+                          <div key={domain.key}>
+                            <p className={`text-[11px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{domain.name}</p>
+                            <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2">
+                              {domain.programs.map((program) => (
+                                <article key={program.key} className={`rounded-xl border px-3.5 py-3 ${isPanelDark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-100 bg-slate-50'}`}>
+                                  <p className={`text-xs font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{program.name}</p>
+                                  <div className="mt-2 space-y-2">
+                                    {program.metrics.map((metric) => (
+                                      <div key={metric.key} className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <p className={`text-[11px] ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{metric.itemLabel !== program.name ? `${metric.itemLabel} · ` : ''}{metric.label}</p>
+                                          <p className={`mt-0.5 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>{metric.pointCount} ponto(s) comparável(is)</p>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                          <p className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{metric.evolutionDisplay}</p>
+                                          <p className={`mt-0.5 text-[10px] ${metric.trend === 'favorable' ? 'text-emerald-600' : metric.trend === 'attention' ? 'text-rose-600' : metric.trend === 'stable' ? (isPanelDark ? 'text-slate-400' : 'text-slate-500') : (isPanelDark ? 'text-sky-300' : 'text-sky-600')}`}>{metric.trendLabel}</p>
+                                        </div>
+                                      </div>
+                                    ))}
+                                    {(program.activities || []).length > 0 && (
+                                      <div className={`mt-3 border-t pt-3 ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`}>
+                                        <p className={`text-[10px] font-semibold uppercase tracking-wide ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Atividades vinculadas · evidência contextual</p>
+                                        <div className="mt-2 space-y-2">
+                                          {(program.activities || []).map((activity) => (
+                                            <div key={activity.key} className={`rounded-lg px-3 py-2 ${isPanelDark ? 'bg-slate-900/55' : 'bg-white'}`}>
+                                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <p className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>{activity.title}</p>
+                                                {activity.professionalReviewDisplay && <span className={`text-[10px] ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Revisão {activity.professionalReviewDisplay}</span>}
+                                              </div>
+                                              {activity.targetLabel && <p className={`mt-1 text-[10px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Alvo: {activity.targetLabel}</p>}
+                                              {activity.patientEffortDisplay && <p className={`mt-1 text-[10px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Esforço informado: {activity.patientEffortDisplay}</p>}
+                                              {activity.professionalReviewNote && <p className={`mt-1 text-[10px] leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{activity.professionalReviewNote}</p>}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </article>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              </div>
+
+
               {isKidsProfile ? (
                 <ComparisonBarChart 
                   data={comparisonChartData} 
-                  title={`Comparativo de Domínios (%): ${formatReportDateLabel(comparisonDate1) || 'Base'} vs ${formatReportDateLabel(comparisonDate2) || 'Atual'}`} 
+                  title={`Comparativo complementar por domínio (%): ${formatReportDateLabel(comparisonDate1) || 'Base'} vs ${formatReportDateLabel(comparisonDate2) || 'Atual'}`}
                   maxScore={100}
                   emptyMessage={comparisonDate1 && comparisonDate2
                     ? 'Não há medições comparáveis para as datas e o período selecionados.'
@@ -11084,11 +11443,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ) : (
                 <ComparisonBarChart
                   data={adultReportDomainComparisonData}
-                  title={`Relatório por Domínio (${selectedChartProtocol?.title || 'Protocolo'}) - ${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}`}
+                  title={`Comparativo complementar por domínio (${selectedChartProtocol?.title || 'Protocolo'}) - ${periodLabelByValue[reportPeriod as keyof typeof periodLabelByValue] || 'Período'}`}
                   maxScore={100}
                 />
               )}
-
 
               <div className="mt-8">
                 <div className="flex items-center justify-between mb-4">
@@ -11183,7 +11541,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         </div>
                         <p className="text-sm font-semibold text-gray-800">{task.taskTitle}</p>
                         <p className="text-xs text-gray-600 mt-1">
-                          Energia após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                          {task.patientEffort === null ? (
+                            <>Esforço percebido após a atividade: <span className="font-semibold">Não informado</span></>
+                          ) : hasCanonicalAdultEffortSemantics(task, task.taskData) ? (
+                            <>
+                              Esforço percebido após a atividade: <span className="font-semibold">{task.patientEffortEmoji || getEffortEmoji(task.patientEffort)} {task.patientEffort}%</span>
+                            </>
+                          ) : (
+                            <>
+                              Valor histórico de esforço: <span className="font-semibold">{task.patientEffort}%</span> <span className="text-amber-700">(semântica anterior não padronizada)</span>
+                            </>
+                          )}
                         </p>
                         <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap mt-2">
                           {normalizeNoteText(task.evolutionNote) || 'Sem anotação técnica registrada.'}
@@ -11213,14 +11581,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <button
                   className={`px-6 py-3 font-semibold rounded-xl text-xs transition-all ${isPanelDark ? 'bg-slate-800 text-slate-200 hover:bg-slate-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   onClick={isKidsProfile ? () => void handlePDFAction('view') : () => setActiveTab('history')}
-                  disabled={isKidsProfile && isGeneratingProgressPdf}
+                  disabled={isKidsProfile && (isGeneratingProgressPdf || clinicalReportDataPending)}
                 >
                   {isKidsProfile ? 'Visualizar PDF' : 'Ver Histórico'}
                 </button>
                 <button
                   id="report-download-btn"
                   onClick={isKidsProfile ? () => void handlePDFAction('download') : () => void handleGenerateAdultEvolutionReport()}
-                  disabled={isKidsProfile ? isGeneratingProgressPdf : isGeneratingAdultReport}
+                  disabled={isKidsProfile ? (isGeneratingProgressPdf || clinicalReportDataPending) : (isGeneratingAdultReport || clinicalReportDataPending)}
                   className="px-6 py-3 bg-[#7a32fc] text-white font-semibold rounded-xl text-xs shadow-lg shadow-[#7a32fc]/20 hover:opacity-90 transition-all flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   <Download size={16} /> {isKidsProfile ? (isGeneratingProgressPdf ? 'Gerando PDF...' : 'Gerar Relatório Final') : (isGeneratingAdultReport ? 'Gerando...' : 'Gerar PDF Adulto')}
@@ -11681,6 +12049,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     clinicTimeZone={resolvedClinicContext?.clinicTimeZone || resolvedClinicContext?.clinic_timezone || clinicContext?.clinicTimeZone || clinicContext?.clinic_timezone || null}
                     isDark={isPanelDark}
+                    onAssignActivity={handleAssignAdultClinicalActivity}
                   />
                 </div>
                 <div id="new-schedule-card" className={`p-6 rounded-3xl shadow-sm border transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
@@ -11691,46 +12060,56 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   <div className={`flex p-1 rounded-xl mb-6 transition-colors ${isPanelDark ? 'bg-slate-900/70' : 'bg-slate-100'}`}>
                     <button onClick={() => { setPlanType('task'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'task' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>{!isKidsProfile ? 'Avaliação' : 'Tarefa'}</button> 
                     <button onClick={() => { setPlanType('intervention'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'intervention' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Intervenção</button> 
-                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button> 
+                    <button onClick={() => { setPlanType('reinforcement'); setFinalTaskTitle(""); setFinalTaskSubtitle(""); setSelectedSkillId(""); setPendingAdultClinicalTaskContext(null); }} className={`flex-1 py-2 text-sm font-semibold rounded-lg transition-all ${planType === 'reinforcement' ? (isPanelDark ? 'bg-slate-800 text-violet-200 shadow-sm' : 'bg-white text-[#7551FF] shadow-sm') : (isPanelDark ? 'text-slate-300' : 'text-slate-500')}`}>Reforço</button>
                   </div> 
                   <div className="space-y-4"> 
                     {(planType === 'task' || planType === 'intervention') ? ( 
                       <React.Fragment> 
                         <div className="flex items-center justify-between mb-2"> 
                           <span className={`text-xs font-semibold uppercase tracking-wider ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Modo</span> 
-                          <button onClick={() => setIsCreatingNewTask(!isCreatingNewTask)} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button> 
-                        </div> 
+                          <button onClick={() => { if (pendingAdultClinicalTaskContext) { setPendingAdultClinicalTaskContext(null); setIsCreatingNewTask(false); } else { setIsCreatingNewTask(!isCreatingNewTask); } }} className="text-xs font-semibold text-[#7551FF] bg-[#7551FF]/10 px-3 py-1 rounded-full transition-colors hover:bg-[#7551FF]/20">{pendingAdultClinicalTaskContext ? "Desvincular do plano" : isCreatingNewTask ? "Selecionar Existente" : "Criar Nova"}</button>
+                        </div>
+                        {pendingAdultClinicalTaskContext && (
+                          <div className={`rounded-2xl border p-4 ${isPanelDark ? 'border-violet-400/20 bg-violet-500/10' : 'border-violet-200 bg-violet-50/70'}`} data-testid="adult-canonical-clinical-task-context">
+                            <p className={`text-[10px] font-semibold uppercase tracking-wider ${isPanelDark ? 'text-violet-200' : 'text-violet-700'}`}>Vínculo clínico canônico</p>
+                            <p className={`mt-2 text-sm font-medium ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{pendingAdultClinicalTaskContext.planLabel || 'Plano terapêutico'}</p>
+                            <p className={`mt-1 text-xs leading-relaxed ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                              {[pendingAdultClinicalTaskContext.domainName, pendingAdultClinicalTaskContext.programName, pendingAdultClinicalTaskContext.targetName].filter(Boolean).join(' → ')}
+                            </p>
+                            <p className={`mt-2 text-[11px] ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>A atividade e sua revisão permanecerão vinculadas a este plano, programa e alvo. A revisão da tarefa será evidência contextual, sem virar uma métrica clínica artificial.</p>
+                          </div>
+                        )}
                         {isCreatingNewTask ? ( 
-                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? 'bg-green-50/30 dark:bg-green-500/10 border-green-100 dark:border-green-400/20' : 'bg-[#F4F7FE] dark:bg-slate-900/70 border-blue-100 dark:border-slate-700'}`}>
-                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-3 text-sm outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
+                          <div className={`animate-fade-in space-y-4 p-4 rounded-2xl border transition-colors ${planType === 'intervention' ? (isPanelDark ? 'bg-green-500/10 border-green-400/20' : 'bg-green-50/30 border-green-100') : (isPanelDark ? 'bg-slate-900/70 border-slate-700' : 'bg-[#F4F7FE] border-blue-100')}`}>
+                            <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Nome da Nova {planType === 'intervention' ? 'Intervenção' : (!isKidsProfile ? 'Avaliação' : 'Tarefa')}</label><input type="text" className={`w-full rounded-xl p-3 text-sm outline-none border transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder={planType === 'intervention' ? "Ex: Autoestima" : (!isKidsProfile ? "Ex: Avaliação de Autonomia" : "Ex: Arrumar a cama")} value={newTaskName} onChange={e => setNewTaskName(e.target.value)} /></div> 
                             {planType === 'task' && (
                               <div className="grid grid-cols-1 gap-3 opacity-80 hover:opacity-100 transition-opacity"> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Código/Tag da atividade (opcional)</label><input type="text" className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 focus:border-[#7551FF]" placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
+                                <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Código/Tag da atividade (opcional)</label><input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder="Ex: ADL-SEMANA-01" value={newTaskCode} onChange={e => setNewTaskCode(e.target.value)} /></div> 
                               </div> 
                             )}
-                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
+                            <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{planType === 'intervention' ? 'Objetivo / Instruções de Escrita' : 'Objetivo (Base para descrição)'}</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={planType === 'intervention' ? 4 : 2} placeholder={planType === 'intervention' ? "Ex: Liste 20 qualidades que você tem..." : "Objetivo da tarefa..."} value={newTaskObjective} onChange={e => setNewTaskObjective(e.target.value)}></textarea></div> 
                             {planType === 'task' && (
                               <>
-                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Exemplos</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
-                                <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Orientação de execução</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
+                                <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Exemplos</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} placeholder="Ex: Passo a passo..." value={newTaskExample} onChange={e => setNewTaskExample(e.target.value)}></textarea></div> 
+                                <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Orientação de execução</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} placeholder="Como o paciente/família deve executar durante a semana..." value={newTaskCriteria} onChange={e => setNewTaskCriteria(e.target.value)}></textarea></div> 
                               </>
                             )}
-                            <div><label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-1">Anotações do Profissional</label><textarea className="w-full bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 rounded-xl p-2 text-xs outline-none border border-transparent dark:border-slate-700 resize-none" rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
-                            <div className={`pt-2 border-t mt-2 ${planType === 'intervention' ? 'border-green-100 dark:border-green-400/20' : 'border-blue-100 dark:border-slate-700'}`}>
-                              <label className="block text-[10px] font-semibold text-gray-400 dark:text-slate-400 uppercase mb-2">Salvar no Protocolo:</label> 
+                            <div><label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Anotações do Profissional</label><textarea className={`w-full rounded-xl p-2 text-xs outline-none border resize-none transition-colors focus:border-[#7551FF] ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} rows={2} value={newTaskComment || ''} onChange={(e) => setNewTaskComment(e.target.value)} placeholder="Anotações do profissional..."></textarea></div> 
+                            <div className={`${pendingAdultClinicalTaskContext ? 'hidden' : ''} pt-2 border-t mt-2 ${planType === 'intervention' ? (isPanelDark ? 'border-green-400/20' : 'border-green-100') : (isPanelDark ? 'border-slate-700' : 'border-blue-100')}`}>
+                              <label className={`block text-[10px] font-semibold uppercase mb-2 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Salvar no Protocolo:</label> 
                               <div className="flex gap-2 mb-3"> 
-                                <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Existente</button> 
-                                <button onClick={() => setAddToProtocolMode('new')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'new' ? 'bg-white dark:bg-slate-800 border-[#7551FF] text-[#7551FF] dark:text-violet-200' : 'border-transparent bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-slate-300'}`}>Novo</button> 
+                                <button onClick={() => setAddToProtocolMode('existing')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'existing' ? (isPanelDark ? 'bg-slate-800 border-[#7551FF] text-violet-200' : 'bg-white border-[#7551FF] text-[#7551FF]') : (isPanelDark ? 'border-transparent bg-slate-800 text-slate-300' : 'border-transparent bg-slate-100 text-slate-500')}`}>Existente</button> 
+                                <button onClick={() => setAddToProtocolMode('new')} className={`flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors ${addToProtocolMode === 'new' ? (isPanelDark ? 'bg-slate-800 border-[#7551FF] text-violet-200' : 'bg-white border-[#7551FF] text-[#7551FF]') : (isPanelDark ? 'border-transparent bg-slate-800 text-slate-300' : 'border-transparent bg-slate-100 text-slate-500')}`}>Novo</button> 
                               </div> 
                               {addToProtocolMode === 'existing' ? ( 
                                 <div className="space-y-2"> 
-                                  <select className="w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none" value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
-                                  {targetProtocol && (<select className="w-full bg-white dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none" value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
+                                  <select className={`w-full border rounded-xl p-2 text-xs outline-none transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} value={targetProtocolId} onChange={e => setTargetProtocolId(e.target.value)}><option value="">Selecione Protocolo...</option>{planProtocolCatalog.filter((p: any) => planType === 'intervention' ? p.category === 'intervention' : (p.category === 'evaluation' || !p.category)).map((p: any) => <option key={p.id} value={p.id}>{p.title}</option>)}</select> 
+                                  {targetProtocol && (<select className={`w-full border rounded-xl p-2 text-xs outline-none transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-white border-slate-200 text-slate-800'}`} value={targetDomainId} onChange={e => setTargetDomainId(e.target.value)}><option value="">Selecione Domínio...</option>{targetProtocol.data.map((d: any) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>)} 
                                 </div> 
                               ) : ( 
                                 <div className="space-y-2"> 
-                                  <input type="text" className="w-full bg-white dark:bg-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none border border-gray-200 dark:border-slate-700" placeholder="Nome do Novo Protocolo" value={newProtocolName} onChange={e => setNewProtocolName(e.target.value)} /> 
-                                  <input type="text" className="w-full bg-white dark:bg-slate-800 rounded-xl p-2 text-xs text-slate-800 dark:text-slate-100 outline-none border border-gray-200 dark:border-slate-700" placeholder="Nome do Domínio (Categoria)" value={newDomainName} onChange={e => setNewDomainName(e.target.value)} /> 
+                                  <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder="Nome do Novo Protocolo" value={newProtocolName} onChange={e => setNewProtocolName(e.target.value)} /> 
+                                  <input type="text" className={`w-full rounded-xl p-2 text-xs outline-none border transition-colors ${isPanelDark ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-500' : 'bg-white border-slate-200 text-slate-800 placeholder:text-slate-400'}`} placeholder="Nome do Domínio (Categoria)" value={newDomainName} onChange={e => setNewDomainName(e.target.value)} /> 
                                 </div> 
                               )} 
                             </div> 
@@ -11832,7 +12211,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             </div> 
                           )} 
                         </div> 
-                        {planType === 'task' && !isKidsProfile && (
+                        {planType === 'task' && !isKidsProfile && !pendingAdultClinicalTaskContext && (
                           <div className="mt-4 space-y-4">
                             <div>
                               <label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Vincular Protocolo de Intervenção</label>
@@ -11850,7 +12229,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                             </div>
                           </div>
                         )}
-                        {planType === 'intervention' && (
+                        {planType === 'intervention' && !pendingAdultClinicalTaskContext && (
                           <div className="space-y-4">
                             <div>
                               <label className={`block text-[10px] font-semibold uppercase mb-1 ${isPanelDark ? 'text-slate-400' : 'text-gray-500'}`}>Vincular a Habilidade de Avaliação</label>
@@ -11983,7 +12362,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     </div> 
                   ))) : <p className="text-center text-gray-400 text-sm py-4 italic">Nada agendado ainda.</p>} 
                 </div>
-                {patientAgeYears !== null && patientAgeYears > 12 && (
+                {!isKidsProfile && (
                   <div className="space-y-3 mt-4">
                     <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-2 tracking-widest">
                       Revisão Profissional (Tarefas Adulto)
@@ -12014,6 +12393,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         const reviewContext = resolveAssignedTaskEvaluationContext(task);
                         const dynamicMaxScore = resolveAssignedTaskMaxScore(task);
                         const displayedTitle = taskData?.title || task?.title || 'Tarefa';
+                        const patientEffortRaw = resolveAssignedTaskPatientEffort(task, taskData);
+                        const patientEffort = patientEffortRaw === null ? null : normalizeEffortPercent(patientEffortRaw);
                         return (
                           <div key={reviewKey} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm space-y-3">
                             <div className="flex items-start justify-between gap-3">
@@ -12021,23 +12402,43 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                 <p className="font-semibold text-gray-800 text-sm tracking-tight">{displayedTitle}</p>
                                 <div className="mt-2 w-full max-w-xs rounded-xl border border-slate-100 bg-slate-50 p-2">
                                   <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
-                                    <span>Energia após a atividade</span>
+                                    <span>Esforço percebido após a atividade</span>
                                     <span className="font-semibold text-slate-800 flex items-center gap-1">
-                                      <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0))}</span>
-                                      {normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%
+                                      {patientEffort === null ? (
+                                        'Não informado'
+                                      ) : (
+                                        <>
+                                          {hasCanonicalAdultEffortSemantics(task, taskData) && (
+                                            <span>{String(task?.patient_effort_emoji || taskData?.patientEffortEmoji || taskData?.patient_effort_emoji || getEffortEmoji(patientEffort))}</span>
+                                          )}
+                                          {patientEffort}%
+                                        </>
+                                      )}
                                     </span>
                                   </div>
-                                  <div className="h-1.5 bg-white rounded-full overflow-hidden">
-                                    <div
-                                      className="h-full rounded-full bg-gradient-to-r from-[#fb5a4d] via-[#f6c04d] to-[#05CD99]"
-                                      style={{ width: `${normalizeEffortPercent(task?.patient_effort ?? taskData?.patientEffort ?? taskData?.patient_effort ?? 0)}%` }}
-                                    />
-                                  </div>
-                                  <div className="mt-1 flex justify-between text-[9px] font-semibold text-gray-400">
-                                    <span>Baixa</span>
-                                    <span>Média</span>
-                                    <span>Alta</span>
-                                  </div>
+                                  {patientEffort === null ? (
+                                    <p className="mt-1 text-[10px] font-medium text-slate-500">
+                                      Nenhum valor foi informado pelo paciente para esta tarefa.
+                                    </p>
+                                  ) : hasCanonicalAdultEffortSemantics(task, taskData) ? (
+                                    <>
+                                      <div className="h-1.5 bg-white rounded-full overflow-hidden">
+                                        <div
+                                          className="h-full rounded-full bg-gradient-to-r from-[#05CD99] via-[#f6c04d] to-[#fb5a4d]"
+                                          style={{ width: `${patientEffort}%` }}
+                                        />
+                                      </div>
+                                      <div className="mt-1 flex justify-between text-[9px] font-semibold text-gray-400">
+                                        <span>Pouco esforço</span>
+                                        <span>Moderado</span>
+                                        <span>Muito esforço</span>
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <p className="mt-1 text-[10px] font-medium text-amber-700">
+                                      Semântica legada não padronizada; valor preservado sem inferir direção.
+                                    </p>
+                                  )}
                                 </div>
                                 {reviewContext?.protocol && (
                                   <p className="text-[11px] text-[#7a32fc] font-semibold mt-1">
@@ -12098,8 +12499,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={isKidsProfile && abaV2Enabled} showAbaV3Details={isKidsProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
-        ) : activeTab === 'session' && isKidsProfile ? (
+          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
+        ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
         ) : activeTab === 'school' ? (
           <PatientSchoolInformation patientId={String(patient.id)} canManage={canManageSchool} isPanelDark={isPanelDark} />
