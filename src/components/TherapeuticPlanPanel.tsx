@@ -707,6 +707,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setShowPlanManager(true);
     setEditingScopeId('');
     setPtsDraftOverride(null);
+    setActivationWarning('');
     setPtsEventKind(null);
     setPtsEventSaving(false);
     void loadPlan(false);
@@ -2607,6 +2608,18 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     return isDark ? 'border-slate-600 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600';
   };
 
+  const specialtyDisplayLabel = (value: unknown) => {
+    const raw = String(value || '').trim();
+    const normalized = raw.toLocaleLowerCase('pt-BR');
+    if (!raw) return 'Especialidade não informada';
+    if (normalized.includes('fono')) return 'Fonoaudiologia';
+    if (normalized.includes('terapeuta ocupacional') || normalized === 'to') return 'Terapia Ocupacional';
+    if (normalized.includes('psicolog')) return 'Psicologia';
+    if (normalized.includes('fisioter')) return 'Fisioterapia';
+    if (normalized.includes('psicopedag')) return 'Psicopedagogia';
+    return raw;
+  };
+
   const responsibleNameForScope = (scope: any) => {
     const professionalId = String(scope?.responsible_professional_id || '');
     return linkedProfessionals.find((professional: any) => String(professional.id) === professionalId)?.name || 'Responsável não definido';
@@ -2761,12 +2774,13 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           {scopes.map((scope: any) => {
             const scopePrograms = programs.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '') === String(scope.id));
             const scopeSummary = buildTherapeuticPlanSummary(scopePrograms, []);
+            const specialtyLabel = specialtyDisplayLabel(scope.specialty);
             return (
               <article key={scope.id} className={`rounded-2xl border p-4 sm:p-5 ${panel} ${scopeStateAccentClass(scope?.status)}`} data-testid="specialty-plan-list-item">
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h4 className={`text-base font-medium ${text}`}>{scope.specialty || 'Especialidade não informada'}</h4>
+                      <h4 className={`text-base font-medium ${text}`}>{specialtyLabel}</h4>
                       <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(scope)}`}>
                         {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
                       </span>
@@ -2949,8 +2963,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <h2 className={`text-lg font-medium ${text}`}>Plano de {scope?.specialty || 'especialidade'}</h2>
-                <span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                <h2 className={`text-lg font-medium ${text}`}>Plano de {specialtyDisplayLabel(scope?.specialty)}</h2>
+                <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(scope)}`}>
                   {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
                 </span>
               </div>
@@ -3152,6 +3166,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <PtsEventForm
             key={`${selectedPtsScope.id}:${ptsEventKind}`}
             kind={ptsEventKind}
+            clinicTimeZone={clinicTimeZone}
             isDark={isDark}
             saving={ptsEventSaving}
             onCancel={() => setPtsEventKind(null)}

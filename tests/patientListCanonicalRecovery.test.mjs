@@ -44,8 +44,8 @@ assert.match(
 
 assert.match(
   coordinator,
-  /needsCanonicalPatientList = allPatients\.length === 0 \|\| Boolean\(patientListError\)/,
-  'tela de pacientes deve permitir uma única reconciliação canônica mesmo quando o cache parcial não está vazio',
+  /patientListSurfaceVisible = activeTab === "patients" \|\| activeTab === "notices" \|\| activeTab === "agenda"[\s\S]*?patientListEnsureAttemptedWorkspaceRef\.current === workspaceScopeKey/,
+  'tela de pacientes deve garantir uma única reconciliação canônica por workspace mesmo quando o cache parcial não está vazio',
 );
 
 console.log('patientListCanonicalRecovery.test.mjs: ok');
