@@ -163,6 +163,7 @@ import {
   type SalesCommercialExceptionApprovalSnapshot,
   type SalesCommercialExceptionType
 } from './src/utils/salesModularEconomics';
+import { filterSalesCurrentOperatingTechnicalBlockers } from './src/utils/salesCurrentOperatingEconomics';
 import {
   buildAbaPromptSnapshot,
   normalizeAbaPromptTypeConfig,
@@ -3312,7 +3313,10 @@ function buildSalesCommercialExceptionApproval(input: {
   if (validationError) return { approval: null, error: validationError };
   const type = input.type as SalesCommercialExceptionType;
   const review = classifySalesProposalReview(input.result);
-  if (review.technicalBlockingCodes.length > 0) {
+  const technicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers(
+    review.technicalBlockingCodes,
+  );
+  if (technicalBlockingCodes.length > 0) {
     return { approval: null, error: "PROPOSAL_TECHNICAL_BLOCKED" };
   }
   if (!review.requiresCommercialApproval && type !== "strategic_showcase") {
@@ -93621,15 +93625,24 @@ async function startServer() {
           1500,
         );
         const review = classifySalesProposalReview(results);
-        if (review.technicalBlockingCodes.length > 0) {
+        const technicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers(
+          review.technicalBlockingCodes,
+        );
+        if (technicalBlockingCodes.length > 0) {
           return res.status(422).json({
             success: false,
             code: "PROPOSAL_TECHNICAL_BLOCKED",
-            blockingCodes: review.technicalBlockingCodes,
+            blockingCodes: technicalBlockingCodes,
             error:
-              "Corrija os dados, custos, drivers e valores obrigatórios antes de salvar.",
+              "Corrija os valores comerciais e a reconciliação obrigatória antes de salvar.",
           });
         }
+        const effectiveReview = {
+          ...review,
+          technicalBlockingCodes,
+          canSaveDraft: true,
+          canGeneratePublicOfferWithoutApproval: true,
+        };
         const calculatedAt = new Date().toISOString();
         const approvalRequested =
           req.body?.approveCommercialException === true;
@@ -93657,7 +93670,7 @@ async function startServer() {
           return res.status(accessError ? 403 : 422).json({
             success: false,
             code: approvalResult.error,
-            blockingCodes: review.technicalBlockingCodes,
+            blockingCodes: technicalBlockingCodes,
             error: accessError
               ? "A aprovação excepcional exige administração da plataforma com MFA validado."
               : approvalResult.error ===
@@ -93675,9 +93688,9 @@ async function startServer() {
           commercialPresentationVersion:
             SALES_CUSTOMER_FACING_PRESENTATION_VERSION,
           commercialReview: {
-            ...review,
+            ...effectiveReview,
             canGeneratePublicOffer:
-              review.canGeneratePublicOfferWithoutApproval,
+              effectiveReview.canGeneratePublicOfferWithoutApproval,
           },
           commercialExceptionApproval: approvalResult.approval,
         };
@@ -94512,14 +94525,6 @@ async function startServer() {
             "O cenário divergiu do catálogo congelado. Duplique e salve uma nova versão.",
         });
       }
-      if (recalculated.missingCosts.length > 0) {
-        return res.status(422).json({
-          success: false,
-          code: "PRICING_COST_MODEL_MISSING",
-          error:
-            "Complete os custos das funcionalidades antes de gerar a proposta.",
-        });
-      }
       if (
         recalculated.commercialPricing.enabled
         && recalculated.commercialPricing.missingPriceItemKeys.length > 0
@@ -94533,13 +94538,16 @@ async function startServer() {
           });
       }
       const proposalReview = classifySalesProposalReview(recalculated);
-      if (proposalReview.technicalBlockingCodes.length > 0) {
+      const proposalTechnicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers(
+        proposalReview.technicalBlockingCodes,
+      );
+      if (proposalTechnicalBlockingCodes.length > 0) {
         return res.status(422).json({
           success: false,
           code: "PROPOSAL_TECHNICAL_BLOCKED",
-          blockingCodes: proposalReview.technicalBlockingCodes,
+          blockingCodes: proposalTechnicalBlockingCodes,
           error:
-            "Corrija os dados técnicos obrigatórios antes de gerar a proposta.",
+            "Corrija os valores comerciais e a reconciliação obrigatória antes de gerar a proposta.",
         });
       }
       if (
@@ -95812,12 +95820,16 @@ async function startServer() {
           });
         }
         const frozenReview = classifySalesProposalReview(frozenResults);
-        if (frozenReview.technicalBlockingCodes.length > 0) {
+        const frozenTechnicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers(
+          frozenReview.technicalBlockingCodes,
+        );
+        if (frozenTechnicalBlockingCodes.length > 0) {
           return res.status(409).json({
             success: false,
             code: "MODULAR_CHECKOUT_TECHNICAL_BLOCKED",
+            blockingCodes: frozenTechnicalBlockingCodes,
             error:
-              "O snapshot congelado possui uma pendência técnica não excepcionável.",
+              "O snapshot congelado possui uma pendência estrutural de preço ou reconciliação.",
           });
         }
         if (
