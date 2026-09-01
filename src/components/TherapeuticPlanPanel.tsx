@@ -194,6 +194,7 @@ const initialForm = () => ({
   customSessions: '3',
   customSessionMode: 'consecutive',
   reviewDueDate: '',
+  shareWithPts: false,
   advancedSettings: {
     antecedent: '',
     expectedResponse: '',
@@ -305,7 +306,7 @@ const sourceCardClass = (dark: boolean) => `group flex min-h-[150px] flex-col it
     : 'border-slate-200 bg-white text-slate-800 hover:border-violet-300 hover:shadow-sm'
 }`;
 
-export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], masteryEvaluations = [], userRole, currentUserId, isDark = false, onStartSession, onAssignActivity }: any) => {
+export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = [], caseTeamLinks = [], masteryEvaluations = [], userRole, currentUserId, clinicTimeZone, isDark = false, onStartSession, onAssignActivity }: any) => {
   const patientId = String(patient?.id || '').trim();
   const patientName = String(patient?.name || patient?.nome || 'Paciente').trim() || 'Paciente';
   const normalizedRole = String(userRole || '').trim().toLowerCase();
@@ -334,6 +335,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [activationWarning, setActivationWarning] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [creationStep, setCreationStep] = useState<CreationStep>(null);
@@ -488,7 +490,40 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const historicalPrograms = Array.isArray(planData?.historicalPrograms)
     ? planData.historicalPrograms
     : [];
-  const professionalLinks = Array.isArray(planData?.professionalLinks) ? planData.professionalLinks : [];
+  const professionalLinks = useMemo(() => {
+    const fromPlan = Array.isArray(planData?.professionalLinks) ? planData.professionalLinks : [];
+    const live = (Array.isArray(caseTeamLinks) ? caseTeamLinks : [])
+      .filter((link: any) => String(link?.status || '').toLowerCase() === 'active');
+    if (live.length === 0) return fromPlan;
+
+    const planLinkByProfessionalId = new Map(
+      fromPlan.map((link: any) => [String(link?.professional_id || ''), link]),
+    );
+    return live.map((link: any) => {
+      const professionalId = String(link?.professional_id || '');
+      const serverLink: any = planLinkByProfessionalId.get(professionalId) || {};
+      const specialty = link?.specialty || link?.professional?.specialty || serverLink?.specialty || null;
+      const hasServerEligibility = typeof serverLink?.planEligible === 'boolean';
+      const liveEligibility =
+        link?.accessEnabled !== false &&
+        link?.professional?.membershipActive !== false &&
+        String(specialty || '').trim().length >= 2 &&
+        link?.permissions?.write !== false;
+      return {
+        ...serverLink,
+        ...link,
+        name: link?.professional?.name || serverLink?.name || link?.professional?.email || 'Profissional',
+        profile_photo_url: link?.professional?.profile_photo_url || serverLink?.profile_photo_url || null,
+        specialty,
+        caseRole: link.case_role || link.caseRole || null,
+        relationshipType: link.relationship_type || link.relationshipType || null,
+        planEligible: (hasServerEligibility ? serverLink.planEligible === true : liveEligibility) && link?.accessEnabled !== false,
+        planEligibilityReason: link?.accessEnabled === false
+          ? 'Vínculo clínico com pendência de integridade.'
+          : serverLink?.planEligibilityReason || null,
+      };
+    });
+  }, [caseTeamLinks, planData?.professionalLinks]);
   const linkedProfessionals = useMemo(() => {
     const providedById = new Map(
       (Array.isArray(professionals) ? professionals : []).map((professional: any) => [
@@ -502,14 +537,17 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return {
         ...provided,
         id,
-        name: provided.name || link.name || 'Profissional',
+        name: provided.name || link.name || link.professional?.name || 'Profissional',
         profile_photo_url:
           provided.profile_photo_url ||
           provided.profilePhotoUrl ||
           provided.profilePicture ||
           link.profile_photo_url ||
+          link.professional?.profile_photo_url ||
           null,
-        specialty: link.specialty || provided.specialty || null,
+        specialty: link.specialty || link.professional?.specialty || provided.specialty || null,
+        caseRole: link.case_role || link.caseRole || null,
+        relationshipType: link.relationship_type || link.relationshipType || null,
         permissions: link.permissions || {},
         planEligible: link.planEligible === true,
         planEligibilityReason: link.planEligibilityReason || null,
@@ -1097,7 +1135,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       targets: normalizedForm.targets,
       measurementType: normalizedForm.measurementType,
       masteryCriteria: buildMasteryCriteria(normalizedForm),
-      advancedSettings: normalizedForm.advancedSettings,
+      advancedSettings: {
+        ...normalizedForm.advancedSettings,
+        shareWithPts: Boolean(normalizedForm.shareWithPts),
+      },
       reviewDueDate: normalizedForm.reviewDueDate || null,
       originType: creationSource,
       originId: originContext?.id || null,
@@ -1146,6 +1187,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       customSessions: String(criteria?.requiredSessions ?? criteria?.required_sessions ?? 3),
       customSessionMode: String(criteria?.sessionMode || criteria?.session_mode || 'consecutive'),
       reviewDueDate: String(program?.review_due_date || '').slice(0, 10),
+      shareWithPts: program?.advanced_settings?.shareWithPts === true || program?.advanced_settings?.share_with_pts === true,
       advancedSettings: { ...initialForm().advancedSettings, ...(program?.advanced_settings || {}) },
     });
     setCreationSource((['template', 'protocol', 'recommendation'].includes(String(program?.origin_type)) ? program.origin_type : 'manual') as CreationSource);
@@ -1242,7 +1284,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     if (scopeDraft.mode === 'interdisciplinary' && participantIds.length < 2) {
-      setError('Selecione ao menos dois profissionais para o Projeto Terapêutico Singular.');
+      setError('O responsável já conta como participante. Selecione pelo menos mais um profissional para o Projeto Terapêutico Singular.');
       return;
     }
     if (!scopeIdempotencyKeyRef.current) {
@@ -1266,6 +1308,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       return;
     }
     setScopeFormOpen(false);
+    setActivationWarning('');
     scopeIdempotencyKeyRef.current = '';
     setScopeDraft({ mode: 'specialty', specialty: '', responsibleProfessionalId: '', participantProfessionalIds: [] });
     setNotice(scopeDraft.mode === 'interdisciplinary'
@@ -1283,6 +1326,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const openPtsDraft = async (scope: any) => {
     const scopeId = String(scope?.id || '');
     if (!scopeId || scopeSaving) return;
+    setActivationWarning('');
     const existingDraft = draftVersionForScope(scope);
     if (existingDraft?.id) {
       setEditingScopeId(scopeId);
@@ -1401,11 +1445,30 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       : await dataService.savePtsDraftVersion(patientId, scopeId, versionId, requestPayload);
     setScopeSaving(false);
     if (response?.success === false) {
+      if (
+        payload?.action === 'activate'
+        && String(response?.error || '') === 'PTS_DRAFT_VALIDATION_FAILED'
+      ) {
+        setError('');
+        if (response?.draftPreserved === true && response?.data?.id) {
+          setPtsDraftOverride({ planId: scopeId, version: response.data });
+        }
+        setActivationWarning(
+          response?.message
+          || 'O rascunho foi salvo. Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente.',
+        );
+        if (response?.draftPreserved === true) {
+          setNotice('Rascunho salvo. Nenhuma informação preenchida foi descartada.');
+        }
+        return;
+      }
+      setActivationWarning('');
       setError(response?.message || response?.error || (payload?.action === 'activate'
         ? 'Não foi possível ativar o Projeto Terapêutico Singular.'
         : 'Não foi possível salvar o rascunho do Projeto Terapêutico Singular.'));
       return;
     }
+    setActivationWarning('');
     if (payload?.action === 'activate') {
       setPtsDraftOverride(null);
       setEditingScopeId('');
@@ -1975,6 +2038,18 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                 </select>
               </label>
             )}
+            <label className={`md:col-span-2 flex items-start gap-3 rounded-xl border px-4 py-3 ${isDark ? 'border-slate-700 bg-slate-900/40' : 'border-slate-200 bg-slate-50/70'}`}>
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                checked={Boolean(form.shareWithPts)}
+                onChange={(event) => setForm((current) => ({ ...current, shareWithPts: event.target.checked }))}
+              />
+              <span className="min-w-0">
+                <span className={`block text-sm ${text}`}>Compartilhar resumo com o PTS</span>
+                <span className={`mt-0.5 block text-xs leading-5 ${muted}`}>Compartilha somente o resumo autorizado deste programa com a equipe. O plano da especialidade continua restrito e não ganha acesso cruzado.</span>
+              </span>
+            </label>
           </div>
           <label className={`block text-xs ${muted}`}>Objetivo terapêutico<textarea className={`${field} mt-1.5 min-h-[92px] resize-y`} value={form.objective} maxLength={1000} onChange={(event) => setForm((current) => ({ ...current, objective: event.target.value }))} placeholder="O que se pretende desenvolver?" /></label>
           <div>
@@ -2483,14 +2558,18 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     );
   }
 
-  const statusLabelForScope = (scope: any) => (
-    isCancelledLifecycleStatus(scope?.status) ? 'Cancelado'
-      : scope?.status === 'active' ? 'Ativo'
-        : scope?.status === 'paused' ? 'Pausado'
-          : scope?.status === 'completed' ? 'Concluído'
-            : scope?.status === 'archived' ? 'Arquivado'
-              : 'Rascunho'
-  );
+  const statusLabelForScope = (scope: any) => {
+    if (isCancelledLifecycleStatus(scope?.status)) return 'Cancelado';
+    if (scope?.mode === 'interdisciplinary') {
+      if (scope?.pts_lineage?.activeVersion?.id) return 'Ativo';
+      if (scope?.pts_lineage?.draftVersion?.id) return 'Rascunho';
+    }
+    return scope?.status === 'active' ? 'Ativo'
+      : scope?.status === 'paused' ? 'Pausado'
+        : scope?.status === 'completed' ? 'Concluído'
+          : scope?.status === 'archived' ? 'Arquivado'
+            : 'Rascunho';
+  };
 
   const scopeStatusOptionsFor = (scope: any) => {
     const currentStatus = String(scope?.status || 'draft').trim().toLowerCase();
@@ -2514,6 +2593,19 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       ? scope?.pts_lineage?.activeVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || scope?.edit_version || 1
       : scope?.edit_version || 1,
   );
+
+  const scopeDraftVersionNumber = (scope: any) => Number(scope?.pts_lineage?.draftVersion?.versionNumber || 0);
+
+  const lifecycleBadgeClass = (scope: any) => {
+    const label = statusLabelForScope(scope);
+    if (label === 'Rascunho' || label === 'Pausado') {
+      return isDark ? 'border-amber-400/25 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800';
+    }
+    if (label === 'Ativo') {
+      return isDark ? 'border-violet-400/25 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-700';
+    }
+    return isDark ? 'border-slate-600 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600';
+  };
 
   const responsibleNameForScope = (scope: any) => {
     const professionalId = String(scope?.responsible_professional_id || '');
@@ -2560,7 +2652,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <label className={`text-xs ${muted}`}>
-          Responsável principal
+          Responsável principal · também participa do plano
           <select
             className={`${field} mt-1.5`}
             value={scopeDraft.responsibleProfessionalId}
@@ -2597,7 +2689,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <fieldset className="md:col-span-2">
           <legend className={`text-xs ${muted}`}>
             {scopeDraft.mode === 'interdisciplinary'
-              ? 'Equipe participante (de 2 a 5 profissionais)'
+              ? 'Equipe participante (responsável incluído · 2 a 5 profissionais)'
               : 'Colaboradores da mesma especialidade (opcional)'}
           </legend>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
@@ -2675,7 +2767,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className={`text-base font-medium ${text}`}>{scope.specialty || 'Especialidade não informada'}</h4>
-                      <span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                      <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(scope)}`}>
                         {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
                       </span>
                     </div>
@@ -2723,6 +2815,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const ptsParticipants = primaryPtsScope?.participant_professional_ids || [];
     const canCreatePts = canCreatePlanScope && canManageStructure && !primaryPtsScope;
     const canCreateSpecialty = canCreatePlanScope && selectableResponsibleProfessionals.length > 0;
+    const ptsDraftNumber = primaryPtsScope ? scopeDraftVersionNumber(primaryPtsScope) : 0;
+    const ptsActiveNumber = Number(primaryPtsScope?.pts_lineage?.activeVersion?.versionNumber || 0);
 
     return (
       <div className="space-y-6" data-testid="therapeutic-plan-hub">
@@ -2754,11 +2848,16 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h4 className={`text-base font-medium ${text}`}>Projeto Terapêutico Singular (PTS)</h4>
-                    <span className={`rounded-full px-2 py-1 text-[10px] ${isDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                    <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(primaryPtsScope)}`}>
                       {statusLabelForScope(primaryPtsScope)} · v{scopeVersionNumber(primaryPtsScope)}
                     </span>
                   </div>
                   <p className={`mt-1 text-xs ${muted}`}>Plano integrado da equipe assistencial</p>
+                  {ptsActiveNumber > 0 && ptsDraftNumber > 0 && (
+                    <p className={`mt-2 text-xs ${isDark ? 'text-amber-200' : 'text-amber-700'}`}>
+                      Rascunho v{ptsDraftNumber} em elaboração; a versão v{ptsActiveNumber} permanece ativa.
+                    </p>
+                  )}
                   <div className={`mt-4 grid gap-3 rounded-xl border p-3 sm:grid-cols-3 ${isDark ? 'border-slate-700 bg-slate-950/30' : 'border-violet-100 bg-violet-50/60'}`}>
                     <div><p className={`text-[11px] ${muted}`}>Participantes</p><p className={`mt-1 text-sm ${text}`}>{ptsParticipants.length}</p></div>
                     <div><p className={`text-[11px] ${muted}`}>Metas em acompanhamento</p><p className={`mt-1 text-sm ${text}`}>{pts ? pts.goals.filter((goal) => !['achieved', 'cancelled'].includes(goal.status)).length : 0}</p></div>
@@ -2973,6 +3072,19 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   return (
     <section className="space-y-5" data-testid="therapeutic-plan-panel">
       {notice && <div className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-800'}`}><span>{notice}</span><button type="button" onClick={() => setNotice('')}><X size={15} /></button></div>}
+      {activationWarning && (
+        <div
+          role="status"
+          className={`flex items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-sm ${
+            isDark
+              ? 'border-amber-400/30 bg-amber-500/10 text-amber-100'
+              : 'border-amber-200 bg-amber-50 text-amber-900'
+          }`}
+        >
+          <span>{activationWarning}</span>
+          <button type="button" aria-label="Fechar aviso" onClick={() => setActivationWarning('')}><X size={15} /></button>
+        </div>
+      )}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
       {showPlanManager || !workspaceScope ? (
@@ -3005,9 +3117,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       {selectedPtsScope && workspaceScope?.mode === 'interdisciplinary' && !showPlanManager && editingScopeId === String(selectedPtsScope.id) && (
         <ResponsiveDrawer
           open
-          title="Nova versão do PTS"
+          title={draftVersionForScope(selectedPtsScope)?.id ? 'Editar rascunho do PTS' : 'Nova versão do PTS'}
           titleId="pts-workspace-editor-title"
-          description="Atualize o plano compartilhado. O histórico anterior será preservado."
+          description={selectedPtsScope?.pts_lineage?.activeVersion?.id
+            ? 'Edite o rascunho sem alterar a versão clínica atualmente ativa.'
+            : 'Complete o plano compartilhado antes da primeira ativação.'}
           onRequestClose={() => setEditingScopeId('')}
           isDark={isDark}
         >
@@ -3017,6 +3131,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             draftVersion={draftVersionForScope(selectedPtsScope)}
             professionals={linkedProfessionals}
             sharedEvidence={ptsSharedEvidence}
+            clinicTimeZone={clinicTimeZone}
             isDark={isDark}
             saving={scopeSaving}
             onSave={(payload) => savePtsScope(String(selectedPtsScope.id), payload)}
