@@ -49,6 +49,7 @@ import {
   type SalesProfitabilityPolicy,
   type SalesProposalReviewClassification
 } from '../utils/salesModularEconomics';
+import { filterSalesCurrentOperatingTechnicalBlockers } from '../utils/salesCurrentOperatingEconomics';
 import type { SalesAssumptionSnapshot } from '../utils/salesProfitability';
 import { normalizeSalesTrialDays } from '../utils/salesTrialContract';
 import { buildSalesRecurringMoneyFlow } from '../utils/salesFinancialExplanation';
@@ -785,6 +786,17 @@ export const SalesModularProposalBuilder = ({
     () => preview ? classifySalesProposalReview(preview) : null,
     [preview]
   );
+  const proposalTechnicalBlockingCodes = useMemo(
+    () => filterSalesCurrentOperatingTechnicalBlockers(
+      proposalReview?.technicalBlockingCodes
+    ),
+    [proposalReview]
+  );
+  const proposalHasIncompleteEconomicData = Boolean(
+    proposalReview?.technicalBlockingCodes.some(
+      (code) => !proposalTechnicalBlockingCodes.includes(code)
+    )
+  );
   const profitabilityThresholdColumns = useMemo(() => {
     const policy = preview?.economics?.policy;
     if (!policy) return [];
@@ -1037,6 +1049,12 @@ export const SalesModularProposalBuilder = ({
         ? classifySalesProposalReview(selectedSimulation.results_snapshot)
         : null,
     [selectedSimulation]
+  );
+  const selectedSimulationTechnicalBlockingCodes = useMemo(
+    () => filterSalesCurrentOperatingTechnicalBlockers(
+      selectedSimulationReview?.technicalBlockingCodes
+    ),
+    [selectedSimulationReview]
   );
   const selectedSimulationHasApproval =
     selectedSimulation?.results_snapshot?.commercialExceptionApproval
@@ -3882,18 +3900,20 @@ export const SalesModularProposalBuilder = ({
                       </div>
                       <span
                         className={`inline-flex min-h-8 items-center rounded-full px-3 text-xs font-medium ${
-                          proposalReview?.technicalBlockingCodes.length
+                          proposalTechnicalBlockingCodes.length
                             ? 'bg-rose-100 text-rose-800'
-                            : proposalReview?.commercialAlertCodes.length
+                            : proposalHasIncompleteEconomicData || proposalReview?.commercialAlertCodes.length
                               ? 'bg-amber-100 text-amber-900'
                               : 'bg-emerald-100 text-emerald-800'
                         }`}
                       >
-                        {proposalReview?.technicalBlockingCodes.length
+                        {proposalTechnicalBlockingCodes.length
                           ? 'Dados obrigatórios pendentes'
-                          : proposalReview?.commercialAlertCodes.length
-                            ? 'Abaixo da meta · aviso'
-                            : 'Dentro da margem-alvo'}
+                          : proposalHasIncompleteEconomicData
+                            ? 'Custos incompletos · aviso'
+                            : proposalReview?.commercialAlertCodes.length
+                              ? 'Abaixo da meta · aviso'
+                              : 'Dentro da margem-alvo'}
                       </span>
                     </div>
                   </div>
@@ -3959,23 +3979,23 @@ export const SalesModularProposalBuilder = ({
                         </div>
                       ))}
                     </dl>
-                    {proposalReview?.technicalBlockingCodes.length ||
+                    {proposalTechnicalBlockingCodes.length ||
                     proposalReview?.commercialAlertCodes.length ||
                     preview.economics.warnings.length ? (
                       <div
                         role="alert"
                         className={`mt-4 rounded-xl border p-3 text-xs leading-5 ${
-                          proposalReview?.technicalBlockingCodes.length
+                          proposalTechnicalBlockingCodes.length
                             ? 'border-rose-200 bg-rose-50 text-rose-900'
                             : 'border-amber-200 bg-amber-50 text-amber-950'
                         }`}
                       >
                         <p className="font-medium">
-                          {proposalReview?.technicalBlockingCodes.length
+                          {proposalTechnicalBlockingCodes.length
                             ? 'Dados obrigatórios antes do envio'
                             : 'Avisos econômicos não bloqueantes'}
                         </p>
-                        {!proposalReview?.technicalBlockingCodes.length ? (
+                        {!proposalTechnicalBlockingCodes.length ? (
                           <p className="mt-1 font-normal">
                             Estes avisos registram a distância para a meta, mas
                             não impedem salvar, publicar, aceitar ou cobrar a
@@ -5611,7 +5631,7 @@ export const SalesModularProposalBuilder = ({
                   profitabilityPolicyRequired ||
                   !preview ||
                   preview.commercialPricing.missingPriceItemKeys.length > 0 ||
-                  Boolean(proposalReview?.technicalBlockingCodes.length) ||
+                  Boolean(proposalTechnicalBlockingCodes.length) ||
                   (approveCommercialException &&
                     internalJustification.trim().length < 20)
                 }
@@ -5637,10 +5657,7 @@ export const SalesModularProposalBuilder = ({
                   (!selectedSimulation.offer &&
                     selectedSimulationRequiresVersionedProfitabilityPolicy &&
                     !selectedSimulationHasVersionedEconomics) ||
-                  selectedSimulation.results_snapshot?.missingCosts?.length > 0 ||
-                  Boolean(
-                    selectedSimulationReview?.technicalBlockingCodes.length
-                  ) ||
+                  Boolean(selectedSimulationTechnicalBlockingCodes.length) ||
                   (
                     selectedSimulationReview?.requiresCommercialApproval ===
                       true &&
