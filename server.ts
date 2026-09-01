@@ -2135,6 +2135,64 @@ function serializeSalesCheckoutLink(req: any, link: any) {
   };
 }
 
+const SALES_CHECKOUT_RETURN_CONTEXT_PREFIX = "pagamento-";
+
+function buildSalesCheckoutReturnContextToken(checkoutPublicToken: string): string {
+  const safeToken = sanitizeString(checkoutPublicToken, 300);
+  if (safeToken.length < 32) throw new Error("SALES_CHECKOUT_RETURN_TOKEN_INVALID");
+  return `${SALES_CHECKOUT_RETURN_CONTEXT_PREFIX}${safeToken}`;
+}
+
+async function resolveSalesPostPaymentContextToken(
+  rawToken: unknown,
+  checkoutSessionId: string,
+): Promise<{ offerId: string; leadId: string; source: "offer" | "checkout" } | null> {
+  const token = sanitizeString(rawToken, 300);
+  const sessionId = sanitizeString(checkoutSessionId, 200);
+  if (!sessionId || token.length < 32) return null;
+
+  if (token.startsWith(SALES_CHECKOUT_RETURN_CONTEXT_PREFIX)) {
+    const checkoutToken = token.slice(SALES_CHECKOUT_RETURN_CONTEXT_PREFIX.length);
+    if (checkoutToken.length < 32) return null;
+    const { data: link, error: linkError } = await supabase
+      .from("sales_checkout_links")
+      .select("offer_id,lead_id,request_hash,idempotency_key,stripe_checkout_session_id")
+      .eq("public_token_hash", hashSalesOfferToken(checkoutToken))
+      .eq("stripe_checkout_session_id", sessionId)
+      .maybeSingle();
+    if (linkError) throw linkError;
+    const offerId = sanitizeString(link?.offer_id, 120);
+    const leadId = sanitizeString(link?.lead_id, 120);
+    const requestHash = sanitizeString(link?.request_hash, 128);
+    const idempotencyKey = sanitizeString(link?.idempotency_key, 240);
+    if (!isUuid(offerId) || !isUuid(leadId) || !requestHash || !idempotencyKey) return null;
+    const expectedCheckoutToken = deriveSalesCheckoutPublicToken(
+      offerId,
+      `${requestHash}:${idempotencyKey}`,
+    );
+    if (!crypto.timingSafeEqual(
+      Buffer.from(hashSalesOfferToken(checkoutToken)),
+      Buffer.from(hashSalesOfferToken(expectedCheckoutToken)),
+    )) {
+      return null;
+    }
+    return { offerId, leadId, source: "checkout" };
+  }
+
+  const { data: offer, error: offerError } = await supabase
+    .from("sales_offers")
+    .select("id,lead_id")
+    .eq("public_token_hash", hashSalesOfferToken(token))
+    .eq("stripe_checkout_session_id", sessionId)
+    .maybeSingle();
+  if (offerError) throw offerError;
+  const offerId = sanitizeString(offer?.id, 120);
+  const leadId = sanitizeString(offer?.lead_id, 120);
+  return isUuid(offerId) && isUuid(leadId)
+    ? { offerId, leadId, source: "offer" }
+    : null;
+}
+
 function resolveSalesStripeConfiguration() {
   const basePriceId = sanitizeString(
     process.env.STRIPE_BASE_ACTIVE_PATIENT_PRICE_ID,
@@ -24966,13 +25024,20 @@ async function startServer() {
       }
 
       try {
-        const tokenHash = hashSalesOfferToken(token);
+        const context = await resolveSalesPostPaymentContextToken(token, checkoutSessionId);
+        if (!context) {
+          return res.status(404).json({
+            success: false,
+            error: "PAYMENT_STATUS_NOT_FOUND",
+          });
+        }
         const { data: offer, error: offerError } = await supabase
           .from("sales_offers")
           .select(
             "id,lead_id,status,payment_confirmed_at,provisioning_status,provisioning_error_code,offer_type,stripe_subscription_id",
           )
-          .eq("public_token_hash", tokenHash)
+          .eq("id", context.offerId)
+          .eq("lead_id", context.leadId)
           .eq("stripe_checkout_session_id", checkoutSessionId)
           .maybeSingle();
         if (offerError) throw offerError;
@@ -25086,11 +25151,18 @@ async function startServer() {
       }
 
       try {
-        const tokenHash = hashSalesOfferToken(token);
+        const context = await resolveSalesPostPaymentContextToken(token, checkoutSessionId);
+        if (!context) {
+          return res.status(404).json({
+            success: false,
+            error: "SALES_DIRECTOR_PROVISIONING_CONTEXT_NOT_FOUND",
+          });
+        }
         const { data: offer, error: offerError } = await supabase
           .from("sales_offers")
           .select("id,lead_id,status,provisioning_status,stripe_checkout_session_id")
-          .eq("public_token_hash", tokenHash)
+          .eq("id", context.offerId)
+          .eq("lead_id", context.leadId)
           .eq("stripe_checkout_session_id", checkoutSessionId)
           .maybeSingle();
         if (offerError) throw offerError;
@@ -25174,11 +25246,15 @@ async function startServer() {
       }
 
       try {
-        const tokenHash = hashSalesOfferToken(token);
+        const context = await resolveSalesPostPaymentContextToken(token, checkoutSessionId);
+        if (!context) {
+          return res.status(404).json({ success: false, error: "SALES_DIRECTOR_SESSION_CONTEXT_NOT_FOUND" });
+        }
         const { data: offer, error: offerError } = await supabase
           .from("sales_offers")
           .select("id,lead_id,status,payment_confirmed_at,provisioning_status,offer_type,contract_email,stripe_subscription_id")
-          .eq("public_token_hash", tokenHash)
+          .eq("id", context.offerId)
+          .eq("lead_id", context.leadId)
           .eq("stripe_checkout_session_id", checkoutSessionId)
           .maybeSingle();
         if (offerError) throw offerError;
@@ -95951,9 +96027,10 @@ async function startServer() {
             mode: "subscription",
             client_reference_id: offerId,
             customer_email: contractEmail,
-            success_url: publicOfferToken
-              ? `${buildSalesOfferPublicUrl(req, publicOfferToken)}?payment=success&session_id={CHECKOUT_SESSION_ID}`
-              : `${origin}/oferta/pagamento?payment=success&session_id={CHECKOUT_SESSION_ID}`,
+            success_url: `${buildSalesOfferPublicUrl(
+              req,
+              buildSalesCheckoutReturnContextToken(checkoutPublicToken),
+            )}?payment=success&session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: publicOfferToken
               ? `${buildSalesOfferPublicUrl(req, publicOfferToken)}?payment=cancel`
               : `${origin}/oferta/pagamento?payment=cancelled`,
