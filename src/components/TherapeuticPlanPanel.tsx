@@ -318,6 +318,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     capabilities: null,
     historicalPlanVersions: [],
     historicalPrograms: [],
+    ptsSharedEvidence: [],
+    ptsLegacyEvidence: [],
     readOnlyHistory: false,
   });
   const effectiveRole = String(
@@ -471,6 +473,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     [planScopes, workspaceScopeId],
   );
   const selectedPtsScope = workspaceScope?.mode === 'interdisciplinary' ? workspaceScope : primaryPtsScope;
+  const ptsSharedEvidence = useMemo(() => (
+    Array.isArray(planData?.ptsSharedEvidence) ? planData.ptsSharedEvidence : []
+  ), [planData?.ptsSharedEvidence]);
+  const ptsLegacyEvidence = useMemo(() => (
+    Array.isArray(planData?.ptsLegacyEvidence) ? planData.ptsLegacyEvidence : []
+  ), [planData?.ptsLegacyEvidence]);
   const ptsWorkspacePrograms = useMemo(() => {
     if (!workspaceScope?.id || workspaceScope?.mode !== 'interdisciplinary') return [];
     return programs.filter((program: any) =>
@@ -633,6 +641,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       capabilities: data?.capabilities || null,
       historicalPlanVersions: Array.isArray(data?.historicalPlanVersions) ? data.historicalPlanVersions : [],
       historicalPrograms: Array.isArray(data?.historicalPrograms) ? data.historicalPrograms : [],
+      ptsSharedEvidence: Array.isArray(data?.ptsSharedEvidence) ? data.ptsSharedEvidence : [],
+      ptsLegacyEvidence: Array.isArray(data?.ptsLegacyEvidence) ? data.ptsLegacyEvidence : [],
       readOnlyHistory: data?.readOnlyHistory === true,
       accessEndedAt: data?.accessEndedAt || null,
     });
@@ -650,6 +660,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       capabilities: null,
       historicalPlanVersions: [],
       historicalPrograms: [],
+      ptsSharedEvidence: [],
+      ptsLegacyEvidence: [],
       readOnlyHistory: false,
     });
     setSelectedProgramId('');
@@ -2970,7 +2982,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           scope={workspaceScope}
           availableScopes={ptsScopes}
           professionals={linkedProfessionals}
-          programs={ptsWorkspacePrograms}
+          sharedEvidence={ptsSharedEvidence}
+          legacyEvidence={ptsLegacyEvidence}
           loading={loading}
           isDark={isDark}
           canEditScope={workspaceScope.canEdit === true && workspaceScope.status !== 'archived'}
@@ -2980,7 +2993,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           onRecordReview={() => setPtsEventKind('review')}
           onRecordRisk={() => setPtsEventKind('risk')}
           onManagePlans={() => { setShowPlanManager(true); setWorkspaceScopeId(''); setEditingScopeId(''); }}
-          renderProgramCard={renderPtsProgramCard}
+          onOpenSourcePlan={(planId) => {
+            const sourceScope = specialtyScopes.find((item: any) => String(item?.id || '') === String(planId));
+            if (sourceScope) openWorkspace(sourceScope);
+          }}
         />
       ) : (
         renderSpecialtyPlanWorkspace(workspaceScope)
@@ -2999,9 +3015,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             key={`${selectedPtsScope.id}:${String(draftVersionForScope(selectedPtsScope)?.id || 'draft')}`}
             scope={selectedPtsScope}
             draftVersion={draftVersionForScope(selectedPtsScope)}
-            events={Array.isArray(selectedPtsScope?.pts_events) ? selectedPtsScope.pts_events : []}
             professionals={linkedProfessionals}
-            programs={ptsWorkspacePrograms}
+            sharedEvidence={ptsSharedEvidence}
             isDark={isDark}
             saving={scopeSaving}
             onSave={(payload) => savePtsScope(String(selectedPtsScope.id), payload)}

@@ -1598,7 +1598,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setPatientPhotoError('');
     try {
       const extension = file.type.includes('jpeg') || file.type.includes('jpg') ? 'jpg' : file.type.includes('webp') ? 'webp' : 'png';
-      const uploadPath = `${String(patient.id)}/clinic-profile-${Date.now()}.${extension}`;
+      const uploadPath = `${String(patient.id)}/profile/clinic-profile.${extension}`;
       const upload = await dataService.uploadFile('patient-photos', uploadPath, file);
       if (!upload?.success || !upload?.url) {
         throw new Error(upload?.error || 'Não foi possível enviar a foto.');

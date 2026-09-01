@@ -19,7 +19,8 @@ type PtsTherapeuticDashboardProps = {
   scope: any;
   availableScopes: any[];
   professionals: any[];
-  sharedEvidence: any[];
+  sharedEvidence?: any[];
+  legacyEvidence?: any[];
   loading?: boolean;
   isDark?: boolean;
   canEditScope?: boolean;
@@ -99,7 +100,8 @@ export function PtsTherapeuticDashboard({
   scope,
   availableScopes,
   professionals,
-  sharedEvidence,
+  sharedEvidence = [],
+  legacyEvidence = [],
   loading = false,
   isDark = false,
   canEditScope = false,
@@ -510,6 +512,28 @@ export function PtsTherapeuticDashboard({
                       <p className={`mt-3 text-sm ${muted}`}>Nenhuma evidência foi compartilhada com este PTS ainda.</p>
                       <p className={`mt-1 max-w-xl text-xs leading-5 ${muted}`}>O conteúdo privado dos planos por especialidade não é carregado automaticamente nesta visão.</p>
                     </div>
+                  )}
+
+                  {legacyEvidence.length > 0 && (
+                    <details className={`rounded-2xl border ${inset}`} data-testid="pts-legacy-evidence-section">
+                      <summary className={`cursor-pointer px-4 py-3 text-sm ${text}`}>
+                        Histórico clínico legado ({legacyEvidence.length})
+                      </summary>
+                      <div className={`border-t px-4 py-4 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
+                        <p className={`mb-3 text-xs leading-5 ${muted}`}>
+                          Registros anteriores à separação entre PTS e planos por especialidade. São preservados somente para leitura histórica e não significam compartilhamento atual com o PTS.
+                        </p>
+                        <div className="space-y-2">
+                          {legacyEvidence.map((evidence: any) => (
+                            <article key={`legacy-${String(evidence?.id)}`} className={`rounded-xl border px-3 py-3 ${surface}`}>
+                              <h4 className={`text-sm ${text}`}>{evidence?.name || 'Registro clínico legado'}</h4>
+                              {evidence?.objective && <p className={`mt-1 text-xs leading-5 ${muted}`}>{evidence.objective}</p>}
+                              <p className={`mt-2 text-[11px] ${muted}`}>Última evidência: {evidence?.lastAppliedAt ? formatTherapeuticPlanDate(evidence.lastAppliedAt) : 'Não registrada'}</p>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    </details>
                   )}
                 </div>
               )}

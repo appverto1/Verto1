@@ -1333,6 +1333,11 @@ export const ReceptionistDashboard = ({
                       "Clínica Verto",
                     cnpj: user?.clinicSettings?.clinicCnpj || "",
                     address: user?.clinicSettings?.clinicAddress || "",
+                    patientPhotoPolicy:
+                      String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC'
+                        ? 'CLINIC'
+                        : 'PORTAL',
+                    role: user?.role || 'receptionist',
                     logoUrl:
                       user?.clinicSettings?.clinicLogoUrl ||
                       user?.profilePicture ||
@@ -1342,6 +1347,7 @@ export const ReceptionistDashboard = ({
                     signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                     defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || 50,
                   }}
+                  userRole={user?.role || 'receptionist'}
                 />
               );
             })()}
