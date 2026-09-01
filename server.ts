@@ -41312,12 +41312,26 @@ async function startServer() {
   });
 
   const patientStorageUploadGuard = requireAnyClinicCapabilityOrPatientPortal('patient.files.upload', 'clinical.documents.upload');
+  const patientProfilePhotoUploadGuard = requireClinicCapability('patient.demographics.edit');
+  const isCanonicalPatientProfilePhotoUploadPath = (value: unknown) => {
+    const path = sanitizeString(value, 260).replace(/^\/+/, '');
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/profile\/(?:profile-[a-f0-9]{32}|clinic-profile)(?:-[0-9]+)?\.(?:webp|png|jpe?g|gif)$/i.test(path);
+  };
   const requireStorageUploadAccess = async (req: any, res: any, next: any) => {
+    const requestedBucket = sanitizeString(req.body?.bucket, 80);
     const requestedObjectPath = sanitizeString(req.body?.path, 260);
     const requestedPathParts = requestedObjectPath.split('/').filter(Boolean);
     const accessObjectPath = requestedPathParts[0] === 'demo'
       ? requestedPathParts.slice(2).join('/')
       : requestedObjectPath;
+    const sessionRole = sanitizeString(req.session?.user?.role, 40).toLowerCase();
+    const isClinicManagedPatientProfileUpload =
+      sessionRole !== 'patient' &&
+      requestedBucket === 'patient-photos' &&
+      isCanonicalPatientProfilePhotoUploadPath(accessObjectPath);
+    if (isClinicManagedPatientProfileUpload) {
+      return patientProfilePhotoUploadGuard(req, res, next);
+    }
     if (!accessObjectPath.startsWith('onboarding/')) {
       return patientStorageUploadGuard(req, res, next);
     }
@@ -41402,6 +41416,51 @@ async function startServer() {
           const canAccess = await canAccessPatientInCurrentClinic(ownerPatientId, req.session.user);
           if (!canAccess) {
             return res.status(403).json({ success: false, error: 'Paciente fora do escopo da clínica.' });
+          }
+
+          const isClinicManagedPatientProfileUpload = isCanonicalPatientProfilePhotoUploadPath(accessObjectPath);
+          if (isClinicManagedPatientProfileUpload) {
+            const effectiveClinicRole = sanitizeString(
+              req.authorizationContext?.role || req.effectiveClinicRole || role,
+              40,
+            ).toLowerCase();
+            if (!['director', 'coordinator', 'receptionist'].includes(effectiveClinicRole)) {
+              return res.status(403).json({
+                success: false,
+                error: 'PATIENT_PROFILE_PHOTO_ROLE_DENIED',
+                message: 'Seu papel atual não permite gerenciar a foto cadastral do paciente.'
+              });
+            }
+            if (!isUuid(activeClinicId)) {
+              return res.status(403).json({ success: false, error: 'CLINIC_CONTEXT_REQUIRED' });
+            }
+            const clinicPhotoPolicyResult = await supabase
+              .from('clinics')
+              .select('patient_photo_policy')
+              .eq('id', activeClinicId)
+              .maybeSingle();
+            if (clinicPhotoPolicyResult.error) {
+              const missingColumn = extractMissingColumnName(clinicPhotoPolicyResult.error);
+              if (missingColumn === 'patient_photo_policy') {
+                return res.status(409).json({
+                  success: false,
+                  error: 'PATIENT_PHOTO_POLICY_SCHEMA_REQUIRED',
+                  message: 'A política de foto da clínica ainda não está disponível.'
+                });
+              }
+              throw clinicPhotoPolicyResult.error;
+            }
+            const clinicPhotoPolicy = sanitizeString(
+              clinicPhotoPolicyResult.data?.patient_photo_policy,
+              20,
+            ).toUpperCase();
+            if (clinicPhotoPolicy !== 'CLINIC') {
+              return res.status(403).json({
+                success: false,
+                error: 'PATIENT_PROFILE_PHOTO_POLICY_DENIED',
+                message: 'A foto do paciente é gerenciada pelo portal nesta clínica.'
+              });
+            }
           }
         }
       }

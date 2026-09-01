@@ -501,6 +501,10 @@ const getPatientPhotoSource = (patient: any) =>
       patient?.profile_picture ||
       patient?.profilePictureUrl ||
       patient?.profile_picture_url ||
+      patient?.portalProfilePicture ||
+      patient?.portal_profile_picture ||
+      patient?.portalProfilePictureUrl ||
+      patient?.portal_profile_picture_url ||
       patient?.photoUrl ||
       patient?.photo_url ||
       ""

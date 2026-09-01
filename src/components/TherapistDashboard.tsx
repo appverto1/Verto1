@@ -1459,6 +1459,11 @@ export const TherapistDashboard = ({
                       "Clínica Verto",
                     cnpj: user?.clinicSettings?.clinicCnpj || "",
                     address: user?.clinicSettings?.clinicAddress || "",
+                    patientPhotoPolicy:
+                      String(user?.clinicSettings?.patientPhotoPolicy || user?.clinicSettings?.patient_photo_policy || 'PORTAL').toUpperCase() === 'CLINIC'
+                        ? 'CLINIC'
+                        : 'PORTAL',
+                    role: user?.role || 'therapist',
                     logoUrl:
                       user?.clinicSettings?.clinicLogoUrl ||
                       user?.profilePicture ||
@@ -1468,6 +1473,7 @@ export const TherapistDashboard = ({
                     signatureUrl: user?.signatureDataUrl || user?.clinicSettings?.signatureDataUrl || null,
                     defaultSessionDuration: user?.clinicSettings?.defaultSessionDuration || 50,
                   }}
+                  userRole={user?.role || 'therapist'}
                 />
               );
             })()}
