@@ -1,0 +1,15 @@
+Verto merge resolution — staging > main
+
+Resolved files:
+- server.ts
+- src/components/ClinicGlobalSettingsPanel.tsx
+- src/components/CoordinatorDashboard.tsx
+- src/components/PatientDetailView.tsx
+- src/components/PtsTherapeuticDashboard.tsx
+- src/components/TherapeuticPlanPanel.tsx
+
+Resolution policy:
+- Preserve staging/HEAD functional fixes for therapeutic-plan lifecycle, active-plan session gating, adult clinical evidence, ABA chart/session eligibility, PTS legacy evidence and activity assignment.
+- Preserve main-only compatible improvements where needed: clinic timezone imports/propagation, activation-warning reset and specialty display normalization.
+- Coordinator patient list keeps name filter + birthday filter + shared alphabetical sorter.
+- No unrelated code rewritten.
