@@ -22,7 +22,7 @@ assert.match(provision, /SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED/);
 assert.match(provision, /existingMetadataOfferId === offerId/);
 
 assert.match(reconcile, /stripe\.checkout\.sessions\.retrieve\(checkoutSessionId\)/);
-assert.match(reconcile, /processSalesAssistedCheckoutCompleted\(stripe, session\)/);
+assert.match(reconcile, /reconcileSalesAssistedCheckout\(stripe, session\)/);
 assert.doesNotMatch(
   reconcile,
   /if \(sanitizeString\(offer\.provisioning_status, 40\) === "review_required"\) \{[^]*?SALES_ACTIVATION_REVIEW_REQUIRED/,

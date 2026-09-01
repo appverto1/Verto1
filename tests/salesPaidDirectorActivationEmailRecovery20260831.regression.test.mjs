@@ -28,7 +28,7 @@ assert.doesNotMatch(statusRoute, /activationPath|emailDeliveryState|activationEm
 // The retained prepare-activation URL is now a reconciliation endpoint: it reads Stripe,
 // reuses the canonical paid processor and does not create a new Checkout/subscription.
 assert.match(reconcileRoute, /stripe\.checkout\.sessions\.retrieve\(checkoutSessionId\)/);
-assert.match(reconcileRoute, /processSalesAssistedCheckoutCompleted\(stripe,\s*session\)/);
+assert.match(reconcileRoute, /reconcileSalesAssistedCheckout\(stripe,\s*session\)/);
 assert.doesNotMatch(reconcileRoute, /req\.body\?\.email|req\.body\.email/);
 assert.doesNotMatch(reconcileRoute, /checkout\.sessions\.create|subscriptions\.update/);
 assert.doesNotMatch(reconcileRoute, /emails\.send|sendTransactionalEmail/);
