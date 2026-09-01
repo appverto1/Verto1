@@ -669,6 +669,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     const query = new URLSearchParams(window.location.search);
     const checkoutSessionId = query.get('session_id') || '';
     const returnedFromPayment = query.get('payment') === 'success' && Boolean(checkoutSessionId);
+    const legacyPaymentReturnWithoutContext = returnedFromPayment && token.toLowerCase() === 'pagamento';
 
     const applyStatusPayload = (data: any) => {
       if (data?.state === 'review_required' || data?.reviewRequired === true) {
@@ -842,7 +843,11 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       }
     };
 
-    if (returnedFromPayment) void loadPaymentStatus();
+    if (legacyPaymentReturnWithoutContext) {
+      setPaymentReturnState('unavailable');
+      setError('Este Checkout foi criado por uma versão anterior sem o contexto seguro de retorno. Gere um novo Checkout para concluir este teste; nenhuma nova cobrança será criada automaticamente.');
+      setLoading(false);
+    } else if (returnedFromPayment) void loadPaymentStatus();
     else void loadOffer();
     return () => {
       cancelled = true;
