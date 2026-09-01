@@ -25172,13 +25172,11 @@ async function startServer() {
             error: "SALES_DIRECTOR_PROVISIONING_CONTEXT_NOT_FOUND",
           });
         }
-        if (sanitizeString(offer.provisioning_status, 40) === "review_required") {
-          return res.status(409).json({
-            success: false,
-            error: "SALES_ACTIVATION_REVIEW_REQUIRED",
-          });
-        }
-
+        // Do not treat a stored review_required flag as permanently terminal here.
+        // A concurrent webhook can temporarily mark review_required while another
+        // idempotent provisioning attempt is still completing. Reconcile against
+        // Stripe + the frozen contract again; genuine conflicts are re-established
+        // by processSalesAssistedCheckoutCompleted and remain blocked.
         const stripe = getStripe();
         const session = await stripe.checkout.sessions.retrieve(checkoutSessionId);
         const metadata = (session.metadata || {}) as Record<string, string>;
@@ -26223,53 +26221,7 @@ async function startServer() {
 
     let authUser = await findAuthUserByEmail(email);
     const ownerName = sanitizeString(params.leadName, 180) || email.split("@")[0];
-    if (authUser?.id) {
-      const existingProfile = await fetchProfileWithSchemaFallback({
-        supabase,
-        userId: authUser.id,
-        logger: console,
-      });
-      if (existingProfile.error) throw existingProfile.error;
-      const existingMetadataOfferId = sanitizeString(
-        authUser?.user_metadata?.sales_activation_offer_id,
-        120,
-      );
-      if (existingProfile.data) {
-        const profile = existingProfile.data as any;
-        const profileEmail = sanitizeEmail(profile.email);
-        const profileClinicId = sanitizeString(profile.clinic_id, 120);
-        const profileRole = sanitizeString(profile.role, 40).toLowerCase();
-        const samePartialCommercialAccount =
-          profileEmail === email
-          && (!profileClinicId || profileClinicId === authUser.id)
-          && ["director", "coordinator"].includes(profileRole)
-          && (!existingMetadataOfferId || existingMetadataOfferId === offerId);
-        if (!samePartialCommercialAccount) {
-          const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
-          (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
-          throw conflict;
-        }
-      } else if (existingMetadataOfferId && existingMetadataOfferId !== offerId) {
-        const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
-        (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
-        throw conflict;
-      }
-
-      const { data: updatedAuthUser, error: updateAuthError } =
-        await supabase.auth.admin.updateUserById(authUser.id, {
-          email_confirm: true,
-          user_metadata: {
-            ...(authUser.user_metadata || {}),
-            full_name: ownerName,
-            sales_activation_offer_id: offerId,
-            sales_checkout_session_id: checkoutSessionId,
-            sales_paid_director: true,
-            first_login_completed: false,
-          },
-        });
-      if (updateAuthError) throw updateAuthError;
-      authUser = updatedAuthUser?.user || authUser;
-    } else {
+    if (!authUser?.id) {
       const { data: createdUser, error: createError } =
         await supabase.auth.admin.createUser({
           email,
@@ -26285,15 +26237,81 @@ async function startServer() {
       if (createError) {
         const normalized = sanitizeString(createError.message, 240).toLowerCase();
         if (!normalized.includes("already")) throw createError;
+        // Webhook and browser reconciliation can race after the same paid Checkout.
+        // If the other request created this exact commercial identity first, reuse it
+        // only after the same compatibility checks applied to any pre-existing user.
         authUser = await findAuthUserByEmail(email);
         if (!authUser?.id) throw createError;
+      } else {
+        authUser = createdUser?.user || null;
+      }
+    }
+    if (!authUser?.id) throw new Error("SALES_AUTH_USER_NOT_CREATED");
+
+    const existingProfile = await fetchProfileWithSchemaFallback({
+      supabase,
+      userId: authUser.id,
+      logger: console,
+    });
+    if (existingProfile.error) throw existingProfile.error;
+    const existingMetadataOfferId = sanitizeString(
+      authUser?.user_metadata?.sales_activation_offer_id,
+      120,
+    );
+    const { data: activeMembershipRows, error: activeMembershipError } = await supabase
+      .from("clinic_memberships")
+      .select("clinic_id,role,status")
+      .eq("user_id", authUser.id)
+      .eq("status", "active")
+      .limit(20);
+    if (activeMembershipError) throw activeMembershipError;
+    const activeMemberships = Array.isArray(activeMembershipRows) ? activeMembershipRows : [];
+    const membershipsCompatible = activeMemberships.every((membership: any) => {
+      const membershipClinicId = sanitizeString(membership?.clinic_id, 120);
+      const membershipRole = sanitizeString(membership?.role, 40).toLowerCase();
+      return membershipClinicId === authUser.id
+        && ["director", "coordinator"].includes(membershipRole);
+    });
+    if (!membershipsCompatible) {
+      const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+      (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+      throw conflict;
+    }
+    if (existingProfile.data) {
+      const profile = existingProfile.data as any;
+      const profileEmail = sanitizeEmail(profile.email);
+      const profileClinicId = sanitizeString(profile.clinic_id, 120);
+      const profileRole = sanitizeString(profile.role, 40).toLowerCase();
+      const samePartialCommercialAccount =
+        profileEmail === email
+        && (!profileClinicId || profileClinicId === authUser.id)
+        && ["director", "coordinator"].includes(profileRole)
+        && (!existingMetadataOfferId || existingMetadataOfferId === offerId);
+      if (!samePartialCommercialAccount) {
         const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
         (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
         throw conflict;
       }
-      authUser = createdUser?.user || null;
+    } else if (existingMetadataOfferId && existingMetadataOfferId !== offerId) {
+      const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+      (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+      throw conflict;
     }
-    if (!authUser?.id) throw new Error("SALES_AUTH_USER_NOT_CREATED");
+
+    const { data: updatedAuthUser, error: updateAuthError } =
+      await supabase.auth.admin.updateUserById(authUser.id, {
+        email_confirm: true,
+        user_metadata: {
+          ...(authUser.user_metadata || {}),
+          full_name: ownerName,
+          sales_activation_offer_id: offerId,
+          sales_checkout_session_id: checkoutSessionId,
+          sales_paid_director: true,
+          first_login_completed: false,
+        },
+      });
+    if (updateAuthError) throw updateAuthError;
+    authUser = updatedAuthUser?.user || authUser;
 
     const profileResult = await fetchProfileWithSchemaFallback({
       supabase,
