@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -8,6 +8,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { LogoVerto } from './Common';
+import { getSupabase } from '../lib/supabase';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -156,7 +157,9 @@ type PaymentReturnState =
   | 'idle'
   | 'confirming'
   | 'payment_confirmed'
-  | 'activation_email_sent'
+  | 'provisioning'
+  | 'director_ready'
+  | 'account_activated'
   | 'review_required'
   | 'unavailable';
 
@@ -593,6 +596,72 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
+  const [paymentStatusRefreshKey, setPaymentStatusRefreshKey] = useState(0);
+  const [directorOpening, setDirectorOpening] = useState(false);
+  const directorOpeningRef = useRef(false);
+
+  const openDirectorSession = async (checkoutSessionId: string) => {
+    if (!checkoutSessionId || directorOpeningRef.current) return false;
+    directorOpeningRef.current = true;
+    setDirectorOpening(true);
+    setError('');
+    try {
+      const response = await fetch(
+        `/api/public/sales-offers/${encodeURIComponent(token)}/director-session`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'omit',
+          cache: 'no-store',
+          body: JSON.stringify({ sessionId: checkoutSessionId }),
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.success === false || !payload?.tokenHash) {
+        if (payload?.error === 'SALES_DIRECTOR_SESSION_ALREADY_CLAIMED') {
+          window.location.replace('/');
+          return true;
+        }
+        throw new Error(payload?.message || payload?.error || 'Não foi possível abrir sua conta agora.');
+      }
+
+      const supabase = await getSupabase();
+      const verified = await supabase.auth.verifyOtp({
+        token_hash: String(payload.tokenHash),
+        type: (payload.otpType || 'magiclink') as any,
+      });
+      if (verified?.error || !verified?.data?.session?.access_token) {
+        throw verified?.error || new Error('Não foi possível estabelecer a sessão do Diretor.');
+      }
+
+      const loginResponse = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          accessToken: verified.data.session.access_token,
+          intendedRole: 'director',
+          provider: 'sales_checkout',
+          activationFlow: false,
+        }),
+      });
+      const loginPayload = await loginResponse.json().catch(() => ({}));
+      if (!loginResponse.ok || loginPayload?.success === false) {
+        throw new Error(loginPayload?.message || loginPayload?.error || 'O acesso foi liberado, mas não foi possível abrir a Verto.');
+      }
+
+      setPaymentReturnState('account_activated');
+      window.history.replaceState({}, document.title, '/');
+      window.location.replace('/');
+      return true;
+    } catch (sessionError: any) {
+      setError(sessionError?.message || 'Não foi possível abrir sua conta agora. Tente novamente.');
+      return false;
+    } finally {
+      directorOpeningRef.current = false;
+      setDirectorOpening(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -600,50 +669,164 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     const query = new URLSearchParams(window.location.search);
     const checkoutSessionId = query.get('session_id') || '';
     const returnedFromPayment = query.get('payment') === 'success' && Boolean(checkoutSessionId);
+    const legacyPaymentReturnWithoutContext = returnedFromPayment && token.toLowerCase() === 'pagamento';
+
+    const applyStatusPayload = (data: any) => {
+      if (data?.state === 'review_required' || data?.reviewRequired === true) {
+        setPaymentReturnState('review_required');
+        return 'review_required';
+      }
+      if (data?.state === 'account_activated' || data?.sessionClaimed === true) {
+        setPaymentReturnState('account_activated');
+        return 'account_activated';
+      }
+      if (data?.state === 'director_ready' || data?.directorSessionReady === true) {
+        setPaymentReturnState('director_ready');
+        return 'director_ready';
+      }
+      if (data?.state === 'provisioning' || data?.accountProvisioned === true) {
+        setPaymentReturnState('provisioning');
+        return 'provisioning';
+      }
+      if (data?.state === 'payment_confirmed' || data?.paymentConfirmed === true) {
+        setPaymentReturnState('payment_confirmed');
+        return 'payment_confirmed';
+      }
+      setPaymentReturnState('confirming');
+      return 'payment_pending';
+    };
+
+    const paymentRetryDelayMs = (response: Response | null, data: any, fallbackMs: number) => {
+      const headerSeconds = Number(response?.headers?.get('retry-after') || 0);
+      const payloadMs = Number(data?.retryAfterMs || 0);
+      const requestedMs = headerSeconds > 0
+        ? headerSeconds * 1000
+        : payloadMs > 0
+          ? payloadMs
+          : fallbackMs;
+      return Math.max(1500, Math.min(30000, Math.round(requestedMs)));
+    };
+
+    const reconcileDirectorProvisioning = async () => {
+      const response = await fetch(
+        `/api/public/sales-offers/${encodeURIComponent(token)}/prepare-activation`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'omit',
+          cache: 'no-store',
+          body: JSON.stringify({ sessionId: checkoutSessionId }),
+        },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 429) {
+        return {
+          ...data,
+          rateLimited: true,
+          retryAfterMs: paymentRetryDelayMs(response, data, 5000),
+        };
+      }
+      if (!response.ok && response.status !== 202) {
+        throw new Error(data?.error || 'SALES_DIRECTOR_PROVISIONING_FAILED');
+      }
+      if (!cancelled) applyStatusPayload(data);
+      return data;
+    };
+
+    const finishReturnedPaymentState = async (data: any) => {
+      if (cancelled || data?.rateLimited === true) return false;
+      const state = applyStatusPayload(data);
+      if (state === 'account_activated') {
+        window.location.replace('/');
+        return true;
+      }
+      if (state === 'review_required') return true;
+      if (state === 'director_ready') {
+        await openDirectorSession(checkoutSessionId);
+        return true;
+      }
+      return false;
+    };
 
     const loadPaymentStatus = async () => {
       setPaymentReturnState('confirming');
       setLoading(false);
-      const maxAttempts = 8;
+      const maxAttempts = 10;
+      let nextDelayMs = 1800;
+
+      // The success return already carries the Stripe Checkout session id. Reconcile
+      // it immediately on the server instead of waiting for the webhook/database
+      // status to change first. The operation is idempotent and validates the frozen
+      // offer metadata against Stripe before provisioning the Director.
+      try {
+        const initialReconciliation = await reconcileDirectorProvisioning();
+        if (await finishReturnedPaymentState(initialReconciliation)) return;
+        if (initialReconciliation?.rateLimited === true) {
+          nextDelayMs = Number(initialReconciliation.retryAfterMs || nextDelayMs);
+        } else {
+          nextDelayMs = paymentRetryDelayMs(null, initialReconciliation, nextDelayMs);
+        }
+      } catch {
+        // Webhook/status polling below remains the recovery path for transient Stripe
+        // or network failures. A failed reconciliation never creates another charge.
+      }
+
       for (let attempt = 0; attempt < maxAttempts && !cancelled; attempt += 1) {
+        await new Promise<void>((resolve) => {
+          retryTimer = window.setTimeout(resolve, nextDelayMs);
+        });
+        if (cancelled) return;
+
         try {
           const response = await fetch(
             `/api/public/sales-offers/${encodeURIComponent(token)}/payment-status?session_id=${encodeURIComponent(checkoutSessionId)}`,
-            { credentials: 'omit', cache: 'no-store' }
+            { credentials: 'omit', cache: 'no-store' },
           );
           const data = await response.json().catch(() => ({}));
+          if (response.status === 429) {
+            setPaymentReturnState('confirming');
+            nextDelayMs = paymentRetryDelayMs(response, data, 5000);
+            continue;
+          }
           if (!response.ok && response.status !== 202) {
             throw new Error(data?.error || 'PAYMENT_STATUS_UNAVAILABLE');
           }
           if (cancelled) return;
-          if (data?.state === 'activation_email_sent') {
-            setPaymentReturnState('activation_email_sent');
-            return;
-          }
-          if (data?.state === 'review_required') {
-            setPaymentReturnState('review_required');
-            return;
-          }
-          if (data?.state === 'payment_confirmed') {
-            setPaymentReturnState('payment_confirmed');
+          if (await finishReturnedPaymentState(data)) return;
+          nextDelayMs = paymentRetryDelayMs(
+            response,
+            data,
+            Math.min(5000, 1800 + attempt * 400),
+          );
+
+          // Retry authoritative Stripe reconciliation periodically while provisioning
+          // remains pending. This handles a delayed/missed webhook without hammering
+          // either Stripe or the status endpoint.
+          if (attempt === 2 || attempt === 5 || attempt === 8) {
+            const reconciled = await reconcileDirectorProvisioning();
+            if (await finishReturnedPaymentState(reconciled)) return;
+            if (reconciled?.rateLimited === true) {
+              nextDelayMs = Math.max(
+                nextDelayMs,
+                Number(reconciled.retryAfterMs || 5000),
+              );
+            }
           }
         } catch {
+          nextDelayMs = Math.min(8000, Math.max(2500, nextDelayMs + 1000));
           if (attempt === maxAttempts - 1 && !cancelled) {
             setPaymentReturnState('unavailable');
             return;
           }
         }
-        await new Promise<void>((resolve) => {
-          retryTimer = window.setTimeout(resolve, 2000);
-        });
       }
-      if (!cancelled) setPaymentReturnState('payment_confirmed');
+      if (!cancelled) setPaymentReturnState('provisioning');
     };
 
     const loadOffer = async () => {
       try {
         const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}`, {
-          credentials: 'omit'
+          credentials: 'omit',
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok || data?.success === false) {
@@ -659,13 +842,18 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         if (!cancelled) setLoading(false);
       }
     };
-    if (returnedFromPayment) void loadPaymentStatus();
+
+    if (legacyPaymentReturnWithoutContext) {
+      setPaymentReturnState('unavailable');
+      setError('Este Checkout foi criado por uma versão anterior sem o contexto seguro de retorno. Gere um novo Checkout para concluir este teste; nenhuma nova cobrança será criada automaticamente.');
+      setLoading(false);
+    } else if (returnedFromPayment) void loadPaymentStatus();
     else void loadOffer();
     return () => {
       cancelled = true;
       if (retryTimer !== null) window.clearTimeout(retryTimer);
     };
-  }, [token]);
+  }, [paymentStatusRefreshKey, token]);
 
   const continueToCheckout = async () => {
     setContinuing(true);
@@ -725,7 +913,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
           {paymentReturnState !== 'idle' ? (
             <div className="flex min-h-72 flex-col items-center justify-center text-center">
-              {paymentReturnState === 'confirming' ? (
+              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' || directorOpening ? (
                 <Loader2 className="mb-4 animate-spin text-violet-600" size={30} />
               ) : paymentReturnState === 'unavailable' || paymentReturnState === 'review_required' ? (
                 <AlertCircle className="mb-4 text-amber-600" size={32} />
@@ -733,25 +921,73 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 <CheckCircle2 className="mb-4 text-emerald-600" size={32} />
               )}
               <h1 className="text-xl font-semibold text-slate-900">
-                {paymentReturnState === 'confirming'
-                  ? 'Confirmando seu pagamento'
-                  : paymentReturnState === 'activation_email_sent'
-                    ? 'Pagamento confirmado'
-                    : paymentReturnState === 'review_required'
-                      ? 'Pagamento recebido'
-                      : paymentReturnState === 'unavailable'
-                        ? 'Confirmação em andamento'
-                        : 'Pagamento confirmado'}
+                {directorOpening
+                  ? 'Abrindo sua Verto'
+                  : paymentReturnState === 'confirming'
+                    ? 'Confirmando seu pagamento'
+                    : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
+                      ? 'Preparando sua clínica'
+                      : paymentReturnState === 'director_ready'
+                        ? 'Acesso de Diretor liberado'
+                        : paymentReturnState === 'account_activated'
+                          ? 'Conta de Diretor ativada'
+                          : paymentReturnState === 'review_required'
+                            ? 'Pagamento recebido'
+                            : 'Confirmação em andamento'}
               </h1>
               <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
-                {paymentReturnState === 'activation_email_sent'
-                  ? 'Enviamos o link de ativação para o e-mail informado no Checkout. Abra a mensagem para criar seu acesso à Verto.'
-                  : paymentReturnState === 'review_required'
-                    ? 'Seu pagamento foi preservado. A equipe da Verto revisará os dados de ativação antes de liberar o acesso.'
-                    : paymentReturnState === 'unavailable'
-                      ? 'Ainda não recebemos a confirmação final. Aguarde alguns minutos e verifique seu e-mail; se necessário, fale com o suporte.'
-                      : 'A Stripe confirmou o retorno e estamos preparando seu e-mail de ativação. Esta página não cria a conta automaticamente.'}
+                {directorOpening
+                  ? 'Seu pagamento já foi confirmado. Estamos abrindo a sessão segura do Diretor e levando você para a configuração inicial da clínica.'
+                  : paymentReturnState === 'director_ready'
+                    ? 'A Stripe confirmou o pagamento. A Verto já criou o acesso de Diretor e liberou exatamente os módulos contratados. Você pode seguir direto para o onboarding.'
+                    : paymentReturnState === 'account_activated'
+                      ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
+                      : paymentReturnState === 'review_required'
+                        ? 'Seu pagamento foi preservado. Os dados comerciais precisam de revisão antes de liberar o acesso.'
+                        : paymentReturnState === 'unavailable'
+                          ? 'Ainda não conseguimos consultar o estado final. Atualize esta página em alguns instantes; nenhuma nova cobrança será criada.'
+                          : 'A Stripe confirmou a transação e a Verto está concluindo automaticamente a criação da conta, da clínica e dos módulos contratados.'}
               </p>
+
+              {paymentReturnState !== 'confirming' && paymentReturnState !== 'unavailable' ? (
+                <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
+                  {[
+                    { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Diretor e módulos contratados liberados', done: ['director_ready', 'account_activated'].includes(paymentReturnState) || directorOpening },
+                    { label: 'Entrada no onboarding da clínica', done: paymentReturnState === 'account_activated' || directorOpening }
+                  ].map((step) => (
+                    <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">
+                      <span className={step.done ? 'text-emerald-600' : 'text-slate-300'}>{step.done ? '✓' : '○'}</span>
+                      <span className={step.done ? 'font-medium text-slate-800' : 'font-normal text-slate-500'}>{step.label}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
+              {paymentReturnState === 'director_ready' && !directorOpening ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sessionId = new URLSearchParams(window.location.search).get('session_id') || '';
+                    void openDirectorSession(sessionId);
+                  }}
+                  className="mt-5 min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                >
+                  Entrar na Verto e continuar onboarding
+                </button>
+              ) : null}
+
+              {['payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) && !directorOpening ? (
+                <button
+                  type="button"
+                  onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}
+                  className="mt-3 min-h-10 rounded-xl border border-violet-200 bg-white px-4 text-sm font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+                >
+                  Atualizar status
+                </button>
+              ) : null}
+
+              {error ? <p className="mt-3 max-w-md text-xs leading-5 text-rose-600">{error}</p> : null}
             </div>
           ) : loading ? (
             <div className="flex min-h-72 items-center justify-center gap-3 text-sm text-slate-600">

@@ -7,18 +7,22 @@ const end = server.indexOf('const mutationActionLabel', start);
 assert.ok(start >= 0 && end > start, 'finalizeSalesActivationForUser section not found');
 const section = server.slice(start, end);
 
-assert.doesNotMatch(
+assert.match(
   section,
   /getStripe\(\)\.subscriptions\.retrieve/,
-  'first access must not depend on an outbound Stripe retrieve',
+  'activation must reconcile the current Stripe subscription before releasing contracted modules',
 );
+assert.match(section, /\.eq\("status", "paid"\)/, 'activation must be linked to a persisted paid offer');
+assert.match(section, /stripe_subscription_id/, 'the persisted Stripe subscription id must be the activation linkage');
 assert.match(section, /sales_lead_events/);
-assert.match(section, /subscription_status/);
-assert.match(section, /payment_confirmed_at/);
-assert.match(section, /trial_days/);
+assert.match(section, /stripeSubscriptionToEntitlementStatus\(\s*subscription\.status/);
 assert.match(section, /applyModularEntitlementsForOrganization/);
-assert.match(section, /provisioning_status:\s*"completed"/);
-assert.match(section, /provisioning_status:\s*"failed"/);
+assert.match(section, /provisionModularCapacityBillingContract/);
+assert.match(section, /verifySalesDirectorContractAccess/);
+assert.match(section, /\.update\(\{ used: true \}\)/);
 assert.match(section, /SALES_SUBSCRIPTION_NOT_ACTIVE/);
+const verifyIndex = section.indexOf('await verifySalesDirectorContractAccess');
+const consumeIndex = section.indexOf('.update({ used: true })');
+assert.ok(verifyIndex >= 0 && consumeIndex > verifyIndex, 'activation token must be consumed only after director/module verification');
 
 console.log('salesActivationPersistedStripeState.test.mjs: ok');

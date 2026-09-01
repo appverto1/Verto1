@@ -20,8 +20,11 @@ assert.match(ui, /payload\?\.passwordSaved === true/);
 assert.match(passwordRoute, /let passwordSaved = false/);
 assert.match(passwordRoute, /passwordSaved = true/);
 assert.match(passwordRoute, /passwordSaved: true/);
-assert.match(passwordRoute, /provisioningPending: true/);
-assert.doesNotMatch(passwordRoute, /finalizeSalesActivationForUser\(/);
-assert.match(passwordRoute, /error: \"SALES_ACTIVATION_PASSWORD_SETUP_FAILED\"/);
+assert.match(passwordRoute, /role: \"director\"/);
+assert.match(passwordRoute, /modules: loaded\.contractedModules/);
+assert.match(passwordRoute, /ensureClinicAndMembershipForCoordinator\(authUser\.id, \"director\"\)/);
+assert.match(passwordRoute, /finalizeSalesActivationForUser\(/);
+assert.doesNotMatch(passwordRoute, /\.update\(\{ used: true \}\)/);
+assert.match(passwordRoute, /error: provisioningFailure[\s\S]*?SALES_ACTIVATION_PROVISIONING_FAILED/);
 
 console.log('salesActivationPasswordFirstAccess.test.mjs: OK');
