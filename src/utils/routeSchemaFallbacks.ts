@@ -371,7 +371,6 @@ export const HISTORY_SELECT_COLUMNS = [
   'clinical_target_id',
   'clinical_link_snapshot',
   'created_at',
-  'updated_at',
   'is_active',
   'deleted_at'
 ];

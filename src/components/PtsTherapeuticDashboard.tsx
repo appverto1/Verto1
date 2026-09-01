@@ -17,8 +17,8 @@ type WorkspaceTab = 'evidence' | 'reviews' | 'history';
 
 type PtsTherapeuticDashboardProps = {
   scope: any;
-  availableScopes: any[];
-  professionals: any[];
+  availableScopes?: any[];
+  professionals?: any[];
   sharedEvidence?: any[];
   legacyEvidence?: any[];
   loading?: boolean;
@@ -98,8 +98,8 @@ const humanSpecialty = (value: unknown) => {
 
 export function PtsTherapeuticDashboard({
   scope,
-  availableScopes,
-  professionals,
+  availableScopes = [],
+  professionals = [],
   sharedEvidence = [],
   legacyEvidence = [],
   loading = false,
