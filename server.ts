@@ -20806,10 +20806,9 @@ async function startServer() {
       throw new Error("SALES_CHECKOUT_METADATA_INVALID");
     }
 
-    const customerEmail = sanitizeEmail(
+    const stripeObservedCustomerEmail = sanitizeEmail(
       session.customer_details?.email || session.customer_email,
     );
-    if (!customerEmail) throw new Error("SALES_CHECKOUT_EMAIL_MISSING");
 
     const subscriptionId = sanitizeString(
       String(session.subscription || ""),
@@ -20845,7 +20844,9 @@ async function startServer() {
     if (leadError || !lead) {
       throw leadError || new Error("SALES_LEAD_NOT_FOUND");
     }
-    if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
+    const isModularSalesFlow = sanitizeString(metadata.flowType, 80) === "sales_modular_assisted";
+    let paymentIdentityEmail = stripeObservedCustomerEmail;
+    if (isModularSalesFlow) {
       const { data: frozenModuleItems, error: frozenModuleError } = await supabase
         .from("sales_offer_items")
         .select("item_key")
@@ -20869,7 +20870,14 @@ async function startServer() {
       ) {
         throw new Error("MODULAR_CHECKOUT_RECONCILIATION_FAILED");
       }
+      // The contracting identity was frozen by Verto before Checkout and is
+      // independently bound to this Stripe Session through contractEmailHash.
+      // customer_details.email is a billing/payer contact and may differ (for
+      // example when Stripe Link is used). It must never replace the Director
+      // identity or force a legitimate modular payment into manual review.
+      paymentIdentityEmail = frozenContractEmail;
     }
+    if (!paymentIdentityEmail) throw new Error("SALES_CHECKOUT_EMAIL_MISSING");
     let subscription: Stripe.Subscription | null = null;
     // A paid Checkout is already authoritative for the financial transition.
     // Only no-payment sessions need the subscription status before persistence.
@@ -20945,7 +20953,7 @@ async function startServer() {
         p_offer_id: offerId,
         p_lead_id: leadId,
         p_checkout_session_id: session.id,
-        p_customer_email: customerEmail,
+        p_customer_email: paymentIdentityEmail,
         p_stripe_customer_id: customerId || null,
         p_stripe_subscription_id: subscriptionId || null,
         p_payment_status: paymentStatus || "paid",
@@ -21021,7 +21029,7 @@ async function startServer() {
     const directorEmail =
       sanitizeString((offer as any).offer_type, 30) === "modular"
         ? sanitizeEmail((offer as any).contract_email)
-        : customerEmail;
+        : paymentIdentityEmail;
     if (!directorEmail) {
       throw new Error("SALES_DIRECTOR_EMAIL_MISSING");
     }
