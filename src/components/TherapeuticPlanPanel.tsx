@@ -2846,9 +2846,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
     return (
       <div className="space-y-6" data-testid="therapeutic-plan-hub">
-        <header>
-          <h2 className={`text-xl font-semibold tracking-tight ${text}`}>Planos terapêuticos</h2>
-          <p className={`mt-1 text-sm leading-relaxed ${muted}`}>
+        <header className={`rounded-2xl border p-4 sm:p-5 ${subpanel}`}>
+          <p className={`text-xs uppercase tracking-[0.16em] ${isDark ? 'text-violet-300' : 'text-violet-600'}`}>Planejamento terapêutico</p>
+          <h2 className={`mt-1 text-xl font-semibold tracking-tight ${text}`}>Planos terapêuticos</h2>
+          <p className={`mt-1 max-w-3xl text-sm leading-relaxed ${muted}`}>
             Acesse o plano compartilhado da equipe e os planos clínicos sob sua responsabilidade ou supervisão.
           </p>
         </header>
@@ -2862,14 +2863,14 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               <p className={`mt-1 text-xs leading-5 ${muted}`}>Compartilhado com os profissionais ativos vinculados ao cuidado deste paciente.</p>
             </div>
             {canCreatePts && !scopeFormOpen && (
-              <button type="button" className={createPlanButton} onClick={() => openPlanScopeForm('interdisciplinary')}>
+              <button type="button" className={`${createPlanButton} w-full sm:w-auto`} onClick={() => openPlanScopeForm('interdisciplinary')}>
                 <Plus size={15} /> Criar PTS da equipe
               </button>
             )}
           </div>
 
           {primaryPtsScope ? (
-            <article className={`rounded-2xl border p-4 sm:p-5 ${panel} ${scopeStateAccentClass(primaryPtsScope?.status)}`} data-testid="team-pts-card">
+            <article className={`rounded-2xl border p-4 transition-colors sm:p-5 ${panel} ${scopeStateAccentClass(primaryPtsScope?.status)}`} data-testid="team-pts-card">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -2890,7 +2891,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                     <div><p className={`text-[11px] ${muted}`}>Próxima reavaliação</p><p className={`mt-1 text-sm ${text}`}>{pts?.nextReviewDate ? formatTherapeuticPlanDate(pts.nextReviewDate) : 'Não definida'}</p></div>
                   </div>
                 </div>
-                <button type="button" className={workspaceButton} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
+                <button type="button" className={`${workspaceButton} w-full sm:w-auto`} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
               </div>
             </article>
           ) : (

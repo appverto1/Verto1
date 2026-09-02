@@ -8991,9 +8991,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const renderPeiMaintenanceMetric = (label: string, value: number) => (
-    <div className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-100'}`}>
-      <p className={`text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
-      <p className={`mt-1 text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{value}</p>
+    <div className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/50' : 'border-slate-200 bg-white'}`}>
+      <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
+      <p className={`mt-1 text-xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{value}</p>
     </div>
   );
 
@@ -9015,14 +9015,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       peiMaintenanceActionKey === `${actionName}-${row.key}` ||
       (scheduleId && peiMaintenanceActionKey === `${actionName}-${scheduleId}`) ||
       Boolean(peiMaintenanceActionKey && peiMaintenanceActionKey.endsWith(String(row.key)));
-    const buttonClass = `min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
-    const primaryClass = 'min-h-[40px] rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white transition-all hover:opacity-90 disabled:opacity-60';
+    const buttonClass = `min-h-[40px] rounded-xl border px-3 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-60 ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`;
+    const primaryClass = 'min-h-[40px] rounded-xl bg-violet-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:opacity-60';
 
     if (options.technical) {
       return (
         <div className="mt-4 flex flex-wrap gap-2">
           {needsReview && (
-            <button type="button" onClick={() => openPeiMaintenanceReviewModal(row)} className={`inline-flex min-h-[40px] items-center rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100 hover:bg-amber-500/20' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}>
+            <button type="button" onClick={() => openPeiMaintenanceReviewModal(row)} className={`inline-flex min-h-[40px] items-center rounded-xl border px-3 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${isPanelDark ? 'border-amber-300/20 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20' : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}>
               Revisar vínculo
             </button>
           )}
@@ -9033,7 +9033,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return (
       <div className="mt-4 flex flex-wrap gap-2">
         {needsReview && (
-          <button type="button" onClick={() => openPeiMaintenanceReviewModal(row)} className={`inline-flex min-h-[40px] items-center rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100 hover:bg-amber-500/20' : 'bg-amber-50 text-amber-700 hover:bg-amber-100'}`}>
+          <button type="button" onClick={() => openPeiMaintenanceReviewModal(row)} className={`inline-flex min-h-[40px] items-center rounded-xl border px-3 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${isPanelDark ? 'border-amber-300/20 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20' : 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'}`}>
             Revisar vínculo
           </button>
         )}
@@ -9050,7 +9050,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         {group === 'confirmation' && (
           <>
             <button type="button" disabled={actionLoading('confirm') || !hasRealSchedule || needsTargetReview} title={needsTargetReview || !hasRealSchedule ? 'Revise o vínculo antes de confirmar.' : undefined} onClick={() => handlePeiConfirmCandidateLink(row)} className={primaryClass}>
-              {actionLoading('confirm') ? 'Confirmando...' : 'Confirmar vinculo'}
+              {actionLoading('confirm') ? 'Confirmando...' : 'Confirmar vínculo'}
             </button>
             <button type="button" disabled={actionLoading('skip') || !hasRealSchedule} title={!hasRealSchedule ? 'Revise o vínculo antes de fazer depois.' : undefined} onClick={() => handlePeiSkipCandidateLink(row)} className={buttonClass}>
               {actionLoading('skip') ? 'Atualizando...' : 'Fazer depois'}
@@ -9105,18 +9105,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       ? `Plano de manutencao: ${row.completedCount}/${row.totalCycleCount || 4} concluido`
       : 'Sem ciclo completo registrado';
     return (
-      <div key={row.key} className={`rounded-2xl border ${options.technical ? 'p-3 shadow-none' : 'p-4 shadow-sm'} ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+      <div key={row.key} className={`rounded-2xl border ${options.technical ? 'p-3' : 'p-4'} ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap gap-2">
-              <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${row.isRegressionRisk ? 'bg-red-50 text-red-700' : row.isMaintained ? 'bg-emerald-50 text-emerald-700' : 'bg-violet-50 text-[#7a32fc]'}`}>
+              <span className={`rounded-full border px-2.5 py-1 text-[11px] ${row.isRegressionRisk ? 'border-rose-200 bg-rose-50 text-rose-700' : row.isMaintained ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>
                 {row.statusLabel}
               </span>
-              {row.group === 'confirmation' && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">Pendente de confirmacao</span>}
+              {row.group === 'confirmation' && <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] text-amber-700">Pendente de confirmação</span>}
             </div>
             <h4 className={`mt-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{displayTargetName}</h4>
             {!options.technical && (
-              <p className={`mt-1 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                 {[row.protocol, row.domain].filter(Boolean).join(' · ') || 'PEI do paciente'}
               </p>
             )}
@@ -9124,28 +9124,28 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {rowClinicalContext}
             </p>
           </div>
-          <div className={`rounded-2xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-900/70 text-slate-200' : 'bg-slate-50 text-slate-600'}`}>
+          <div className={`rounded-xl border px-3 py-2 text-xs ${isPanelDark ? 'border-slate-700 bg-slate-900/70 text-slate-200' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
             {formatPeiMaintenanceScheduleLabel(row.nextSchedule)}
           </div>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
           <div className={`rounded-xl p-3 text-xs ${isPanelDark ? 'bg-slate-900/60 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
-            <span className="font-semibold">Proximo probe</span>
+            <span className="font-medium">Proximo probe</span>
             <p className="mt-1">{formatPeiMaintenanceScheduleLabel(row.nextSchedule)}</p>
           </div>
           <div className={`rounded-xl p-3 text-xs ${isPanelDark ? 'bg-slate-900/60 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
-            <span className="font-semibold">Ciclo atual</span>
+            <span className="font-medium">Ciclo atual</span>
             <p className="mt-1">{cycleLabel}</p>
           </div>
           <div className={`rounded-xl p-3 text-xs ${isPanelDark ? 'bg-slate-900/60 text-slate-300' : 'bg-slate-50 text-slate-600'}`}>
-            <span className="font-semibold">Resultado recente</span>
+            <span className="font-medium">Resultado recente</span>
             <p className="mt-1">
               {lastResult ? `${accuracy ?? 0}% acuracia - ${independence ?? 0}% independencia` : 'Sem probe concluido'}
             </p>
           </div>
         </div>
         {row.activeAlert && (
-          <div className="mt-3 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+          <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
             {row.isRegressionRisk ? 'Risco de regressao' : 'Atencao'}: {safeDisplayValue(row.activeAlert?.message, 'Acompanhar proximos probes.')}
           </div>
         )}
@@ -9163,7 +9163,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       <section className={`space-y-3 ${technical ? 'pt-2' : ''}`}>
         <div className="flex items-center justify-between">
           <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{title}</h4>
-          <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{rows.length}</span>
+          <span className={`rounded-full border px-2.5 py-1 text-xs ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600'}`}>{rows.length}</span>
         </div>
         {description && (
           <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{description}</p>
@@ -9175,7 +9175,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <button
             type="button"
             onClick={() => setIsPeiMaintenanceTechnicalExpanded((value) => !value)}
-            className={`min-h-[40px] rounded-xl px-3 py-2 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+            className={`min-h-[40px] rounded-xl border px-3 py-2 text-xs transition-colors ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
           >
             {isPeiMaintenanceTechnicalExpanded ? 'Recolher pendências técnicas' : `Mostrar ${rows.length - visibleRows.length} pendência(s) técnica(s)`}
           </button>
@@ -9201,22 +9201,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         : display.tone === 'violet'
           ? isPanelDark ? 'bg-violet-500/15 text-violet-100 border-violet-300/30' : 'bg-violet-50 text-violet-700 border-violet-200'
           : isPanelDark ? 'bg-emerald-500/15 text-emerald-100 border-emerald-300/30' : 'bg-emerald-50 text-emerald-700 border-emerald-200';
-      const buttonClass = `inline-flex min-h-[36px] items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-slate-800 text-slate-100 hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`;
-      const dangerClass = `inline-flex min-h-[36px] items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold transition-all disabled:opacity-60 ${isPanelDark ? 'bg-rose-500/10 text-rose-100 hover:bg-rose-500/20' : 'bg-rose-50 text-rose-700 hover:bg-rose-100'}`;
+      const buttonClass = `inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-60 ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-100 hover:bg-slate-700' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`;
+      const dangerClass = `inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl border px-3 py-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 disabled:opacity-60 ${isPanelDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20' : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'}`;
       return (
-        <div key={row?.key || scheduleId || title} className={`rounded-2xl border p-4 ${row?.duplicateSchedule ? isPanelDark ? 'border-amber-400/30 bg-[#101b2e]' : 'border-amber-200 bg-white' : isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
+        <div key={row?.key || scheduleId || title} className={`rounded-2xl border p-4 ${row?.duplicateSchedule ? isPanelDark ? 'border-amber-400/30 bg-[#101b2e]' : 'border-amber-200 bg-white' : isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
               <h5 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{title}</h5>
               <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{[protocol, domain].filter(Boolean).join(' · ') || 'PEI do paciente'}</p>
-              <p className={`mt-2 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{display.line}</p>
+              <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>{display.line}</p>
               {row?.duplicateSchedule && (
-                <p className={`mt-2 rounded-xl border px-3 py-2 text-xs font-semibold ${isPanelDark ? 'border-amber-300/20 bg-amber-500/10 text-amber-100' : 'border-amber-100 bg-amber-50 text-amber-700'}`}>
+                <p className={`mt-2 rounded-xl border px-3 py-2 text-xs ${isPanelDark ? 'border-amber-300/20 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
                   Há múltiplas sondagens ativas para esta habilidade.
                 </p>
               )}
             </div>
-            <span className={`inline-flex min-h-[32px] items-center rounded-xl border px-3 py-1.5 text-xs font-semibold ${badgeClass}`}>
+            <span className={`inline-flex min-h-[32px] items-center rounded-xl border px-3 py-1.5 text-xs ${badgeClass}`}>
               {display.badge}
             </span>
           </div>
@@ -9272,33 +9272,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
 
     return (
-      <div className="space-y-4">
-        <div>
+      <div className="space-y-5">
+        <div className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}>
           <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Manutenção</h3>
-          <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades adquiridas no Ensino, prontas para sondagem de manutenção.</p>
+          <p className={`mt-1 text-sm leading-6 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades adquiridas no Ensino, prontas para sondagem de manutenção.</p>
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+        <div className={`grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-4 ${isPanelDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`}>
           {[
             ['Elegíveis', peiMaintenanceEligibleRows.length],
             ['Em manutenção', 0],
             ['Agendadas', peiMaintenanceScheduledRows.length],
             ['Aguardando sessão', peiMaintenanceWaitingRows.length],
           ].map(([label, value]) => (
-            <div key={String(label)} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/50' : 'border-slate-100 bg-white'}`}>
-              <p className={`text-xs font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
-              <p className={`mt-1 text-2xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{value}</p>
+            <div key={String(label)} className={`p-4 ${isPanelDark ? 'bg-slate-900/80' : 'bg-white'}`}>
+              <p className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{label}</p>
+              <p className={`mt-1 text-xl font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{value}</p>
             </div>
           ))}
         </div>
         {peiMaintenancePanelMessage && (
-          <div className={`rounded-2xl border p-4 text-sm font-semibold ${isPanelDark ? 'border-violet-400/30 bg-violet-500/10 text-violet-100' : 'border-violet-100 bg-violet-50 text-violet-700'}`}>
+          <div className={`rounded-2xl border p-4 text-sm ${isPanelDark ? 'border-violet-400/30 bg-violet-500/10 text-violet-100' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>
             {peiMaintenancePanelMessage}
           </div>
         )}
         <section className="space-y-3">
           <div className="flex items-center justify-between gap-3">
             <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Habilidades elegíveis para manutenção</h4>
-            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{peiMaintenanceEligibleRows.length}</span>
+            <span className={`rounded-full border px-2.5 py-1 text-xs ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600'}`}>{peiMaintenanceEligibleRows.length}</span>
           </div>
           {shouldShowPeiMaintenancePanelLoading ? (
             <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
@@ -9320,31 +9320,31 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 const goalDomain = safeDisplayValue(goal?.domain || goal?.domainName, '');
                 const goalProgressPercent = Number.isFinite(Number(goal?.progressPercent)) ? Math.max(0, Math.min(100, Math.round(Number(goal.progressPercent)))) : 100;
                 return (
-                  <div key={goal.key} className={`rounded-2xl border p-5 shadow-sm ${isPanelDark ? 'border-emerald-400/40 bg-[#101b2e]' : 'border-emerald-200 bg-white'}`}>
+                  <div key={goal.key} className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-emerald-400/40 bg-[#101b2e]' : 'border-emerald-200 bg-emerald-50/25'}`}>
                     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                       <div className="min-w-0">
                         <h4 className={`text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{goalName}</h4>
-                        <p className={`mt-1 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
+                        <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                           {[goalProtocol, goalDomain].filter(Boolean).join(' · ') || 'PEI do paciente'}
                         </p>
                         {goal.description && (
                           <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(goal.description)}</p>
                         )}
                       </div>
-                      <span className="inline-flex min-h-[34px] items-center justify-center rounded-xl bg-emerald-500 px-4 py-2 text-xs font-bold uppercase tracking-wide text-white shadow-md shadow-emerald-200">
+                      <span className={`inline-flex min-h-[34px] items-center justify-center rounded-full border px-3 py-1.5 text-xs ${isPanelDark ? 'border-emerald-300/30 bg-emerald-500/15 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
                         {goal.statusLabel}
                       </span>
                     </div>
                     {goalProgressPercent !== null && (
                       <div className="mt-4">
-                        <div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-widest text-emerald-700">
+                        <div className={`flex items-center justify-between text-xs ${isPanelDark ? 'text-emerald-200' : 'text-emerald-700'}`}>
                           <span>Progresso da meta</span>
                           <span>{goalProgressPercent}%</span>
                         </div>
                         <div className={`mt-2 h-3 overflow-hidden rounded-full ${isPanelDark ? 'bg-slate-800' : 'bg-emerald-100'}`}>
                           <div className="h-full rounded-full bg-gradient-to-r from-emerald-400 via-green-500 to-teal-500" style={{ width: `${goalProgressPercent}%` }}></div>
                         </div>
-                        <div className={`mt-3 inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-bold ${isPanelDark ? 'bg-emerald-500/10 text-emerald-100 border border-emerald-300/20' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+                        <div className={`mt-3 inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${isPanelDark ? 'border-emerald-300/20 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>
                           <CheckCircle2 size={15} />
                           Status: Adquirido. Progresso: {goalProgressPercent}%.
                         </div>
@@ -9358,7 +9358,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           disabled={Boolean(peiMaintenanceActionKey) || !canManagePeiMaintenance}
                           title={cannotScheduleTooltip}
                           aria-label={cannotScheduleTooltip || 'Agendar manutenção'}
-                          className="min-h-[44px] w-full rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition-all hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
+                          className="min-h-[44px] w-full rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto"
                         >
                           {peiMaintenanceActionKey === scheduleActionKey ? 'Agendando...' : 'Agendar manutenção'}
                         </button>
@@ -9374,7 +9374,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Agendadas</h4>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{peiMaintenanceScheduledRows.length}</span>
+              <span className={`rounded-full border px-2.5 py-1 text-xs ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600'}`}>{peiMaintenanceScheduledRows.length}</span>
             </div>
             <div className="space-y-3">
               {peiMaintenanceScheduledRows.map((row: any) => renderScheduledRow(row, 'Sondagem agendada'))}
@@ -9385,7 +9385,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Agendamentos duplicados para revisão</h4>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-amber-500/10 text-amber-100' : 'bg-amber-50 text-amber-700'}`}>{peiMaintenanceDuplicateScheduleRows.length}</span>
+              <span className={`rounded-full border px-2.5 py-1 text-xs ${isPanelDark ? 'border-amber-300/20 bg-amber-500/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>{peiMaintenanceDuplicateScheduleRows.length}</span>
             </div>
             <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>O fluxo principal mostra somente o agendamento ativo mais recente por habilidade.</p>
             <div className="space-y-3">
@@ -9397,7 +9397,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h4 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>Aguardando sessão</h4>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>{peiMaintenanceWaitingRows.length}</span>
+              <span className={`rounded-full border px-2.5 py-1 text-xs ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600'}`}>{peiMaintenanceWaitingRows.length}</span>
             </div>
             <div className="space-y-3">
               {peiMaintenanceWaitingRows.map((row: any) => renderScheduledRow(row, 'Aguardando futura sessão'))}
@@ -9409,20 +9409,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const renderPeiGeneralizationPanel = () => (
-    <div className="space-y-4">
-      <div>
-        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Generalizacao</h3>
-        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades mantidas que podem evoluir para outro ambiente, terapeuta, material ou familiar.</p>
+    <div className="space-y-5">
+      <div className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}>
+        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Generalização</h3>
+        <p className={`mt-1 text-sm leading-6 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Habilidades mantidas que podem evoluir para outro ambiente, terapeuta, material ou familiar.</p>
       </div>
       {peiGeneralizationRows.length === 0 ? (
-        <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>Nenhuma habilidade pronta para generalização no momento.</p>
+        <p className={`rounded-2xl border border-dashed p-6 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>Nenhuma habilidade pronta para generalização no momento.</p>
       ) : (
         <div className="space-y-3">
           {peiGeneralizationRows.map((row: any) => (
-            <div key={row.key} className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+            <div key={row.key} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
               <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{row.targetName}</p>
               <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{row.protocol} - {row.domain}</p>
-              <span className="mt-3 inline-flex rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">{row.statusLabel || 'Habilidade mantida'}</span>
+              <span className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs ${isPanelDark ? 'border-emerald-300/20 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}`}>{row.statusLabel || 'Habilidade mantida'}</span>
             </div>
           ))}
         </div>
@@ -9431,23 +9431,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   );
 
   const renderPeiHistoryPanel = () => (
-    <div className="space-y-4">
-      <div>
-        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Historico do PEI</h3>
-        <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Linha do tempo com eventos clinicos ja registrados.</p>
+    <div className="space-y-5">
+      <div className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}>
+        <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Histórico do PEI</h3>
+        <p className={`mt-1 text-sm leading-6 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Linha do tempo com eventos clínicos já registrados.</p>
       </div>
       {peiHistoryEvents.length === 0 ? (
-        <p className={`rounded-2xl border p-5 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>Ainda nao ha historico estruturado do PEI para este paciente.</p>
+        <p className={`rounded-2xl border border-dashed p-6 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-400' : 'border-slate-200 bg-slate-50 text-slate-500'}`}>Ainda não há histórico estruturado do PEI para este paciente.</p>
       ) : (
         <div className="space-y-3">
           {peiHistoryEvents.map((event: any) => (
-            <div key={event.id} className={`rounded-2xl border p-4 ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-100'}`}>
+            <div key={event.id} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>{event.title}</p>
                   <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{event.detail}</p>
                 </div>
-                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                <span className={`rounded-full border px-3 py-1 text-xs ${isPanelDark ? 'border-slate-700 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600'}`}>
                   {event.date ? formatAbaDateTime(event.date) : event.source}
                 </span>
               </div>
@@ -11597,44 +11597,47 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </div>
           </div>
         ) : activeTab === 'plan' ? ( 
-          <div className="space-y-6 animate-fade-in"> 
+          <div className="animate-fade-in space-y-6">
             {isKidsProfile && (
-              <div className={`p-6 rounded-[32px] shadow-sm border mb-6 relative overflow-hidden transition-colors ${isPanelDark ? 'bg-[#101b2e] border-slate-700' : 'bg-white border-slate-200'}`}>
-                <div className="mb-5">
-                  <h3 className={`text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-gray-900'}`}>Planejamento</h3>
-                  <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>Navegue entre o planejamento terapêutico compartilhado e, quando aplicável, o planejamento educacional do paciente.</p>
+              <div className={`relative mb-6 overflow-hidden rounded-3xl border p-4 shadow-sm transition-colors sm:p-6 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                <div className="mb-6">
+                  <p className={`text-xs uppercase tracking-[0.16em] ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Cuidado coordenado</p>
+                  <h3 className={`mt-1 text-xl font-semibold tracking-tight ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>Planejamento</h3>
+                  <p className={`mt-1 max-w-3xl text-sm leading-6 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Navegue entre o planejamento terapêutico compartilhado e, quando aplicável, o planejamento educacional do paciente.</p>
                 </div>
 
-                <div className={`mb-6 border-b ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`} data-testid="therapeutic-plan-mode-switch">
-                  <div className="flex min-h-[44px] gap-6 overflow-x-auto" role="tablist" aria-label="Tipo de plano terapêutico">
+                <div className="mb-6" data-testid="therapeutic-plan-mode-switch">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="tablist" aria-label="Tipo de plano terapêutico">
                     <button
                       type="button"
                       role="tab"
                       aria-selected={therapeuticPlanMode === 'pts'}
                       onClick={() => { setTherapeuticPlanMode('pts'); setActivePeiPlanSubtab('teaching'); }}
-                      className={`relative shrink-0 px-1 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pts' ? (isPanelDark ? 'text-violet-300' : 'text-violet-700') : isPanelDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      className={`relative min-h-[72px] rounded-2xl border px-4 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pts' ? (isPanelDark ? 'border-violet-400/40 bg-violet-500/10 text-violet-100' : 'border-violet-200 bg-violet-50/80 text-violet-800 shadow-sm') : isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300 hover:border-slate-600 hover:bg-slate-900/70' : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:border-violet-200 hover:bg-white'}`}
                     >
-                      PTS
-                      {therapeuticPlanMode === 'pts' && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
+                      <span className="block text-sm font-semibold">PTS</span>
+                      <span className={`mt-1 block text-xs leading-5 ${therapeuticPlanMode === 'pts' ? (isPanelDark ? 'text-violet-200/80' : 'text-violet-700') : isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Projeto Terapêutico Singular</span>
+                      {therapeuticPlanMode === 'pts' && <span className="absolute inset-x-4 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
                     </button>
                     <button
                       type="button"
                       role="tab"
                       aria-selected={therapeuticPlanMode === 'pei'}
                       onClick={() => setTherapeuticPlanMode('pei')}
-                      className={`relative shrink-0 px-1 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pei' ? (isPanelDark ? 'text-violet-300' : 'text-violet-700') : isPanelDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`}
+                      className={`relative min-h-[72px] rounded-2xl border px-4 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pei' ? (isPanelDark ? 'border-violet-400/40 bg-violet-500/10 text-violet-100' : 'border-violet-200 bg-violet-50/80 text-violet-800 shadow-sm') : isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300 hover:border-slate-600 hover:bg-slate-900/70' : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:border-violet-200 hover:bg-white'}`}
                     >
-                      PEI
-                      {therapeuticPlanMode === 'pei' && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
+                      <span className="block text-sm font-semibold">PEI</span>
+                      <span className={`mt-1 block text-xs leading-5 ${therapeuticPlanMode === 'pei' ? (isPanelDark ? 'text-violet-200/80' : 'text-violet-700') : isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Plano Educacional Individualizado</span>
+                      {therapeuticPlanMode === 'pei' && <span className="absolute inset-x-4 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
                     </button>
                   </div>
-                  <p className={`pb-3 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                  <p className={`mt-2 px-1 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
                     {therapeuticPlanMode === 'pts' ? 'Coordenação clínica compartilhada da equipe.' : 'Metas educacionais e estruturas legadas do paciente.'}
                   </p>
                 </div>
 
                 {therapeuticPlanMode === 'pei' && (
-                <nav aria-label="Áreas do Plano terapêutico" className={`mb-7 flex gap-2 overflow-x-auto rounded-2xl border p-1.5 shadow-sm ${isPanelDark ? 'bg-slate-900/70 border-slate-700' : 'bg-slate-100/80 border-slate-200'}`} data-therapeutic-plan-navigation>
+                <nav aria-label="Áreas do Plano terapêutico" className={`mb-6 flex gap-1 overflow-x-auto border-b ${isPanelDark ? 'border-slate-700' : 'border-slate-200'}`} data-therapeutic-plan-navigation role="tablist">
                   {PEI_PLAN_SUBTABS.map((tab) => {
                     const active = activePeiPlanSubtab === tab.id;
                     const label =
@@ -11652,21 +11655,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       <button
                         key={tab.id}
                         type="button"
+                        role="tab"
+                        aria-selected={active}
                         onClick={() => setActivePeiPlanSubtab(tab.id)}
-                        className={`min-h-[44px] shrink-0 rounded-xl border px-5 py-2.5 text-sm font-medium transition-all ${
+                        className={`relative min-h-[44px] shrink-0 rounded-t-lg px-3 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
                           active
                             ? isPanelDark
-                              ? 'border-slate-600 bg-slate-800 text-white shadow-sm'
-                              : 'border-violet-100 bg-white text-[#7a32fc] shadow-sm'
+                              ? 'bg-violet-500/10 text-violet-200'
+                              : 'bg-violet-50 text-violet-700'
                             : isPanelDark
-                              ? 'border-transparent text-slate-300 hover:bg-slate-800/60'
-                              : 'border-transparent text-slate-600 hover:bg-white/70'
+                              ? 'text-slate-400 hover:bg-slate-800 hover:text-violet-200'
+                              : 'text-slate-500 hover:bg-slate-50 hover:text-violet-600'
                         }`}
                       >
                         {label}
                         {badge > 0 && (
-                          <span className="ml-2 rounded-full bg-[#7a32fc]/10 px-2 py-0.5 text-xs text-[#7a32fc]">{badge}</span>
+                          <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${isPanelDark ? 'bg-violet-500/15 text-violet-200' : 'bg-violet-100 text-violet-700'}`}>{badge}</span>
                         )}
+                        {active && <span className="absolute inset-x-0 bottom-0 h-[3px] rounded-t-full bg-violet-600" aria-hidden="true" />}
                       </button>
                     );
                   })}
@@ -11690,21 +11696,27 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     />
                   )}
                   {therapeuticPlanMode === 'pei' && (
-                  <details open className={`rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`}>
-                    <summary className={`cursor-pointer list-none px-4 py-3 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                      PEI - Plano Educacional Individualizado
-                      <span className={`ml-2 text-xs ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>Metas educacionais, protocolos e registros anteriores</span>
+                  <details open className={`overflow-hidden rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}>
+                    <summary className={`cursor-pointer list-none px-4 py-4 transition-colors sm:px-5 ${isPanelDark ? 'hover:bg-slate-900/70' : 'hover:bg-slate-50'}`}>
+                      <span className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span>
+                          <span className={`block text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>PEI - Plano Educacional Individualizado</span>
+                          <span className={`mt-1 block text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Metas educacionais, protocolos e registros anteriores</span>
+                        </span>
+                        <span className={`w-fit rounded-full border px-2.5 py-1 text-[11px] ${isPanelDark ? 'border-violet-400/25 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>Planejamento educacional</span>
+                      </span>
                     </summary>
-                    <div className="space-y-4 border-t p-4 pt-5 dark:border-slate-700">
-                  <div className="flex items-center justify-between mb-2">
-                    <h4 className={`text-xs font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Metas Ativas</h4>
+                    <div className={`space-y-5 border-t p-4 sm:p-5 ${isPanelDark ? 'border-slate-700' : 'border-slate-100'}`}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <h4 className={`text-base font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Metas ativas</h4>
+                      <p className={`mt-1 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Organize habilidades por prazo e acompanhe sua evolução clínica.</p>
+                    </div>
                     <button 
                       onClick={() => setIsAddingPEIGoal(!isAddingPEIGoal)}
-                      className={`text-xs font-bold px-4 py-2 rounded-xl transition-all flex items-center gap-2 shadow-sm ${
-                        isPanelDark
-                          ? 'text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-400/20'
-                          : 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
-                      }`}
+                      className={isAddingPEIGoal
+                        ? `inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`
+                        : 'inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2'}
                     >
                       {isAddingPEIGoal ? <X size={14} /> : <Plus size={14} />}
                       {isAddingPEIGoal ? "Cancelar" : "Adicionar Meta do Protocolo"}
@@ -11712,12 +11724,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </div>
 
                   {isAddingPEIGoal && (
-                    <div className="bg-gray-50 p-5 rounded-3xl border border-dashed border-[#05CD99]/30 animate-slide-up mb-6">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                    <div className={`animate-slide-up rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-violet-400/25 bg-violet-500/5' : 'border-violet-200 bg-violet-50/40'}`}>
+                      <div className="mb-4">
+                        <h5 className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Adicionar meta do protocolo</h5>
+                        <p className={`mt-1 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Selecione o protocolo e o domínio para escolher uma habilidade.</p>
+                      </div>
+                      <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
                         <div>
-                          <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Protocolo</label>
+                          <label className={`mb-1.5 ml-1 block text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Protocolo</label>
                           <select 
-                            className="w-full bg-white border border-gray-100 rounded-xl p-3 text-sm outline-none focus:border-[#05CD99] font-semibold text-gray-700"
+                            className={`w-full rounded-xl border p-3 text-sm outline-none transition-colors focus:border-violet-500 ${isPanelDark ? 'border-slate-700 bg-slate-950/50 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}
                             value={selectedPEIProtocolId}
                             onChange={(e) => {
                               setSelectedPEIProtocolId(e.target.value);
@@ -11732,9 +11748,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                           </select>
                         </div>
                         <div>
-                          <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Domínio</label>
+                          <label className={`mb-1.5 ml-1 block text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Domínio</label>
                           <select 
-                            className="w-full bg-white border border-gray-100 rounded-xl p-3 text-sm outline-none focus:border-[#05CD99] font-semibold text-gray-700"
+                            className={`w-full rounded-xl border p-3 text-sm outline-none transition-colors focus:border-violet-500 disabled:cursor-not-allowed disabled:opacity-60 ${isPanelDark ? 'border-slate-700 bg-slate-950/50 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}
                             value={selectedPEIDomainId}
                             onChange={(e) => {
                               setSelectedPEIDomainId(e.target.value);
@@ -11752,7 +11768,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       
                       {selectedPEIDomainId && (
                         <div className="space-y-3 animate-fade-in">
-                          <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1.5 ml-1">Habilidade / Meta</label>
+                          <label className={`mb-1.5 ml-1 block text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Habilidade / meta</label>
                           <div className="grid grid-cols-1 gap-2">
                             {(selectedPEIDomain?.skills || []).map((s: any) => (
                               <button 
@@ -11787,21 +11803,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   setSelectedPEISkillId(String(s.id));
                                   flashPEIConfirmation(peiGoalId, s.id);
                                 }}
-                                className="relative overflow-hidden text-left p-4 bg-white border border-gray-100 rounded-2xl hover:border-[#05CD99] hover:bg-[#05CD99]/5 transition-all group"
+                                className={`group relative overflow-hidden rounded-xl border p-4 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${isPanelDark ? 'border-slate-700 bg-slate-900/60 hover:border-violet-400/50 hover:bg-slate-900' : 'border-slate-200 bg-white hover:border-violet-300 hover:bg-violet-50/50'}`}
                               >
                                 {String(confirmedPEISkillId) === String(s.id) && (
-                                  <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-[#05CD99]/10 backdrop-blur-[1px] animate-pop">
-                                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-[#05CD99] text-white shadow-xl shadow-emerald-500/30">
+                                  <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-violet-500/10 backdrop-blur-[1px] animate-pop">
+                                    <span className="flex h-11 w-11 items-center justify-center rounded-full bg-violet-600 text-white shadow-xl shadow-violet-500/25">
                                       <CheckCircle2 size={24} />
                                     </span>
                                   </span>
                                 )}
-                                <div className="flex justify-between items-center">
-                                  <div>
-                                    <p className="text-sm font-semibold text-gray-800">{s.name}</p>
-                                    <p className="text-[10px] text-gray-500 mt-1">{sanitizeDescriptionForDisplay(s.objective)}</p>
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>{s.name}</p>
+                                    <p className={`mt-1 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(s.objective)}</p>
                                   </div>
-                                  <Plus size={16} className="text-gray-300 group-hover:text-[#05CD99]" />
+                                  <Plus size={16} className={`shrink-0 ${isPanelDark ? 'text-slate-500 group-hover:text-violet-300' : 'text-slate-300 group-hover:text-violet-600'}`} />
                                 </div>
                               </button>
                             ))}
@@ -11819,39 +11835,39 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         
                         return (
                           <div key={term} className="space-y-3">
-                            <h5 className="text-[10px] font-semibold text-gray-400 uppercase tracking-[0.2em] ml-2">
+                            <h5 className={`ml-1 text-xs font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
                               {term === 'short' ? 'Curto Prazo' : term === 'medium' ? 'Médio Prazo' : 'Longo Prazo'}
                             </h5>
                             {termGoals.sort((a: any, b: any) => (b.isPriority ? 1 : 0) - (a.isPriority ? 1 : 0)).map((goal: any) => {
                               const masteryDisplay = resolvePeiGoalMasteryDisplay(goal);
                               const goalMasteryTarget = getGoalMasteryTarget(goal);
                               return (
-                              <div key={goal.id} className={`p-5 rounded-2xl border shadow-sm group hover:shadow-md transition-all relative overflow-hidden ${
+                              <div key={goal.id} className={`group relative overflow-hidden rounded-2xl border p-4 transition-all sm:p-5 ${
                                 isGoalAcquired(goal)
                                   ? isPanelDark
-                                    ? 'bg-gradient-to-br from-emerald-950/70 via-[#101b2e] to-teal-950/50 border-emerald-400/50 ring-1 ring-emerald-400/20 shadow-emerald-950/20'
-                                    : 'bg-gradient-to-br from-emerald-50 via-white to-teal-50 border-emerald-300 ring-2 ring-emerald-100 shadow-emerald-100'
+                                    ? 'border-emerald-400/40 bg-emerald-500/5'
+                                    : 'border-emerald-200 bg-emerald-50/35'
                                   : isPanelDark
-                                    ? 'bg-[#101b2e] border-slate-700'
-                                    : 'bg-white border-slate-200'
+                                    ? 'border-slate-700 bg-[#101b2e] hover:border-slate-600'
+                                    : 'border-slate-200 bg-white hover:border-violet-200 hover:shadow-sm'
                               }`}>
                                 {String(confirmedPEIGoalId) === String(goal.id) && (
-                                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-[#05CD99]/10 backdrop-blur-[1px] animate-pop">
-                                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#05CD99] text-white shadow-xl shadow-emerald-500/30">
+                                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-violet-500/10 backdrop-blur-[1px] animate-pop">
+                                    <div className="flex h-12 w-12 items-center justify-center rounded-full bg-violet-600 text-white shadow-xl shadow-violet-500/25">
                                       <CheckCircle2 size={26} />
                                     </div>
                                   </div>
                                 )}
                                 {isGoalAcquired(goal) && (
-                                  <div className="absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r from-emerald-400 via-green-500 to-teal-400 pointer-events-none" />
+                                  <div className="pointer-events-none absolute inset-y-4 left-0 w-1 rounded-r-full bg-emerald-500" />
                                 )}
-                                <div className="flex justify-between items-start mb-3">
-                                  <div>
-                                    <div className="flex items-center gap-2 mb-1">
-                                      <span className="text-[9px] font-semibold text-[#05CD99] bg-[#05CD99]/10 px-2 py-0.5 rounded-full uppercase">{goal.protocolTitle}</span>
-                                      <span className={`text-[9px] font-semibold uppercase ${isPanelDark ? 'text-slate-300' : 'text-gray-400'}`}>{goal.domainName}</span>
+                                <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                                      <span className={`rounded-full border px-2.5 py-1 text-[10px] ${isPanelDark ? 'border-violet-400/25 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>{goal.protocolTitle}</span>
+                                      <span className={`rounded-full border px-2.5 py-1 text-[10px] ${isPanelDark ? 'border-slate-700 bg-slate-900/60 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>{goal.domainName}</span>
                                       <select 
-                                        className={`text-[9px] font-semibold px-2 py-0.5 rounded-full uppercase outline-none transition-colors ${isPanelDark ? 'bg-slate-800 text-slate-200' : 'bg-gray-100 text-gray-500'}`}
+                                        className={`rounded-full border px-2.5 py-1 text-[10px] outline-none transition-colors focus:border-violet-500 ${isPanelDark ? 'border-slate-700 bg-slate-900 text-slate-200' : 'border-slate-200 bg-white text-slate-600'}`}
                                         value={goal.term}
                                         onChange={(e) => {
                                           const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, term: e.target.value } : g);
@@ -11863,14 +11879,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         <option value="long">Longo Prazo</option>
                                       </select>
                                     </div>
-                                    <h4 className={`font-semibold text-base flex items-center gap-2 ${isPanelDark ? 'text-slate-50' : 'text-gray-800'}`}>
+                                    <h4 className={`flex items-center gap-2 text-base font-semibold ${isPanelDark ? 'text-slate-50' : 'text-slate-900'}`}>
                                       {goal.name}
                                       <button 
                                         onClick={() => {
                                           const updatedPEI = peiGoals.map((g: any) => g.id === goal.id ? { ...g, isPriority: !g.isPriority } : g);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
-                                        className={`p-1 rounded-md transition-all ${goal.isPriority ? 'text-orange-500 bg-orange-50' : isPanelDark ? 'text-slate-400 hover:text-orange-300 hover:bg-slate-800' : 'text-slate-400 hover:text-orange-500 hover:bg-orange-50'}`}
+                                        className={`rounded-lg p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${goal.isPriority ? (isPanelDark ? 'bg-amber-500/15 text-amber-300' : 'bg-amber-50 text-amber-600') : isPanelDark ? 'text-slate-400 hover:bg-slate-800 hover:text-amber-300' : 'text-slate-400 hover:bg-amber-50 hover:text-amber-600'}`}
                                         title={goal.isPriority ? "Remover Prioridade" : "Marcar como Prioridade para Sessão"}
                                       >
                                         <Zap size={14} fill={goal.isPriority ? "currentColor" : "none"} />
@@ -11881,18 +11897,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                         <MasteryDots count={getMasteryProgress(goal) || 0} status={isGoalAcquired(goal) ? 'completed' : goal.status} target={goalMasteryTarget} />
                                       </div>
                                     )}
-                                    <p className={`text-xs mt-1 ${isPanelDark ? 'text-slate-300' : 'text-gray-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
+                                    <p className={`mt-1 text-xs leading-5 ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>{sanitizeDescriptionForDisplay(goal.objective)}</p>
                                     <div className={`mt-3 border-t pt-3 ${isPanelDark ? 'border-slate-700' : 'border-slate-100'}`}>
-                                      <p className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Criterio de maestria</p>
-                                      <p className={`mt-1 text-xs font-bold ${masteryDisplay.criterion ? (isPanelDark ? 'text-violet-100' : 'text-[#7a32fc]') : 'text-amber-600'}`}>{masteryDisplay.label}</p>
-                                      <p className={`mt-1 text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Origem: {masteryDisplay.sourceLabel}</p>
-                                      <p className={`text-[11px] font-semibold ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Hoje: {masteryDisplay.progressLabel}</p>
+                                      <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Critério de maestria</p>
+                                      <p className={`mt-1 text-sm ${masteryDisplay.criterion ? (isPanelDark ? 'text-violet-200' : 'text-violet-700') : 'text-amber-600'}`}>{masteryDisplay.label}</p>
+                                      <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Origem: {masteryDisplay.sourceLabel}</p>
+                                      <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Hoje: {masteryDisplay.progressLabel}</p>
                                     </div>
                                   </div>
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
                                       <select 
-                                        className={`text-[10px] font-semibold px-3 py-1.5 rounded-xl outline-none appearance-none uppercase tracking-wider border-2 transition-all ${
-                                          isGoalAcquired(goal) ? isPanelDark ? 'bg-emerald-500/20 text-emerald-100 border-emerald-300/40 shadow-sm shadow-emerald-950/20' : 'bg-emerald-500 text-white border-emerald-500 shadow-md shadow-emerald-200' :
+                                        className={`appearance-none rounded-xl border px-3 py-2 text-xs outline-none transition-colors focus:border-violet-500 ${
+                                          isGoalAcquired(goal) ? isPanelDark ? 'border-emerald-300/30 bg-emerald-500/15 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-700' :
                                           goal.status === 'in_progress' ? isPanelDark ? 'bg-blue-500/15 text-blue-200 border-blue-400/30' : 'bg-blue-50 text-blue-700 border-blue-200' : 
                                           isPanelDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-100 text-slate-600 border-slate-200'
                                         }`}
@@ -11923,7 +11939,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                               onUpdatePatient({ ...patient, pei: updatedPEI });
                                             }
                                           }}
-                                          className={`p-2 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-orange-300 hover:bg-slate-800' : 'text-slate-400 hover:text-orange-500 hover:bg-orange-50'}`}
+                                          className={`rounded-xl p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${isPanelDark ? 'text-slate-400 hover:bg-slate-800 hover:text-amber-300' : 'text-slate-400 hover:bg-amber-50 hover:text-amber-600'}`}
                                           title="Zerar Progresso de Maestria"
                                         >
                                           <RotateCcw size={16} />
@@ -11934,16 +11950,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                           const updatedPEI = peiGoals.filter((g: any) => g.id !== goal.id);
                                           onUpdatePatient({ ...patient, pei: updatedPEI });
                                         }}
-                                        className={`p-2 rounded-xl transition-all ${isPanelDark ? 'text-slate-400 hover:text-red-300 hover:bg-red-500/10' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
+                                        className={`rounded-xl p-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 ${isPanelDark ? 'text-slate-400 hover:bg-rose-500/10 hover:text-rose-300' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-600'}`}
                                       >
                                         <Trash2 size={16} />
                                       </button>
                                     </div>
                                 </div>
                                 <div className="space-y-2">
-                                  <div className="flex justify-between items-center">
-                                    <span className={`text-[10px] font-semibold uppercase tracking-widest ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Progresso da Meta</span>
-                                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
+                                  <div className="flex items-center justify-between">
+                                    <span className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Progresso da meta</span>
+                                    <span className={`rounded-lg border px-2 py-0.5 text-xs ${
                                       isGoalAcquired(goal) ? isPanelDark ? 'bg-emerald-500/20 text-emerald-100 border border-emerald-300/40' : 'bg-emerald-500 text-white border border-emerald-500 shadow-sm shadow-emerald-200' :
                                       getGoalProgressPercent(goal) >= 60 ? isPanelDark ? 'bg-blue-500/15 text-blue-200 border border-blue-400/30' : 'bg-blue-50 text-blue-700 border border-blue-200' : 
                                       isPanelDark ? 'bg-violet-500/15 text-violet-100 border border-violet-400/30' : 'bg-slate-100 text-slate-700 border border-slate-200'
@@ -11995,10 +12011,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                     />
                                   </div>
                                   {isGoalAcquired(goal) && (
-                                    <div className={`flex items-center gap-2 rounded-2xl px-3 py-2 text-xs font-bold ${
+                                    <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
                                       isPanelDark
-                                        ? 'bg-emerald-500/10 text-emerald-100 border border-emerald-300/20'
-                                        : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                        ? 'border-emerald-300/20 bg-emerald-500/10 text-emerald-100'
+                                        : 'border-emerald-200 bg-emerald-50 text-emerald-700'
                                     }`}>
                                       <CheckCircle2 size={15} />
                                       Habilidade adquirida. Progresso concluído com 100%.
@@ -12006,8 +12022,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                                   )}
                                   {patientCategory === 'Criança' && (
                                     <div className="flex justify-between px-1">
-                                      <span className="text-[8px] font-semibold text-gray-300 dark:text-slate-400 uppercase">Início</span>
-                                      <span className="text-[8px] font-semibold text-gray-300 dark:text-slate-400 uppercase">Maestria</span>
+                                      <span className="text-[9px] uppercase text-slate-400 dark:text-slate-500">Início</span>
+                                      <span className="text-[9px] uppercase text-slate-400 dark:text-slate-500">Maestria</span>
                                     </div>
                                   )}
                                 </div>
@@ -12018,10 +12034,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         );
                       })
                     ) : (
-                      <div className="text-center py-12 bg-gray-50 rounded-3xl border-2 border-dashed border-gray-200">
-                        <Target size={40} className="mx-auto mb-3 text-gray-300 opacity-50" />
-                        <p className="text-sm font-semibold text-gray-400">Nenhuma meta definida no PEI ainda.</p>
-                        <p className="text-[10px] text-gray-400 mt-1">Adicione metas dos protocolos para começar o planejamento.</p>
+                      <div className={`rounded-2xl border border-dashed px-6 py-12 text-center ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-slate-50/70'}`}>
+                        <Target size={32} className={`mx-auto mb-3 ${isPanelDark ? 'text-slate-600' : 'text-slate-300'}`} />
+                        <p className={`text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Nenhuma meta definida no PEI ainda.</p>
+                        <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-500' : 'text-slate-500'}`}>Adicione metas dos protocolos para começar o planejamento.</p>
                       </div>
                     )}
                   </div>
