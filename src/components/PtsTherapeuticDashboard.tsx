@@ -214,19 +214,19 @@ export function PtsTherapeuticDashboard({
   const inset = isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-100 bg-slate-50/70';
   const text = isDark ? 'text-slate-100' : 'text-slate-900';
   const muted = isDark ? 'text-slate-400' : 'text-slate-500';
-  const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+  const secondaryButton = `inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:w-auto ${
     isDark ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
   }`;
-  const neutralButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+  const neutralButton = `inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:w-auto ${
     isDark ? 'text-slate-300 hover:bg-slate-800 hover:text-slate-100' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
   }`;
-  const reviewButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+  const reviewButton = `inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:w-auto ${
     isDark ? 'border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'
   }`;
-  const riskButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 ${
+  const riskButton = `inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 sm:w-auto ${
     isDark ? 'border-rose-400/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20' : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
   }`;
-  const primaryButton = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2';
+  const primaryButton = 'inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:w-auto';
   const draftBadge = isDark
     ? 'border-amber-400/25 bg-amber-500/10 text-amber-200'
     : 'border-amber-200 bg-amber-50 text-amber-800';
@@ -271,8 +271,8 @@ export function PtsTherapeuticDashboard({
   };
 
   return (
-    <div className="space-y-4" data-testid="pts-therapeutic-dashboard">
-      <header className={`rounded-2xl border px-4 py-4 sm:px-5 ${surface}`}>
+    <div className="space-y-5" data-testid="pts-therapeutic-dashboard">
+      <header className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -313,7 +313,7 @@ export function PtsTherapeuticDashboard({
             )}
           </div>
 
-          <div className="flex flex-wrap gap-2 xl:max-w-[520px] xl:justify-end">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:max-w-[520px] xl:justify-end">
             {canManagePlans && <button type="button" className={neutralButton} onClick={onManagePlans}>Voltar aos planos</button>}
             {hasActiveVersion && onRecordReview && <button type="button" className={reviewButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
             {hasActiveVersion && onRecordRisk && <button type="button" className={riskButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
@@ -333,7 +333,7 @@ export function PtsTherapeuticDashboard({
       )}
 
       {hasActiveVersion && (
-        <dl className={`grid gap-px overflow-hidden rounded-xl border sm:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`} data-testid="pts-active-summary">
+        <dl className={`grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`} data-testid="pts-active-summary">
           {[
             { label: 'Metas em andamento', value: goalsInProgress },
             { label: 'Metas atingidas', value: achievedGoals },
@@ -353,7 +353,7 @@ export function PtsTherapeuticDashboard({
         </dl>
       )}
 
-      <div className="grid min-h-[560px] gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="grid gap-4 lg:min-h-[560px] lg:grid-cols-[300px_minmax(0,1fr)]">
         <aside className={`self-start rounded-2xl border px-4 lg:sticky lg:top-4 ${surface}`} aria-label="Índice do PTS">
           <div className="flex items-center gap-2 border-b py-4">
             <ClipboardList size={18} className="text-violet-500" />
