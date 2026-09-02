@@ -214,10 +214,19 @@ export function PtsTherapeuticDashboard({
   const inset = isDark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-100 bg-slate-50/70';
   const text = isDark ? 'text-slate-100' : 'text-slate-900';
   const muted = isDark ? 'text-slate-400' : 'text-slate-500';
-  const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors ${
-    isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+  const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+    isDark ? 'border-slate-700 bg-slate-900/50 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
   }`;
-  const primaryButton = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm text-white transition-colors hover:bg-violet-700';
+  const neutralButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+    isDark ? 'text-slate-300 hover:bg-slate-800 hover:text-slate-100' : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+  }`;
+  const reviewButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+    isDark ? 'border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'
+  }`;
+  const riskButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-3.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2 ${
+    isDark ? 'border-rose-400/30 bg-rose-500/10 text-rose-200 hover:bg-rose-500/20' : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+  }`;
+  const primaryButton = 'inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2';
   const draftBadge = isDark
     ? 'border-amber-400/25 bg-amber-500/10 text-amber-200'
     : 'border-amber-200 bg-amber-50 text-amber-800';
@@ -305,9 +314,9 @@ export function PtsTherapeuticDashboard({
           </div>
 
           <div className="flex flex-wrap gap-2 xl:max-w-[520px] xl:justify-end">
-            {canManagePlans && <button type="button" className={secondaryButton} onClick={onManagePlans}>Voltar aos planos</button>}
-            {hasActiveVersion && onRecordReview && <button type="button" className={secondaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
-            {hasActiveVersion && onRecordRisk && <button type="button" className={secondaryButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
+            {canManagePlans && <button type="button" className={neutralButton} onClick={onManagePlans}>Voltar aos planos</button>}
+            {hasActiveVersion && onRecordReview && <button type="button" className={reviewButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
+            {hasActiveVersion && onRecordRisk && <button type="button" className={riskButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
             {canEditScope && (
               <button type="button" className={primaryButton} onClick={onNewVersion}>
                 <Pencil size={15} /> {hasPtsDraft ? (hasActiveVersion ? 'Continuar rascunho' : 'Editar rascunho') : 'Criar nova versão'}
@@ -326,14 +335,19 @@ export function PtsTherapeuticDashboard({
       {hasActiveVersion && (
         <dl className={`grid gap-px overflow-hidden rounded-xl border sm:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`} data-testid="pts-active-summary">
           {[
-            ['Metas em andamento', goalsInProgress],
-            ['Metas atingidas', achievedGoals],
-            ['Riscos ativos', activeRisks],
-            ['Evidências compartilhadas', sharedEvidence.length],
-          ].map(([label, value]) => (
-            <div key={String(label)} className={isDark ? 'bg-slate-900/80 px-4 py-3' : 'bg-white px-4 py-3'}>
+            { label: 'Metas em andamento', value: goalsInProgress },
+            { label: 'Metas atingidas', value: achievedGoals },
+            { label: 'Riscos ativos', value: activeRisks, isRisk: true },
+            { label: 'Evidências compartilhadas', value: sharedEvidence.length },
+          ].map(({ label, value, isRisk }) => (
+            <div
+              key={label}
+              className={isRisk && Number(value) > 0
+                ? isDark ? 'bg-rose-500/10 px-4 py-3' : 'bg-rose-50/70 px-4 py-3'
+                : isDark ? 'bg-slate-900/80 px-4 py-3' : 'bg-white px-4 py-3'}
+            >
               <dt className={`text-xs ${muted}`}>{label}</dt>
-              <dd className={`mt-1 text-xl ${text}`}>{value}</dd>
+              <dd className={`mt-1 text-xl font-medium ${isRisk && Number(value) > 0 ? (isDark ? 'text-rose-200' : 'text-rose-700') : text}`}>{value}</dd>
             </div>
           ))}
         </dl>
@@ -453,14 +467,14 @@ export function PtsTherapeuticDashboard({
             </div>
           ) : (
             <>
-              <nav className={`flex gap-5 overflow-x-auto border-b ${isDark ? 'border-slate-700' : 'border-slate-100'}`} aria-label="Áreas do PTS" role="tablist">
+              <nav className={`flex gap-1 overflow-x-auto border-b ${isDark ? 'border-slate-700' : 'border-slate-100'}`} aria-label="Áreas do PTS" role="tablist">
                 {TABS.map((item) => (
                   <button
                     key={item.id}
                     type="button"
                     role="tab"
                     aria-selected={tab === item.id}
-                    className={`relative shrink-0 px-1 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${tab === item.id ? (isDark ? 'text-violet-300' : 'text-violet-700') : `${muted} hover:text-violet-500`}`}
+                    className={`relative shrink-0 rounded-t-lg px-3 pb-3 pt-2 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${tab === item.id ? (isDark ? 'bg-violet-500/10 text-violet-200' : 'bg-violet-50 text-violet-700') : (isDark ? 'text-slate-400 hover:bg-slate-800 hover:text-violet-200' : 'text-slate-500 hover:bg-slate-50 hover:text-violet-600')}`}
                     onClick={() => setTab(item.id)}
                   >
                     {item.label}
@@ -545,7 +559,7 @@ export function PtsTherapeuticDashboard({
                       <h3 className={`text-base font-semibold ${text}`}>Reavaliações e decisões</h3>
                       <p className={`mt-1 text-sm ${muted}`}>Eventos append-only preservam a versão publicada do plano.</p>
                     </div>
-                    {onRecordReview && <button type="button" className={primaryButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
+                    {onRecordReview && <button type="button" className={reviewButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
                   </div>
                   {reviewEvents.length > 0 && reviewEvents.map((event: any) => (
                     <article key={String(event?.id)} className={`rounded-2xl border p-4 ${inset}`}>

@@ -656,6 +656,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const secondaryButton = `inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
     isDark ? 'border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
   }`;
+  const workspaceButton = `inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
+    isDark ? 'border-violet-400/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20' : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'
+  }`;
+  const createPlanButton = 'inline-flex min-h-[40px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
 
   const loadPlan = async (force = false) => {
     if (!patientId) return;
@@ -1735,6 +1739,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
   const scopeStateAccentClass = (statusValue: any) => {
     const rawStatus = String(statusValue || '').trim().toLowerCase();
+    if (rawStatus === 'active') return 'border-l-4 !border-l-violet-500';
+    if (rawStatus === 'draft') return 'border-l-4 !border-l-amber-400';
     if (rawStatus === 'paused') return 'border-l-4 !border-l-amber-400';
     if (rawStatus === 'completed') return 'border-l-4 !border-l-emerald-500';
     if (isCancelledLifecycleStatus(rawStatus)) return 'border-l-4 !border-l-red-500';
@@ -2605,6 +2611,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     if (label === 'Ativo') {
       return isDark ? 'border-violet-400/25 bg-violet-500/10 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-700';
     }
+    if (label === 'Concluído') {
+      return isDark ? 'border-emerald-400/25 bg-emerald-500/10 text-emerald-200' : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    }
+    if (label === 'Cancelado') {
+      return isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-200' : 'border-rose-200 bg-rose-50 text-rose-700';
+    }
     return isDark ? 'border-slate-600 bg-slate-800 text-slate-300' : 'border-slate-200 bg-slate-100 text-slate-600';
   };
 
@@ -2813,7 +2825,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                         <Play size={15} /> {scopeSaving ? 'Retomando...' : 'Retomar plano'}
                       </button>
                     )}
-                    <button type="button" className={secondaryButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                    <button type="button" className={workspaceButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
                   </div>
                 </div>
               </article>
@@ -2835,7 +2847,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     return (
       <div className="space-y-6" data-testid="therapeutic-plan-hub">
         <header>
-          <h2 className={`text-lg font-medium ${text}`}>Planos terapêuticos</h2>
+          <h2 className={`text-xl font-semibold tracking-tight ${text}`}>Planos terapêuticos</h2>
           <p className={`mt-1 text-sm leading-relaxed ${muted}`}>
             Acesse o plano compartilhado da equipe e os planos clínicos sob sua responsabilidade ou supervisão.
           </p>
@@ -2850,14 +2862,14 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               <p className={`mt-1 text-xs leading-5 ${muted}`}>Compartilhado com os profissionais ativos vinculados ao cuidado deste paciente.</p>
             </div>
             {canCreatePts && !scopeFormOpen && (
-              <button type="button" className={secondaryButton} onClick={() => openPlanScopeForm('interdisciplinary')}>
+              <button type="button" className={createPlanButton} onClick={() => openPlanScopeForm('interdisciplinary')}>
                 <Plus size={15} /> Criar PTS da equipe
               </button>
             )}
           </div>
 
           {primaryPtsScope ? (
-            <article className={`rounded-2xl border p-4 sm:p-5 ${panel}`} data-testid="team-pts-card">
+            <article className={`rounded-2xl border p-4 sm:p-5 ${panel} ${scopeStateAccentClass(primaryPtsScope?.status)}`} data-testid="team-pts-card">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -2878,7 +2890,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                     <div><p className={`text-[11px] ${muted}`}>Próxima reavaliação</p><p className={`mt-1 text-sm ${text}`}>{pts?.nextReviewDate ? formatTherapeuticPlanDate(pts.nextReviewDate) : 'Não definida'}</p></div>
                   </div>
                 </div>
-                <button type="button" className={secondaryButton} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
+                <button type="button" className={workspaceButton} onClick={() => openWorkspace(primaryPtsScope)}>Abrir PTS</button>
               </div>
             </article>
           ) : (
@@ -2897,7 +2909,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
               <p className={`mt-1 text-xs leading-5 ${muted}`}>A lista já respeita seu vínculo com o caso, participação no plano e relações ativas de supervisão.</p>
             </div>
             {canCreateSpecialty && !scopeFormOpen && (
-              <button type="button" className={secondaryButton} onClick={() => openPlanScopeForm('specialty')}>
+              <button type="button" className={createPlanButton} onClick={() => openPlanScopeForm('specialty')}>
                 <Plus size={15} /> Novo plano por especialidade
               </button>
             )}
