@@ -5,6 +5,7 @@ import {
   resolveBrandingContext,
 } from '../src/services/notificationBranding';
 import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
+import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 
 type Logger = Pick<Console, 'log' | 'warn' | 'error'>;
 
@@ -41,6 +42,7 @@ type ResolvePatientIdsParams = {
 
 type SavePushSubscriptionParams = {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   subscription: PushSubscriptionInput;
   patientId: string;
   userId?: string | null;
@@ -53,7 +55,7 @@ type SavePushSubscriptionParams = {
 };
 
 export type SendPatientPortalNotificationParams = {
-  supabase: any; patientId: string; patientEmail?: string | null; clinicId?: string | null;
+  supabase: any; deploymentEnv: VertoDeploymentEnvironment; patientId: string; patientEmail?: string | null; clinicId?: string | null;
   title: string; body: string; url?: string; tag?: string; data?: Record<string, unknown>;
   branding?: { displayName?: string | null; logoUrl?: string | null };
   preloadedSubscriptions?: AppointmentPushSubscriptionEntry[]; logger?: Logger;
@@ -61,6 +63,7 @@ export type SendPatientPortalNotificationParams = {
 
 type SendAppointmentNotificationParams = {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   patientId: string;
   prevalidatedPatientIds?: string[];
   patientEmail?: string | null;
@@ -119,6 +122,15 @@ const sanitizeOptionalId = (value: unknown, maxLength = 120) => {
 };
 
 const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
+
+const requireDeploymentEnv = (value: unknown): VertoDeploymentEnvironment => {
+  const deploymentEnv = normalizeVertoDeploymentEnvironment(value);
+  if (!deploymentEnv) throw new Error('PUSH_DEPLOYMENT_ENV_REQUIRED');
+  return deploymentEnv;
+};
+
+const filterEntriesForDeploymentEnv = (entries: AppointmentPushSubscriptionEntry[], deploymentEnv: VertoDeploymentEnvironment) =>
+  entries.filter((entry) => matchesVertoDeploymentEnvironment(entry?.row?.deployment_env, deploymentEnv));
 
 const extractMissingColumnName = (error: any): string | null => {
   const message = String(error?.message || error?.hint || '');
@@ -338,6 +350,7 @@ export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams):
 }
 
 export async function savePatientPushSubscription(params: SavePushSubscriptionParams) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const normalized = normalizePushSubscription(params.subscription);
   if (!normalized) {
     return { success: false, error: 'Inscricao push invalida.' };
@@ -428,6 +441,7 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
   const renewalTokenHash = hashPushRenewalToken(params.renewalToken);
   let payload: Record<string, any> = {
     patient_id: patientId,
+    deployment_env: deploymentEnv,
     endpoint: normalized.endpoint,
     p256dh: normalized.keys.p256dh,
     auth: normalized.keys.auth,
@@ -467,7 +481,8 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
         .from('push_subscriptions')
         .update(updatePayload)
         .eq('endpoint', normalized.endpoint)
-        .select('endpoint')
+        .eq('deployment_env', deploymentEnv)
+        .select('endpoint,deployment_env')
         .limit(1);
 
       if (!error) {
@@ -536,14 +551,16 @@ export async function savePatientPushSubscription(params: SavePushSubscriptionPa
 
 export async function removePatientPushSubscription(params: {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   patientId: string;
   endpoint: string;
 }) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const patientId = sanitizeText(params.patientId, 120);
   const endpoint = sanitizeText(params.endpoint, 2000);
   if (!endpoint) return { success: true };
 
-  let query = params.supabase.from('push_subscriptions').delete().eq('endpoint', endpoint);
+  let query = params.supabase.from('push_subscriptions').delete().eq('endpoint', endpoint).eq('deployment_env', deploymentEnv);
   if (isUuid(patientId)) query = query.eq('patient_id', patientId);
   const { error } = await query;
   return error ? { success: false, error: error.message } : { success: true };
@@ -551,16 +568,19 @@ export async function removePatientPushSubscription(params: {
 
 export async function deleteInvalidPushSubscription(params: {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   endpoint: string;
   logger?: Logger;
 }) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const endpoint = sanitizeText(params.endpoint, 2000);
   if (!endpoint) return;
   const invalidatedAt = new Date().toISOString();
   const mark = await params.supabase
     .from('push_subscriptions')
     .update({ invalidated_at: invalidatedAt, p256dh: null, auth: null, subscription: null, updated_at: invalidatedAt })
-    .eq('endpoint', endpoint);
+    .eq('endpoint', endpoint)
+    .eq('deployment_env', deploymentEnv);
   if (!mark.error) return;
 
   // Compatibility before the self-healing migration is applied: preserve the old cleanup.
@@ -568,7 +588,8 @@ export async function deleteInvalidPushSubscription(params: {
     const fallback = await params.supabase
       .from('push_subscriptions')
       .delete()
-      .eq('endpoint', endpoint);
+      .eq('endpoint', endpoint)
+      .eq('deployment_env', deploymentEnv);
     if (!fallback.error) return;
     params.logger?.warn?.('[Push] Falha ao remover subscription expirada.', {
       endpoint: endpoint.slice(0, 80),
@@ -584,11 +605,13 @@ export async function deleteInvalidPushSubscription(params: {
 
 export async function renewPatientPushSubscription(params: {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   renewalToken: string;
   subscription: PushSubscriptionInput;
   oldEndpoint?: string | null;
   logger?: Logger;
 }) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const tokenHash = hashPushRenewalToken(params.renewalToken);
   const normalized = normalizePushSubscription(params.subscription);
   const oldEndpoint = sanitizeText(params.oldEndpoint, 2000);
@@ -599,6 +622,7 @@ export async function renewPatientPushSubscription(params: {
   const nextToken = createPushRenewalToken();
   const nextTokenHash = hashPushRenewalToken(nextToken);
   const renewal = await params.supabase.rpc('renew_push_subscription_v1', {
+    p_deployment_env: deploymentEnv,
     p_renewal_token_hash: tokenHash,
     p_next_renewal_token_hash: nextTokenHash,
     p_new_endpoint: normalized.endpoint,
@@ -647,12 +671,14 @@ export async function renewPatientPushSubscription(params: {
 
 export async function findPushSubscriptionsForPatient(params: {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   patientIds: string[];
   patientEmail?: string | null;
   legacyUserIds?: string[];
   clinicId?: string | null;
   logger?: Logger;
 }) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const patientIds = new Set(params.patientIds.filter((id) => isUuid(id)));
   const legacyUserIds = new Set((params.legacyUserIds || []).filter((id) => isUuid(id)));
   const patientEmail = sanitizeEmail(params.patientEmail);
@@ -675,7 +701,8 @@ export async function findPushSubscriptionsForPatient(params: {
     if (values.length === 0) return;
     const { data, error } = await params.supabase
       .from('push_subscriptions')
-      .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id')
+      .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env')
+      .eq('deployment_env', deploymentEnv)
       .in(column, values)
       .limit(500);
     if (error) {
@@ -697,7 +724,8 @@ export async function findPushSubscriptionsForPatient(params: {
   if (rowsByEndpoint.size === 0 && patientEmail) {
     const { data, error } = await params.supabase
       .from('push_subscriptions')
-      .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id')
+      .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env')
+      .eq('deployment_env', deploymentEnv)
       .ilike('user_email', patientEmail)
       .limit(100);
     if (error) {
@@ -738,6 +766,7 @@ export async function findPushSubscriptionsForPatient(params: {
 
 export async function findPushSubscriptionsForRecipients(params: {
   supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
   recipients: Array<{
     key: string;
     patientIds: string[];
@@ -747,6 +776,7 @@ export async function findPushSubscriptionsForRecipients(params: {
   }>;
   logger?: Logger;
 }) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const recipients = params.recipients
     .map((recipient) => ({
       key: sanitizeText(recipient.key, 240),
@@ -761,7 +791,7 @@ export async function findPushSubscriptionsForRecipients(params: {
   if (recipients.length === 0) return { complete: true, subscriptionsByRecipientKey: result };
 
   const patientIds = Array.from(new Set(recipients.flatMap((recipient) => recipient.patientIds)));
-  const selectColumns = 'endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id';
+  const selectColumns = 'endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env';
   const chunkFilterValues = (values: string[], maxItems = 100, maxCharacters = 3000) => {
     const chunks: string[][] = [];
     let current: string[] = [];
@@ -788,6 +818,7 @@ export async function findPushSubscriptionsForRecipients(params: {
         const { data, error } = await params.supabase
           .from('push_subscriptions')
           .select(selectColumns)
+          .eq('deployment_env', deploymentEnv)
           .in(column, chunk)
           .order('endpoint', { ascending: true })
           .range(from, from + 499);
@@ -821,6 +852,7 @@ export async function findPushSubscriptionsForRecipients(params: {
         const { data, error } = await params.supabase
           .from('push_subscriptions')
           .select(selectColumns)
+          .eq('deployment_env', deploymentEnv)
           .or(filters)
           .order('endpoint', { ascending: true })
           .range(from, from + 499);
@@ -935,13 +967,14 @@ export async function findPushSubscriptionsForRecipients(params: {
 }
 
 export async function sendPatientPortalNotification(params: SendPatientPortalNotificationParams) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const logger = params.logger || console;
   const patientId = sanitizeText(params.patientId, 120);
   const clinicId = sanitizeText(params.clinicId, 120);
   const patientEmail = sanitizeEmail(params.patientEmail);
   const patientIds = isUuid(patientId) ? [patientId] : [];
-  const rows = params.preloadedSubscriptions !== undefined ? params.preloadedSubscriptions : await findPushSubscriptionsForPatient({
-    supabase: params.supabase, patientIds, patientEmail, legacyUserIds: patientIds, clinicId, logger
+  const rows = params.preloadedSubscriptions !== undefined ? filterEntriesForDeploymentEnv(params.preloadedSubscriptions, deploymentEnv) : await findPushSubscriptionsForPatient({
+    supabase: params.supabase, deploymentEnv, patientIds, patientEmail, legacyUserIds: patientIds, clinicId, logger
   });
   if (!rows.length) return { sent: 0, failed: 0, subscriptions: 0 };
   const displayName = sanitizeText(params.branding?.displayName || 'Clínica', 160) || 'Clínica';
@@ -961,6 +994,7 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
     branding: { displayName, logoUrl: logoUrl || null },
     data: {
       notificationType: 'clinic_announcement',
+      deploymentEnv,
       clinicId: clinicId || null,
       announcementTitle: announcementTitle || null,
       ...(params.data || {})
@@ -973,13 +1007,14 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
   }
   if (invalidEndpoints.size > 0) {
     await Promise.all(Array.from(invalidEndpoints).map((endpoint) =>
-      deleteInvalidPushSubscription({ supabase: params.supabase, endpoint, logger })
+      deleteInvalidPushSubscription({ supabase: params.supabase, deploymentEnv, endpoint, logger })
     ));
   }
   return { sent, failed, subscriptions: rows.length };
 }
 
 export async function sendAppointmentNotification(params: SendAppointmentNotificationParams) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const logger = params.logger || console;
   const prevalidatedPatientIds = Array.from(new Set(
     (params.prevalidatedPatientIds || []).filter((id) => isUuid(id))
@@ -996,9 +1031,10 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
       });
   const legacyIds = isUuid(params.patientId) ? [params.patientId] : [];
   const rows = params.preloadedSubscriptions !== undefined
-    ? params.preloadedSubscriptions
+    ? filterEntriesForDeploymentEnv(params.preloadedSubscriptions, deploymentEnv)
     : await findPushSubscriptionsForPatient({
         supabase: params.supabase,
+        deploymentEnv,
         patientIds,
         patientEmail: params.patientEmail,
         legacyUserIds: legacyIds,
@@ -1066,8 +1102,13 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   });
   const payload = JSON.stringify({
     ...notificationPayload,
+    deploymentEnv,
     title: notificationPayload.title,
     body: params.body || notificationPayload.body,
+    data: {
+      ...(notificationPayload.data || {}),
+      deploymentEnv,
+    },
   });
 
   let sent = 0;
@@ -1094,7 +1135,7 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
 
   if (invalidEndpoints.size > 0) {
     await Promise.all(Array.from(invalidEndpoints).map((endpoint) =>
-      deleteInvalidPushSubscription({ supabase: params.supabase, endpoint, logger })
+      deleteInvalidPushSubscription({ supabase: params.supabase, deploymentEnv, endpoint, logger })
     ));
   }
 

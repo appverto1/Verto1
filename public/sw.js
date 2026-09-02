@@ -178,6 +178,7 @@ self.addEventListener("push", (event) => {
     timestamp: Date.now(),
     data: {
       ...(payload.data || {}),
+      deploymentEnv: payload.data?.deploymentEnv || payload.deploymentEnv || null,
       url: targetUrl,
       appointmentId,
       reminderKind,
