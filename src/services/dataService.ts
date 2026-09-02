@@ -8256,6 +8256,36 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getClinicCosts(month: string) {
+    try {
+      const monthKey = /^\d{4}-\d{2}$/.test(String(month || '').trim())
+        ? String(month).trim()
+        : new Date().toISOString().slice(0, 7);
+      const response = await fetch(`/api/financial/costs?month=${encodeURIComponent(monthKey)}`, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      const result = await safeJson(response);
+      if (response.ok) return result;
+      return { ...result, success: false, error: result?.error || 'Não foi possível carregar os custos.' };
+    } catch (error) {
+      console.error('Error fetching clinic costs:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar os custos.' };
+    }
+  },
+
+  async saveClinicCost(cost: any) {
+    const id = generateId();
+    return await saveOfflineFirst(
+      id,
+      { ...(cost || {}), id },
+      'payment',
+      '/api/financial/costs',
+      'POST',
+      { requireServerAck: true }
+    );
+  },
+
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
     const endpoint = `/api/profile/${userId}`;

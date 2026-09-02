@@ -89084,6 +89084,18 @@ async function startServer() {
       .filter(Boolean)
   ));
   const isDuplicateFinancialSeriesError = (error: any) => sanitizeString(error?.code, 40) === '23505';
+  const CLINIC_RECURRING_COST_SELECT = 'id,name,amount,recurrence,starts_on,active,created_at,updated_at';
+  const clinicCostMonthRange = (value: unknown) => {
+    const rawMonthKey = String(value || '').trim();
+    const monthKey = rawMonthKey || new Date().toISOString().slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(monthKey)) return null;
+    const [year, month] = monthKey.split('-').map(Number);
+    if (!year || month < 1 || month > 12) return null;
+    return {
+      monthKey,
+      end: new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
+    };
+  };
   const loadProfessionalPaymentIdentities = async (clinicId: string, professionalIds: string[]) => {
     const uniqueIds = Array.from(new Set(professionalIds.filter(isUuid)));
     if (uniqueIds.length === 0) return new Map<string, { name: string; specialty: string | null }>();
@@ -89990,6 +90002,113 @@ async function startServer() {
     } catch (error: any) {
       return sendRouteDbError(res, '/api/financial/entries [GET]', error, {
         limit: parseBoundedListLimit(req.query?.limit, 100, 200),
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.get('/api/financial/costs', checkAuth, requireClinicCapability('finance.entries.view'), async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const monthRange = clinicCostMonthRange(req.query?.month);
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!monthRange) return res.status(400).json({ success: false, error: 'Mês de referência inválido.' });
+
+      const result = await supabase
+        .from('clinic_recurring_costs')
+        .select(CLINIC_RECURRING_COST_SELECT)
+        .eq('clinic_id', clinicId)
+        .eq('active', true)
+        .lte('starts_on', monthRange.end)
+        .order('starts_on', { ascending: false })
+        .limit(200);
+      if (result.error) {
+        if (hasMissingFinancialSchema(result.error)) {
+          return res.json({ success: true, data: [], schemaPending: true });
+        }
+        throw result.error;
+      }
+      return res.json({ success: true, data: result.data || [], month: monthRange.monthKey });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/costs [GET]', error, {
+        requestId: requestIdForLogs(req)
+      });
+    }
+  });
+
+  app.post('/api/financial/costs', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Cadastro de custo')) return;
+      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const id = sanitizeString(req.body?.id, 120);
+      const name = sanitizeString(req.body?.name, 120).trim();
+      const amount = Number(req.body?.amount);
+      const recurrence = sanitizeString(req.body?.recurrence, 20).toLowerCase();
+      const startsOn = dateGroupForClinic(undefined, req.session.user);
+
+      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
+      if (!isUuid(id)) return res.status(400).json({ success: false, error: 'Identificador do custo inválido.' });
+      if (!name) return res.status(400).json({ success: false, error: 'Informe o nome do custo.' });
+      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
+        return res.status(400).json({ success: false, error: 'Informe um valor válido de até R$ 10.000.000,00.' });
+      }
+      if (!['weekly', 'monthly'].includes(recurrence)) {
+        return res.status(400).json({ success: false, error: 'Recorrência inválida.' });
+      }
+
+      const payload = {
+        id,
+        clinic_id: clinicId,
+        name,
+        amount: Math.round(amount * 100) / 100,
+        recurrence,
+        starts_on: startsOn,
+        active: true,
+        created_by: actorId,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      const inserted = await supabase
+        .from('clinic_recurring_costs')
+        .insert([payload])
+        .select(CLINIC_RECURRING_COST_SELECT)
+        .single();
+      if (!inserted.error) return res.status(201).json({ success: true, data: inserted.data });
+      if (sanitizeString(inserted.error?.code, 40) === '23505') {
+        const existing = await supabase
+          .from('clinic_recurring_costs')
+          .select(CLINIC_RECURRING_COST_SELECT)
+          .eq('clinic_id', clinicId)
+          .eq('id', id)
+          .maybeSingle();
+        if (
+          !existing.error &&
+          existing.data &&
+          sanitizeString(existing.data?.name, 120) === name &&
+          Number(existing.data?.amount) === payload.amount &&
+          sanitizeString(existing.data?.recurrence, 20) === recurrence
+        ) {
+          return res.json({
+            success: true,
+            idempotent: true,
+            code: 'CLINIC_COST_ALREADY_PERSISTED',
+            data: existing.data
+          });
+        }
+        return res.status(409).json({
+          success: false,
+          conflict: true,
+          code: 'CLINIC_COST_IDEMPOTENCY_CONFLICT',
+          error: 'Este identificador já foi usado para outro custo.'
+        });
+      }
+      if (hasMissingFinancialSchema(inserted.error)) {
+        return res.status(503).json({ success: false, error: 'Estrutura de custos da clínica ainda não aplicada.' });
+      }
+      throw inserted.error;
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/costs [POST]', error, {
         requestId: requestIdForLogs(req)
       });
     }

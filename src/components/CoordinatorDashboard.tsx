@@ -131,6 +131,11 @@ import {
 } from "../utils/brMasks";
 import { resolveClinicTimeZone } from "../utils/clinicTimeZone";
 import {
+  normalizeClinicCostRecurrence,
+  projectClinicCostForMonth,
+  type ClinicCostRecurrence,
+} from "../utils/clinicRecurringCosts";
+import {
   formatProfessionalCouncil,
   formatProfessionalRegistry,
   isProfessionalRegistryValid,
@@ -774,6 +779,7 @@ export function CoordinatorDashboard({
   const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = hasCapability("finance.payments.view");
+  const canManageClinicCosts = hasCapability("finance.entries.manage");
   // Patient treatment pricing is part of the mandatory patient core.
   // Full finance (payments, ledger, DRE, transfers) remains an optional module.
   const canManagePatientFinancialPlan = hasCapability("patient.demographics.edit");
@@ -2001,6 +2007,15 @@ export function CoordinatorDashboard({
   const [payments, setPayments] = useState<any[]>([]);
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
   const [financialEntries, setFinancialEntries] = useState<any[]>([]);
+  const [clinicCosts, setClinicCosts] = useState<any[]>([]);
+  const [clinicCostsLoading, setClinicCostsLoading] = useState(false);
+  const [clinicCostsError, setClinicCostsError] = useState("");
+  const [clinicCostName, setClinicCostName] = useState("");
+  const [clinicCostAmount, setClinicCostAmount] = useState("");
+  const [clinicCostRecurrence, setClinicCostRecurrence] = useState<ClinicCostRecurrence>("monthly");
+  const [clinicCostSaving, setClinicCostSaving] = useState(false);
+  const clinicCostSaveInFlightRef = useRef(false);
+  const clinicCostsCacheRef = useRef<Map<string, any[]>>(new Map());
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isProfessionalPaymentModalOpen, setIsProfessionalPaymentModalOpen] = useState(false);
   const [isPaymentSaving, setIsPaymentSaving] = useState(false);
@@ -2976,6 +2991,39 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance, isReceptionist]);
 
   useEffect(() => {
+    if (activeTab !== "financial" || !canAccessClinicFinance) return;
+    const cacheKey = `${workspaceScopeKey}:${financialMonth}`;
+    const cached = clinicCostsCacheRef.current.get(cacheKey);
+    if (cached) {
+      setClinicCosts(cached);
+      setClinicCostsError("");
+      setClinicCostsLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setClinicCostsLoading(true);
+    setClinicCostsError("");
+    void dataService.getClinicCosts(financialMonth).then((result: any) => {
+      if (cancelled) return;
+      if (!result?.success) {
+        setClinicCosts([]);
+        setClinicCostsError(String(result?.error || "Não foi possível carregar os custos."));
+        return;
+      }
+      const rows = Array.isArray(result.data) ? result.data : [];
+      clinicCostsCacheRef.current.set(cacheKey, rows);
+      setClinicCosts(rows);
+    }).finally(() => {
+      if (!cancelled) setClinicCostsLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, canAccessClinicFinance, financialMonth, workspaceScopeKey]);
+
+  useEffect(() => {
     if (!isPatientRegistrationModalOpen || !canCreatePatients || !hasInsuranceTissModule || !canViewPatientInsurance) return;
     let cancelled = false;
     setClinicPayerOptionsState({ loading: true, error: "" });
@@ -3695,6 +3743,64 @@ export function CoordinatorDashboard({
     setProfessionalPaymentAdditionalScope(payment?.additional_scope === "future" ? "future" : "next");
     setProfessionalPaymentAdjustmentReason(String(payment?.adjustment_reason || payment?.adjustmentReason || payment?.notes || ""));
     setIsProfessionalPaymentModalOpen(true);
+  };
+
+  const handleAddClinicCost = async () => {
+    if (clinicCostSaveInFlightRef.current || !canManageClinicCosts) return;
+    const name = clinicCostName.trim();
+    const amount = parseMoneyInput(clinicCostAmount);
+    if (!name) {
+      showToast("Informe o nome do custo.", "error");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
+      showToast("Informe um valor válido de até R$ 10.000.000,00.", "error");
+      return;
+    }
+
+    clinicCostSaveInFlightRef.current = true;
+    setClinicCostSaving(true);
+    try {
+      const result = await dataService.saveClinicCost({
+        name,
+        amount: Math.round(amount * 100) / 100,
+        recurrence: clinicCostRecurrence,
+      });
+      if (!result?.success || result?.pending) {
+        showToast(
+          result?.error || result?.warning || "Não foi possível confirmar o custo no banco.",
+          "error",
+        );
+        return;
+      }
+      const persistedCost = result.data || {
+        name,
+        amount,
+        recurrence: clinicCostRecurrence,
+        starts_on: new Date().toISOString().slice(0, 10),
+      };
+      const isVisibleInSelectedMonth = projectClinicCostForMonth(persistedCost, financialMonth).occurrences > 0;
+      const nextCosts = isVisibleInSelectedMonth
+        ? [persistedCost, ...clinicCosts.filter((item: any) => String(item?.id) !== String(persistedCost?.id))]
+        : clinicCosts;
+      clinicCostsCacheRef.current.clear();
+      clinicCostsCacheRef.current.set(`${workspaceScopeKey}:${financialMonth}`, nextCosts);
+      setClinicCosts(nextCosts);
+      setClinicCostName("");
+      setClinicCostAmount("");
+      setClinicCostRecurrence("monthly");
+      showToast("Custo cadastrado e incluído no DRE.");
+      onAddActivityLog(
+        "Custo cadastrado",
+        `${name}: ${formatCurrency(amount)} por ${clinicCostRecurrence === "weekly" ? "semana" : "mês"}.`,
+        "management",
+      );
+    } catch (error: any) {
+      showToast(error?.message || "Não foi possível cadastrar o custo.", "error");
+    } finally {
+      clinicCostSaveInFlightRef.current = false;
+      setClinicCostSaving(false);
+    }
   };
 
   const handleAddProfessionalPayment = async () => {
@@ -8975,9 +9081,18 @@ export function CoordinatorDashboard({
     const monthFinancialEntries = (financialEntries || []).filter((entry: any) =>
       isSameFinancialMonth(entry?.occurred_on || entry?.occurredOn || entry?.date, financialMonth),
     );
-    const operationalExpenses = monthFinancialEntries
+    const recordedOperationalExpenses = monthFinancialEntries
       .filter((entry: any) => String(entry?.entry_type || entry?.type || "expense").toLowerCase() === "expense")
       .reduce((sum: number, entry: any) => sum + parseCurrencyValue(entry?.amount), 0);
+    const clinicCostRows = (clinicCosts || [])
+      .map((cost: any) => ({
+        ...cost,
+        ...projectClinicCostForMonth(cost, financialMonth),
+        recurrence: normalizeClinicCostRecurrence(cost?.recurrence),
+      }))
+      .filter((cost: any) => cost.occurrences > 0 && cost.total > 0);
+    const recurringCosts = clinicCostRows.reduce((sum: number, cost: any) => sum + cost.total, 0);
+    const operationalExpenses = recordedOperationalExpenses + recurringCosts;
 
     const specialtyMap = new Map<string, any>();
     const payerMap = new Map<string, any>();
@@ -9157,7 +9272,7 @@ export function CoordinatorDashboard({
       { label: "Inadimplência", value: -overdueAmount, type: "expense", info: `${overduePayments.length} pagamento(s) vencido(s) sem baixa.` },
       { label: "A receber projetado", value: outstanding, type: "total", info: "Diferença entre projeção mensal e pagamentos pagos." },
       { label: "Pagamentos a profissionais", value: -professionalPaid, type: "expense", info: "Repasses profissionais pagos no mês." },
-      { label: "Despesas operacionais", value: -operationalExpenses, type: "expense", info: "Saídas registradas no fluxo de caixa da clínica." },
+      { label: "Despesas operacionais", value: -operationalExpenses, type: "expense", info: "Saídas registradas e custos recorrentes calculados para o mês." },
       { label: "Fluxo de caixa líquido", value: cashFlow, type: cashFlow >= 0 ? "profit" : "expense", info: "Entradas pagas menos saídas pagas." },
       { label: "Lucro líquido", value: netProfit, type: netProfit >= 0 ? "profit" : "expense", info: `Margem líquida ${netMarginPct.toFixed(1)}%.` },
       { label: "Margem de contribuição", value: contributionMarginValue, type: contributionMarginValue >= 0 ? "profit" : "expense", info: `${contributionMarginPct.toFixed(1)}% após repasses profissionais pagos.` },
@@ -9239,6 +9354,9 @@ export function CoordinatorDashboard({
       cashFlow,
       professionalPaid,
       professionalPending,
+      recordedOperationalExpenses,
+      recurringCosts,
+      clinicCostRows,
       operationalExpenses,
       contributionMarginValue,
       contributionMarginPct,
@@ -9266,7 +9384,7 @@ export function CoordinatorDashboard({
       paidProfessionalPayments,
       pendingProfessionalPayments,
     };
-  }, [allPatients, financialEntries, financialMonth, payments, professionalPayments, therapistMembersById]);
+  }, [allPatients, clinicCosts, financialEntries, financialMonth, payments, professionalPayments, therapistMembersById]);
 
   const dreData = financialDashboard.dreRows;
   const compensationForecast = financialDashboard.dueRows.slice(0, 6);
@@ -11774,7 +11892,7 @@ export function CoordinatorDashboard({
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
-                className="space-y-8"
+                className="financial-light-typography space-y-8"
               >
                 {!isReceptionist && isFinancialDashboardSection && (
                   <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
@@ -11808,7 +11926,7 @@ export function CoordinatorDashboard({
                         { label: "A receber", value: formatCurrency(financialDashboard.pendingAmount), rawValue: financialDashboard.pendingAmount, hint: "Pendente: cobranças em aberto no mês", semantic: "neutral" as const },
                         { label: "Em atraso", value: formatCurrency(financialDashboard.overdueAmount), rawValue: financialDashboard.overdueAmount, hint: "Pendente vencido no período", semantic: "negative" as const },
                         { label: "Repasses previstos", value: formatCurrency(financialDashboard.professionalPending), rawValue: financialDashboard.professionalPending, hint: "Previsto/a pagar a profissionais", semantic: "negative" as const },
-                        { label: "Despesas", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Realizado: saídas registradas no fluxo de caixa", semantic: "negative" as const },
+                        { label: "Despesas", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Saídas registradas e custos calculados no mês", semantic: "negative" as const },
                         { label: "Lucro estimado", value: formatCurrency(financialDashboard.netProfit), rawValue: financialDashboard.netProfit, hint: `Estimado: ${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`, semantic: "profit" as const },
                         { label: "Ticket médio", value: formatCurrency(financialDashboard.averageTicket), rawValue: financialDashboard.averageTicket, hint: "Projetado por paciente ativo", semantic: "neutral" as const },
                       ].map((metric) => (
@@ -12171,19 +12289,125 @@ export function CoordinatorDashboard({
                 )}
 
                 {isExpenseSection && (
-                  <div data-financial-expenses-view className="grid gap-3 md:grid-cols-4">
-                    {[
-                      { label: "Despesas operacionais", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Saídas registradas no período", semantic: "negative" as const },
-                      { label: "Repasses pagos", value: formatCurrency(financialDashboard.professionalPaid), rawValue: financialDashboard.professionalPaid, hint: "Pagamentos profissionais baixados", semantic: "negative" as const },
-                      { label: "Repasses pendentes", value: formatCurrency(financialDashboard.professionalPending), rawValue: financialDashboard.professionalPending, hint: "Valores ainda a repassar", semantic: "negative" as const },
-                      { label: "Saldo líquido", value: formatCurrency(financialDashboard.cashFlow), rawValue: financialDashboard.cashFlow, hint: "Entradas pagas menos saídas pagas", semantic: "profit" as const },
-                    ].map((metric) => (
-                      <div key={metric.label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{metric.label}</p>
-                        <p className={`mt-2 text-xl font-semibold ${getFinancialSemanticValueClass(metric.semantic, metric.rawValue)}`}>{metric.value}</p>
-                        <p className="mt-1 text-xs text-slate-500">{metric.hint}</p>
+                  <div className="space-y-4">
+                    <div data-financial-expenses-view className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                      {[
+                        { label: "Despesas operacionais", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Saídas registradas + custos do mês", semantic: "negative" as const },
+                        { label: "Custos cadastrados", value: formatCurrency(financialDashboard.recurringCosts), rawValue: financialDashboard.recurringCosts, hint: `${financialDashboard.clinicCostRows.length} custo(s) ativo(s) no período`, semantic: "negative" as const },
+                        { label: "Repasses pagos", value: formatCurrency(financialDashboard.professionalPaid), rawValue: financialDashboard.professionalPaid, hint: "Pagamentos profissionais baixados", semantic: "negative" as const },
+                        { label: "Repasses pendentes", value: formatCurrency(financialDashboard.professionalPending), rawValue: financialDashboard.professionalPending, hint: "Valores ainda a repassar", semantic: "negative" as const },
+                        { label: "Saldo líquido", value: formatCurrency(financialDashboard.cashFlow), rawValue: financialDashboard.cashFlow, hint: "Entradas pagas menos saídas pagas", semantic: "profit" as const },
+                      ].map((metric) => (
+                        <div key={metric.label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{metric.label}</p>
+                          <p className={`mt-2 text-xl font-semibold ${getFinancialSemanticValueClass(metric.semantic, metric.rawValue)}`}>{metric.value}</p>
+                          <p className="mt-1 text-xs text-slate-500">{metric.hint}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <section className="rounded-[32px] border border-slate-100 bg-white p-5 shadow-sm sm:p-6" aria-labelledby="clinic-costs-title">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-violet-600">Custos da clínica</p>
+                          <h4 id="clinic-costs-title" className="mt-1 text-xl font-semibold text-slate-900">Custos recorrentes</h4>
+                          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-500">
+                            Cadastre uma vez. O valor mensal ou as ocorrências semanais do período entram automaticamente nas despesas e no DRE.
+                          </p>
+                        </div>
+                        <span className="w-fit rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700">
+                          Incluído no DRE
+                        </span>
                       </div>
-                    ))}
+
+                      {canManageClinicCosts ? (
+                        <form className="mt-5 grid gap-3 lg:grid-cols-[minmax(220px,1.4fr)_minmax(150px,0.7fr)_minmax(170px,0.7fr)_auto] lg:items-end" onSubmit={(event) => { event.preventDefault(); void handleAddClinicCost(); }}>
+                          <label className="text-sm font-medium text-slate-600">
+                            Nome do custo
+                            <input
+                              type="text"
+                              value={clinicCostName}
+                              onChange={(event) => setClinicCostName(event.target.value.slice(0, 120))}
+                              maxLength={120}
+                              autoComplete="off"
+                              placeholder="Ex.: Internet, energia ou aluguel"
+                              className="mt-1.5 min-h-[46px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-base font-normal text-slate-800 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-4 focus:ring-violet-100"
+                            />
+                          </label>
+                          <label className="text-sm font-medium text-slate-600">
+                            Valor
+                            <div className="relative mt-1.5">
+                              <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-sm text-slate-400">R$</span>
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={clinicCostAmount}
+                                onChange={(event) => setClinicCostAmount(normalizeMoneyInputChange(event.target.value))}
+                                onBlur={() => setClinicCostAmount(formatMoneyInput(clinicCostAmount))}
+                                placeholder="0,00"
+                                className="min-h-[46px] w-full rounded-2xl border border-slate-200 bg-slate-50 py-2 pl-11 pr-4 text-base font-normal text-slate-800 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-4 focus:ring-violet-100"
+                              />
+                            </div>
+                          </label>
+                          <label className="text-sm font-medium text-slate-600">
+                            Recorrência
+                            <select
+                              value={clinicCostRecurrence}
+                              onChange={(event) => setClinicCostRecurrence(event.target.value === "weekly" ? "weekly" : "monthly")}
+                              className="mt-1.5 min-h-[46px] w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 text-base font-normal text-slate-800 outline-none transition focus:border-violet-400 focus:bg-white focus:ring-4 focus:ring-violet-100"
+                            >
+                              <option value="monthly">Mensal</option>
+                              <option value="weekly">Semanal</option>
+                            </select>
+                          </label>
+                          <button
+                            type="submit"
+                            disabled={clinicCostSaving || !clinicCostName.trim() || parseMoneyInput(clinicCostAmount) <= 0}
+                            className="inline-flex min-h-[46px] items-center justify-center gap-2 rounded-2xl bg-violet-600 px-5 text-sm font-medium text-white shadow-sm transition hover:bg-violet-700 focus:outline-none focus:ring-4 focus:ring-violet-200 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {clinicCostSaving ? <Loader2 size={17} className="animate-spin" /> : <Plus size={17} />}
+                            {clinicCostSaving ? "Salvando..." : "Cadastrar custo"}
+                          </button>
+                        </form>
+                      ) : (
+                        <p className="mt-5 rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">Você pode consultar os custos, mas não possui permissão para cadastrar novos valores.</p>
+                      )}
+
+                      <div className="mt-6 border-t border-slate-100 pt-5">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium text-slate-700">Custos considerados em {formatFinancialMonthLabel(financialMonth, "long")}</p>
+                          <p className="text-sm text-slate-500">Total: <span className="font-medium text-rose-600">{formatCurrency(financialDashboard.recurringCosts)}</span></p>
+                        </div>
+                        {clinicCostsLoading ? (
+                          <div className="space-y-2" aria-live="polite" aria-label="Carregando custos">
+                            {[0, 1].map((item) => <div key={item} className="h-16 animate-pulse rounded-2xl bg-slate-100" />)}
+                          </div>
+                        ) : clinicCostsError ? (
+                          <p className="rounded-2xl border border-rose-100 bg-rose-50 p-4 text-sm text-rose-700">{clinicCostsError}</p>
+                        ) : financialDashboard.clinicCostRows.length ? (
+                          <div className="grid gap-2 lg:grid-cols-2">
+                            {financialDashboard.clinicCostRows.map((cost: any) => (
+                              <div key={cost.id || `${cost.name}-${cost.starts_on}`} className="flex items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-medium text-slate-800">{cost.name}</p>
+                                  <p className="mt-1 text-xs text-slate-500">
+                                    {cost.recurrence === "weekly" ? "Semanal" : "Mensal"} · {cost.occurrences} {cost.occurrences === 1 ? "ocorrência" : "ocorrências"} no mês
+                                  </p>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <p className="text-sm font-medium text-slate-900">{formatCurrency(cost.total)}</p>
+                                  {cost.occurrences > 1 && <p className="mt-1 text-[11px] text-slate-400">{formatCurrency(cost.unitAmount)} cada</p>}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50/70 p-5 text-sm text-slate-500">
+                            Nenhum custo recorrente afeta este período.
+                          </div>
+                        )}
+                      </div>
+                    </section>
                   </div>
                 )}
 
