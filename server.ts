@@ -62,6 +62,10 @@ import {
   sendAppointmentNotification
 } from './services/pushNotificationService';
 import {
+  resolveVertoDeploymentEnvironment,
+  validateVertoDeploymentConfiguration,
+} from './services/deploymentEnvironment';
+import {
   SupabaseRateLimitStore,
   checkDistributedRuntimeState,
   issueDistributedSessionToken,
@@ -522,6 +526,7 @@ function validateRequiredEnvForDeploy(): void {
     'SUPABASE_SERVICE_ROLE_KEY',
     'DATA_ENCRYPTION_KEY',
     'PSEUDONYMIZATION_KEY',
+    'VERTO_DEPLOYMENT_ENV',
     'STRIPE_ENVIRONMENT',
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET'
@@ -536,6 +541,11 @@ function validateRequiredEnvForDeploy(): void {
   if (!isValidDataEncryptionKey(dataEncryptionKey)) {
     throw new Error('DATA_ENCRYPTION_KEY invalida. Use hex com 64 caracteres ou base64 com 32 bytes.');
   }
+  const deploymentValidation = validateVertoDeploymentConfiguration({ requireEnvironment: true });
+  if (!deploymentValidation.ok) {
+    throw new Error(`Ambiente de deployment invalido: ${deploymentValidation.errors.join(' ')}`);
+  }
+
   try {
     const stripeEnvironment = resolveStripeEnvironment();
     validateStripeSecretForEnvironment(stripeEnvironment);
@@ -549,6 +559,22 @@ function validateRequiredEnvForDeploy(): void {
 }
 
 validateRequiredEnvForDeploy();
+
+const vertoDeploymentEnv = resolveVertoDeploymentEnvironment();
+const vertoDeploymentConfiguration = validateVertoDeploymentConfiguration({
+  requireEnvironment: process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT),
+});
+if (vertoDeploymentEnv) {
+  console.log('[Deployment] Namespace de ambiente confirmado.', {
+    deploymentEnv: vertoDeploymentEnv,
+    appHost: vertoDeploymentConfiguration.appHost,
+    supabaseProjectRef: vertoDeploymentConfiguration.supabaseProjectRef,
+    railwayEnvironment: vertoDeploymentConfiguration.railwayEnvironment,
+    vapidPublicKeyFingerprint: vertoDeploymentConfiguration.vapidPublicKeyFingerprint,
+  });
+} else {
+  console.warn('[Deployment] VERTO_DEPLOYMENT_ENV ausente/invalida: operacoes de push e jobs permanecem fail-closed neste runtime.');
+}
 
 // Initialize Stripe lazily to prevent crash on startup if key is missing
 // Matches stripe-node 21.0.1's generated API contract; this makes the
@@ -590,6 +616,16 @@ const vapidSubject =
 
 if (vapidPublicKey && vapidPrivateKey) {
   webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+}
+
+function requireNotificationDeploymentEnvironment(res: any) {
+  if (vertoDeploymentEnv) return vertoDeploymentEnv;
+  res.status(503).json({
+    success: false,
+    error: 'NOTIFICATION_ENV_NOT_CONFIGURED',
+    message: 'O namespace de ambiente das notificacoes nao esta configurado neste runtime.',
+  });
+  return null;
 }
 
 function normalizeSubscriptionStatusFromStripe(status: string): 'active' | 'pending' | 'delinquent' | 'canceled' {
@@ -19599,7 +19635,12 @@ try {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false
-      }
+      },
+      ...(vertoDeploymentEnv ? {
+        global: {
+          headers: { 'x-verto-deployment-env': vertoDeploymentEnv }
+        }
+      } : {})
     });
   }
   if (supabaseUrl && supabasePublicClientKey) {
@@ -35445,6 +35486,8 @@ async function startServer() {
   });
 
   const handleVapidPublicKey = (_req: any, res: any) => {
+    const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+    if (!deploymentEnv) return;
     if (!vapidPublicKey || !vapidPrivateKey) {
       return res.status(503).json({
         success: false,
@@ -35457,6 +35500,8 @@ async function startServer() {
 
   const handlePushSubscribe = async (req: any, res: any) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
       if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
@@ -35538,6 +35583,7 @@ async function startServer() {
       const renewalToken = crypto.randomBytes(32).toString('base64url');
       const result = await savePatientPushSubscription({
         supabase,
+        deploymentEnv,
         subscription,
         patientId,
         userId: sanitizeString(user?.id, 120),
@@ -35574,6 +35620,8 @@ async function startServer() {
 
   const handlePushUnsubscribe = async (req: any, res: any) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
       const user = req.session.user;
@@ -35587,6 +35635,7 @@ async function startServer() {
       });
       const result = await removePatientPushSubscription({
         supabase,
+        deploymentEnv,
         patientId: patientIds[0] || '',
         endpoint
       });
@@ -35600,6 +35649,8 @@ async function startServer() {
 
   const handlePushRenew = async (req: any, res: any) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const renewalToken = sanitizeString(req.body?.renewalToken || req.body?.renewal_token, 200);
       const subscription = req.body?.subscription;
       const oldEndpoint = sanitizeString(req.body?.oldEndpoint || req.body?.old_endpoint, 2000);
@@ -35609,6 +35660,7 @@ async function startServer() {
       }
       const result = await renewPatientPushSubscription({
         supabase,
+        deploymentEnv,
         renewalToken,
         subscription,
         oldEndpoint,
@@ -38900,8 +38952,11 @@ async function startServer() {
       );
       const canRequestReschedule = await readClinicPatientReschedulePolicy(reminderClinicId);
 
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const result = await sendAppointmentNotification({
         supabase,
+        deploymentEnv,
         patientId,
         patientEmail,
         appointment: {
@@ -54268,6 +54323,8 @@ async function startServer() {
 
   app.get('/api/portal/notifications', checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const userId = sanitizeString(req.session.user?.id, 120);
       const userEmail = sanitizeEmail(req.session.user?.email);
       const patientIds = await getPortalPatientIdsForUser(req.session.user);
@@ -54282,6 +54339,7 @@ async function startServer() {
       let query = supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
+        .eq('deployment_env', deploymentEnv)
         .in('patient_id', patientIds)
         .order('created_at', { ascending: false })
         .limit(Math.min(200, limit * 4 + 1));
@@ -54552,6 +54610,8 @@ async function startServer() {
 
   app.patch('/api/portal/notifications/:notificationId', checkAuth, requirePatientPortalModule('appointments_communication'), portalActionLimiter, async (req: any, res) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const notificationId = sanitizeString(req.params.notificationId, 120);
       const userId = sanitizeString(req.session.user?.id, 120);
       const userEmail = sanitizeEmail(req.session.user?.email);
@@ -54561,6 +54621,7 @@ async function startServer() {
       const { data: existing, error: existingError } = await supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, recipient_user_id, recipient_email, type, scheduled_for, read_at, acknowledged_at, metadata')
+        .eq('deployment_env', deploymentEnv)
         .eq('id', notificationId)
         .limit(1)
         .maybeSingle();
@@ -54589,6 +54650,7 @@ async function startServer() {
           let siblingQuery = supabase
             .from('portal_notifications')
             .select('id, scheduled_for, metadata')
+            .eq('deployment_env', deploymentEnv)
             .eq('patient_id', existing.patient_id)
             .eq('type', existing.type)
             .is('acknowledged_at', null)
@@ -54630,6 +54692,7 @@ async function startServer() {
           ...(acknowledge ? { acknowledged_at: existing.acknowledged_at || now } : {}),
           updated_at: now
         })
+        .eq('deployment_env', deploymentEnv)
         .in('id', targetNotificationIds)
         .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata');
       if (error) throw error;
@@ -54781,6 +54844,7 @@ async function startServer() {
     action: string;
     notificationId?: unknown;
   }) => {
+    if (!vertoDeploymentEnv) return { ok: true, notificationIds: [] as string[] };
     const appointmentId = sanitizeString(params.appointment?.id, 120);
     const patientId = sanitizeString(params.appointment?.patient_id || params.appointment?.patientId, 120);
     if (!isUuid(appointmentId) || !isUuid(patientId)) return { ok: true, notificationIds: [] as string[] };
@@ -54798,6 +54862,7 @@ async function startServer() {
         acknowledged_at: now,
         updated_at: now
       })
+      .eq('deployment_env', vertoDeploymentEnv)
       .eq('appointment_id', appointmentId)
       .eq('patient_id', patientId);
     if (requestedNotificationId) query = query.eq('id', requestedNotificationId);
@@ -54818,6 +54883,7 @@ async function startServer() {
           read_at: now,
           acknowledged_at: now
         })
+        .eq('deployment_env', vertoDeploymentEnv)
         .eq('appointment_id', appointmentId)
         .eq('patient_id', patientId);
       if (requestedNotificationId) fallbackQuery = fallbackQuery.eq('id', requestedNotificationId);
@@ -54847,6 +54913,7 @@ async function startServer() {
   };
 
   const acknowledgeStaleAppointmentReminderNotifications = async (appointmentOrAppointments: any) => {
+    if (!vertoDeploymentEnv) return [] as string[];
     const appointments = (Array.isArray(appointmentOrAppointments) ? appointmentOrAppointments : [appointmentOrAppointments])
       .filter(Boolean);
     const appointmentIds = Array.from(new Set(
@@ -54874,6 +54941,7 @@ async function startServer() {
           acknowledged_at: now,
           ...(includeUpdatedAt ? { updated_at: now } : {})
         })
+        .eq('deployment_env', vertoDeploymentEnv)
         .in('appointment_id', appointmentIds)
         .in('patient_id', patientIds)
         .in('type', reminderTypes)
@@ -55910,6 +55978,10 @@ async function startServer() {
     scheduledStart: string;
   }) => {
     try {
+      if (!vertoDeploymentEnv) {
+        console.warn('[PortalReschedule] notificacao ignorada: VERTO_DEPLOYMENT_ENV ausente/invalida.');
+        return;
+      }
       const appointment = params.appointment || {};
       const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || params.originalAppointment?.patient_id || params.originalAppointment?.patientId, 120);
       if (!isUuid(patientId)) return;
@@ -55938,6 +56010,7 @@ async function startServer() {
       const sentAt = new Date().toISOString();
       if (recipientUserId || recipientEmail) {
         const notificationPayload = cleanObject({
+          deployment_env: vertoDeploymentEnv,
           organization_id: isUuid(params.organizationId) ? params.organizationId : clinicBranding.id || clinicId || null,
           clinic_id: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
           recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -55949,8 +56022,9 @@ async function startServer() {
           message,
           sent_at: sentAt,
           scheduled_for: scheduledAt || sentAt,
-          idempotency_key: `${sanitizeString(appointment?.id || params.originalAppointment?.id, 120)}:reschedule_approved:${scheduledAt || sentAt}`,
+          idempotency_key: `${vertoDeploymentEnv}:${sanitizeString(appointment?.id || params.originalAppointment?.id, 120)}:reschedule_approved:${scheduledAt || sentAt}`,
           metadata: sanitizeClinicalPayload({
+            deploymentEnv: vertoDeploymentEnv,
             reminderKind: 'reschedule_approved',
             scheduledAt,
             clinicName,
@@ -55961,13 +56035,14 @@ async function startServer() {
         });
         const { error } = await supabase
           .from('portal_notifications')
-          .upsert(notificationPayload, { onConflict: 'idempotency_key' });
+          .upsert(notificationPayload, { onConflict: 'deployment_env,idempotency_key' });
         if (error && !isMissingRelationError(error)) {
           console.warn('[PortalReschedule] internal notification skipped:', error.message);
         }
       }
       await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -56215,6 +56290,7 @@ async function startServer() {
         const notificationResult = await supabase
           .from('portal_notifications')
           .select('appointment_id')
+          .eq('deployment_env', vertoDeploymentEnv || '__disabled__')
           .in('patient_id', patientIds)
           .is('acknowledged_at', null)
           .limit(Math.min(200, limit * 4));
@@ -57632,10 +57708,13 @@ async function startServer() {
 
   app.get('/api/clinic/announcements', noStoreDynamicResponse, checkAuth, requireClinicModule('appointments_communication'), requireClinicCapability('communication.clinic_notifications.manage'), async (req: any, res) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const limit = Math.min(50, Math.max(1, Math.round(Number(req.query?.limit || 30) || 30)));
       const { data, error } = await supabase.from('clinic_announcements')
         .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at,updated_at')
+        .eq('deployment_env', deploymentEnv)
         .eq('clinic_id', clinicId).order('created_at', { ascending: false }).limit(limit);
       if (error) { if (isMissingRelationError(error)) return res.status(503).json({ success:false, error:'O módulo de avisos ainda não foi ativado no banco.' }); throw error; }
       return res.json({ success:true, data:data || [] });
@@ -57644,6 +57723,8 @@ async function startServer() {
 
   app.post('/api/clinic/announcements', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('appointments_communication'), requireClinicCapability('communication.clinic_notifications.manage'), async (req:any,res) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user),120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId,120);
       if(!isUuid(clinicId)) return res.status(400).json({success:false,error:'Clínica inválida.'});
@@ -57668,9 +57749,9 @@ async function startServer() {
       const normalizedScheduledFor = scheduledFor && new Date(scheduledFor).getTime() > Date.now() + 15_000 ? scheduledFor : null;
       const selectedIds=Array.from(new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((v:unknown)=>sanitizeString(v,120)).filter((v:string)=>isUuid(v)))).slice(0,500) as string[];
       if(audienceMode==='SELECTED' && !selectedIds.length) return res.status(400).json({success:false,error:'Selecione ao menos um paciente.'});
-      const idempotencyKey=sanitizeString(req.body?.idempotencyKey,120) || crypto.randomUUID();
+      const idempotencyKey=`${deploymentEnv}:${sanitizeString(req.body?.idempotencyKey,100) || crypto.randomUUID()}`;
       const announcementSelect='id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at';
-      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
+      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
       if(!existing.error && existing.data) return res.json({success:true,data:existing.data,duplicate:true});
       if(existing.error && !isMissingRelationError(existing.error)) throw existing.error;
       const context = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
@@ -57734,18 +57815,18 @@ async function startServer() {
       const deliveryRow=delivery.data && typeof delivery.data==='object' && !Array.isArray(delivery.data) ? delivery.data : {};
       const announcementId=sanitizeString(deliveryRow?.announcement_id || requestedAnnouncementId,120);
       if(deliveryRow?.created===false){
-        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
+        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
         if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true});
       }
 
       if(normalizedScheduledFor){
-        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
         if(scheduled.error) throw scheduled.error;
         return res.status(201).json({success:true,data:scheduled.data,scheduled:true});
       }
 
       const dispatched=await dispatchClinicAnnouncementNow(announcementId,'api_immediate');
-      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
       if(final.error) throw final.error;
       return res.status(201).json({
         success:true,
@@ -88848,6 +88929,8 @@ async function startServer() {
 
   app.post('/api/patient-finance/charges/:paymentId/reminder', portalActionLimiter, checkAuth, requireClinicCapability('finance.payments.edit'), async (req: any, res) => {
     try {
+      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
+      if (!deploymentEnv) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
       const paymentId = sanitizeString(req.params.paymentId, 120);
@@ -88911,9 +88994,10 @@ async function startServer() {
       const localDay = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
-      const idempotencyKey = `patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
+      const idempotencyKey = `${deploymentEnv}:patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
       const now = new Date().toISOString();
       const notificationPayload = cleanObject({
+        deployment_env: deploymentEnv,
         organization_id: organizationId,
         clinic_id: organizationId,
         recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -88927,6 +89011,7 @@ async function startServer() {
         scheduled_for: now,
         idempotency_key: idempotencyKey,
         metadata: sanitizeClinicalPayload({
+          deploymentEnv,
           paymentId,
           balance,
           dueDate: sanitizeDate(charge.due_date),
@@ -88953,6 +89038,7 @@ async function startServer() {
 
       await sendAppointmentNotification({
         supabase,
+        deploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -98393,6 +98479,7 @@ async function startServer() {
   // --- STRUCTURED SCHOOL MANAGEMENT ---
   registerSchoolManagementRoutes(app, {
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     noStoreDynamicResponse,
     checkAuth,
     requireClinicCapability,
@@ -98613,6 +98700,7 @@ async function startServer() {
 
   startAppointmentReminderCron({
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,
@@ -98621,6 +98709,7 @@ async function startServer() {
   });
   startClinicAnnouncementCron({
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,

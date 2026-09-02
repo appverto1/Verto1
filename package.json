@@ -102,6 +102,7 @@
     "test:patient-dashboard": "tsx tests/patientDashboard.test.ts",
     "test:patient-professional-link": "tsx tests/clinicalProfessionalLinksHistory.test.ts",
     "test:notifications": "tsx tests/notificationBranding.test.ts",
+    "test:notification-environment-isolation": "tsx tests/notificationEnvironmentIsolation.test.ts",
     "test:verto-branding": "tsx tests/vertoRebranding.test.ts",
     "test:appointment-notifications": "tsx tests/appointmentNotifications.test.ts",
     "test:appointment-action-driven": "tsx tests/appointmentActionDriven.test.ts",
