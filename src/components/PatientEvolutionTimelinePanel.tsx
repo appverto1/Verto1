@@ -6,6 +6,7 @@ import {
   Clipboard,
   ExternalLink,
   FileText,
+  History,
   Link2,
   Loader2,
   Mail,
@@ -47,6 +48,18 @@ type CareNetworkOption = {
   email?: string | null;
 };
 
+type EvolutionAccessActivity = {
+  grantId?: string | null;
+  action: 'VIEWED' | 'FILE_ACCESSED' | string;
+  createdAt?: string | null;
+  recipientEmail?: string | null;
+  recipientName?: string | null;
+  previousAuthorization?: boolean;
+  subject?: string | null;
+  monthKey?: string | null;
+  fileName?: string | null;
+};
+
 type EvolutionTimelineItem = {
   id: string;
   monthKey: string;
@@ -61,6 +74,7 @@ type EvolutionTimelineItem = {
     sizeBytes?: number;
   } | null;
   grants?: EvolutionGrant[];
+  accessActivity?: EvolutionAccessActivity[];
 };
 
 type TimelineEntitlement = {
@@ -168,6 +182,8 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
   const [shareConfirmedByItem, setShareConfirmedByItem] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
+  const [actionSuccessKey, setActionSuccessKey] = useState('');
+  const [openActivityByItem, setOpenActivityByItem] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     if (!patientId) return;
@@ -378,6 +394,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
     setShareCanCommentByItem((current) => ({ ...current, [item.id]: false }));
     setShareConfirmedByItem((current) => ({ ...current, [item.id]: false }));
     setSuccess(result?.data?.emailSent ? 'Acesso criado e convite enviado por e-mail.' : 'Acesso criado. Você pode reenviar ou copiar um novo acesso seguro.');
+    setActionSuccessKey(`${item.id}:share`); window.setTimeout(() => setActionSuccessKey((current) => current === `${item.id}:share` ? '' : current), 1600);
     await load();
   };
 
@@ -395,7 +412,9 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
     const result = await dataService.resendPatientEvolutionTimelineAccess(patientId, item.id, grant.id);
     setBusyItemId('');
     if (!result?.success) { setError(result?.error || 'Não foi possível reenviar o acesso.'); return; }
-    setSuccess(result?.data?.emailSent ? 'Novo acesso seguro enviado por e-mail.' : 'O compartilhamento segue ativo.'); await load();
+    setSuccess(result?.data?.emailSent ? 'Novo acesso seguro enviado por e-mail.' : 'O compartilhamento segue ativo.');
+    setActionSuccessKey(`${item.id}:${grant.id}:resend`); window.setTimeout(() => setActionSuccessKey((current) => current === `${item.id}:${grant.id}:resend` ? '' : current), 1600);
+    await load();
   };
 
   const copyAccess = async (item: EvolutionTimelineItem, grant: EvolutionGrant) => {
@@ -421,6 +440,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
     setBusyItemId('');
     if (!result?.success) { setError(result?.error || 'Não foi possível alterar a permissão de comentário.'); return; }
     setSuccess(!grant.canComment ? 'Comentários habilitados para este profissional.' : 'Comentários desabilitados para este profissional.');
+    setActionSuccessKey(`${item.id}:${grant.id}:comment`); window.setTimeout(() => setActionSuccessKey((current) => current === `${item.id}:${grant.id}:comment` ? '' : current), 1600);
     await load();
   };
 
@@ -613,6 +633,33 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
               </div>
               <p className={`mt-1 text-[11px] leading-5 ${subtleClass}`}>Cada acesso pertence somente a esta evolução. O profissional externo precisa entrar na própria conta Verto para visualizar o conteúdo.</p>
 
+              {(item.accessActivity || []).length > 0 && (
+                <div className="mt-3">
+                  <button type="button" onClick={() => setOpenActivityByItem((current) => ({ ...current, [item.id]: !current[item.id] }))} aria-expanded={openActivityByItem[item.id] === true} className={`inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-[10px] font-medium transition ${dark ? 'text-violet-200 hover:bg-violet-500/10' : 'text-violet-700 hover:bg-violet-50'}`}>
+                    <History size={12} /> Ver atividade · {(item.accessActivity || []).length}
+                  </button>
+                  {openActivityByItem[item.id] === true && (
+                    <div className={`mt-2 rounded-xl border p-3 ${dark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-100 bg-white'}`}>
+                      <p className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${dark ? 'text-slate-400' : 'text-slate-400'}`}>Atividade de acesso</p>
+                      <div className={`mt-2 divide-y ${dark ? 'divide-slate-700' : 'divide-slate-100'}`}>
+                        {(item.accessActivity || []).map((event, activityIndex) => (
+                          <div key={`${event.grantId || 'audit'}:${event.createdAt || activityIndex}:${event.action}`} className="py-2.5 first:pt-1 last:pb-1">
+                            <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <p className={`text-[11px] font-semibold ${textClass}`}>{event.recipientName || event.recipientEmail || 'Profissional externo'}</p>
+                                <p className={`mt-0.5 text-[10px] ${subtleClass}`}>{event.action === 'FILE_ACCESSED' ? `Acessou documento${event.fileName ? ` · ${event.fileName}` : ''}` : `Visualizou · ${event.subject || item.subject}`}</p>
+                                <p className={`mt-0.5 text-[10px] ${subtleClass}`}>{monthLabel(event.monthKey || item.monthKey)}{event.previousAuthorization ? ' · compartilhamento anterior' : ''}</p>
+                              </div>
+                              {event.createdAt && <time className={`shrink-0 text-[10px] ${subtleClass}`}>{formatSharedAt(event.createdAt)}</time>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {(item.grants || []).length > 0 ? (
                 <div className="mt-3 space-y-2">
                   {(item.grants || []).map((grant) => {
@@ -639,10 +686,10 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
                               {busyItemId === `${item.id}:${grant.id}:copy` ? <Loader2 size={11} className="animate-spin" /> : <Clipboard size={11} />} {copiedKey === grant.id ? 'Copiado' : 'Copiar acesso'}
                             </button>
                             <button type="button" onClick={() => void resendAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                              <Mail size={11} /> Reenviar
+                              {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:resend` ? <CheckCircle2 size={11} /> : <Mail size={11} />} {busyItemId === `${item.id}:${grant.id}` ? 'Reenviando...' : actionSuccessKey === `${item.id}:${grant.id}:resend` ? 'Enviado' : 'Reenviar'}
                             </button>
                             <button type="button" onClick={() => void toggleCommentPermission(item, grant)} disabled={!grant.careNetworkContactId || busyItemId === `${item.id}:${grant.id}:comment`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${grant.canComment ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50' : dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                              <MessageCircle size={11} /> {grant.canComment ? 'Desabilitar comentário' : 'Habilitar comentário'}
+                              {busyItemId === `${item.id}:${grant.id}:comment` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:comment` ? <CheckCircle2 size={11} /> : <MessageCircle size={11} />} {busyItemId === `${item.id}:${grant.id}:comment` ? 'Atualizando...' : actionSuccessKey === `${item.id}:${grant.id}:comment` ? 'Atualizado' : grant.canComment ? 'Desabilitar comentário' : 'Habilitar comentário'}
                             </button>
                             <button type="button" onClick={() => void revokeAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-[10px] font-medium text-rose-600 hover:bg-rose-50">
                               {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />} Revogar
@@ -694,7 +741,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
                   </label>
                   <div className="mt-3 flex justify-end">
                     <button type="button" onClick={() => void grantAccess(item)} disabled={busyItemId === item.id || !shareContactByItem[item.id]} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-xs font-semibold text-white disabled:opacity-60">
-                      {busyItemId === item.id ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Compartilhar
+                      {busyItemId === item.id ? <Loader2 size={14} className="animate-spin" /> : actionSuccessKey === `${item.id}:share` ? <CheckCircle2 size={14} /> : <Send size={14} />} {busyItemId === item.id ? 'Compartilhando...' : actionSuccessKey === `${item.id}:share` ? 'Compartilhado' : 'Compartilhar'}
                     </button>
                   </div>
                 </div>

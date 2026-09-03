@@ -87,3 +87,38 @@ export function updateExternalTimelineComparisonSelection(currentSelection, key)
   if (current.length < 2) return [...current, normalizedKey];
   return [current[0], normalizedKey];
 }
+
+
+export function externalTimelineUnreadCount(items) {
+  return (Array.isArray(items) ? items : []).reduce((total, item) => total + (item?.firstViewedAt ? 0 : 1), 0);
+}
+
+export function externalTimelineMostRecentUnreadMonth(groups) {
+  let bestKey = '';
+  let bestTimestamp = -1;
+  for (const group of Array.isArray(groups) ? groups : []) {
+    for (const item of Array.isArray(group?.items) ? group.items : []) {
+      if (item?.firstViewedAt) continue;
+      const shared = timestamp(item?.sharedAt || item?.updatedAt || item?.createdAt);
+      if (shared > bestTimestamp) {
+        bestTimestamp = shared;
+        bestKey = normalizeExternalTimelineMonthKey(group?.key);
+      }
+    }
+  }
+  return bestKey;
+}
+
+export function externalTimelineInitialMonth(groups, preferredMonth = '') {
+  const available = new Set((Array.isArray(groups) ? groups : []).map((group) => normalizeExternalTimelineMonthKey(group?.key)).filter(Boolean));
+  const unreadMonth = externalTimelineMostRecentUnreadMonth(groups);
+  if (unreadMonth) return unreadMonth;
+  const preferred = normalizeExternalTimelineMonthKey(preferredMonth);
+  if (preferred && available.has(preferred)) return preferred;
+  return externalTimelineLatestMonth(groups);
+}
+
+export function externalTimelineVisibleGroup(groups, key) {
+  const normalized = normalizeExternalTimelineMonthKey(key);
+  return (Array.isArray(groups) ? groups : []).find((group) => normalizeExternalTimelineMonthKey(group?.key) === normalized) || null;
+}

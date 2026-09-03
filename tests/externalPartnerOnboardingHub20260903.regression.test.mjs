@@ -79,7 +79,7 @@ assert.match(central, /senderNames\.some/);
 assert.match(central, /Compartilhado por/);
 assert.match(central, /toggleClinic/);
 assert.match(central, /openPatientTimeline/);
-assert.match(central, /Tudo o que suas clínicas parceiras compartilharam com você/);
+assert.match(central, /Seus compartilhamentos, organizados em um só lugar/);
 
 // Persistence/revocation remains server-derived; authorization epochs stay immutable.
 assert.match(central, /api\/external\/care-network\/shared/);
