@@ -5,6 +5,7 @@ const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8')
 const detail = fs.readFileSync(new URL('../src/components/PatientDetailView.tsx', import.meta.url), 'utf8');
 const panel = fs.readFileSync(new URL('../src/components/PatientEvolutionTimelinePanel.tsx', import.meta.url), 'utf8');
 const external = fs.readFileSync(new URL('../src/components/ExternalEvolutionShare.tsx', import.meta.url), 'utf8');
+const externalTimeline = fs.readFileSync(new URL('../src/components/ExternalPatientTimeline.tsx', import.meta.url), 'utf8');
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const data = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260903033000_external_care_network_collaboration_v1.sql', import.meta.url), 'utf8');
@@ -46,8 +47,11 @@ assert.match(external, /Crie uma senha/);
 assert.match(external, /current-password/);
 assert.doesNotMatch(external, /one-time-code/);
 assert.match(external, /EXTERNAL_ACCOUNT_MISMATCH/);
-assert.match(external, /Comentários|Comentário/);
-assert.match(external, /rede-de-cuidado/);
+assert.match(external, /openAuthorizedTimeline/);
+assert.match(external, /\/api\/external\/evolution\/\$\{encodeURIComponent\(publicId\)\}\/context/);
+assert.match(externalTimeline, /Comentários/);
+assert.match(externalTimeline, /canComment/);
+assert.match(externalTimeline, /rede-de-cuidado/);
 assert.match(app, /ExternalEvolutionShare publicId=\{externalEvolutionPublicId\}/);
 
 assert.match(migration, /external_professional_accounts/);

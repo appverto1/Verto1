@@ -18558,11 +18558,11 @@ function buildExternalEvolutionInviteEmail(params: { clinicName: string; shareUr
       <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
         <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
           <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
-          <h1 style="font-size:21px;margin:0 0 14px;">Atualização clínica compartilhada</h1>
+          <h1 style="font-size:21px;margin:0 0 14px;">Timeline clínica compartilhada</h1>
           <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
-            ${clinicName} disponibilizou um conteúdo clínico para continuidade do cuidado. O link abaixo é individual e permite criar ou acessar sua conta Verto com o e-mail autorizado.
+            ${clinicName} disponibilizou uma atualização clínica para continuidade do cuidado. Após autenticar sua conta Verto, você verá a timeline compartilhada deste paciente contendo somente os registros autorizados para o seu e-mail.
           </p>
-          <a href="${shareUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Acessar com segurança</a>
+          <a href="${shareUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Ver timeline compartilhada</a>
         </div>
       </div>
     `
@@ -18745,6 +18745,26 @@ async function validateExternalEvolutionActivationToken(publicId: string, rawTok
     .is('consumed_at', null)
     .is('invalidated_at', null)
     .gt('expires_at', nowIso)
+    .maybeSingle();
+  if (error) {
+    if (isMissingRelationError(error)) throw new Error('EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE');
+    throw error;
+  }
+  if (!data?.id || sanitizeEmail(data.recipient_email_normalized) !== sanitizeEmail(loaded.grant.recipient_email)) return null;
+  return { loaded, tokenHash, tokenRow: data };
+}
+
+async function inspectExternalEvolutionActivationToken(publicId: string, rawToken: unknown) {
+  const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+  if (!isUuid(publicId) || token.length < 32 || token.length > 256) return null;
+  const loaded = await loadActiveExternalEvolutionShare(publicId);
+  if (!loaded) return null;
+  const tokenHash = hashExternalEvolutionActivationToken(token);
+  const { data, error } = await supabase
+    .from('external_evolution_activation_tokens')
+    .select('id,grant_id,recipient_email_normalized,expires_at,consumed_at,invalidated_at')
+    .eq('grant_id', loaded.grant.id)
+    .eq('token_hash', tokenHash)
     .maybeSingle();
   if (error) {
     if (isMissingRelationError(error)) throw new Error('EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE');
@@ -37301,8 +37321,13 @@ async function startServer() {
       if (identity.account) return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
       if (identity.mismatch) return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
 
-      const validated = await validateExternalEvolutionActivationToken(publicId, req.body?.activationToken || req.body?.activation_token);
+      const rawActivationToken = req.body?.activationToken || req.body?.activation_token;
+      const validated = await validateExternalEvolutionActivationToken(publicId, rawActivationToken);
       if (!validated) {
+        const inspected = await inspectExternalEvolutionActivationToken(publicId, rawActivationToken);
+        if (inspected?.tokenRow?.consumed_at && !inspected.tokenRow.invalidated_at) {
+          return res.json({ success: true, data: { mode: 'LOGIN', email: sanitizeEmail(inspected.loaded.grant.recipient_email), activationAlreadyConsumed: true } });
+        }
         return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
       }
       const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
@@ -37458,9 +37483,9 @@ async function startServer() {
         }
         if (activationToken) {
           validatedToken = await validateExternalEvolutionActivationToken(publicId, activationToken);
-          if (!validatedToken) {
-            return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
-          }
+          // A consumed/expired activation token is never authentication. Once the correct
+          // Supabase Auth identity is verified, publicId remains only a locator and the
+          // active grant + account identity are the authorization boundary.
         }
       }
 
@@ -37534,7 +37559,7 @@ async function startServer() {
   const loadExternalCareNetworkCentral = async (accountId: string, limit: number, offset: number) => {
     const { data: grants, error: grantsError } = await supabase
       .from('patient_evolution_share_grants')
-      .select('id,public_id,timeline_item_id,clinic_id,patient_id,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,last_invited_at,created_at')
+      .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,last_invited_at,created_at')
       .eq('external_account_id', accountId)
       .eq('status', 'ACTIVE')
       .order('created_at', { ascending: false })
@@ -37552,8 +37577,8 @@ async function startServer() {
     const [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult] = await Promise.all([
       supabase.from('clinics').select('id,name').in('id', clinicIds),
       supabase.from('patients').select('id,clinic_id,name,is_active,deleted_at,archived_at,status').in('id', patientIds),
-      supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,subject,created_at,archived_at').in('id', itemIds),
-      contactIds.length ? supabase.from('patient_care_network_contacts').select('id,clinic_id,patient_id,archived_at').in('id', contactIds) : Promise.resolve({ data: [], error: null } as any),
+      supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,subject,created_at,updated_at,archived_at').in('id', itemIds),
+      contactIds.length ? supabase.from('patient_care_network_contacts').select('id,clinic_id,patient_id,email,archived_at').in('id', contactIds) : Promise.resolve({ data: [], error: null } as any),
       grantIds.length ? supabase.from('patient_evolution_external_comments').select('id,grant_id').in('grant_id', grantIds) : Promise.resolve({ data: [], error: null } as any),
     ]);
     for (const result of [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult]) if (result.error) throw result.error;
@@ -37568,7 +37593,7 @@ async function startServer() {
       const item = timelineItemsByScope.get(`${grant.clinic_id}:${grant.patient_id}:${grant.timeline_item_id}`);
       const contact = grant.care_network_contact_id ? contacts.get(String(grant.care_network_contact_id)) : null;
       const patientEligible = patient && patient.is_active !== false && !patient.deleted_at && !patient.archived_at && sanitizeString(patient.status, 40).toUpperCase() !== PATIENT_STATUS_ARCHIVED;
-      const contactEligible = Boolean(grant.care_network_contact_id && contact && !contact.archived_at && String(contact.clinic_id) === String(grant.clinic_id) && String(contact.patient_id) === String(grant.patient_id));
+      const contactEligible = Boolean(grant.care_network_contact_id && contact && !contact.archived_at && String(contact.clinic_id) === String(grant.clinic_id) && String(contact.patient_id) === String(grant.patient_id) && sanitizeEmail(contact.email) === sanitizeEmail(grant.recipient_email));
       if (!patientEligible || !item || item.archived_at || !contactEligible) return [];
       return [{
         grantId: grant.id,
@@ -37586,9 +37611,123 @@ async function startServer() {
         viewCount: Math.max(0, Number(grant.view_count || 0)),
         commentCount: commentCountByGrant.get(String(grant.id)) || 0,
         sharedAt: grant.created_at,
+        itemUpdatedAt: item.updated_at || item.created_at || grant.created_at,
       }];
     });
     return { items: sharedItems, nextOffset: hasMore ? offset + limit : null };
+  };
+
+  const externalPatientTimelinePath = (clinicId: string, patientId: string) =>
+    `/rede-de-cuidado/paciente/${encodeURIComponent(clinicId)}/${encodeURIComponent(patientId)}`;
+
+  const loadExternalPatientTimeline = async (accountId: string, clinicId: string, patientId: string) => {
+    if (![accountId, clinicId, patientId].every(isUuid)) return null;
+    const { data: grants, error: grantsError } = await supabase
+      .from('patient_evolution_share_grants')
+      .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,created_at')
+      .eq('external_account_id', accountId)
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .eq('status', 'ACTIVE')
+      .order('created_at', { ascending: false });
+    if (grantsError) throw grantsError;
+    const grantRows = grants || [];
+    if (!grantRows.length) return null;
+
+    const itemIds = Array.from(new Set(grantRows.map((row: any) => sanitizeString(row.timeline_item_id, 120)).filter(isUuid)));
+    const contactIds = Array.from(new Set(grantRows.map((row: any) => sanitizeString(row.care_network_contact_id, 120)).filter(isUuid)));
+    const [clinicResult, patientResult, itemsResult, contactsResult] = await Promise.all([
+      supabase.from('clinics').select('id,name').eq('id', clinicId).maybeSingle(),
+      supabase.from('patients').select('id,clinic_id,name,is_active,deleted_at,archived_at,status').eq('id', patientId).eq('clinic_id', clinicId).maybeSingle(),
+      supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', itemIds).is('archived_at', null),
+      contactIds.length
+        ? supabase.from('patient_care_network_contacts').select('id,clinic_id,patient_id,email,archived_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', contactIds).is('archived_at', null)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    for (const result of [clinicResult, patientResult, itemsResult, contactsResult]) if (result.error) throw result.error;
+
+    const patient = patientResult.data;
+    const patientEligible = Boolean(
+      patient?.id && patient?.is_active !== false && !patient?.deleted_at && !patient?.archived_at &&
+      sanitizeString(patient?.status, 40).toUpperCase() !== PATIENT_STATUS_ARCHIVED
+    );
+    if (!patientEligible) return null;
+
+    const itemsById = new Map((itemsResult.data || []).map((row: any) => [String(row.id), row]));
+    const contactsById = new Map((contactsResult.data || []).map((row: any) => [String(row.id), row]));
+    const eligibleGrants = grantRows.filter((grant: any) => {
+      const contact = contactsById.get(String(grant.care_network_contact_id || ''));
+      const item = itemsById.get(String(grant.timeline_item_id || ''));
+      return Boolean(
+        contact && item && !item.archived_at &&
+        String(contact.clinic_id) === clinicId && String(contact.patient_id) === patientId &&
+        sanitizeEmail(contact.email) === sanitizeEmail(grant.recipient_email)
+      );
+    });
+    if (!eligibleGrants.length) return null;
+
+    const eligibleGrantIds = eligibleGrants.map((row: any) => sanitizeString(row.id, 120)).filter(isUuid);
+    const fileIds = Array.from(new Set(eligibleGrants.map((grant: any) => itemsById.get(String(grant.timeline_item_id))?.patient_file_id).map((value: any) => sanitizeString(value, 120)).filter(isUuid)));
+    const [commentsResult, filesResult] = await Promise.all([
+      supabase.from('patient_evolution_external_comments').select('id,grant_id,body,created_at').eq('external_account_id', accountId).in('grant_id', eligibleGrantIds).order('created_at', { ascending: true }),
+      fileIds.length
+        ? supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,created_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', fileIds)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    for (const result of [commentsResult, filesResult]) if (result.error && !isMissingRelationError(result.error)) throw result.error;
+
+    const commentsByGrant = new Map<string, any[]>();
+    for (const comment of commentsResult.data || []) {
+      const key = String(comment.grant_id || '');
+      const list = commentsByGrant.get(key) || [];
+      list.push({ id: comment.id, body: comment.body, createdAt: comment.created_at });
+      commentsByGrant.set(key, list);
+    }
+    const filesById = new Map((filesResult.data || []).map((row: any) => [String(row.id), row]));
+
+    const timelineItems = eligibleGrants.flatMap((grant: any) => {
+      const item: any = itemsById.get(String(grant.timeline_item_id));
+      if (!item?.id) return [];
+      const file: any = isUuid(item.patient_file_id) ? filesById.get(String(item.patient_file_id)) : null;
+      return [{
+        grantId: grant.id,
+        publicId: grant.public_id,
+        timelineItemId: item.id,
+        monthKey: item.month_key,
+        slot: item.slot,
+        subject: item.subject,
+        content: item.content || '',
+        createdAt: item.created_at,
+        updatedAt: item.updated_at || item.created_at,
+        sharedAt: grant.created_at,
+        canComment: grant.can_comment === true,
+        firstViewedAt: grant.first_viewed_at || null,
+        lastViewedAt: grant.last_viewed_at || null,
+        viewCount: Math.max(0, Number(grant.view_count || 0)),
+        comments: commentsByGrant.get(String(grant.id)) || [],
+        attachment: file?.id ? {
+          id: file.id,
+          fileName: file.file_name,
+          mimeType: file.mime_type,
+          sizeBytes: file.file_size_bytes,
+          createdAt: file.created_at,
+        } : null,
+      }];
+    }).sort((left: any, right: any) => {
+      const leftMonth = sanitizeString(left.monthKey, 20);
+      const rightMonth = sanitizeString(right.monthKey, 20);
+      if (leftMonth !== rightMonth) return rightMonth.localeCompare(leftMonth);
+      return new Date(right.createdAt || 0).getTime() - new Date(left.createdAt || 0).getTime();
+    });
+    if (!timelineItems.length) return null;
+
+    return {
+      clinicId,
+      clinicName: sanitizeString(clinicResult.data?.name, 180) || 'Clínica',
+      patientId,
+      patientName: sanitizeString(patient.name, 180) || 'Paciente',
+      items: timelineItems,
+    };
   };
 
   app.get('/api/external/care-network/shared', noStoreDynamicResponse, async (req: any, res) => {
@@ -37601,6 +37740,72 @@ async function startServer() {
       return res.json({ success: true, data });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Não foi possível carregar seus compartilhamentos.' });
+    }
+  });
+
+  app.get('/api/external/evolution/:publicId/context', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      const authorized = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!authorized.loaded || !authorized.account) {
+        if (authorized.mismatch) return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
+        return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_REQUIRED', error: 'Faça login para acessar este compartilhamento.' });
+      }
+      const clinicId = sanitizeString(authorized.loaded.grant.clinic_id, 120);
+      const patientId = sanitizeString(authorized.loaded.grant.patient_id, 120);
+      if (![clinicId, patientId].every(isUuid)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      return res.json({ success: true, data: { clinicId, patientId, timelinePath: externalPatientTimelinePath(clinicId, patientId) } });
+    } catch {
+      return res.status(500).json({ success: false, error: 'Não foi possível abrir este compartilhamento.' });
+    }
+  });
+
+  app.get('/api/external/care-network/patients/:clinicId/:patientId/timeline', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(req.params?.clinicId, 120);
+      const patientId = sanitizeString(req.params?.patientId, 120);
+      if (![clinicId, patientId].every(isUuid)) return res.status(404).json({ success: false, error: 'Timeline indisponível.' });
+      const identity = await resolveExternalProfessionalAccount(req);
+      if (!identity.account) return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_REQUIRED', error: 'Faça login para continuar.' });
+      const data = await loadExternalPatientTimeline(identity.account.id, clinicId, patientId);
+      if (!data) return res.status(403).json({ success: false, code: 'EXTERNAL_PATIENT_TIMELINE_FORBIDDEN', error: 'Esta timeline não está disponível para esta conta.' });
+      return res.json({ success: true, data });
+    } catch {
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar esta timeline.' });
+    }
+  });
+
+  app.post('/api/external/care-network/patients/:clinicId/:patientId/items/:grantId/view', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const clinicId = sanitizeString(req.params?.clinicId, 120);
+      const patientId = sanitizeString(req.params?.patientId, 120);
+      const grantId = sanitizeString(req.params?.grantId, 120);
+      if (![clinicId, patientId, grantId].every(isUuid)) return res.status(404).json({ success: false, error: 'Registro indisponível.' });
+      const identity = await resolveExternalProfessionalAccount(req);
+      if (!identity.account) return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_REQUIRED', error: 'Faça login para continuar.' });
+      const grantResult = await supabase
+        .from('patient_evolution_share_grants')
+        .select('id,public_id')
+        .eq('id', grantId)
+        .eq('external_account_id', identity.account.id)
+        .eq('clinic_id', clinicId)
+        .eq('patient_id', patientId)
+        .eq('status', 'ACTIVE')
+        .maybeSingle();
+      if (grantResult.error || !grantResult.data?.id || !isUuid(grantResult.data.public_id)) return res.status(404).json({ success: false, error: 'Registro indisponível.' });
+      const authorized = await resolveExternalEvolutionAuthorizedShare(req, grantResult.data.public_id);
+      if (!authorized.loaded || !authorized.account || sanitizeString(authorized.loaded.grant.id, 120) !== grantId) return res.status(404).json({ success: false, error: 'Registro indisponível.' });
+      const viewResult = await supabase.rpc('record_external_evolution_view_v1', { p_grant_id: grantId, p_external_account_id: identity.account.id });
+      if (viewResult.error) throw viewResult.error;
+      await persistExternalEvolutionAccessAudit({ req, grant: authorized.loaded.grant, item: authorized.loaded.item, action: 'VIEWED', metadata: { authenticatedExternalAccount: true, longitudinalTimeline: true } });
+      return res.json({ success: true, data: viewResult.data || null });
+    } catch (error: any) {
+      const message = sanitizeString(error?.message || String(error), 220);
+      if (message.includes('ACCESS_DENIED') || message.includes('PATIENT_INELIGIBLE') || message.includes('ITEM_ARCHIVED') || message.includes('CARE_LINK_INACTIVE')) {
+        return res.status(404).json({ success: false, error: 'Registro indisponível.' });
+      }
+      return res.status(500).json({ success: false, error: 'Não foi possível registrar esta visualização.' });
     }
   });
 

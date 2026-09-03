@@ -216,6 +216,9 @@ const ExternalEvolutionShare = React.lazy(() =>
 const ExternalCareNetworkCentral = React.lazy(() =>
   import('./components/ExternalCareNetworkCentral').then((m) => ({ default: m.ExternalCareNetworkCentral }))
 );
+const ExternalPatientTimeline = React.lazy(() =>
+  import('./components/ExternalPatientTimeline').then((m) => ({ default: m.ExternalPatientTimeline }))
+);
 const PublicSalesOffer = React.lazy(() =>
   import('./components/PublicSalesOffer').then((m) => ({ default: m.PublicSalesOffer }))
 );
@@ -431,8 +434,21 @@ export default function App() {
       ? window.location.pathname.match(/^\/evolucao-compartilhada\/([^/]+)\/?$/i)
       : null;
   const isExternalEvolutionRoute = Boolean(externalEvolutionRouteMatch);
+  const externalCarePatientRouteMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/rede-de-cuidado\/paciente\/([^/]+)\/([^/]+)\/?$/i)
+      : null;
+  const isExternalCarePatientRoute = Boolean(externalCarePatientRouteMatch);
   const isExternalCareNetworkRoute =
     typeof window !== 'undefined' && /^\/rede-de-cuidado\/?$/i.test(window.location.pathname);
+  const externalCarePatientClinicId = (() => {
+    if (!externalCarePatientRouteMatch) return '';
+    try { return decodeURIComponent(externalCarePatientRouteMatch[1]); } catch { return ''; }
+  })();
+  const externalCarePatientId = (() => {
+    if (!externalCarePatientRouteMatch) return '';
+    try { return decodeURIComponent(externalCarePatientRouteMatch[2]); } catch { return ''; }
+  })();
   const externalEvolutionPublicId = (() => {
     if (!externalEvolutionRouteMatch) return '';
     try {
@@ -8249,6 +8265,8 @@ export default function App() {
         <Suspense fallback={lazyFallback}>
         {isExternalEvolutionRoute ? (
           <ExternalEvolutionShare publicId={externalEvolutionPublicId} />
+        ) : isExternalCarePatientRoute ? (
+          <ExternalPatientTimeline clinicId={externalCarePatientClinicId} patientId={externalCarePatientId} />
         ) : isExternalCareNetworkRoute ? (
           <ExternalCareNetworkCentral />
         ) : isSalesOfferRoute ? (
