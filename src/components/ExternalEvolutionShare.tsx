@@ -215,9 +215,9 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
   const switchAccount = async () => {
     setBusy(true); setError('');
     try {
+      // Clear only the partner context. The same person may also have an internal Verto
+      // session, so switching the external identity must not sign out the clinical app.
       await fetch('/api/external/auth/logout', { method: 'POST', credentials: 'include', headers: { Accept: 'application/json' } });
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include', headers: { Accept: 'application/json' } }).catch(() => undefined);
-      try { const supabase = await getSupabase(); await supabase.auth.signOut(); } catch { /* server session is already cleared */ }
       window.location.reload();
     } finally { setBusy(false); }
   };

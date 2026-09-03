@@ -37341,6 +37341,30 @@ async function startServer() {
       const loaded = await loadActiveExternalEvolutionShare(publicId);
       if (!loaded) return res.status(404).json({ success: false, code: 'EXTERNAL_SHARE_NOT_FOUND', error: 'Compartilhamento indisponível.' });
 
+      const rawActivationToken = req.body?.activationToken || req.body?.activation_token;
+      const validated = await validateExternalEvolutionActivationToken(publicId, rawActivationToken);
+      if (validated) {
+        const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
+        // A valid invitation belongs to its recipient, not to whichever external-partner
+        // session happens to be left in this browser. A matching session may continue
+        // directly; a stale session is ignored for this bootstrap only and will be
+        // replaced after the recipient activates or logs in successfully.
+        const invitedIdentity = await resolveExternalProfessionalAccountFromExternalSession(req, recipientEmail);
+        if (invitedIdentity.account) {
+          return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
+        }
+        const authUser = await findAuthUserByEmail(recipientEmail);
+        const mode = resolveExternalEvolutionBootstrapMode({
+          authenticated: false,
+          mismatch: invitedIdentity.mismatch === true,
+          tokenState: 'VALID',
+          authUserExists: Boolean(authUser?.id),
+        });
+        return res.json({ success: true, data: { mode, email: recipientEmail, displayName: sanitizeString(validated.loaded.careContact?.professional_name, 180) || null } });
+      }
+
+      // Without a valid invitation, the existing external-partner session is still the
+      // authorization context. A locator for another identity must remain a mismatch.
       const identity = await resolveExternalProfessionalAccountFromExternalSession(req, sanitizeEmail(loaded.grant.recipient_email));
       const authenticatedMode = resolveExternalEvolutionBootstrapMode({
         authenticated: Boolean(identity.account),
@@ -37350,15 +37374,6 @@ async function startServer() {
       });
       if (authenticatedMode === 'AUTHENTICATED') return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
       if (authenticatedMode === 'MISMATCH') return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
-
-      const rawActivationToken = req.body?.activationToken || req.body?.activation_token;
-      const validated = await validateExternalEvolutionActivationToken(publicId, rawActivationToken);
-      if (validated) {
-        const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
-        const authUser = await findAuthUserByEmail(recipientEmail);
-        const mode = resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: false, tokenState: 'VALID', authUserExists: Boolean(authUser?.id) });
-        return res.json({ success: true, data: { mode, email: recipientEmail, displayName: sanitizeString(validated.loaded.careContact?.professional_name, 180) || null } });
-      }
 
       const inspected = await inspectExternalEvolutionActivationToken(publicId, rawActivationToken);
       const consumed = Boolean(inspected?.tokenRow?.consumed_at && !inspected?.tokenRow?.invalidated_at);

@@ -56,9 +56,16 @@ export function buildExternalEvolutionInviteEmailContract({ clinicName: clinicNa
 }
 
 export function resolveExternalEvolutionBootstrapMode({ authenticated, mismatch, tokenState, authUserExists }) {
+  // A valid one-time invitation is allowed to bootstrap its own recipient even when
+  // this browser still carries an external-partner session for another account.
+  // The invitation remains bootstrap-only: future access still requires the account
+  // session bound to the ACTIVE grant.
+  if (tokenState === 'VALID') {
+    if (authenticated) return 'AUTHENTICATED';
+    return authUserExists ? 'LOGIN' : 'ACTIVATE';
+  }
   if (authenticated) return 'AUTHENTICATED';
   if (mismatch) return 'MISMATCH';
-  if (tokenState === 'VALID') return authUserExists ? 'LOGIN' : 'ACTIVATE';
   if (tokenState === 'CONSUMED') return 'LOGIN';
   return 'REFRESH';
 }
