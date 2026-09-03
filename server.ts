@@ -106,6 +106,7 @@ import {
   signExternalEvolutionInvitationContext,
   verifyExternalEvolutionInvitationContext
 } from './src/utils/externalEvolutionInviteHandoff.mjs';
+import { createSensitiveApiMutationProtectionMiddleware } from './src/utils/sensitiveApiMutationProtection.mjs';
 import { isKnownNewFeatureKey, type NewFeatureKey } from './src/constants/featureMetadata';
 import {
   resolveAppointmentConfirmationSnapshot
@@ -27867,102 +27868,30 @@ async function startServer() {
   app.use('/api', limiter);
 
   // Basic CSRF mitigation for state-changing API routes.
-  app.use('/api', (req, res, next) => {
-    const method = req.method.toUpperCase();
-    if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
-      return next();
-    }
+  const publicStateChangingPaths = new Set<string>([
+    "/auth/signup",
+    "/auth/signup-direct",
+    "/auth/login",
+    "/auth/logout",
+    "/auth/resend-confirmation",
+    "/auth/activation/bootstrap",
+    "/auth/patient-activation/password",
+    "/auth/invitation/password",
+    "/auth/password/recovery/bootstrap",
+    "/auth/password/recovery/email/request",
+    "/auth/password/recovery/verify",
+    "/portal/auth/request-code",
+    "/portal/auth/verify-code",
+    "/stripe/create-checkout-registration",
+    "/public/sales-leads",
+  ]);
+  app.use('/api', createSensitiveApiMutationProtectionMiddleware({
+    publicStateChangingPaths,
+    isPublicSalesOfferMutation: (path: string) =>
+      path.startsWith('/public/sales-offers/') && (path.endsWith('/checkout') || path.endsWith('/accept')),
+    configuredAppBase: () => sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500),
+  }));
 
-    if (req.path === '/stripe/webhook') {
-      return next();
-    }
-
-    // Public onboarding/auth endpoints that must work without prior session.
-    // Keep this list explicit and minimal.
-    const publicStateChangingPaths = new Set<string>([
-      "/auth/signup",
-      "/auth/signup-direct",
-      "/auth/login",
-      "/auth/logout",
-      "/auth/resend-confirmation",
-      "/auth/activation/bootstrap",
-      "/auth/patient-activation/password",
-      "/auth/invitation/password",
-      "/auth/password/recovery/bootstrap",
-      "/auth/password/recovery/email/request",
-      "/auth/password/recovery/verify",
-      "/portal/auth/request-code",
-      "/portal/auth/verify-code",
-      "/stripe/create-checkout-registration",
-      "/public/sales-leads",
-    ]);
-    const isPublicSalesOfferMutation =
-      req.path.startsWith("/public/sales-offers/") &&
-      (req.path.endsWith("/checkout") || req.path.endsWith("/accept"));
-    if (publicStateChangingPaths.has(req.path) || isPublicSalesOfferMutation) {
-      return next();
-    }
-
-    const rawOrigin = sanitizeString(req.headers.origin, 500);
-    const rawReferer = sanitizeString(req.headers.referer, 1000);
-    const expected = `${req.protocol}://${req.get('host')}`;
-    const configuredAppBase =
-      sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500);
-
-    const allowedOrigins = new Set<string>();
-    const pushAllowedOrigin = (value: string) => {
-      if (!value) return;
-      try {
-        const parsed = new URL(value);
-        allowedOrigins.add(parsed.origin.toLowerCase());
-      } catch {
-        // ignore invalid URL
-      }
-    };
-
-    pushAllowedOrigin(expected);
-    pushAllowedOrigin(configuredAppBase);
-
-    const requestOrigin = rawOrigin ? rawOrigin.toLowerCase() : '';
-    let refererOrigin = '';
-    if (rawReferer) {
-      try {
-        refererOrigin = new URL(rawReferer).origin.toLowerCase();
-      } catch {
-        refererOrigin = '';
-      }
-    }
-
-    const hasSessionCookie =
-      Boolean((req.cookies && req.cookies['verto-session']) ||
-      String(req.headers.cookie || '').includes('verto-session='));
-    const hasBearerAuth = String(req.headers.authorization || '').toLowerCase().startsWith('bearer ');
-
-    if (hasSessionCookie) {
-      // Cookie-authenticated requests must present same-origin proof via Origin/Referer.
-      const originAllowed = requestOrigin && allowedOrigins.has(requestOrigin);
-      const refererAllowed = refererOrigin && allowedOrigins.has(refererOrigin);
-      if (!originAllowed && !refererAllowed) {
-        return res.status(403).json({
-          error: 'Origem inválida para operação sensível.'
-        });
-      }
-      return next();
-    }
-
-    // Non-cookie API clients (e.g. bearer token) are allowed without Origin/Referer.
-    if (hasBearerAuth) {
-      return next();
-    }
-
-    // If neither cookie nor bearer is present for a state-changing request, deny.
-    if (!hasSessionCookie && !hasBearerAuth) {
-      return res.status(403).json({
-        error: 'Requisição sensível sem autenticação válida.'
-      });
-    }
-    return next();
-  });
 
   // --- HEALTH CHECK ---
   // Security hardening:
