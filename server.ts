@@ -21444,6 +21444,91 @@ async function startServer() {
     return continuation;
   };
 
+  const normalizeModularSchedulePhaseBoundaries = (
+    phases,
+    stripeCurrentPeriodEnd,
+    importedCurrentEnd,
+  ) => {
+    if (!Array.isArray(phases) || phases.length <= 1) {
+      return {
+        firstPlanEnd: null,
+        effectiveFirstTransitionEnd: null,
+        boundaryShiftSeconds: 0,
+        futurePhases: [],
+      };
+    }
+
+    const firstPlanEnd = phases[0]?.endsAt
+      ? Math.floor(Date.parse(phases[0].endsAt) / 1000)
+      : 0;
+    if (!Number.isFinite(firstPlanEnd) || firstPlanEnd <= 0) {
+      throw new Error("MODULAR_SCHEDULE_FIRST_PHASE_END_MISSING");
+    }
+    if (
+      !Number.isFinite(stripeCurrentPeriodEnd)
+      || stripeCurrentPeriodEnd <= 0
+    ) {
+      throw new Error("MODULAR_SUBSCRIPTION_CURRENT_PERIOD_END_MISSING");
+    }
+    if (!Number.isFinite(importedCurrentEnd) || importedCurrentEnd <= 0) {
+      throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_END_MISSING");
+    }
+
+    // The imported Schedule can legitimately be longer than the Subscription's
+    // current period when a previous idempotent reconciliation already added a
+    // continuation. It must never be shorter than Stripe's canonical period.
+    if (importedCurrentEnd < stripeCurrentPeriodEnd - 1) {
+      throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_BEFORE_SUBSCRIPTION_PERIOD_END");
+    }
+
+    const effectiveFirstTransitionEnd = Math.max(
+      firstPlanEnd,
+      stripeCurrentPeriodEnd,
+      importedCurrentEnd,
+    );
+    if (effectiveFirstTransitionEnd < stripeCurrentPeriodEnd - 1) {
+      // Preserve the original safety invariant: a commercial phase may never
+      // truncate the billing period already created and paid in Stripe.
+      throw new Error("MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END");
+    }
+
+    // Frozen commercial timestamps are based on the offer/Checkout preparation
+    // instant (T0). Stripe anchors the real subscription when Checkout completes
+    // (T1). If T1 is later, translate all future boundaries by the same delta so
+    // durations and prices remain frozen while the first transition lands on the
+    // real Stripe billing boundary. This changes no commercial amount or module.
+    const boundaryShiftSeconds = Math.max(
+      0,
+      effectiveFirstTransitionEnd - firstPlanEnd,
+    );
+    const futurePhases = phases.slice(1).map((phase, index) => {
+      const originalStart = phase?.startsAt
+        ? Math.floor(Date.parse(phase.startsAt) / 1000)
+        : 0;
+      const originalEnd = phase?.endsAt
+        ? Math.floor(Date.parse(phase.endsAt) / 1000)
+        : null;
+      if (!Number.isFinite(originalStart) || originalStart <= 0) {
+        throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_START_INVALID");
+      }
+      const startDate = originalStart + boundaryShiftSeconds;
+      const endDate = originalEnd === null
+        ? null
+        : originalEnd + boundaryShiftSeconds;
+      if (endDate !== null && (!Number.isFinite(endDate) || endDate <= startDate)) {
+        throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_END_INVALID");
+      }
+      return { phase, index, startDate, endDate };
+    });
+
+    return {
+      firstPlanEnd,
+      effectiveFirstTransitionEnd,
+      boundaryShiftSeconds,
+      futurePhases,
+    };
+  };
+
   const ensureModularSubscriptionSchedule = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
@@ -21688,26 +21773,25 @@ async function startServer() {
     if (!Number.isFinite(importedCurrentEnd) || importedCurrentEnd <= 0) {
       throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_END_MISSING");
     }
-
-    const firstPlanEnd = phases[0]?.endsAt
-      ? Math.floor(Date.parse(phases[0].endsAt) / 1000)
-      : null;
-    if (!firstPlanEnd || !Number.isFinite(firstPlanEnd)) {
-      throw new Error("MODULAR_SCHEDULE_FIRST_PHASE_END_MISSING");
-    }
-    if (firstPlanEnd < importedCurrentEnd - 1) {
-      // Never shorten the Stripe-imported billing period to force a promotional
-      // boundary. That could truncate a trial or change the billing anchor.
-      throw new Error("MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END");
-    }
+    const stripeCurrentPeriodEnd = Number(
+      (subscription as any)?.current_period_end || 0,
+    );
+    const normalizedBoundaries = normalizeModularSchedulePhaseBoundaries(
+      phases,
+      stripeCurrentPeriodEnd,
+      importedCurrentEnd,
+    );
+    const effectiveFirstTransitionEnd = Number(
+      normalizedBoundaries.effectiveFirstTransitionEnd || 0,
+    );
 
     const configuredPhases: Record<string, any>[] = [preservedCurrentPhase];
-    if (firstPlanEnd > importedCurrentEnd + 1) {
+    if (effectiveFirstTransitionEnd > importedCurrentEnd + 1) {
       configuredPhases.push(
         buildStripeScheduleContinuationPhase(
           preservedCurrentPhase,
           importedCurrentEnd,
-          firstPlanEnd,
+          effectiveFirstTransitionEnd,
           {
             flowType: "sales_modular_assisted",
             offerId: sanitizeString(link.offer_id, 120),
@@ -21718,19 +21802,7 @@ async function startServer() {
     }
 
     const futurePhases = await Promise.all(
-      phases.slice(1).map(async (phase: any, index: number) => {
-        const startDate = phase.startsAt
-          ? Math.floor(Date.parse(phase.startsAt) / 1000)
-          : 0;
-        const endDate = phase.endsAt
-          ? Math.floor(Date.parse(phase.endsAt) / 1000)
-          : null;
-        if (!Number.isFinite(startDate) || startDate <= 0) {
-          throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_START_INVALID");
-        }
-        if (endDate !== null && (!Number.isFinite(endDate) || endDate <= startDate)) {
-          throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_END_INVALID");
-        }
+      normalizedBoundaries.futurePhases.map(async ({ phase, index, startDate, endDate }) => {
         return {
           start_date: startDate,
           ...(endDate !== null ? { end_date: endDate } : {}),
