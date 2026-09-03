@@ -36,13 +36,13 @@ const bootstrapStart = server.indexOf('const handleExternalEvolutionBootstrap = 
 const bootstrapEnd = server.indexOf("app.post('/api/external/evolution/:publicId/bootstrap'", bootstrapStart);
 assert.ok(bootstrapStart >= 0 && bootstrapEnd > bootstrapStart, 'bootstrap handler must exist');
 const bootstrap = server.slice(bootstrapStart, bootstrapEnd);
-const tokenValidationAt = bootstrap.indexOf('validateExternalEvolutionActivationToken(publicId, rawActivationToken)');
+const tokenValidationAt = bootstrap.indexOf('resolveExternalEvolutionInvitationCredential(req, res, publicId, rawActivationToken)');
 const staleSessionAt = bootstrap.indexOf('resolveExternalProfessionalAccountFromExternalSession(req, sanitizeEmail(loaded.grant.recipient_email))');
-assert.ok(tokenValidationAt >= 0, 'bootstrap must validate activation token');
-assert.ok(staleSessionAt >= 0, 'bootstrap must still enforce session identity without a valid token');
-assert.ok(tokenValidationAt < staleSessionAt, 'activation token validation must precede stale-session mismatch evaluation');
-assert.match(bootstrap, /if \(validated\)[\s\S]*resolveExternalProfessionalAccountFromExternalSession\(req, recipientEmail\)[\s\S]*findAuthUserByEmail\(recipientEmail\)/);
-assert.match(bootstrap, /Without a valid invitation[\s\S]*EXTERNAL_ACCOUNT_MISMATCH/);
+assert.ok(tokenValidationAt >= 0, 'bootstrap must resolve a BODY/COOKIE invitation credential');
+assert.ok(staleSessionAt >= 0, 'bootstrap must still enforce session identity without a valid invitation');
+assert.ok(tokenValidationAt < staleSessionAt, 'invitation validation must precede stale-session mismatch evaluation');
+assert.match(bootstrap, /credential\.tokenState === 'VALID'[\s\S]*resolveExternalProfessionalAccountFromExternalSession\(req, recipientEmail\)[\s\S]*findAuthUserByEmail\(recipientEmail\)/);
+assert.match(bootstrap, /Without a VALID invitation[\s\S]*EXTERNAL_ACCOUNT_MISMATCH/);
 
 // Successful login/activation rotates only the dedicated external identity session.
 const sessionSetterStart = server.indexOf('async function setExternalClinicalIdentitySession');
