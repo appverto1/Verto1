@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, CalendarDays, ChevronDown, FileText, Loader2, LockKeyhole, LogIn, MessageCircle, Paperclip, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, ArrowLeftRight, CalendarDays, ChevronDown, ChevronRight, Loader2, LockKeyhole, LogIn, MessageCircle, Paperclip, ShieldCheck } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
 import { getSupabase } from '../lib/supabase';
-import { externalTimelineYears, groupExternalTimelineItemsByMonth, normalizeExternalTimelineMonthKey } from '../utils/externalPatientTimelinePresentation.mjs';
+import { externalTimelineClinicalDateLabel, externalTimelineComparisonGroups, externalTimelineLatestMonth, externalTimelineNavigationMonths, externalTimelineYears, groupExternalTimelineItemsByMonth, normalizeExternalTimelineMonthKey, updateExternalTimelineComparisonSelection } from '../utils/externalPatientTimelinePresentation.mjs';
 
 type Props = { clinicId: string; patientId: string };
 
@@ -15,6 +15,7 @@ type TimelineItem = {
   slot?: number | null;
   subject?: string | null;
   content?: string | null;
+  clinicalDate?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   sharedAt?: string | null;
@@ -61,13 +62,16 @@ const monthLabel = (monthKey: string, compact = false) => {
   return compact ? formatted.replace('.', '').toUpperCase() : formatted.toUpperCase();
 };
 
-const formatEvolutionDate = (value: unknown) => {
+const formatSharedAt = (value: unknown) => {
   const date = new Date(String(value || ''));
   if (Number.isNaN(date.getTime())) return '';
-  const day = String(date.getDate()).padStart(2, '0');
-  const month = new Intl.DateTimeFormat('pt-BR', { month: 'short' }).format(date).replace('.', '').toUpperCase();
-  const hasTime = date.getHours() !== 0 || date.getMinutes() !== 0;
-  return hasTime ? `${day} ${month} · ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}` : `${day} ${month}`;
+  const month = new Intl.DateTimeFormat('pt-BR', { month: 'short' }).format(date).replace('.', '').toLowerCase();
+  return `${String(date.getDate()).padStart(2, '0')} ${month}, ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
+
+const comparisonPeriodLabel = (monthKey: string) => {
+  const normalized = normalizeExternalTimelineMonthKey(monthKey);
+  return normalized ? `${monthLabel(normalized, true)} ${normalized.slice(2, 4)}` : '';
 };
 
 const formatDateTime = (value: unknown) => {
@@ -108,9 +112,13 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
   const [fileBusy, setFileBusy] = useState<string | null>(null);
   const [selectedYear, setSelectedYear] = useState('');
   const [activeMonth, setActiveMonth] = useState('');
+  const [comparisonMode, setComparisonMode] = useState<'off' | 'selecting' | 'view'>('off');
+  const [comparisonSelection, setComparisonSelection] = useState<string[]>([]);
   const viewedThisVisit = useRef(new Set<string>());
   const itemNodes = useRef(new Map<string, HTMLElement>());
   const monthNodes = useRef(new Map<string, HTMLElement>());
+  const monthStripRef = useRef<HTMLDivElement | null>(null);
+  const monthChipNodes = useRef(new Map<string, HTMLButtonElement>());
 
   const timelineUrl = `/api/external/care-network/patients/${encodeURIComponent(clinicId)}/${encodeURIComponent(patientId)}/timeline`;
 
@@ -242,7 +250,7 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
     }, { threshold: [0.35, 0.65] });
     for (const node of itemNodes.current.values()) observer.observe(node);
     return () => observer.disconnect();
-  }, [stage, data?.items]);
+  }, [stage, data?.items, activeMonth, comparisonMode]);
 
   const openAttachment = async (item: TimelineItem) => {
     if (!item.publicId || !item.timelineItemId) return;
@@ -277,7 +285,6 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
   };
 
   const monthGroups = useMemo<MonthGroup[]>(() => groupExternalTimelineItemsByMonth(data?.items || []) as MonthGroup[], [data?.items]);
-
   const years = useMemo(() => externalTimelineYears(monthGroups), [monthGroups]);
 
   useEffect(() => {
@@ -286,33 +293,105 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
   }, [years, selectedYear]);
 
   const visibleMonthGroups = useMemo(() => selectedYear ? monthGroups.filter((group) => group.year === selectedYear) : monthGroups, [monthGroups, selectedYear]);
+  const navigationMonthGroups = useMemo(() => externalTimelineNavigationMonths(monthGroups, selectedYear) as MonthGroup[], [monthGroups, selectedYear]);
+  const comparisonGroups = useMemo(() => externalTimelineComparisonGroups(monthGroups, comparisonSelection) as MonthGroup[], [monthGroups, comparisonSelection]);
 
   useEffect(() => {
-    if (visibleMonthGroups.length && !visibleMonthGroups.some((group) => group.key === activeMonth)) setActiveMonth(visibleMonthGroups[0].key);
-  }, [visibleMonthGroups, activeMonth]);
+    if (!visibleMonthGroups.length) { setActiveMonth(''); return; }
+    if (!visibleMonthGroups.some((group) => group.key === activeMonth)) setActiveMonth(externalTimelineLatestMonth(monthGroups, selectedYear));
+  }, [visibleMonthGroups, activeMonth, monthGroups, selectedYear]);
 
   useEffect(() => {
-    if (stage !== 'content' || typeof IntersectionObserver === 'undefined') return;
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-      const key = String((visible[0]?.target as HTMLElement | undefined)?.dataset?.monthKey || '');
-      if (key) setActiveMonth(key);
-    }, { rootMargin: '-120px 0px -65% 0px', threshold: [0, 0.1] });
-    for (const node of monthNodes.current.values()) observer.observe(node);
-    return () => observer.disconnect();
-  }, [stage, visibleMonthGroups]);
+    const strip = monthStripRef.current;
+    const chip = monthChipNodes.current.get(activeMonth);
+    if (!strip || !chip) return;
+    const left = chip.offsetLeft - Math.max(0, (strip.clientWidth - chip.clientWidth) / 2);
+    strip.scrollTo({ left, behavior: 'smooth' });
+  }, [activeMonth, selectedYear]);
 
-  const scrollToMonth = (key: string) => {
+  const openMonth = (key: string) => {
     setActiveMonth(key);
-    monthNodes.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.requestAnimationFrame(() => monthNodes.current.get(key)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
+
+  const toggleComparisonMonth = (key: string) => {
+    setComparisonSelection((current) => updateExternalTimelineComparisonSelection(current, key));
+  };
+
+  const handleMonthChip = (key: string) => {
+    if (comparisonMode === 'selecting') { toggleComparisonMonth(key); return; }
+    openMonth(key);
+  };
+
+  const startComparison = () => {
+    setComparisonSelection([]);
+    setComparisonMode('selecting');
+  };
+
+  const cancelComparison = () => {
+    setComparisonSelection([]);
+    setComparisonMode('off');
   };
 
   const authorLine = (item: TimelineItem) => {
     const author = String(item.authorName || '').trim();
     const sender = String(item.senderName || '').trim();
-    if (author && sender && author !== sender) return { primary: author, secondary: `Compartilhado por ${sender}` };
-    if (author || sender) return { primary: author || sender, secondary: '' };
-    return { primary: '', secondary: '' };
+    const sharedAt = formatSharedAt(item.sharedAt);
+    if (author && sender && author !== sender) return { primary: author, secondary: `Compartilhado por ${sender}${sharedAt ? ` · ${sharedAt}` : ''}` };
+    if (author && sender && author === sender) return { primary: author, secondary: sharedAt ? `Compartilhado em ${sharedAt}` : '' };
+    if (author) return { primary: author, secondary: sharedAt ? `Compartilhado em ${sharedAt}` : '' };
+    if (sender) return { primary: '', secondary: `Compartilhado por ${sender}${sharedAt ? ` · ${sharedAt}` : ''}` };
+    return { primary: '', secondary: sharedAt ? `Compartilhado em ${sharedAt}` : '' };
+  };
+
+  const renderTimelineItem = (item: TimelineItem, index: number, options: { comparison?: boolean } = {}) => {
+    const comments = item.comments || [];
+    const commentsOpen = openComments[item.grantId] === true;
+    const author = authorLine(item);
+    const attachmentMeta = [attachmentTypeLabel(item.attachment?.mimeType), formatBytes(item.attachment?.sizeBytes)].filter(Boolean).join(' · ');
+    const clinicalDateLabel = externalTimelineClinicalDateLabel(item.clinicalDate);
+    const comparison = options.comparison === true;
+    const commentLabel = comments.length
+      ? `${comments.length} ${comments.length === 1 ? 'comentário' : 'comentários'}${!item.canComment ? ' · novas respostas desabilitadas' : ''}`
+      : comparison ? 'Sem comentários' : item.canComment ? 'Comentar' : 'Comentários desabilitados';
+
+    return (
+      <article key={item.grantId} data-grant-id={item.grantId} ref={(node) => { if (node) itemNodes.current.set(item.grantId, node); else itemNodes.current.delete(item.grantId); }} className={`${comparison ? 'py-5' : 'py-6 sm:py-7'} ${index > 0 ? 'border-t border-slate-100' : ''}`}>
+        <div className={clinicalDateLabel ? 'grid gap-3 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-6' : ''}>
+          {clinicalDateLabel && <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-600">{clinicalDateLabel}</div>}
+          <div className="min-w-0">
+            <h3 className={`${comparison ? 'text-sm sm:text-base' : 'text-base sm:text-lg'} font-semibold leading-6 text-slate-950`}>{item.subject || 'Evolução compartilhada'}</h3>
+            {(author.primary || author.secondary) && <div className="mt-2 text-xs leading-5 text-slate-500">{author.primary && <span className="text-slate-600">{author.primary}</span>}{author.secondary && <span className={`block text-slate-400 ${author.primary ? 'sm:ml-2 sm:inline' : ''}`}>{author.secondary}</span>}</div>}
+            {item.content && <p className={`${comparison ? 'mt-3 text-sm leading-6' : 'mt-4 text-sm leading-7 sm:text-[15px]'} whitespace-pre-wrap text-slate-700`}>{item.content}</p>}
+
+            {item.attachment && (
+              <button type="button" onClick={() => void openAttachment(item)} disabled={fileBusy === item.grantId} title={item.attachment.fileName || 'Documento compartilhado'} className="mt-4 flex w-full items-center gap-3 rounded-xl bg-violet-50/65 px-3 py-2.5 text-left transition hover:bg-violet-100/70 disabled:opacity-60 sm:max-w-2xl">
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-violet-600 shadow-sm"><Paperclip size={15} /></span>
+                <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-slate-800">{item.attachment.fileName || 'Documento compartilhado'}</span>{attachmentMeta && <span className="mt-0.5 block text-[10px] text-slate-400">{attachmentMeta}</span>}</span>
+                <span className="shrink-0 text-[11px] font-medium text-violet-700">{fileBusy === item.grantId ? 'Abrindo…' : 'Abrir'}</span>
+              </button>
+            )}
+
+            <div className="mt-4">
+              <button type="button" onClick={() => setOpenComments((current) => ({ ...current, [item.grantId]: !current[item.grantId] }))} aria-expanded={commentsOpen} disabled={(comparison && comments.length === 0) || (!comparison && !item.canComment && comments.length === 0)} className={`inline-flex min-h-9 items-center gap-2 rounded-xl px-2 text-xs font-medium transition ${item.canComment || comments.length ? 'text-violet-700 hover:bg-violet-50' : 'cursor-default bg-slate-50 px-3 text-slate-400'}`}>
+                <MessageCircle size={15} /> {commentLabel}
+              </button>
+
+              {commentsOpen && comments.length > 0 && (
+                <div className="mt-3 max-w-2xl rounded-2xl bg-slate-50/80 p-3 sm:p-4">
+                  <div className="space-y-3">{comments.map((entry) => <div key={entry.id}><p className="whitespace-pre-wrap text-xs leading-5 text-slate-700">{entry.body}</p>{entry.createdAt && <p className="mt-1 text-[10px] text-slate-400">{formatDateTime(entry.createdAt)}</p>}</div>)}</div>
+                  {!comparison && item.canComment && <div className="mt-4 border-t border-slate-100 pt-4"><label className="block text-xs text-slate-500">Sua devolutiva</label><textarea value={commentDrafts[item.grantId] || ''} maxLength={4000} rows={2} onChange={(event) => setCommentDrafts((current) => ({ ...current, [item.grantId]: event.target.value }))} placeholder="Escreva um comentário" className="mt-2 w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm leading-5 outline-none focus:border-violet-300" /><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[10px] text-slate-400">{(commentDrafts[item.grantId] || '').length}/4000</span><button type="button" onClick={() => void sendComment(item)} disabled={commentBusy === item.grantId || !(commentDrafts[item.grantId] || '').trim()} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#7a32fc] px-3.5 text-xs font-semibold text-white disabled:opacity-50">{commentBusy === item.grantId ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />} Enviar</button></div></div>}
+                </div>
+              )}
+
+              {commentsOpen && comments.length === 0 && !comparison && item.canComment && (
+                <div className="mt-3 max-w-2xl rounded-2xl bg-slate-50/80 p-3 sm:p-4"><label className="block text-xs text-slate-500">Sua devolutiva</label><textarea value={commentDrafts[item.grantId] || ''} maxLength={4000} rows={2} onChange={(event) => setCommentDrafts((current) => ({ ...current, [item.grantId]: event.target.value }))} placeholder="Escreva um comentário" className="mt-2 w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm leading-5 outline-none focus:border-violet-300" /><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[10px] text-slate-400">{(commentDrafts[item.grantId] || '').length}/4000</span><button type="button" onClick={() => void sendComment(item)} disabled={commentBusy === item.grantId || !(commentDrafts[item.grantId] || '').trim()} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#7a32fc] px-3.5 text-xs font-semibold text-white disabled:opacity-50">{commentBusy === item.grantId ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />} Enviar</button></div></div>
+              )}
+            </div>
+          </div>
+        </div>
+      </article>
+    );
   };
 
   if (stage === 'loading') {
@@ -364,6 +443,10 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
   }
 
   const totalItems = monthGroups.reduce((total, group) => total + group.items.length, 0);
+  const comparisonReady = comparisonSelection.length === 2;
+  const comparisonActionLabel = comparisonReady
+    ? `Comparar ${comparisonPeriodLabel(comparisonSelection[0])} × ${comparisonPeriodLabel(comparisonSelection[1])}`
+    : 'Selecione dois meses';
 
   return (
     <main className="min-h-screen bg-[linear-gradient(180deg,#f7f3ff_0px,#fbfbfd_250px,#f8fafc_100%)] text-slate-800">
@@ -374,32 +457,38 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
         </div>
       </header>
 
-      <div className="mx-auto max-w-5xl px-4 pb-16 pt-7 sm:px-6 sm:pt-10">
-        <section className="relative overflow-hidden rounded-[28px] border border-violet-100 bg-white px-5 py-6 shadow-[0_22px_55px_-40px_rgba(86,41,170,0.45)] sm:px-8 sm:py-8">
+      <div className="mx-auto max-w-5xl px-4 pb-16 pt-6 sm:px-6 sm:pt-8">
+        <section className="relative overflow-hidden rounded-[26px] border border-violet-100 bg-white px-5 py-5 shadow-[0_22px_55px_-40px_rgba(86,41,170,0.45)] sm:px-7 sm:py-6">
           <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#7a32fc] via-violet-400 to-fuchsia-300" />
           <p className="text-[10px] uppercase tracking-[0.22em] text-violet-500">Timeline compartilhada</p>
-          <h1 className="mt-2 max-w-3xl break-words text-2xl font-semibold uppercase leading-tight text-slate-950 sm:text-3xl">{data?.patientName || 'Paciente'}</h1>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500"><span>{data?.clinicName || 'Clínica'}</span><span className="hidden text-violet-200 sm:inline">•</span><span>{pluralRecords(totalItems)}</span></div>
+          <h1 className="mt-1.5 max-w-3xl break-words text-2xl font-semibold uppercase leading-tight text-slate-950 sm:text-3xl">{data?.patientName || 'Paciente'}</h1>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500"><span>{data?.clinicName || 'Clínica'}</span><span className="hidden text-violet-200 sm:inline">•</span><span>{pluralRecords(totalItems)}</span></div>
         </section>
 
         {monthGroups.length > 0 && (
-          <nav className="sticky top-0 z-20 mt-5 rounded-2xl border border-violet-100 bg-white/95 px-3 py-3 shadow-sm backdrop-blur sm:px-4" aria-label="Navegação por período">
-            <div className="flex items-center gap-3">
+          <nav className="sticky top-0 z-20 mt-4 border-y border-violet-100 bg-white/95 px-1.5 py-2 backdrop-blur" aria-label="Navegação por período">
+            {comparisonMode === 'selecting' && <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1"><div><p className="text-xs font-semibold text-slate-800">Comparar períodos</p><p className="text-[11px] text-slate-400">Selecione dois meses disponíveis.</p></div><button type="button" onClick={cancelComparison} className="min-h-8 rounded-lg px-2.5 text-xs font-medium text-slate-500 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">Cancelar</button></div>}
+            <div className="flex items-center gap-2">
               {years.length > 1 ? (
                 <label className="relative shrink-0">
                   <span className="sr-only">Ano</span>
-                  <select value={selectedYear} onChange={(event) => { setSelectedYear(event.target.value); setActiveMonth(''); }} className="min-h-9 appearance-none rounded-xl border border-violet-100 bg-violet-50 py-1.5 pl-3 pr-8 text-xs font-semibold text-violet-800 outline-none focus:border-violet-300">
+                  <select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)} className="min-h-8 appearance-none rounded-lg border border-violet-100 bg-violet-50 py-1 pl-2.5 pr-7 text-xs font-semibold text-violet-800 outline-none focus:border-violet-300 focus:ring-2 focus:ring-violet-100">
                     {years.map((year) => <option key={year} value={year}>{year}</option>)}
                   </select>
-                  <ChevronDown size={13} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-violet-500" />
+                  <ChevronDown size={12} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-violet-500" />
                 </label>
-              ) : <span className="shrink-0 text-xs font-semibold text-slate-500">{years[0] || ''}</span>}
-              <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {visibleMonthGroups.map((group) => (
-                  <button key={group.key} type="button" onClick={() => scrollToMonth(group.key)} className={`min-h-9 shrink-0 rounded-full px-3 text-[11px] font-semibold transition ${activeMonth === group.key ? 'bg-[#7a32fc] text-white shadow-sm' : 'bg-violet-50/70 text-violet-700 hover:bg-violet-100'}`}>{monthLabel(group.key, true)}</button>
-                ))}
+              ) : <span className="shrink-0 px-1 text-xs font-semibold text-slate-500">{years[0] || ''}</span>}
+              <div ref={monthStripRef} className="flex min-w-0 flex-1 gap-1 overflow-x-auto py-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {navigationMonthGroups.map((group) => {
+                  const selectionIndex = comparisonSelection.indexOf(group.key);
+                  const selectedForComparison = selectionIndex >= 0;
+                  const active = comparisonMode === 'off' && activeMonth === group.key;
+                  return <button key={group.key} ref={(node) => { if (node) monthChipNodes.current.set(group.key, node); else monthChipNodes.current.delete(group.key); }} type="button" onClick={() => handleMonthChip(group.key)} aria-selected={comparisonMode === 'selecting' ? selectedForComparison : active} className={`min-h-8 shrink-0 rounded-full px-2.5 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${selectedForComparison ? 'bg-violet-700 text-white' : active ? 'bg-[#7a32fc] text-white' : 'bg-violet-50/70 text-violet-700 hover:bg-violet-100'}`}>{monthLabel(group.key, true)}{comparisonMode === 'selecting' && selectedForComparison ? ` · ${selectionIndex === 0 ? 'A' : 'B'}` : ''}</button>;
+                })}
               </div>
+              {comparisonMode === 'off' ? <button type="button" onClick={startComparison} className="inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300"><ArrowLeftRight size={14} /> <span className="hidden sm:inline">Comparar</span></button> : comparisonMode === 'view' ? <button type="button" onClick={cancelComparison} className="min-h-8 shrink-0 rounded-lg px-2.5 text-xs font-medium text-violet-700 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">Voltar à timeline</button> : null}
             </div>
+            {comparisonMode === 'selecting' && <div className="mt-2 flex justify-end px-1"><button type="button" disabled={!comparisonReady} onClick={() => { if (comparisonReady) setComparisonMode('view'); }} className="min-h-9 rounded-xl bg-[#7a32fc] px-3.5 text-xs font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-40">{comparisonActionLabel}</button></div>}
           </nav>
         )}
 
@@ -412,63 +501,33 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
             <h2 className="mt-4 text-base font-semibold text-slate-800">Nenhum conteúdo compartilhado no momento</h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">Os conteúdos aparecem aqui enquanto estiverem compartilhados com sua conta.</p>
           </section>
+        ) : comparisonMode === 'view' ? (
+          <section className="mt-7">
+            <div className="mb-4"><p className="text-[10px] font-medium uppercase tracking-[0.18em] text-violet-500">Comparar períodos</p><h2 className="mt-1 text-lg font-semibold text-slate-900">Leitura lado a lado dos conteúdos compartilhados</h2><p className="mt-1 text-xs leading-5 text-slate-500">A Verto apresenta os períodos sem interpretar evolução, melhora ou regressão.</p></div>
+            <div className="grid gap-5 lg:grid-cols-2">
+              {comparisonGroups.map((group, groupIndex) => <section key={group.key} className="min-w-0 rounded-[22px] border border-violet-100 bg-white px-4 py-4 shadow-sm sm:px-5">
+                <div className="border-b border-violet-100 pb-3"><p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-500">Período {groupIndex === 0 ? 'A' : 'B'}</p><h3 className="mt-1 text-sm font-semibold uppercase tracking-[0.08em] text-slate-800">{monthLabel(group.key)}</h3><p className="mt-1 text-xs text-slate-400">{pluralRecords(group.items.length, true)}</p></div>
+                <div>{group.items.map((item, index) => renderTimelineItem(item, index, { comparison: true }))}</div>
+              </section>)}
+            </div>
+          </section>
         ) : (
-          <div className="mt-8 space-y-12 sm:mt-10 sm:space-y-14">
-            {visibleMonthGroups.map((group) => (
-              <section key={group.key} id={`external-month-${group.key}`} data-month-key={group.key} ref={(node) => { if (node) monthNodes.current.set(group.key, node); else monthNodes.current.delete(group.key); }} className="scroll-mt-24">
-                <div className="mb-2 flex flex-wrap items-end justify-between gap-2 border-b border-violet-100 pb-3">
-                  <div><h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-slate-800">{monthLabel(group.key)}</h2><p className="mt-1 text-xs text-slate-400">{pluralRecords(group.items.length, true)}</p></div>
-                  <span className="h-2 w-2 rounded-full bg-violet-400" aria-hidden="true" />
-                </div>
-
-                <div>
-                  {group.items.map((item, index) => {
-                    const comments = item.comments || [];
-                    const commentsOpen = openComments[item.grantId] === true;
-                    const author = authorLine(item);
-                    const attachmentMeta = [attachmentTypeLabel(item.attachment?.mimeType), formatBytes(item.attachment?.sizeBytes)].filter(Boolean).join(' · ');
-                    return (
-                      <article key={item.grantId} data-grant-id={item.grantId} ref={(node) => { if (node) itemNodes.current.set(item.grantId, node); else itemNodes.current.delete(item.grantId); }} className={`py-6 sm:py-7 ${index > 0 ? 'border-t border-slate-100' : ''}`}>
-                        <div className="grid gap-3 sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-6">
-                          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-600">{formatEvolutionDate(item.createdAt) || 'DATA'}</div>
-                          <div className="min-w-0">
-                            <h3 className="text-base font-semibold leading-6 text-slate-950 sm:text-lg">{item.subject || 'Evolução compartilhada'}</h3>
-                            {(author.primary || author.secondary) && <div className="mt-2 text-xs leading-5 text-slate-500">{author.primary && <span className="text-slate-600">{author.primary}</span>}{author.secondary && <span className="block text-slate-400 sm:ml-2 sm:inline">{author.secondary}</span>}</div>}
-                            {item.content && <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-700 sm:text-[15px]">{item.content}</p>}
-
-                            {item.attachment && (
-                              <button type="button" onClick={() => void openAttachment(item)} disabled={fileBusy === item.grantId} className="mt-5 flex w-full items-center gap-3 rounded-2xl bg-violet-50/65 px-3.5 py-3 text-left transition hover:bg-violet-100/70 disabled:opacity-60 sm:max-w-2xl">
-                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-violet-600 shadow-sm"><Paperclip size={16} /></span>
-                                <span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium text-slate-800">{item.attachment.fileName || 'Documento compartilhado'}</span>{attachmentMeta && <span className="mt-0.5 block text-[10px] text-slate-400">{attachmentMeta}</span>}</span>
-                                <span className="shrink-0 text-[11px] font-medium text-violet-700">{fileBusy === item.grantId ? 'Abrindo…' : 'Abrir'}</span>
-                              </button>
-                            )}
-
-                            <div className="mt-5">
-                              {item.canComment ? (
-                                <button type="button" onClick={() => setOpenComments((current) => ({ ...current, [item.grantId]: !current[item.grantId] }))} className="inline-flex min-h-9 items-center gap-2 rounded-xl px-2 text-xs font-medium text-violet-700 transition hover:bg-violet-50"><MessageCircle size={15} /> {comments.length ? `${comments.length} ${comments.length === 1 ? 'comentário' : 'comentários'}` : 'Comentar'}</button>
-                              ) : (
-                                <div className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-slate-50 px-3 text-xs text-slate-400"><MessageCircle size={15} /> Comentários desabilitados</div>
-                              )}
-
-                              {commentsOpen && (
-                                <div className="mt-3 max-w-2xl rounded-2xl bg-slate-50/80 p-3 sm:p-4">
-                                  {comments.length > 0 && <div className="space-y-3">{comments.map((entry) => <div key={entry.id}><p className="whitespace-pre-wrap text-xs leading-5 text-slate-700">{entry.body}</p>{entry.createdAt && <p className="mt-1 text-[10px] text-slate-400">{formatDateTime(entry.createdAt)}</p>}</div>)}</div>}
-                                  {item.canComment && <div className={comments.length ? 'mt-4 border-t border-slate-100 pt-4' : ''}><label className="block text-xs text-slate-500">Sua devolutiva</label><textarea value={commentDrafts[item.grantId] || ''} maxLength={4000} rows={2} onChange={(event) => setCommentDrafts((current) => ({ ...current, [item.grantId]: event.target.value }))} placeholder="Escreva um comentário" className="mt-2 w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm leading-5 outline-none focus:border-violet-300" /><div className="mt-2 flex items-center justify-between gap-3"><span className="text-[10px] text-slate-400">{(commentDrafts[item.grantId] || '').length}/4000</span><button type="button" onClick={() => void sendComment(item)} disabled={commentBusy === item.grantId || !(commentDrafts[item.grantId] || '').trim()} className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-[#7a32fc] px-3.5 text-xs font-semibold text-white disabled:opacity-50">{commentBusy === item.grantId ? <Loader2 size={13} className="animate-spin" /> : <MessageCircle size={13} />} Enviar</button></div></div>}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              </section>
-            ))}
+          <div className="mt-7 space-y-4">
+            {visibleMonthGroups.map((group) => {
+              const expanded = activeMonth === group.key;
+              return <section key={group.key} id={`external-month-${group.key}`} data-month-key={group.key} ref={(node) => { if (node) monthNodes.current.set(group.key, node); else monthNodes.current.delete(group.key); }} className="scroll-mt-20 rounded-[22px] border border-violet-100/80 bg-white px-4 shadow-[0_14px_35px_-32px_rgba(86,41,170,0.35)] sm:px-5">
+                <button type="button" onClick={() => openMonth(group.key)} aria-expanded={expanded} className="flex w-full items-center gap-3 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-300">
+                  <span className="min-w-0 flex-1"><span className="block text-sm font-semibold uppercase tracking-[0.11em] text-slate-800">{monthLabel(group.key)}</span><span className="mt-1 block text-xs text-slate-400">{pluralRecords(group.items.length, true)}</span></span>
+                  {!expanded && <span className="hidden text-xs font-medium text-violet-600 sm:inline">Ver período</span>}
+                  <ChevronRight size={16} className={`shrink-0 text-violet-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                </button>
+                {expanded && <div className="border-t border-violet-50">{group.items.map((item, index) => renderTimelineItem(item, index))}</div>}
+              </section>;
+            })}
           </div>
         )}
       </div>
     </main>
   );
+
 };
