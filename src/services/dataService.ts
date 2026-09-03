@@ -2477,13 +2477,13 @@ export const dataService = {
 
   async getClinicalNoteMentions(limit = 12) {
     try {
-      const response = await fetchClinical(endpointWithLimit('/api/clinical-note-mentions', normalizeListLimit(limit, 12, 30)), {
+      const response = await fetchClinical(endpointWithLimit('/api/clinical-notifications', normalizeListLimit(limit, 12, 30)), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: 'getClinicalNoteMentions',
         operation: 'list',
-        table: 'clinical_note_mentions',
+        table: 'clinical_note_mentions,clinical_inbox_notifications',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2494,16 +2494,17 @@ export const dataService = {
     }
   },
 
-  async markClinicalNoteMentionRead(mentionId: string) {
+  async markClinicalNoteMentionRead(mentionId: string, source: 'mention' | 'clinical_inbox' = 'mention') {
     try {
-      const response = await fetchClinical(`/api/clinical-note-mentions/${encodeURIComponent(String(mentionId))}/read`, {
+      const response = await fetchClinical(`/api/clinical-notifications/${encodeURIComponent(String(mentionId))}/read`, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        body: JSON.stringify({ source })
       }, {
         helperName: 'markClinicalNoteMentionRead',
         operation: 'write',
-        table: 'clinical_note_mentions',
+        table: source === 'clinical_inbox' ? 'clinical_inbox_notifications' : 'clinical_note_mentions',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -3008,6 +3009,7 @@ export const dataService = {
     clinicName?: string;
     professionalName: string;
     specialty?: string;
+    professionalRegistry?: string;
     phone: string;
     email?: string;
   }) {
@@ -3029,6 +3031,7 @@ export const dataService = {
     clinicName?: string;
     professionalName: string;
     specialty?: string;
+    professionalRegistry?: string;
     phone: string;
     email?: string;
   }) {
@@ -3078,6 +3081,40 @@ export const dataService = {
       console.error('Error fetching patient care network:', error);
       return { success: false, error: 'Não foi possível carregar a rede de cuidado agora.', data: [] };
     }
+  },
+
+
+  async createPatientCareNetworkContact(patientId: string, payload: {
+    clinicName?: string; professionalName: string; specialty?: string; professionalRegistry?: string; phone: string; email?: string; restoreAfterPatientRevocation?: boolean;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network`, { method: 'POST', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload) });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível adicionar este profissional.' }; }
+  },
+
+  async updatePatientCareNetworkContact(patientId: string, contactId: string, payload: {
+    clinicName?: string; professionalName: string; specialty?: string; professionalRegistry?: string; phone: string; email?: string; restoreAfterPatientRevocation?: boolean;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safePatientId || !safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network/${safeContactId}`, { method: 'PATCH', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload) });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível atualizar este profissional.' }; }
+  },
+
+  async archivePatientCareNetworkContact(patientId: string, contactId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safePatientId || !safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network/${safeContactId}`, { method: 'DELETE', headers: await getAuthHeaders(), credentials: 'include' });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível desfazer este vínculo.' }; }
   },
 
 
@@ -3153,7 +3190,8 @@ export const dataService = {
   },
 
   async grantPatientEvolutionTimelineAccess(patientId: string, itemId: string, payload: {
-    recipientEmail: string;
+    careNetworkContactId: string;
+    canComment?: boolean;
     authorizationConfirmed: boolean;
   }) {
     try {
@@ -3208,6 +3246,20 @@ export const dataService = {
       return { success: false, error: 'Não foi possível reenviar o acesso.' };
     }
   },
+
+  async createPatientEvolutionTimelineAccessLink(patientId: string, itemId: string, grantId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      const safeGrantId = encodeURIComponent(String(grantId || '').trim());
+      if (!safePatientId || !safeItemId || !safeGrantId) return { success: false, error: 'Compartilhamento inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants/${safeGrantId}/access-link`, {
+        method: 'POST', headers: await getAuthHeaders(), credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível gerar um novo acesso.' }; }
+  },
+
 
   async getPortalContext() {
     try {
@@ -8254,36 +8306,6 @@ export const dataService = {
       console.error('Error fetching clinic financial entries:', error);
     }
     return { success: true, data: [] };
-  },
-
-  async getClinicCosts(month: string) {
-    try {
-      const monthKey = /^\d{4}-\d{2}$/.test(String(month || '').trim())
-        ? String(month).trim()
-        : new Date().toISOString().slice(0, 7);
-      const response = await fetch(`/api/financial/costs?month=${encodeURIComponent(monthKey)}`, {
-        headers: await getAuthHeaders(),
-        credentials: 'include'
-      });
-      const result = await safeJson(response);
-      if (response.ok) return result;
-      return { ...result, success: false, error: result?.error || 'Não foi possível carregar os custos.' };
-    } catch (error) {
-      console.error('Error fetching clinic costs:', error);
-      return { success: false, data: [], error: 'Não foi possível carregar os custos.' };
-    }
-  },
-
-  async saveClinicCost(cost: any) {
-    const id = generateId();
-    return await saveOfflineFirst(
-      id,
-      { ...(cost || {}), id },
-      'payment',
-      '/api/financial/costs',
-      'POST',
-      { requireServerAck: true }
-    );
   },
 
   async saveUserProfile(userId: string, profile: any) {

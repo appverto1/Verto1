@@ -313,6 +313,15 @@ export const TherapistDashboard = ({
   const [patientFocusNoteId, setPatientFocusNoteId] = useState("");
   const openClinicalMentionNotification = (notification: any) => {
     const patientId = String(notification?.patientId || '').trim();
+    const timelineItemId = String(notification?.timelineItemId || '').trim();
+    if (patientId && timelineItemId && notification?.source === 'clinical_inbox') {
+      try { window.sessionStorage.setItem('verto_focus_evolution_timeline_item', timelineItemId); } catch { /* navigation still works without storage */ }
+      setSelectedPatientId(patientId);
+      setPatientOpenTab("report");
+      setPatientFocusNoteId("");
+      handleSetView("patient");
+      return;
+    }
     const noteId = String(notification?.noteId || '').trim();
     if (!patientId || !noteId) return;
     setSelectedPatientId(patientId);

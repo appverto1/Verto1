@@ -62,10 +62,6 @@ import {
   sendAppointmentNotification
 } from './services/pushNotificationService';
 import {
-  resolveVertoDeploymentEnvironment,
-  validateVertoDeploymentConfiguration,
-} from './services/deploymentEnvironment';
-import {
   SupabaseRateLimitStore,
   checkDistributedRuntimeState,
   issueDistributedSessionToken,
@@ -526,7 +522,6 @@ function validateRequiredEnvForDeploy(): void {
     'SUPABASE_SERVICE_ROLE_KEY',
     'DATA_ENCRYPTION_KEY',
     'PSEUDONYMIZATION_KEY',
-    'VERTO_DEPLOYMENT_ENV',
     'STRIPE_ENVIRONMENT',
     'STRIPE_SECRET_KEY',
     'STRIPE_WEBHOOK_SECRET'
@@ -541,11 +536,6 @@ function validateRequiredEnvForDeploy(): void {
   if (!isValidDataEncryptionKey(dataEncryptionKey)) {
     throw new Error('DATA_ENCRYPTION_KEY invalida. Use hex com 64 caracteres ou base64 com 32 bytes.');
   }
-  const deploymentValidation = validateVertoDeploymentConfiguration({ requireEnvironment: true });
-  if (!deploymentValidation.ok) {
-    throw new Error(`Ambiente de deployment invalido: ${deploymentValidation.errors.join(' ')}`);
-  }
-
   try {
     const stripeEnvironment = resolveStripeEnvironment();
     validateStripeSecretForEnvironment(stripeEnvironment);
@@ -559,22 +549,6 @@ function validateRequiredEnvForDeploy(): void {
 }
 
 validateRequiredEnvForDeploy();
-
-const vertoDeploymentEnv = resolveVertoDeploymentEnvironment();
-const vertoDeploymentConfiguration = validateVertoDeploymentConfiguration({
-  requireEnvironment: process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT),
-});
-if (vertoDeploymentEnv) {
-  console.log('[Deployment] Namespace de ambiente confirmado.', {
-    deploymentEnv: vertoDeploymentEnv,
-    appHost: vertoDeploymentConfiguration.appHost,
-    supabaseProjectRef: vertoDeploymentConfiguration.supabaseProjectRef,
-    railwayEnvironment: vertoDeploymentConfiguration.railwayEnvironment,
-    vapidPublicKeyFingerprint: vertoDeploymentConfiguration.vapidPublicKeyFingerprint,
-  });
-} else {
-  console.warn('[Deployment] VERTO_DEPLOYMENT_ENV ausente/invalida: operacoes de push e jobs permanecem fail-closed neste runtime.');
-}
 
 // Initialize Stripe lazily to prevent crash on startup if key is missing
 // Matches stripe-node 21.0.1's generated API contract; this makes the
@@ -616,16 +590,6 @@ const vapidSubject =
 
 if (vapidPublicKey && vapidPrivateKey) {
   webpush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
-}
-
-function requireNotificationDeploymentEnvironment(res: any) {
-  if (vertoDeploymentEnv) return vertoDeploymentEnv;
-  res.status(503).json({
-    success: false,
-    error: 'NOTIFICATION_ENV_NOT_CONFIGURED',
-    message: 'O namespace de ambiente das notificacoes nao esta configurado neste runtime.',
-  });
-  return null;
 }
 
 function normalizeSubscriptionStatusFromStripe(status: string): 'active' | 'pending' | 'delinquent' | 'canceled' {
@@ -18531,7 +18495,7 @@ async function loadActiveExternalEvolutionShare(publicId: string) {
   if (!isUuid(publicId)) return null;
   const { data: grant, error: grantError } = await supabase
     .from('patient_evolution_share_grants')
-    .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_at,last_invited_at,created_at,updated_at')
+    .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_by,authorization_declared_at,last_invited_at,created_at,updated_at,care_network_contact_id,external_account_id,can_comment,first_viewed_at,last_viewed_at,view_count')
     .eq('public_id', publicId)
     .eq('status', 'ACTIVE')
     .maybeSingle();
@@ -18551,15 +18515,38 @@ async function loadActiveExternalEvolutionShare(publicId: string) {
       .is('archived_at', null)
       .maybeSingle(),
     supabase.from('clinics').select('id,name').eq('id', grant.clinic_id).maybeSingle(),
-    supabase.from('patients').select('id,name').eq('id', grant.patient_id).eq('clinic_id', grant.clinic_id).maybeSingle(),
+    supabase.from('patients').select('id,name,is_active,deleted_at,archived_at,status').eq('id', grant.patient_id).eq('clinic_id', grant.clinic_id).maybeSingle(),
   ]);
   if (itemError || clinicError || patientError) {
     const firstError = itemError || clinicError || patientError;
     if (isMissingRelationError(firstError)) return null;
     throw firstError;
   }
-  if (!item?.id || !patient?.id) return null;
-  return { grant, item, clinic: clinic || {}, patient };
+  const patientEligible = Boolean(
+    patient?.id && patient?.is_active !== false && !patient?.deleted_at && !patient?.archived_at &&
+    sanitizeString(patient?.status, 40).toUpperCase() !== PATIENT_STATUS_ARCHIVED
+  );
+  if (!item?.id || !patientEligible) return null;
+
+  let careContact: any = null;
+  const careContactId = sanitizeString(grant?.care_network_contact_id, 120);
+  if (isUuid(careContactId)) {
+    const careResult = await supabase
+      .from('patient_care_network_contacts')
+      .select('id,clinic_id,patient_id,professional_name,specialty,email,archived_at')
+      .eq('id', careContactId)
+      .eq('clinic_id', grant.clinic_id)
+      .eq('patient_id', grant.patient_id)
+      .is('archived_at', null)
+      .maybeSingle();
+    if (careResult.error) {
+      if (isMissingRelationError(careResult.error)) return null;
+      throw careResult.error;
+    }
+    if (!careResult.data?.id || sanitizeEmail(careResult.data.email) !== sanitizeEmail(grant.recipient_email)) return null;
+    careContact = careResult.data;
+  }
+  return { grant, item, clinic: clinic || {}, patient, careContact };
 }
 
 function buildExternalEvolutionInviteEmail(params: { clinicName: string; shareUrl: string }) {
@@ -18573,7 +18560,7 @@ function buildExternalEvolutionInviteEmail(params: { clinicName: string; shareUr
           <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
           <h1 style="font-size:21px;margin:0 0 14px;">Atualização clínica compartilhada</h1>
           <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
-            ${clinicName} disponibilizou um conteúdo clínico para continuidade do cuidado. O link abaixo não libera o conteúdo sozinho: o acesso exige confirmação do e-mail autorizado por código de uso único.
+            ${clinicName} disponibilizou um conteúdo clínico para continuidade do cuidado. O link abaixo é individual e permite criar ou acessar sua conta Verto com o e-mail autorizado.
           </p>
           <a href="${shareUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Acessar com segurança</a>
         </div>
@@ -18602,6 +18589,176 @@ function buildExternalEvolutionOtpEmail(params: { clinicName: string; code: stri
       </div>
     `
   };
+}
+
+const EXTERNAL_EVOLUTION_ACTIVATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const EXTERNAL_EVOLUTION_COMMENT_MAX_LENGTH = 4000;
+
+type ExternalClinicalIdentitySession = {
+  accountId: string;
+  authUserId: string;
+  normalizedEmail: string;
+  authenticatedAt: string;
+};
+
+function hashExternalEvolutionActivationToken(token: string): string {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+function readExternalClinicalIdentitySession(req: any): ExternalClinicalIdentitySession | null {
+  const raw = req?.session?.externalClinicalIdentity;
+  const accountId = sanitizeString(raw?.accountId, 120);
+  const authUserId = sanitizeString(raw?.authUserId, 120);
+  const normalizedEmail = sanitizeEmail(raw?.normalizedEmail);
+  if (!isUuid(accountId) || !isUuid(authUserId) || !normalizedEmail) return null;
+  return { accountId, authUserId, normalizedEmail, authenticatedAt: sanitizeString(raw?.authenticatedAt, 80) || '' };
+}
+
+async function setExternalClinicalIdentitySession(req: any, account: any) {
+  req.session.externalClinicalIdentity = {
+    accountId: sanitizeString(account?.id, 120),
+    authUserId: sanitizeString(account?.auth_user_id, 120),
+    normalizedEmail: sanitizeEmail(account?.normalized_email),
+    authenticatedAt: new Date().toISOString(),
+  };
+  await saveExpressSession(req);
+}
+
+async function ensureExternalProfessionalAccountForAuthUser(authUser: any, displayName?: string | null) {
+  const authUserId = sanitizeString(authUser?.id, 120);
+  const normalizedEmail = sanitizeEmail(authUser?.email);
+  if (!isUuid(authUserId) || !normalizedEmail) throw new Error('EXTERNAL_AUTH_IDENTITY_INVALID');
+
+  const [byAuthResult, byEmailResult] = await Promise.all([
+    supabase.from('external_professional_accounts').select('id,auth_user_id,normalized_email,display_name').eq('auth_user_id', authUserId).maybeSingle(),
+    supabase.from('external_professional_accounts').select('id,auth_user_id,normalized_email,display_name').eq('normalized_email', normalizedEmail).maybeSingle(),
+  ]);
+  if (byAuthResult.error && !isMissingRelationError(byAuthResult.error)) throw byAuthResult.error;
+  if (byEmailResult.error && !isMissingRelationError(byEmailResult.error)) throw byEmailResult.error;
+  if (isMissingRelationError(byAuthResult.error) || isMissingRelationError(byEmailResult.error)) throw new Error('EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE');
+
+  const byAuth = byAuthResult.data;
+  const byEmail = byEmailResult.data;
+  if (byAuth?.id && sanitizeEmail(byAuth.normalized_email) !== normalizedEmail) throw new Error('EXTERNAL_AUTH_EMAIL_CHANGED_REQUIRES_REVIEW');
+  if (byEmail?.id && sanitizeString(byEmail.auth_user_id, 120) !== authUserId) throw new Error('EXTERNAL_EMAIL_ACCOUNT_CONFLICT');
+  if (byAuth?.id || byEmail?.id) return byAuth || byEmail;
+
+  const grantCheck = await supabase
+    .from('patient_evolution_share_grants')
+    .select('id')
+    .eq('status', 'ACTIVE')
+    .eq('recipient_email', normalizedEmail)
+    .limit(1);
+  if (grantCheck.error) throw grantCheck.error;
+  if (!grantCheck.data?.length) throw new Error('EXTERNAL_ACCOUNT_NO_ACTIVE_SHARES');
+
+  const { data, error } = await supabase
+    .from('external_professional_accounts')
+    .insert({
+      auth_user_id: authUserId,
+      normalized_email: normalizedEmail,
+      display_name: sanitizeString(displayName, 180) || null,
+      last_login_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .select('id,auth_user_id,normalized_email,display_name')
+    .single();
+  if (!error && data?.id) return data;
+
+  const retry = await supabase.from('external_professional_accounts').select('id,auth_user_id,normalized_email,display_name').eq('normalized_email', normalizedEmail).maybeSingle();
+  if (retry.error || !retry.data?.id || sanitizeString(retry.data.auth_user_id, 120) !== authUserId) throw error || retry.error || new Error('EXTERNAL_ACCOUNT_CREATE_FAILED');
+  return retry.data;
+}
+
+async function bindExternalProfessionalAccount(accountId: string) {
+  if (!isUuid(accountId)) throw new Error('EXTERNAL_ACCOUNT_INVALID');
+  const { error } = await supabase.rpc('bind_external_professional_account_v1', { p_account_id: accountId });
+  if (error) throw error;
+}
+
+async function resolveExternalProfessionalAccount(req: any, expectedEmail?: string | null) {
+  const expected = sanitizeEmail(expectedEmail || '');
+  const sessionIdentity = readExternalClinicalIdentitySession(req);
+  if (sessionIdentity) {
+    if (expected && sessionIdentity.normalizedEmail !== expected) return { account: null, mismatch: true };
+    const { data, error } = await supabase
+      .from('external_professional_accounts')
+      .select('id,auth_user_id,normalized_email,display_name')
+      .eq('id', sessionIdentity.accountId)
+      .eq('auth_user_id', sessionIdentity.authUserId)
+      .eq('normalized_email', sessionIdentity.normalizedEmail)
+      .maybeSingle();
+    if (error && !isMissingRelationError(error)) throw error;
+    if (data?.id) return { account: data, mismatch: false };
+  }
+
+  const internalUserId = sanitizeString(req?.session?.user?.id, 120);
+  const internalEmail = sanitizeEmail(req?.session?.user?.email);
+  if (isUuid(internalUserId) && internalEmail) {
+    if (expected && internalEmail !== expected) return { account: null, mismatch: true };
+    const authResult = await supabase.auth.admin.getUserById(internalUserId);
+    const authUser = authResult?.data?.user || null;
+    if (authResult.error || !authUser?.id || sanitizeEmail(authUser.email) !== internalEmail) return { account: null, mismatch: true };
+    try {
+      const account = await ensureExternalProfessionalAccountForAuthUser(authUser);
+      await bindExternalProfessionalAccount(account.id);
+      await setExternalClinicalIdentitySession(req, account);
+      return { account, mismatch: false };
+    } catch (error: any) {
+      if (sanitizeString(error?.message, 180).includes('NO_ACTIVE_SHARES')) return { account: null, mismatch: false };
+      throw error;
+    }
+  }
+  return { account: null, mismatch: false };
+}
+
+async function issueExternalEvolutionActivationLink(grant: any) {
+  const grantId = sanitizeString(grant?.id, 120);
+  const publicId = sanitizeString(grant?.public_id, 120);
+  const recipientEmail = sanitizeEmail(grant?.recipient_email);
+  if (!isUuid(grantId) || !isUuid(publicId) || !recipientEmail) throw new Error('EVOLUTION_SHARE_GRANT_INVALID');
+  const token = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = hashExternalEvolutionActivationToken(token);
+  const expiresAt = new Date(Date.now() + EXTERNAL_EVOLUTION_ACTIVATION_TTL_MS).toISOString();
+  const { error } = await supabase.rpc('issue_external_evolution_activation_token_v1', {
+    p_grant_id: grantId,
+    p_token_hash: tokenHash,
+    p_expires_at: expiresAt,
+  });
+  if (error) throw error;
+  const locator = getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`);
+  return { accessUrl: `${locator}#activation_token=${encodeURIComponent(token)}`, expiresAt };
+}
+
+async function validateExternalEvolutionActivationToken(publicId: string, rawToken: unknown) {
+  const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+  if (!isUuid(publicId) || token.length < 32 || token.length > 256) return null;
+  const tokenHash = hashExternalEvolutionActivationToken(token);
+  const loaded = await loadActiveExternalEvolutionShare(publicId);
+  if (!loaded) return null;
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('external_evolution_activation_tokens')
+    .select('id,grant_id,recipient_email_normalized,expires_at,consumed_at,invalidated_at')
+    .eq('grant_id', loaded.grant.id)
+    .eq('token_hash', tokenHash)
+    .is('consumed_at', null)
+    .is('invalidated_at', null)
+    .gt('expires_at', nowIso)
+    .maybeSingle();
+  if (error) {
+    if (isMissingRelationError(error)) throw new Error('EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE');
+    throw error;
+  }
+  if (!data?.id || sanitizeEmail(data.recipient_email_normalized) !== sanitizeEmail(loaded.grant.recipient_email)) return null;
+  return { loaded, tokenHash, tokenRow: data };
+}
+
+function normalizeExternalCommentBody(value: unknown): string | null {
+  const body = typeof value === 'string' ? value.trim() : '';
+  if (!body || body.length > EXTERNAL_EVOLUTION_COMMENT_MAX_LENGTH) return null;
+  if (/<[^>]+>/.test(body)) return null;
+  return body;
 }
 
 async function createRelationshipConfirmationRequest(params: {
@@ -19635,12 +19792,7 @@ try {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false
-      },
-      ...(vertoDeploymentEnv ? {
-        global: {
-          headers: { 'x-verto-deployment-env': vertoDeploymentEnv }
-        }
-      } : {})
+      }
     });
   }
   if (supabaseUrl && supabasePublicClientKey) {
@@ -20350,6 +20502,39 @@ async function startServer() {
     message: { success: false, error: 'Limite de reenvios de recuperação atingido. Tente novamente mais tarde.' }
   });
 
+  const stripePositivePeriodTimestamp = (value) => {
+    const seconds = Number(value || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    return Math.floor(seconds);
+  };
+
+  const resolveStripeSubscriptionCurrentPeriod = (subscription) => {
+    const rawSubscription = subscription || {};
+    const items = Array.isArray(rawSubscription?.items?.data)
+      ? rawSubscription.items.data
+      : [];
+    const itemStarts = items
+      .map((item) => stripePositivePeriodTimestamp(item?.current_period_start))
+      .filter((value) => value !== null);
+    const itemEnds = items
+      .map((item) => stripePositivePeriodTimestamp(item?.current_period_end))
+      .filter((value) => value !== null);
+    const legacyStart = stripePositivePeriodTimestamp(rawSubscription?.current_period_start);
+    const legacyEnd = stripePositivePeriodTimestamp(rawSubscription?.current_period_end);
+    const currentPeriodStart = itemStarts.length
+      ? Math.min(...itemStarts)
+      : legacyStart;
+    const itemCurrentPeriodEnd = itemEnds.length
+      ? Math.max(...itemEnds)
+      : null;
+    const currentPeriodEnd = itemCurrentPeriodEnd === null
+      ? legacyEnd
+      : legacyEnd === null
+        ? itemCurrentPeriodEnd
+        : Math.max(itemCurrentPeriodEnd, legacyEnd);
+    return { currentPeriodStart, currentPeriodEnd };
+  };
+
   const syncSalesSubscriptionDiscount = async (
     subscription: Stripe.Subscription,
   ) => {
@@ -20380,12 +20565,10 @@ async function startServer() {
       Number(discount?.start || 0) > 0
         ? new Date(Number(discount.start) * 1000).toISOString()
         : null;
-    const nextBillingAt =
-      Number(rawSubscription.current_period_end || 0) > 0
-        ? new Date(
-            Number(rawSubscription.current_period_end) * 1000,
-          ).toISOString()
-        : null;
+    const { currentPeriodEnd } = resolveStripeSubscriptionCurrentPeriod(subscription);
+    const nextBillingAt = currentPeriodEnd
+      ? new Date(currentPeriodEnd * 1000).toISOString()
+      : null;
     const durationMonths = Number(coupon?.duration_in_months || 0) || null;
     const percentage =
       coupon?.percent_off == null ? null : Number(coupon.percent_off);
@@ -21163,8 +21346,8 @@ async function startServer() {
     );
 
   const stripeTimestampToIso = (value: unknown): string | null => {
-    const seconds = Number(value || 0);
-    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const seconds = stripePositivePeriodTimestamp(value);
+    if (seconds === null) return null;
     return new Date(seconds * 1000).toISOString();
   };
 
@@ -21195,6 +21378,8 @@ async function startServer() {
     const subscription = params.subscription;
     const subscriptionId = sanitizeString(subscription?.id, 200);
     if (!subscriptionId) return;
+    const { currentPeriodStart, currentPeriodEnd } =
+      resolveStripeSubscriptionCurrentPeriod(subscription);
     const invoice = params.invoice || null;
     const nowIso = new Date().toISOString();
     const organizationId = sanitizeString(
@@ -21222,8 +21407,8 @@ async function startServer() {
       stripe_status: sanitizeString(subscription.status, 50) || 'unknown',
       trial_start_at: stripeTimestampToIso((subscription as any)?.trial_start),
       trial_ends_at: stripeTimestampToIso((subscription as any)?.trial_end),
-      current_period_start: stripeTimestampToIso((subscription as any)?.current_period_start),
-      current_period_end: stripeTimestampToIso((subscription as any)?.current_period_end),
+      current_period_start: stripeTimestampToIso(currentPeriodStart),
+      current_period_end: stripeTimestampToIso(currentPeriodEnd),
       cancel_at_period_end: Boolean((subscription as any)?.cancel_at_period_end),
       cancel_at: stripeTimestampToIso((subscription as any)?.cancel_at),
       canceled_at: stripeTimestampToIso((subscription as any)?.canceled_at),
@@ -21485,6 +21670,91 @@ async function startServer() {
     return continuation;
   };
 
+  const normalizeModularSchedulePhaseBoundaries = (
+    phases,
+    stripeCurrentPeriodEnd,
+    importedCurrentEnd,
+  ) => {
+    if (!Array.isArray(phases) || phases.length <= 1) {
+      return {
+        firstPlanEnd: null,
+        effectiveFirstTransitionEnd: null,
+        boundaryShiftSeconds: 0,
+        futurePhases: [],
+      };
+    }
+
+    const firstPlanEnd = phases[0]?.endsAt
+      ? Math.floor(Date.parse(phases[0].endsAt) / 1000)
+      : 0;
+    if (!Number.isFinite(firstPlanEnd) || firstPlanEnd <= 0) {
+      throw new Error("MODULAR_SCHEDULE_FIRST_PHASE_END_MISSING");
+    }
+    if (
+      !Number.isFinite(stripeCurrentPeriodEnd)
+      || stripeCurrentPeriodEnd <= 0
+    ) {
+      throw new Error("MODULAR_SUBSCRIPTION_CURRENT_PERIOD_END_MISSING");
+    }
+    if (!Number.isFinite(importedCurrentEnd) || importedCurrentEnd <= 0) {
+      throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_END_MISSING");
+    }
+
+    // The imported Schedule can legitimately be longer than the Subscription's
+    // current period when a previous idempotent reconciliation already added a
+    // continuation. It must never be shorter than Stripe's canonical period.
+    if (importedCurrentEnd < stripeCurrentPeriodEnd - 1) {
+      throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_BEFORE_SUBSCRIPTION_PERIOD_END");
+    }
+
+    const effectiveFirstTransitionEnd = Math.max(
+      firstPlanEnd,
+      stripeCurrentPeriodEnd,
+      importedCurrentEnd,
+    );
+    if (effectiveFirstTransitionEnd < stripeCurrentPeriodEnd - 1) {
+      // Preserve the original safety invariant: a commercial phase may never
+      // truncate the billing period already created and paid in Stripe.
+      throw new Error("MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END");
+    }
+
+    // Frozen commercial timestamps are based on the offer/Checkout preparation
+    // instant (T0). Stripe anchors the real subscription when Checkout completes
+    // (T1). If T1 is later, translate all future boundaries by the same delta so
+    // durations and prices remain frozen while the first transition lands on the
+    // real Stripe billing boundary. This changes no commercial amount or module.
+    const boundaryShiftSeconds = Math.max(
+      0,
+      effectiveFirstTransitionEnd - firstPlanEnd,
+    );
+    const futurePhases = phases.slice(1).map((phase, index) => {
+      const originalStart = phase?.startsAt
+        ? Math.floor(Date.parse(phase.startsAt) / 1000)
+        : 0;
+      const originalEnd = phase?.endsAt
+        ? Math.floor(Date.parse(phase.endsAt) / 1000)
+        : null;
+      if (!Number.isFinite(originalStart) || originalStart <= 0) {
+        throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_START_INVALID");
+      }
+      const startDate = originalStart + boundaryShiftSeconds;
+      const endDate = originalEnd === null
+        ? null
+        : originalEnd + boundaryShiftSeconds;
+      if (endDate !== null && (!Number.isFinite(endDate) || endDate <= startDate)) {
+        throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_END_INVALID");
+      }
+      return { phase, index, startDate, endDate };
+    });
+
+    return {
+      firstPlanEnd,
+      effectiveFirstTransitionEnd,
+      boundaryShiftSeconds,
+      futurePhases,
+    };
+  };
+
   const ensureModularSubscriptionSchedule = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
@@ -21729,26 +21999,24 @@ async function startServer() {
     if (!Number.isFinite(importedCurrentEnd) || importedCurrentEnd <= 0) {
       throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_END_MISSING");
     }
-
-    const firstPlanEnd = phases[0]?.endsAt
-      ? Math.floor(Date.parse(phases[0].endsAt) / 1000)
-      : null;
-    if (!firstPlanEnd || !Number.isFinite(firstPlanEnd)) {
-      throw new Error("MODULAR_SCHEDULE_FIRST_PHASE_END_MISSING");
-    }
-    if (firstPlanEnd < importedCurrentEnd - 1) {
-      // Never shorten the Stripe-imported billing period to force a promotional
-      // boundary. That could truncate a trial or change the billing anchor.
-      throw new Error("MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END");
-    }
+    const { currentPeriodEnd: stripeCurrentPeriodEnd } =
+      resolveStripeSubscriptionCurrentPeriod(subscription);
+    const normalizedBoundaries = normalizeModularSchedulePhaseBoundaries(
+      phases,
+      Number(stripeCurrentPeriodEnd || 0),
+      importedCurrentEnd,
+    );
+    const effectiveFirstTransitionEnd = Number(
+      normalizedBoundaries.effectiveFirstTransitionEnd || 0,
+    );
 
     const configuredPhases: Record<string, any>[] = [preservedCurrentPhase];
-    if (firstPlanEnd > importedCurrentEnd + 1) {
+    if (effectiveFirstTransitionEnd > importedCurrentEnd + 1) {
       configuredPhases.push(
         buildStripeScheduleContinuationPhase(
           preservedCurrentPhase,
           importedCurrentEnd,
-          firstPlanEnd,
+          effectiveFirstTransitionEnd,
           {
             flowType: "sales_modular_assisted",
             offerId: sanitizeString(link.offer_id, 120),
@@ -21759,19 +22027,7 @@ async function startServer() {
     }
 
     const futurePhases = await Promise.all(
-      phases.slice(1).map(async (phase: any, index: number) => {
-        const startDate = phase.startsAt
-          ? Math.floor(Date.parse(phase.startsAt) / 1000)
-          : 0;
-        const endDate = phase.endsAt
-          ? Math.floor(Date.parse(phase.endsAt) / 1000)
-          : null;
-        if (!Number.isFinite(startDate) || startDate <= 0) {
-          throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_START_INVALID");
-        }
-        if (endDate !== null && (!Number.isFinite(endDate) || endDate <= startDate)) {
-          throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_END_INVALID");
-        }
+      normalizedBoundaries.futurePhases.map(async ({ phase, index, startDate, endDate }) => {
         return {
           start_date: startDate,
           ...(endDate !== null ? { end_date: endDate } : {}),
@@ -35486,8 +35742,6 @@ async function startServer() {
   });
 
   const handleVapidPublicKey = (_req: any, res: any) => {
-    const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-    if (!deploymentEnv) return;
     if (!vapidPublicKey || !vapidPrivateKey) {
       return res.status(503).json({
         success: false,
@@ -35500,8 +35754,6 @@ async function startServer() {
 
   const handlePushSubscribe = async (req: any, res: any) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
       if (!endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
@@ -35583,7 +35835,6 @@ async function startServer() {
       const renewalToken = crypto.randomBytes(32).toString('base64url');
       const result = await savePatientPushSubscription({
         supabase,
-        deploymentEnv,
         subscription,
         patientId,
         userId: sanitizeString(user?.id, 120),
@@ -35620,8 +35871,6 @@ async function startServer() {
 
   const handlePushUnsubscribe = async (req: any, res: any) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
       const user = req.session.user;
@@ -35635,7 +35884,6 @@ async function startServer() {
       });
       const result = await removePatientPushSubscription({
         supabase,
-        deploymentEnv,
         patientId: patientIds[0] || '',
         endpoint
       });
@@ -35649,8 +35897,6 @@ async function startServer() {
 
   const handlePushRenew = async (req: any, res: any) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const renewalToken = sanitizeString(req.body?.renewalToken || req.body?.renewal_token, 200);
       const subscription = req.body?.subscription;
       const oldEndpoint = sanitizeString(req.body?.oldEndpoint || req.body?.old_endpoint, 2000);
@@ -35660,7 +35906,6 @@ async function startServer() {
       }
       const result = await renewPatientPushSubscription({
         supabase,
-        deploymentEnv,
         renewalToken,
         subscription,
         oldEndpoint,
@@ -36122,20 +36367,15 @@ async function startServer() {
     const clinicName = sanitizeString(body?.clinicName || body?.clinic_name, 180) || null;
     const professionalName = sanitizeString(body?.professionalName || body?.professional_name, 180);
     const specialty = sanitizeString(body?.specialty, 120) || null;
+    const professionalRegistry = sanitizeString(body?.professionalRegistry || body?.professional_registry || body?.registry, 120) || null;
     const phone = sanitizeString(body?.phone || body?.telephone || body?.whatsapp, 60);
     const rawEmail = sanitizeString(body?.email, 254);
     const email = rawEmail ? sanitizeEmail(rawEmail) : '';
     const phoneDigitCount = phone.replace(/\D/g, '').length;
 
-    if (!professionalName) {
-      return { ok: false as const, error: 'Informe o nome do profissional.' };
-    }
-    if (!phone || phoneDigitCount < 6) {
-      return { ok: false as const, error: 'Informe um telefone válido para o profissional.' };
-    }
-    if (rawEmail && !email) {
-      return { ok: false as const, error: 'Informe um e-mail válido ou deixe o campo em branco.' };
-    }
+    if (!professionalName) return { ok: false as const, error: 'Informe o nome do profissional.' };
+    if (!phone || phoneDigitCount < 6) return { ok: false as const, error: 'Informe um telefone válido para o profissional.' };
+    if (rawEmail && !email) return { ok: false as const, error: 'Informe um e-mail válido ou deixe o campo em branco.' };
 
     return {
       ok: true as const,
@@ -36143,45 +36383,78 @@ async function startServer() {
         clinic_name: clinicName,
         professional_name: professionalName,
         specialty,
+        professional_registry: professionalRegistry,
         phone,
         email: email || null,
       }
     };
   };
 
-  const patientCareNetworkColumns = 'id,clinic_id,patient_id,clinic_name,professional_name,specialty,phone,email,source,created_at,updated_at';
+  const patientCareNetworkColumns = 'id,clinic_id,patient_id,clinic_name,professional_name,specialty,professional_registry,phone,email,source,created_at,updated_at';
 
   const sendPatientCareNetworkError = (res: any, error: any, route: string) => {
+    const message = sanitizeString(error?.message || String(error), 280);
     if (isMissingRelationError(error)) {
-      return res.status(503).json({
+      return res.status(503).json({ success: false, code: 'PATIENT_CARE_NETWORK_SCHEMA_UNAVAILABLE', error: 'A estrutura da rede de cuidado ainda não foi aplicada.' });
+    }
+    if (message.includes('CARE_NETWORK_PATIENT_REVOCATION_CONFIRMATION_REQUIRED')) {
+      return res.status(409).json({
         success: false,
-        code: 'PATIENT_CARE_NETWORK_SCHEMA_UNAVAILABLE',
-        error: 'A estrutura da rede de cuidado ainda não foi aplicada.'
+        code: 'CARE_NETWORK_PATIENT_REVOCATION_CONFIRMATION_REQUIRED',
+        error: 'Este vínculo foi desfeito pelo paciente ou responsável. Confirme explicitamente a criação de um novo vínculo antes de continuar.'
       });
     }
+    if (message.includes('CARE_NETWORK_PATIENT_INELIGIBLE')) return res.status(409).json({ success: false, code: 'CARE_NETWORK_PATIENT_INELIGIBLE', error: 'Este paciente não possui vínculo ativo elegível com a clínica.' });
+    if (message.includes('CARE_NETWORK_CONTACT_NOT_FOUND')) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+    if (message.includes('CARE_NETWORK_EMAIL_INVALID')) return res.status(400).json({ success: false, error: 'Informe um e-mail válido ou deixe o campo em branco.' });
     return sendRouteDbError(res, route, error);
+  };
+
+  const upsertPatientCareNetworkContact = async (params: {
+    clinicId: string;
+    patientId: string;
+    contactId?: string | null;
+    actorId: string;
+    source: 'PATIENT_PORTAL' | 'CLINIC';
+    restoreAfterPatientRevocation?: boolean;
+    value: any;
+  }) => {
+    const { data, error } = await supabase.rpc('upsert_patient_care_network_contact_v2', {
+      p_clinic_id: params.clinicId,
+      p_patient_id: params.patientId,
+      p_contact_id: isUuid(params.contactId || '') ? params.contactId : null,
+      p_clinic_name: params.value.clinic_name,
+      p_professional_name: params.value.professional_name,
+      p_specialty: params.value.specialty,
+      p_professional_registry: params.value.professional_registry,
+      p_phone: params.value.phone,
+      p_email: params.value.email,
+      p_source: params.source,
+      p_actor_id: isUuid(params.actorId) ? params.actorId : null,
+      p_restore_after_patient_revocation: params.restoreAfterPatientRevocation === true,
+    });
+    if (error) throw error;
+    return data;
+  };
+
+  const listCareNetwork = async (clinicId: string, patientId: string) => {
+    const { data, error } = await supabase
+      .from('patient_care_network_contacts')
+      .select(patientCareNetworkColumns)
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .is('archived_at', null)
+      .order('created_at', { ascending: true })
+      .limit(100);
+    if (error) throw error;
+    return data || [];
   };
 
   app.get('/api/patient/self/care-network', noStoreDynamicResponse, checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
-      if (!portalScope) {
-        return res.status(409).json({
-          success: false,
-          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
-          error: 'Selecione novamente o acesso do paciente para continuar.'
-        });
-      }
-      const { data, error } = await supabase
-        .from('patient_care_network_contacts')
-        .select(patientCareNetworkColumns)
-        .eq('clinic_id', portalScope.clinicId)
-        .eq('patient_id', portalScope.patientId)
-        .is('archived_at', null)
-        .order('created_at', { ascending: true })
-        .limit(100);
-      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [GET]');
-      return res.json({ success: true, data: data || [] });
+      if (!portalScope) return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
+      return res.json({ success: true, data: await listCareNetwork(portalScope.clinicId, portalScope.patientId) });
     } catch (error: any) {
       return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [GET]');
     }
@@ -36191,46 +36464,11 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Cadastro da rede de cuidado')) return;
       const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
-      if (!portalScope) {
-        return res.status(409).json({
-          success: false,
-          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
-          error: 'Selecione novamente o acesso do paciente para continuar.'
-        });
-      }
+      if (!portalScope) return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
       const normalized = normalizePatientCareNetworkPayload(req.body);
       if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
-
-      const countResult = await supabase
-        .from('patient_care_network_contacts')
-        .select('id', { count: 'exact', head: true })
-        .eq('clinic_id', portalScope.clinicId)
-        .eq('patient_id', portalScope.patientId)
-        .is('archived_at', null);
-      if (countResult.error) return sendPatientCareNetworkError(res, countResult.error, '/api/patient/self/care-network [POST count]');
-      if (Number(countResult.count || 0) >= 100) {
-        return res.status(409).json({ success: false, code: 'PATIENT_CARE_NETWORK_LIMIT_REACHED', error: 'O limite de profissionais cadastrados nesta rede de cuidado foi atingido.' });
-      }
-
-      const actorUserId = sanitizeString(req.session.user?.id, 120);
-      const now = new Date().toISOString();
-      const { data, error } = await supabase
-        .from('patient_care_network_contacts')
-        .insert({
-          id: crypto.randomUUID(),
-          clinic_id: portalScope.clinicId,
-          patient_id: portalScope.patientId,
-          ...normalized.value,
-          source: 'PATIENT_PORTAL',
-          created_by_user_id: isUuid(actorUserId) ? actorUserId : null,
-          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
-          created_at: now,
-          updated_at: now,
-          archived_at: null,
-        })
-        .select(patientCareNetworkColumns)
-        .single();
-      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [POST]');
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const data = await upsertPatientCareNetworkContact({ clinicId: portalScope.clinicId, patientId: portalScope.patientId, actorId, source: 'PATIENT_PORTAL', value: normalized.value });
       return res.status(201).json({ success: true, data });
     } catch (error: any) {
       return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network [POST]');
@@ -36241,33 +36479,17 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 16 * 1024, 'Atualização da rede de cuidado')) return;
       const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
-      if (!portalScope) {
-        return res.status(409).json({
-          success: false,
-          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
-          error: 'Selecione novamente o acesso do paciente para continuar.'
-        });
-      }
+      if (!portalScope) return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
       const contactId = sanitizeString(req.params?.contactId, 120);
       if (!isUuid(contactId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      const current = await supabase.from('patient_care_network_contacts').select('id,source').eq('id', contactId).eq('clinic_id', portalScope.clinicId).eq('patient_id', portalScope.patientId).is('archived_at', null).maybeSingle();
+      if (current.error) throw current.error;
+      if (!current.data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+      if (current.data.source === 'CLINIC') return res.status(403).json({ success: false, code: 'CARE_NETWORK_CLINIC_CONTACT_EDIT_RESTRICTED', error: 'Você pode desfazer este vínculo, mas os dados cadastrados pela clínica devem ser ajustados pela equipe.' });
       const normalized = normalizePatientCareNetworkPayload(req.body);
       if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
-      const actorUserId = sanitizeString(req.session.user?.id, 120);
-      const { data, error } = await supabase
-        .from('patient_care_network_contacts')
-        .update({
-          ...normalized.value,
-          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', contactId)
-        .eq('clinic_id', portalScope.clinicId)
-        .eq('patient_id', portalScope.patientId)
-        .is('archived_at', null)
-        .select(patientCareNetworkColumns)
-        .maybeSingle();
-      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [PATCH]');
-      if (!data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const data = await upsertPatientCareNetworkContact({ clinicId: portalScope.clinicId, patientId: portalScope.patientId, contactId, actorId, source: 'PATIENT_PORTAL', value: normalized.value });
       return res.json({ success: true, data });
     } catch (error: any) {
       return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [PATCH]');
@@ -36277,70 +36499,86 @@ async function startServer() {
   app.delete('/api/patient/self/care-network/:contactId', portalActionLimiter, checkAuth, requireRoles('patient'), async (req: any, res) => {
     try {
       const portalScope = await resolveCanonicalPatientPortalScope(req.session.user);
-      if (!portalScope) {
-        return res.status(409).json({
-          success: false,
-          code: 'PATIENT_PORTAL_CONTEXT_REQUIRED',
-          error: 'Selecione novamente o acesso do paciente para continuar.'
-        });
-      }
+      if (!portalScope) return res.status(409).json({ success: false, code: 'PATIENT_PORTAL_CONTEXT_REQUIRED', error: 'Selecione novamente o acesso do paciente para continuar.' });
       const contactId = sanitizeString(req.params?.contactId, 120);
-      if (!isUuid(contactId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
-      const actorUserId = sanitizeString(req.session.user?.id, 120);
-      const now = new Date().toISOString();
-      const { data, error } = await supabase
-        .from('patient_care_network_contacts')
-        .update({
-          archived_at: now,
-          updated_at: now,
-          updated_by_user_id: isUuid(actorUserId) ? actorUserId : null,
-        })
-        .eq('id', contactId)
-        .eq('clinic_id', portalScope.clinicId)
-        .eq('patient_id', portalScope.patientId)
-        .is('archived_at', null)
-        .select('id')
-        .maybeSingle();
-      if (error) return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [DELETE]');
-      if (!data?.id) return res.status(404).json({ success: false, error: 'Profissional não encontrado nesta rede de cuidado.' });
-      return res.json({ success: true, data: { id: data.id, archived: true } });
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (!isUuid(contactId) || !isUuid(actorId)) return res.status(400).json({ success: false, error: 'Profissional inválido.' });
+      const { data, error } = await supabase.rpc('archive_patient_care_network_contact_v2', {
+        p_clinic_id: portalScope.clinicId, p_patient_id: portalScope.patientId, p_contact_id: contactId, p_actor_id: actorId, p_reason: 'PATIENT_UNLINKED'
+      });
+      if (error) throw error;
+      return res.json({ success: true, data });
     } catch (error: any) {
       return sendPatientCareNetworkError(res, error, '/api/patient/self/care-network/:contactId [DELETE]');
     }
   });
 
-  app.get(
-    '/api/patients/:patientId/care-network',
-    noStoreDynamicResponse,
-    checkAuth,
-    requireAnyClinicCapability('clinical.record.view', 'clinical.history.view'),
-    checkPatientAccess,
-    async (req: any, res) => {
-      try {
-        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
-        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
-        if (!isUuid(patientId) || !isUuid(clinicId)) {
-          return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
-        }
-        const { data, error } = await supabase
-          .from('patient_care_network_contacts')
-          .select(patientCareNetworkColumns)
-          .eq('clinic_id', clinicId)
-          .eq('patient_id', patientId)
-          .is('archived_at', null)
-          .order('created_at', { ascending: true })
-          .limit(100);
-        if (error) return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
-        return res.json({ success: true, data: data || [] });
-      } catch (error: any) {
-        return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
-      }
+  app.get('/api/patients/:patientId/care-network', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('clinical.record.view', 'clinical.history.view'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
+      return res.json({ success: true, data: await listCareNetwork(clinicId, patientId) });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [GET]');
     }
-  );
+  });
 
+  app.post('/api/patients/:patientId/care-network', portalActionLimiter, checkAuth, requireClinicCapability('documents.patient_share'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Cadastro da rede de cuidado')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      if (![patientId, clinicId, actorId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      const normalized = normalizePatientCareNetworkPayload(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
+      const data = await upsertPatientCareNetworkContact({
+        clinicId, patientId, actorId, source: 'CLINIC', value: normalized.value,
+        restoreAfterPatientRevocation: req.body?.restoreAfterPatientRevocation === true,
+      });
+      return res.status(201).json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network [POST]');
+    }
+  });
+
+  app.patch('/api/patients/:patientId/care-network/:contactId', portalActionLimiter, checkAuth, requireClinicCapability('documents.patient_share'), checkPatientAccess, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'Atualização da rede de cuidado')) return;
+      const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const contactId = sanitizeString(req.params?.contactId, 120);
+      if (![patientId, clinicId, actorId, contactId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      const normalized = normalizePatientCareNetworkPayload(req.body);
+      if (!normalized.ok) return res.status(400).json({ success: false, error: normalized.error });
+      const data = await upsertPatientCareNetworkContact({ clinicId, patientId, contactId, actorId, source: 'CLINIC', value: normalized.value, restoreAfterPatientRevocation: req.body?.restoreAfterPatientRevocation === true });
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network/:contactId [PATCH]');
+    }
+  });
+
+  app.delete('/api/patients/:patientId/care-network/:contactId', portalActionLimiter, checkAuth, requireClinicCapability('documents.patient_share'), checkPatientAccess, async (req: any, res) => {
+    try {
+      const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+      const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+      const actorId = sanitizeString(req.session.user?.id, 120);
+      const contactId = sanitizeString(req.params?.contactId, 120);
+      if (![patientId, clinicId, actorId, contactId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+      const { data, error } = await supabase.rpc('archive_patient_care_network_contact_v2', {
+        p_clinic_id: clinicId, p_patient_id: patientId, p_contact_id: contactId, p_actor_id: actorId, p_reason: 'CLINIC_UNLINKED'
+      });
+      if (error) throw error;
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendPatientCareNetworkError(res, error, '/api/patients/:patientId/care-network/:contactId [DELETE]');
+    }
+  });
 
   const patientEvolutionTimelineColumns = 'id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_by_user_id,created_at,updated_at,archived_at';
-  const patientEvolutionGrantColumns = 'id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_by,authorization_declared_at,created_by_user_id,created_at,updated_at,last_invited_at,revoked_at,revoked_by_user_id';
+  const patientEvolutionGrantColumns = 'id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,status,purpose,authorization_statement_version,authorization_declared_by,authorization_declared_at,created_by_user_id,created_at,updated_at,last_invited_at,revoked_at,revoked_by_user_id,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,revocation_reason';
 
   const normalizeEvolutionTimelineMonthKey = (value: unknown): string => {
     const raw = sanitizeString(value, 20);
@@ -36379,6 +36617,15 @@ async function startServer() {
     }
     if (message.includes('EVOLUTION_SHARE_EMAIL_INVALID')) {
       return res.status(400).json({ success: false, code: 'EVOLUTION_SHARE_EMAIL_INVALID', error: 'Informe um e-mail válido para o destinatário.' });
+    }
+    if (message.includes('CARE_NETWORK_CONTACT_EMAIL_REQUIRED')) {
+      return res.status(400).json({ success: false, code: 'CARE_NETWORK_CONTACT_EMAIL_REQUIRED', error: 'O profissional selecionado precisa ter um e-mail válido para receber o compartilhamento.' });
+    }
+    if (message.includes('CARE_NETWORK_CONTACT_NOT_FOUND')) {
+      return res.status(404).json({ success: false, code: 'CARE_NETWORK_CONTACT_NOT_FOUND', error: 'Profissional não encontrado na Rede de cuidado deste paciente.' });
+    }
+    if (message.includes('EVOLUTION_SHARE_PATIENT_INELIGIBLE')) {
+      return res.status(409).json({ success: false, code: 'EVOLUTION_SHARE_PATIENT_INELIGIBLE', error: 'Este paciente não possui vínculo ativo elegível com a clínica.' });
     }
     if (message.includes('EVOLUTION_TIMELINE_ITEM_NOT_FOUND') || message.includes('EVOLUTION_SHARE_GRANT_NOT_FOUND')) {
       return res.status(404).json({ success: false, error: 'Registro não encontrado.' });
@@ -36533,17 +36780,50 @@ async function startServer() {
     if (grantResult.error) throw grantResult.error;
     if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
 
+    const grantRows = grantResult.data || [];
+    const grantIds = grantRows.map((grant: any) => sanitizeString(grant?.id, 120)).filter(isUuid);
+    const careContactIds = Array.from(new Set(grantRows.map((grant: any) => sanitizeString(grant?.care_network_contact_id, 120)).filter(isUuid)));
+    const [careContactResult, commentResult] = await Promise.all([
+      careContactIds.length
+        ? supabase.from('patient_care_network_contacts').select('id,professional_name,specialty,professional_registry,email,source').in('id', careContactIds).eq('clinic_id', clinicId).eq('patient_id', patientId)
+        : Promise.resolve({ data: [], error: null } as any),
+      grantIds.length
+        ? supabase.from('patient_evolution_external_comments').select('id,grant_id,body,created_at').in('grant_id', grantIds).eq('clinic_id', clinicId).eq('patient_id', patientId).order('created_at', { ascending: true }).limit(300)
+        : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    if (careContactResult.error && !isMissingRelationError(careContactResult.error)) throw careContactResult.error;
+    if (commentResult.error && !isMissingRelationError(commentResult.error)) throw commentResult.error;
+    const careContactById = new Map((careContactResult.data || []).map((row: any) => [String(row.id), row]));
+    const commentsByGrant = new Map<string, any[]>();
+    for (const comment of commentResult.data || []) {
+      const key = String(comment.grant_id || '');
+      const list = commentsByGrant.get(key) || [];
+      list.push({ id: comment.id, body: comment.body, createdAt: comment.created_at });
+      commentsByGrant.set(key, list);
+    }
+
     const grantsByItem = new Map<string, any[]>();
-    for (const grant of grantResult.data || []) {
+    for (const grant of grantRows) {
       const key = sanitizeString(grant?.timeline_item_id, 120);
       const current = grantsByItem.get(key) || [];
+      const careContact = careContactById.get(String(grant?.care_network_contact_id || ''));
+      const comments = commentsByGrant.get(String(grant?.id || '')) || [];
       current.push({
         id: grant.id,
         publicId: grant.public_id,
+        careNetworkContactId: grant.care_network_contact_id || null,
         recipientEmail: grant.recipient_email,
+        recipientName: sanitizeString(careContact?.professional_name, 180) || sanitizeEmail(grant.recipient_email),
+        recipientSpecialty: sanitizeString(careContact?.specialty, 120) || null,
+        canComment: grant.can_comment === true,
         status: grant.status,
         authorizationDeclaredAt: grant.authorization_declared_at,
         lastInvitedAt: grant.last_invited_at,
+        firstViewedAt: grant.first_viewed_at || null,
+        lastViewedAt: grant.last_viewed_at || null,
+        viewCount: Math.max(0, Number(grant.view_count || 0)),
+        commentCount: comments.length,
+        comments,
         shareUrl: isUuid(grant.public_id) ? getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`) : null,
       });
       grantsByItem.set(key, current);
@@ -36756,6 +37036,74 @@ async function startServer() {
     }
   );
 
+  const ensureExternalEvolutionGrantCareContact = async (params: { grant: any; clinicId: string; patientId: string }) => {
+    const recipientEmail = sanitizeEmail(params.grant?.recipient_email);
+    const grantId = sanitizeString(params.grant?.id, 120);
+    if (!recipientEmail || !isUuid(grantId) || !isUuid(params.clinicId) || !isUuid(params.patientId)) throw new Error('EVOLUTION_SHARE_GRANT_INVALID');
+
+    const currentContactId = sanitizeString(params.grant?.care_network_contact_id, 120);
+    if (isUuid(currentContactId)) {
+      const current = await supabase.from('patient_care_network_contacts')
+        .select('id,email')
+        .eq('id', currentContactId)
+        .eq('clinic_id', params.clinicId)
+        .eq('patient_id', params.patientId)
+        .is('archived_at', null)
+        .maybeSingle();
+      if (current.error) throw current.error;
+      if (current.data?.id && sanitizeEmail(current.data.email) === recipientEmail) return current.data.id;
+    }
+
+    const candidates = await supabase.from('patient_care_network_contacts')
+      .select('id,email')
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .is('archived_at', null)
+      .limit(100);
+    if (candidates.error) throw candidates.error;
+    const matches = (candidates.data || []).filter((row: any) => sanitizeEmail(row?.email) === recipientEmail);
+    if (matches.length !== 1 || !isUuid(matches[0]?.id)) throw new Error('CARE_NETWORK_CONTACT_REQUIRED');
+
+    const contactId = sanitizeString(matches[0].id, 120);
+    const bind = await supabase.from('patient_evolution_share_grants')
+      .update({ care_network_contact_id: contactId, updated_at: new Date().toISOString() })
+      .eq('id', grantId)
+      .eq('clinic_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('status', 'ACTIVE')
+      .select('id')
+      .maybeSingle();
+    if (bind.error || !bind.data?.id) throw bind.error || new Error('EVOLUTION_SHARE_GRANT_NOT_FOUND');
+    params.grant.care_network_contact_id = contactId;
+    return contactId;
+  };
+
+  const sendExternalEvolutionInviteForGrant = async (params: { req: any; grant: any; clinicId: string; patientId: string; itemId: string; context: string }) => {
+    const recipientEmail = sanitizeEmail(params.grant?.recipient_email);
+    const grantId = sanitizeString(params.grant?.id, 120);
+    if (!recipientEmail || !isUuid(grantId)) throw new Error('EVOLUTION_SHARE_GRANT_INVALID');
+    await ensureExternalEvolutionGrantCareContact({ grant: params.grant, clinicId: params.clinicId, patientId: params.patientId });
+    const issued = await issueExternalEvolutionActivationLink(params.grant);
+    const clinicResult = await supabase.from('clinics').select('name').eq('id', params.clinicId).maybeSingle();
+    if (clinicResult.error) throw clinicResult.error;
+    const clinicName = sanitizeString(clinicResult.data?.name, 180) || 'Clínica';
+    const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl: issued.accessUrl });
+    const emailSent = await sendTransactionalEmailSafe({
+      to: recipientEmail,
+      subject: emailTemplate.subject,
+      html: emailTemplate.html,
+      context: params.context,
+      from: OFFICIAL_FROM_NOREPLY,
+      replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+      metadata: { grantId, patientId: params.patientId, clinicId: params.clinicId, recipientEmail: maskEmail(recipientEmail) }
+    });
+    if (emailSent) {
+      await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId).eq('clinic_id', params.clinicId).eq('patient_id', params.patientId);
+      await persistExternalEvolutionAccessAudit({ req: params.req, grant: params.grant, item: { id: params.itemId, clinic_id: params.clinicId, patient_id: params.patientId }, action: 'INVITE_SENT', metadata: { activationLink: true } });
+    }
+    return { emailSent, expiresAt: issued.expiresAt };
+  };
+
   app.post(
     '/api/patients/:patientId/evolution-timeline/:itemId/grants',
     portalActionLimiter,
@@ -36770,66 +37118,54 @@ async function startServer() {
         const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
         const actorId = sanitizeString(req.session.user?.id, 120);
         const itemId = sanitizeString(req.params?.itemId, 120);
+        let careNetworkContactId = sanitizeString(req.body?.careNetworkContactId || req.body?.care_network_contact_id, 120);
         const recipientEmail = sanitizeEmail(req.body?.recipientEmail || req.body?.recipient_email);
+        const canComment = req.body?.canComment === true || req.body?.can_comment === true;
         const authorizationConfirmed = req.body?.authorizationConfirmed === true || req.body?.authorization_confirmed === true;
         if (![patientId, clinicId, actorId, itemId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
-        if (!recipientEmail) return res.status(400).json({ success: false, error: 'Informe um e-mail válido para o destinatário.' });
-        if (!authorizationConfirmed) {
-          return res.status(400).json({
-            success: false,
-            code: 'EVOLUTION_SHARE_AUTHORIZATION_DECLARATION_REQUIRED',
-            error: 'Confirme que existe autorização válida do paciente ou responsável antes de compartilhar.'
-          });
+        if (!authorizationConfirmed) return res.status(400).json({ success: false, code: 'EVOLUTION_SHARE_AUTHORIZATION_DECLARATION_REQUIRED', error: 'Confirme que existe autorização válida do paciente ou responsável antes de compartilhar.' });
+
+        if (!isUuid(careNetworkContactId) && recipientEmail) {
+          const contactLookup = await supabase
+            .from('patient_care_network_contacts')
+            .select('id,email')
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .is('archived_at', null)
+            .limit(100);
+          if (contactLookup.error) throw contactLookup.error;
+          const matches = (contactLookup.data || []).filter((row: any) => sanitizeEmail(row?.email) === recipientEmail);
+          if (matches.length === 1) careNetworkContactId = sanitizeString(matches[0]?.id, 120);
+        }
+        if (!isUuid(careNetworkContactId)) {
+          return res.status(400).json({ success: false, code: 'CARE_NETWORK_CONTACT_REQUIRED', error: 'Selecione um profissional com e-mail na Rede de cuidado deste paciente.' });
         }
 
-        const { data: rpcData, error } = await supabase.rpc('upsert_patient_evolution_share_grant_v1', {
+        const { data: rpcData, error } = await supabase.rpc('upsert_patient_evolution_share_grant_v2', {
           p_clinic_id: clinicId,
           p_patient_id: patientId,
           p_item_id: itemId,
-          p_recipient_email: recipientEmail,
+          p_care_network_contact_id: careNetworkContactId,
           p_actor_id: actorId,
+          p_can_comment: canComment,
           p_authorization_statement_version: EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION,
         });
         if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants [POST]');
-        const publicId = sanitizeString(rpcData?.publicId || rpcData?.public_id, 120);
         const grantId = sanitizeString(rpcData?.id, 120);
-        const shareUrl = isUuid(publicId) ? getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`) : '';
-
-        let clinicName = 'Clínica';
-        const clinicResult = await supabase.from('clinics').select('name').eq('id', clinicId).maybeSingle();
-        if (!clinicResult.error && clinicResult.data?.name) clinicName = sanitizeString(clinicResult.data.name, 180) || clinicName;
-        let emailSent = false;
-        if (shareUrl) {
-          const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl });
-          emailSent = await sendTransactionalEmailSafe({
-            to: recipientEmail,
-            subject: emailTemplate.subject,
-            html: emailTemplate.html,
-            context: 'external_clinical_evolution_invite',
-            from: OFFICIAL_FROM_NOREPLY,
-            replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-            metadata: { grantId, patientId, clinicId, recipientEmail: maskEmail(recipientEmail) }
-          });
-          if (emailSent && isUuid(grantId)) {
-            await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId).eq('clinic_id', clinicId).eq('patient_id', patientId);
-            await persistExternalEvolutionAccessAudit({
-              req,
-              grant: { id: grantId, timeline_item_id: itemId, clinic_id: clinicId, patient_id: patientId, recipient_email: recipientEmail },
-              item: { id: itemId, clinic_id: clinicId, patient_id: patientId },
-              action: 'INVITE_SENT',
-            });
-          }
-        }
-
+        const grantResult = await supabase.from('patient_evolution_share_grants').select(patientEvolutionGrantColumns).eq('id', grantId).eq('clinic_id', clinicId).eq('patient_id', patientId).maybeSingle();
+        if (grantResult.error || !grantResult.data?.id) throw grantResult.error || new Error('EVOLUTION_SHARE_GRANT_NOT_FOUND');
+        const invite = await sendExternalEvolutionInviteForGrant({ req, grant: grantResult.data, clinicId, patientId, itemId, context: 'external_clinical_evolution_invite' });
         return res.status(201).json({
           success: true,
           data: {
             id: grantId,
-            publicId,
-            recipientEmail,
+            publicId: rpcData?.publicId || rpcData?.public_id,
+            careNetworkContactId,
+            recipientEmail: grantResult.data.recipient_email,
+            canComment: grantResult.data.can_comment === true,
             status: 'ACTIVE',
-            shareUrl: shareUrl || null,
-            emailSent,
+            shareUrl: getAppPortalPathUrl(`/evolucao-compartilhada/${grantResult.data.public_id}`),
+            emailSent: invite.emailSent,
             authorizationStatementVersion: EXTERNAL_EVOLUTION_SHARE_AUTH_STATEMENT_VERSION,
           }
         });
@@ -36853,37 +37189,38 @@ async function startServer() {
         const itemId = sanitizeString(req.params?.itemId, 120);
         const grantId = sanitizeString(req.params?.grantId, 120);
         if (![patientId, clinicId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
-        const { data: grant, error } = await supabase
-          .from('patient_evolution_share_grants')
-          .select(patientEvolutionGrantColumns)
-          .eq('id', grantId)
-          .eq('timeline_item_id', itemId)
-          .eq('clinic_id', clinicId)
-          .eq('patient_id', patientId)
-          .eq('status', 'ACTIVE')
-          .maybeSingle();
+        const { data: grant, error } = await supabase.from('patient_evolution_share_grants').select(patientEvolutionGrantColumns).eq('id', grantId).eq('timeline_item_id', itemId).eq('clinic_id', clinicId).eq('patient_id', patientId).eq('status', 'ACTIVE').maybeSingle();
         if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend [POST]');
         if (!grant?.id) return res.status(404).json({ success: false, error: 'Compartilhamento não encontrado.' });
-        const shareUrl = getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`);
-        const clinicResult = await supabase.from('clinics').select('name').eq('id', clinicId).maybeSingle();
-        const clinicName = sanitizeString(clinicResult.data?.name, 180) || 'Clínica';
-        const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName, shareUrl });
-        const emailSent = await sendTransactionalEmailSafe({
-          to: sanitizeEmail(grant.recipient_email),
-          subject: emailTemplate.subject,
-          html: emailTemplate.html,
-          context: 'external_clinical_evolution_invite_resend',
-          from: OFFICIAL_FROM_NOREPLY,
-          replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-          metadata: { grantId, patientId, clinicId, recipientEmail: maskEmail(grant.recipient_email) }
-        });
-        if (emailSent) {
-          await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', grantId);
-          await persistExternalEvolutionAccessAudit({ req, grant, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'INVITE_SENT', metadata: { resend: true } });
-        }
-        return res.json({ success: true, data: { shareUrl, emailSent } });
+        const invite = await sendExternalEvolutionInviteForGrant({ req, grant, clinicId, patientId, itemId, context: 'external_clinical_evolution_invite_resend' });
+        return res.json({ success: true, data: { shareUrl: getAppPortalPathUrl(`/evolucao-compartilhada/${grant.public_id}`), emailSent: invite.emailSent } });
       } catch (error: any) {
         return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/resend [POST]');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/access-link',
+    portalActionLimiter,
+    checkAuth,
+    requireClinicCapability('reports.generate'),
+    requireClinicCapability('documents.patient_share'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params?.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const itemId = sanitizeString(req.params?.itemId, 120);
+        const grantId = sanitizeString(req.params?.grantId, 120);
+        if (![patientId, clinicId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
+        const { data: grant, error } = await supabase.from('patient_evolution_share_grants').select(patientEvolutionGrantColumns).eq('id', grantId).eq('timeline_item_id', itemId).eq('clinic_id', clinicId).eq('patient_id', patientId).eq('status', 'ACTIVE').maybeSingle();
+        if (error || !grant?.id) return res.status(404).json({ success: false, error: 'Compartilhamento não encontrado.' });
+        await ensureExternalEvolutionGrantCareContact({ grant, clinicId, patientId });
+        const issued = await issueExternalEvolutionActivationLink(grant);
+        return res.json({ success: true, data: { accessUrl: issued.accessUrl, expiresAt: issued.expiresAt } });
+      } catch (error: any) {
+        return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/access-link [POST]');
       }
     }
   );
@@ -36903,24 +37240,13 @@ async function startServer() {
         const itemId = sanitizeString(req.params?.itemId, 120);
         const grantId = sanitizeString(req.params?.grantId, 120);
         if (![patientId, clinicId, actorId, itemId, grantId].every(isUuid)) return res.status(400).json({ success: false, error: 'Parâmetros inválidos.' });
-        const grantLookup = await supabase
-          .from('patient_evolution_share_grants')
-          .select(patientEvolutionGrantColumns)
-          .eq('id', grantId)
-          .eq('timeline_item_id', itemId)
-          .eq('clinic_id', clinicId)
-          .eq('patient_id', patientId)
-          .maybeSingle();
+        const grantLookup = await supabase.from('patient_evolution_share_grants').select(patientEvolutionGrantColumns).eq('id', grantId).eq('timeline_item_id', itemId).eq('clinic_id', clinicId).eq('patient_id', patientId).maybeSingle();
         if (grantLookup.error) return sendEvolutionTimelineError(res, grantLookup.error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [lookup]');
-        const { data, error } = await supabase.rpc('revoke_patient_evolution_share_grant_v1', {
-          p_clinic_id: clinicId,
-          p_patient_id: patientId,
-          p_item_id: itemId,
-          p_grant_id: grantId,
-          p_actor_id: actorId,
+        const { data, error } = await supabase.rpc('revoke_patient_evolution_share_grant_v2', {
+          p_clinic_id: clinicId, p_patient_id: patientId, p_item_id: itemId, p_grant_id: grantId, p_actor_id: actorId, p_reason: 'CLINIC_MANUAL'
         });
         if (error) return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [POST]');
-        await persistExternalEvolutionAccessAudit({ req, grant: grantLookup.data, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'REVOKED' });
+        await persistExternalEvolutionAccessAudit({ req, grant: grantLookup.data, item: { id: itemId, clinic_id: clinicId, patient_id: patientId }, action: 'REVOKED', metadata: { reason: 'CLINIC_MANUAL' } });
         return res.json({ success: true, data });
       } catch (error: any) {
         return sendEvolutionTimelineError(res, error, '/api/patients/:patientId/evolution-timeline/:itemId/grants/:grantId/revoke [POST]');
@@ -36928,18 +37254,35 @@ async function startServer() {
     }
   );
 
+  const resolveExternalEvolutionAuthorizedShare = async (req: any, publicId: string) => {
+    const loaded = await loadActiveExternalEvolutionShare(publicId);
+    if (!loaded) return { loaded: null, account: null, mismatch: false };
+    const identity = await resolveExternalProfessionalAccount(req, sanitizeEmail(loaded.grant.recipient_email));
+    if (!identity.account) return { loaded: null, account: null, mismatch: identity.mismatch };
+    if (!loaded.careContact?.id) return { loaded: null, account: null, mismatch: false };
+    if (loaded.grant.external_account_id && sanitizeString(loaded.grant.external_account_id, 120) !== sanitizeString(identity.account.id, 120)) {
+      return { loaded: null, account: null, mismatch: true };
+    }
+    if (!loaded.grant.external_account_id) {
+      await bindExternalProfessionalAccount(identity.account.id);
+      loaded.grant.external_account_id = identity.account.id;
+    }
+    return { loaded, account: identity.account, mismatch: false };
+  };
+
   app.get('/api/external/evolution/:publicId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     try {
       const publicId = sanitizeString(req.params?.publicId, 120);
       const loaded = await loadActiveExternalEvolutionShare(publicId);
-      if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível ou revogado.' });
+      if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      const identity = await resolveExternalProfessionalAccount(req, sanitizeEmail(loaded.grant.recipient_email));
       return res.json({
         success: true,
         data: {
-          publicId,
-          clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
-          recipientEmailHint: maskEmail(loaded.grant.recipient_email),
-          requiresEmailVerification: true,
+          available: true,
+          authenticated: Boolean(identity.account),
+          accountMismatch: identity.mismatch === true,
+          requiresAuthentication: !identity.account,
         }
       });
     } catch (error: any) {
@@ -36947,190 +37290,340 @@ async function startServer() {
     }
   });
 
-  app.post('/api/external/evolution/:publicId/request-code', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
-    const genericResponse = { success: true, message: 'Se o e-mail estiver autorizado, enviaremos um código de acesso.' };
+  app.post('/api/external/evolution/:publicId/access-state', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Código de acesso externo')) return;
+      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Acesso externo')) return;
       const publicId = sanitizeString(req.params?.publicId, 120);
-      const email = sanitizeEmail(req.body?.email);
-      if (!isUuid(publicId) || !email) return res.json(genericResponse);
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
       const loaded = await loadActiveExternalEvolutionShare(publicId);
-      if (!loaded || sanitizeEmail(loaded.grant.recipient_email) !== email) return res.json(genericResponse);
+      if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      const identity = await resolveExternalProfessionalAccount(req, sanitizeEmail(loaded.grant.recipient_email));
+      if (identity.account) return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
+      if (identity.mismatch) return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
 
-      const identifier = `${publicId}:${email}`;
-      const key = makeOtpChallengeKey('email', 'external_clinical_share', identifier);
-      await consumeOtpChallenge(key, { requirePersistent: requiresDistributedRuntimeState() });
-      const code = generate6DigitOtp();
-      await setOtpChallenge({
-        key,
-        channel: 'email',
-        purpose: 'external_clinical_share',
-        identifier,
-        userId: null,
-        codeHash: hashIdentifier(code),
-        expiresAt: Date.now() + PORTAL_LOGIN_OTP_TTL_MS,
-        attempts: 0,
-        consumed: false,
-        createdAt: Date.now(),
-      });
-      const shareUrl = getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`);
-      const emailTemplate = buildExternalEvolutionOtpEmail({
-        clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica',
-        code,
-        shareUrl,
-      });
-      const sent = await sendTransactionalEmailSafe({
-        to: email,
-        subject: emailTemplate.subject,
-        html: emailTemplate.html,
-        context: 'external_clinical_evolution_otp',
-        from: OFFICIAL_FROM_NOREPLY,
-        replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
-        metadata: { grantId: loaded.grant.id, publicId, recipientEmail: maskEmail(email) }
-      });
-      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'OTP_REQUESTED', metadata: { emailSent: sent } });
-      return res.json(genericResponse);
-    } catch (error: any) {
-      console.warn('[ExternalEvolutionShare] request-code warning:', sanitizeString(error?.message || String(error), 220));
-      return res.json(genericResponse);
-    }
-  });
-
-  app.post('/api/external/evolution/:publicId/verify-code', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
-    const invalid = { success: false, error: 'INVALID_CODE', message: 'Código inválido ou expirado.' };
-    try {
-      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Verificação de acesso externo')) return;
-      const publicId = sanitizeString(req.params?.publicId, 120);
-      const email = sanitizeEmail(req.body?.email);
-      const code = sanitizeString(req.body?.code, 12).replace(/\D/g, '');
-      if (!isUuid(publicId) || !email || !/^\d{6}$/.test(code)) return res.status(400).json(invalid);
-      const loaded = await loadActiveExternalEvolutionShare(publicId);
-      if (!loaded || sanitizeEmail(loaded.grant.recipient_email) !== email) return res.status(400).json(invalid);
-
-      const key = makeOtpChallengeKey('email', 'external_clinical_share', `${publicId}:${email}`);
-      const requirePersistent = requiresDistributedRuntimeState();
-      const challenge = await getOtpChallenge(key, { requirePersistent });
-      if (!challenge || challenge.consumed) return res.status(400).json(invalid);
-      const nextAttempts = Math.max(0, Number(challenge.attempts || 0)) + 1;
-      const attemptRecorded = await updateOtpChallengeAttempts(key, challenge.attempts, nextAttempts, { requirePersistent });
-      if (!attemptRecorded) return res.status(409).json({ success: false, error: 'OTP_RETRY_REQUIRED', message: 'Solicite um novo código e tente novamente.' });
-      if (nextAttempts > 5) {
-        await consumeOtpChallenge(key, { requirePersistent, expectedAttempts: nextAttempts });
-        return res.status(429).json({ success: false, error: 'TOO_MANY_ATTEMPTS', message: 'Muitas tentativas. Solicite um novo código.' });
+      const validated = await validateExternalEvolutionActivationToken(publicId, req.body?.activationToken || req.body?.activation_token);
+      if (!validated) {
+        return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
       }
-      if (hashIdentifier(code) !== challenge.codeHash || Date.now() > challenge.expiresAt) return res.status(400).json(invalid);
-      const consumed = await consumeOtpChallenge(key, { requirePersistent, expectedAttempts: nextAttempts });
-      if (!consumed) return res.status(409).json({ success: false, error: 'OTP_RETRY_REQUIRED', message: 'Solicite um novo código e tente novamente.' });
-
-      setExternalEvolutionShareCookie(res, publicId, email);
-      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'OTP_VERIFIED' });
-      return res.json({ success: true });
+      const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
+      const authUser = await findAuthUserByEmail(recipientEmail);
+      return res.json({ success: true, data: { mode: authUser?.id ? 'LOGIN' : 'ACTIVATE', email: recipientEmail } });
     } catch (error: any) {
-      console.warn('[ExternalEvolutionShare] verify-code warning:', sanitizeString(error?.message || String(error), 220));
-      return res.status(400).json(invalid);
+      const message = sanitizeString(error?.message || String(error), 180);
+      if (message.includes('SCHEMA_UNAVAILABLE')) return res.status(503).json({ success: false, code: 'EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE', error: 'O acesso externo ainda não está disponível.' });
+      return res.status(500).json({ success: false, error: 'Não foi possível validar este acesso.' });
     }
   });
 
-  const resolveExternalEvolutionAuthorizedShare = async (req: any, publicId: string) => {
-    const loaded = await loadActiveExternalEvolutionShare(publicId);
-    if (!loaded) return null;
-    const cookieName = externalEvolutionShareCookieName(publicId);
-    const sessionData = verifyExternalEvolutionShareSession(req.cookies?.[cookieName]);
-    if (!sessionData || sessionData.publicId !== publicId) return null;
-    if (sanitizeEmail(sessionData.email) !== sanitizeEmail(loaded.grant.recipient_email)) return null;
-    return loaded;
-  };
+  app.post('/api/external/evolution/:publicId/resend-access', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    const generic = { success: true, message: 'Se este compartilhamento estiver ativo, um novo acesso será enviado ao endereço autorizado.' };
+    try {
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      if (!isUuid(publicId)) return res.json(generic);
+      const loaded = await loadActiveExternalEvolutionShare(publicId);
+      if (!loaded) return res.json(generic);
+      const lastInvitedMs = loaded.grant.last_invited_at ? new Date(loaded.grant.last_invited_at).getTime() : 0;
+      if (lastInvitedMs && Date.now() - lastInvitedMs < 60_000) return res.json(generic);
+      await ensureExternalEvolutionGrantCareContact({ grant: loaded.grant, clinicId: loaded.grant.clinic_id, patientId: loaded.grant.patient_id });
+      const issued = await issueExternalEvolutionActivationLink(loaded.grant);
+      const emailTemplate = buildExternalEvolutionInviteEmail({ clinicName: sanitizeString(loaded.clinic?.name, 180) || 'Clínica', shareUrl: issued.accessUrl });
+      const sent = await sendTransactionalEmailSafe({
+        to: sanitizeEmail(loaded.grant.recipient_email), subject: emailTemplate.subject, html: emailTemplate.html,
+        context: 'external_clinical_evolution_legacy_resend', from: OFFICIAL_FROM_NOREPLY, replyTo: OFFICIAL_TRANSACTIONAL_REPLY_TO,
+        metadata: { grantId: loaded.grant.id, publicId, recipientEmail: maskEmail(loaded.grant.recipient_email) }
+      });
+      if (sent) {
+        await supabase.from('patient_evolution_share_grants').update({ last_invited_at: new Date().toISOString() }).eq('id', loaded.grant.id);
+        await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'INVITE_SENT', metadata: { legacyLocatorResend: true } });
+      }
+      return res.json(generic);
+    } catch (error: any) {
+      console.warn('[ExternalEvolutionShare] resend access warning:', sanitizeString(error?.message || String(error), 220));
+      return res.json(generic);
+    }
+  });
 
-  const loadExternalEvolutionTimelineForRecipient = async (loaded: any) => {
-    const email = sanitizeEmail(loaded?.grant?.recipient_email);
-    const clinicId = sanitizeString(loaded?.grant?.clinic_id, 120);
-    const patientId = sanitizeString(loaded?.grant?.patient_id, 120);
-    if (!email || !isUuid(clinicId) || !isUuid(patientId)) return [];
+  // The Timeline external flow no longer uses OTP. These legacy endpoints remain
+  // explicit tombstones so OTP infrastructure used elsewhere in Verto is untouched.
+  app.post('/api/external/evolution/:publicId/request-code', portalActionLimiter, noStoreDynamicResponse, async (_req: any, res) => {
+    return res.status(410).json({ success: false, code: 'EXTERNAL_TIMELINE_OTP_RETIRED', error: 'Use o acesso por conta Verto enviado ao e-mail autorizado.' });
+  });
+  app.post('/api/external/evolution/:publicId/verify-code', portalActionLimiter, noStoreDynamicResponse, async (_req: any, res) => {
+    return res.status(410).json({ success: false, code: 'EXTERNAL_TIMELINE_OTP_RETIRED', error: 'Use o acesso por conta Verto enviado ao e-mail autorizado.' });
+  });
 
+  app.post('/api/external/auth/login', authLoginLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Login da Rede de cuidado')) return;
+      const email = sanitizeEmail(req.body?.email);
+      const password = typeof req.body?.password === 'string' ? req.body.password : '';
+      const publicId = sanitizeString(req.body?.publicId || req.body?.public_id, 120);
+      const activationToken = typeof (req.body?.activationToken || req.body?.activation_token) === 'string' ? String(req.body?.activationToken || req.body?.activation_token) : '';
+      if (!email || !password || !supabaseAuthClient) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
+
+      let loadedForLink: any = null;
+      let validatedToken: any = null;
+      if (publicId) {
+        if (!isUuid(publicId)) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
+        loadedForLink = await loadActiveExternalEvolutionShare(publicId);
+        if (!loadedForLink || sanitizeEmail(loadedForLink.grant.recipient_email) !== email) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
+        if (activationToken) validatedToken = await validateExternalEvolutionActivationToken(publicId, activationToken);
+      }
+
+      const signIn = await supabaseAuthClient.auth.signInWithPassword({ email, password });
+      const authUser = signIn.data?.user || null;
+      if (signIn.error || !authUser?.id || sanitizeEmail(authUser.email) !== email) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
+      const account = await ensureExternalProfessionalAccountForAuthUser(authUser, sanitizeString(loadedForLink?.careContact?.professional_name, 180) || null);
+      await bindExternalProfessionalAccount(account.id);
+      if (validatedToken?.tokenHash) {
+        const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', { p_public_id: publicId, p_token_hash: validatedToken.tokenHash, p_account_id: account.id });
+        if (consumed.error && !sanitizeString(consumed.error?.message, 220).includes('EXPIRED_OR_USED')) throw consumed.error;
+      }
+      await setExternalClinicalIdentitySession(req, account);
+      return res.json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || null, redirectPublicId: isUuid(publicId) ? publicId : null } });
+    } catch (error: any) {
+      const message = sanitizeString(error?.message || String(error), 220);
+      if (message.includes('NO_ACTIVE_SHARES')) return res.status(403).json({ success: false, code: 'EXTERNAL_NO_ACTIVE_SHARES', error: 'Não há compartilhamentos ativos para esta conta.' });
+      return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
+    }
+  });
+
+  app.post('/api/external/evolution/:publicId/activate', authLoginLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Ativação da Rede de cuidado')) return;
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const password = validateStrongPassword(req.body?.password);
+      const validated = await validateExternalEvolutionActivationToken(publicId, req.body?.activationToken || req.body?.activation_token);
+      if (!validated) return res.status(401).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_INVALID', error: 'Este acesso expirou ou já foi utilizado. Solicite um novo link.' });
+      if (!password) return res.status(400).json({ success: false, code: 'PASSWORD_POLICY_INVALID', error: 'Use uma senha de 12 a 128 caracteres com maiúscula, minúscula, número e símbolo.' });
+      const email = sanitizeEmail(validated.loaded.grant.recipient_email);
+      const existingAuth = await findAuthUserByEmail(email);
+      if (existingAuth?.id) return res.status(409).json({ success: false, code: 'EXTERNAL_ACCOUNT_EXISTS_LOGIN_REQUIRED', error: 'Esta conta já existe. Entre com sua senha para continuar.' });
+
+      const created = await supabase.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+        user_metadata: { external_clinical_access: true },
+      });
+      if (created.error || !created.data?.user?.id) {
+        const duplicate = /already\s+(registered|exists)|user\s+already\s+registered|email.*already/i.test(String(created.error?.message || ''));
+        if (duplicate) return res.status(409).json({ success: false, code: 'EXTERNAL_ACCOUNT_EXISTS_LOGIN_REQUIRED', error: 'Esta conta já existe. Entre com sua senha para continuar.' });
+        throw created.error || new Error('EXTERNAL_AUTH_CREATE_FAILED');
+      }
+      invalidateAuthUserEmailCache(email);
+      const account = await ensureExternalProfessionalAccountForAuthUser(created.data.user, sanitizeString(validated.loaded.careContact?.professional_name, 180) || null);
+      const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', { p_public_id: publicId, p_token_hash: validated.tokenHash, p_account_id: account.id });
+      if (consumed.error) throw consumed.error;
+      await bindExternalProfessionalAccount(account.id);
+      await setExternalClinicalIdentitySession(req, account);
+      return res.status(201).json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || null } });
+    } catch (error: any) {
+      const message = sanitizeString(error?.message || String(error), 220);
+      if (message.includes('EXPIRED_OR_USED')) return res.status(409).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_USED', error: 'Este acesso já foi utilizado. Entre com sua senha ou solicite um novo link.' });
+      return res.status(500).json({ success: false, error: 'Não foi possível criar seu acesso agora.' });
+    }
+  });
+
+  app.post('/api/external/auth/session', authLoginLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 12 * 1024, 'Sessão da Rede de cuidado')) return;
+      const accessToken = typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : '';
+      const publicId = sanitizeString(req.body?.publicId || req.body?.public_id, 120);
+      const activationToken = typeof (req.body?.activationToken || req.body?.activation_token) === 'string'
+        ? String(req.body?.activationToken || req.body?.activation_token).trim()
+        : '';
+      if (!accessToken || accessToken.length > 8192) {
+        return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_SESSION_INVALID', error: 'Faça login para continuar.' });
+      }
+      const tokenMatch = tokenMatchesCurrentProject(accessToken);
+      if (!tokenMatch.ok) {
+        return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_PROJECT_MISMATCH', error: 'Sessão inválida para este ambiente.' });
+      }
+      const verified = await getUserFromAccessToken(accessToken);
+      const authUser = verified.user;
+      const authEmail = sanitizeEmail(authUser?.email);
+      if (!authUser?.id || !authEmail) {
+        return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_SESSION_INVALID', error: 'Faça login para continuar.' });
+      }
+
+      let loadedForLink: any = null;
+      let validatedToken: any = null;
+      if (publicId) {
+        if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+        loadedForLink = await loadActiveExternalEvolutionShare(publicId);
+        if (!loadedForLink) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+        if (sanitizeEmail(loadedForLink.grant.recipient_email) !== authEmail) {
+          return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
+        }
+        if (activationToken) {
+          validatedToken = await validateExternalEvolutionActivationToken(publicId, activationToken);
+          if (!validatedToken) {
+            return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
+          }
+        }
+      }
+
+      const account = await ensureExternalProfessionalAccountForAuthUser(
+        authUser,
+        sanitizeString(loadedForLink?.careContact?.professional_name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name, 180) || null,
+      );
+      await bindExternalProfessionalAccount(account.id);
+      if (validatedToken?.tokenHash && publicId) {
+        const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', {
+          p_public_id: publicId,
+          p_token_hash: validatedToken.tokenHash,
+          p_account_id: account.id,
+        });
+        if (consumed.error && !sanitizeString(consumed.error?.message, 220).includes('EXPIRED_OR_USED')) throw consumed.error;
+      }
+      await setExternalClinicalIdentitySession(req, account);
+      return res.json({
+        success: true,
+        data: {
+          email: account.normalized_email,
+          displayName: account.display_name || null,
+          redirectPublicId: isUuid(publicId) ? publicId : null,
+        },
+      });
+    } catch (error: any) {
+      const message = sanitizeString(error?.message || String(error), 220);
+      if (message.includes('NO_ACTIVE_SHARES')) {
+        return res.status(403).json({ success: false, code: 'EXTERNAL_NO_ACTIVE_SHARES', error: 'Não há compartilhamentos ativos para esta conta.' });
+      }
+      if (message.includes('EXTERNAL_EMAIL_ACCOUNT_CONFLICT') || message.includes('EXTERNAL_AUTH_EMAIL_CHANGED_REQUIRES_REVIEW')) {
+        return res.status(409).json({ success: false, code: 'EXTERNAL_AUTH_IDENTITY_CONFLICT', error: 'Não foi possível vincular esta identidade automaticamente.' });
+      }
+      return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_SESSION_INVALID', error: 'Faça login para continuar.' });
+    }
+  });
+
+  app.post('/api/external/auth/logout', noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      if (req?.session) delete req.session.externalClinicalIdentity;
+      await saveExpressSession(req);
+    } catch { /* session cleanup is best-effort */ }
+    return res.json({ success: true });
+  });
+
+  app.get('/api/external/auth/me', noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const identity = await resolveExternalProfessionalAccount(req);
+      if (!identity.account) return res.status(401).json({ success: false, error: 'Faça login para continuar.' });
+      return res.json({ success: true, data: { email: identity.account.normalized_email, displayName: identity.account.display_name || null } });
+    } catch {
+      return res.status(401).json({ success: false, error: 'Faça login para continuar.' });
+    }
+  });
+
+  app.patch('/api/external/auth/me', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 4 * 1024, 'Perfil externo')) return;
+      const identity = await resolveExternalProfessionalAccount(req);
+      if (!identity.account) return res.status(401).json({ success: false, error: 'Faça login para continuar.' });
+      const displayName = sanitizeString(req.body?.displayName || req.body?.display_name, 180);
+      if (!displayName) return res.status(400).json({ success: false, error: 'Informe seu nome.' });
+      const { data, error } = await supabase.from('external_professional_accounts').update({ display_name: displayName, updated_at: new Date().toISOString() }).eq('id', identity.account.id).eq('auth_user_id', identity.account.auth_user_id).select('normalized_email,display_name').single();
+      if (error) throw error;
+      return res.json({ success: true, data: { email: data.normalized_email, displayName: data.display_name } });
+    } catch {
+      return res.status(500).json({ success: false, error: 'Não foi possível atualizar seu perfil.' });
+    }
+  });
+
+  const loadExternalCareNetworkCentral = async (accountId: string, limit: number, offset: number) => {
     const { data: grants, error: grantsError } = await supabase
       .from('patient_evolution_share_grants')
-      .select('id,timeline_item_id,recipient_email,status,created_at')
-      .eq('clinic_id', clinicId)
-      .eq('patient_id', patientId)
+      .select('id,public_id,timeline_item_id,clinic_id,patient_id,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,last_invited_at,created_at')
+      .eq('external_account_id', accountId)
       .eq('status', 'ACTIVE')
-      .eq('recipient_email', email)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit);
     if (grantsError) throw grantsError;
-
-    const grantByItem = new Map<string, any>();
-    for (const grant of grants || []) {
-      const itemId = sanitizeString(grant?.timeline_item_id, 120);
-      if (isUuid(itemId)) grantByItem.set(itemId, grant);
-    }
-    const itemIds = Array.from(grantByItem.keys());
-    if (!itemIds.length) return [];
-
-    const { data: items, error: itemsError } = await supabase
-      .from('patient_evolution_timeline_items')
-      .select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at')
-      .in('id', itemIds)
-      .eq('clinic_id', clinicId)
-      .eq('patient_id', patientId)
-      .is('archived_at', null)
-      .order('month_key', { ascending: true })
-      .order('slot', { ascending: true });
-    if (itemsError) throw itemsError;
-
-    const fileIds = (items || []).map((item: any) => sanitizeString(item?.patient_file_id, 120)).filter(isUuid);
-    const fileResult = fileIds.length
-      ? await supabase
-          .from('patient_files')
-          .select('id,file_name,mime_type,file_size_bytes,created_at')
-          .in('id', fileIds)
-          .eq('clinic_id', clinicId)
-          .eq('patient_id', patientId)
-      : { data: [], error: null } as any;
-    if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
-    const fileById = new Map((fileResult.data || []).map((file: any) => [String(file.id), file]));
-
-    const months = new Map<string, any[]>();
-    for (const item of items || []) {
-      if (!grantByItem.has(String(item.id))) continue;
-      const monthKey = sanitizeString(item.month_key, 20).slice(0, 7);
-      if (!/^\d{4}-\d{2}$/.test(monthKey)) continue;
-      const file = item.patient_file_id ? fileById.get(String(item.patient_file_id)) : null;
-      const row = {
-        id: item.id,
+    const rawRows = grants || [];
+    const hasMore = rawRows.length > limit;
+    const rows = rawRows.slice(0, limit);
+    if (!rows.length) return { items: [], nextOffset: null };
+    const clinicIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.clinic_id, 120)).filter(isUuid)));
+    const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter(isUuid)));
+    const itemIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.timeline_item_id, 120)).filter(isUuid)));
+    const contactIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.care_network_contact_id, 120)).filter(isUuid)));
+    const grantIds = rows.map((row: any) => sanitizeString(row.id, 120)).filter(isUuid);
+    const [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult] = await Promise.all([
+      supabase.from('clinics').select('id,name').in('id', clinicIds),
+      supabase.from('patients').select('id,clinic_id,name,is_active,deleted_at,archived_at,status').in('id', patientIds),
+      supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,subject,created_at,archived_at').in('id', itemIds),
+      contactIds.length ? supabase.from('patient_care_network_contacts').select('id,clinic_id,patient_id,archived_at').in('id', contactIds) : Promise.resolve({ data: [], error: null } as any),
+      grantIds.length ? supabase.from('patient_evolution_external_comments').select('id,grant_id').in('grant_id', grantIds) : Promise.resolve({ data: [], error: null } as any),
+    ]);
+    for (const result of [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult]) if (result.error) throw result.error;
+    const clinics = new Map((clinicsResult.data || []).map((row: any) => [String(row.id), row]));
+    const patients = new Map((patientsResult.data || []).map((row: any) => [`${row.clinic_id}:${row.id}`, row]));
+    const timelineItemsByScope = new Map((itemsResult.data || []).map((row: any) => [`${row.clinic_id}:${row.patient_id}:${row.id}`, row]));
+    const contacts = new Map((contactsResult.data || []).map((row: any) => [String(row.id), row]));
+    const commentCountByGrant = new Map<string, number>();
+    for (const comment of commentsResult.data || []) commentCountByGrant.set(String(comment.grant_id), (commentCountByGrant.get(String(comment.grant_id)) || 0) + 1);
+    const sharedItems = rows.flatMap((grant: any) => {
+      const patient = patients.get(`${grant.clinic_id}:${grant.patient_id}`);
+      const item = timelineItemsByScope.get(`${grant.clinic_id}:${grant.patient_id}:${grant.timeline_item_id}`);
+      const contact = grant.care_network_contact_id ? contacts.get(String(grant.care_network_contact_id)) : null;
+      const patientEligible = patient && patient.is_active !== false && !patient.deleted_at && !patient.archived_at && sanitizeString(patient.status, 40).toUpperCase() !== PATIENT_STATUS_ARCHIVED;
+      const contactEligible = Boolean(grant.care_network_contact_id && contact && !contact.archived_at && String(contact.clinic_id) === String(grant.clinic_id) && String(contact.patient_id) === String(grant.patient_id));
+      if (!patientEligible || !item || item.archived_at || !contactEligible) return [];
+      return [{
+        grantId: grant.id,
+        publicId: grant.public_id,
+        clinicId: grant.clinic_id,
+        clinicName: sanitizeString(clinics.get(String(grant.clinic_id))?.name, 180) || 'Clínica',
+        patientId: grant.patient_id,
+        patientName: sanitizeString(patient.name, 180) || 'Paciente',
+        timelineItemId: grant.timeline_item_id,
         monthKey: item.month_key,
-        slot: item.slot,
         subject: item.subject,
-        content: item.content || '',
-        createdAt: item.created_at,
-        attachment: file ? {
-          id: file.id,
-          fileName: file.file_name,
-          mimeType: file.mime_type,
-          sizeBytes: file.file_size_bytes,
-          createdAt: file.created_at,
-        } : null,
-      };
-      const current = months.get(monthKey) || [];
-      current.push(row);
-      months.set(monthKey, current);
-    }
-
-    return Array.from(months.entries())
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([monthKey, monthItems]) => ({
-        monthKey,
-        items: monthItems.sort((left: any, right: any) => Number(left.slot || 0) - Number(right.slot || 0)),
-      }));
+        canComment: grant.can_comment === true,
+        firstViewedAt: grant.first_viewed_at || null,
+        lastViewedAt: grant.last_viewed_at || null,
+        viewCount: Math.max(0, Number(grant.view_count || 0)),
+        commentCount: commentCountByGrant.get(String(grant.id)) || 0,
+        sharedAt: grant.created_at,
+      }];
+    });
+    return { items: sharedItems, nextOffset: hasMore ? offset + limit : null };
   };
+
+  app.get('/api/external/care-network/shared', noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      const identity = await resolveExternalProfessionalAccount(req);
+      if (!identity.account) return res.status(401).json({ success: false, error: 'Faça login para continuar.' });
+      const limit = parseBoundedListLimit(req.query?.limit, 40, 100);
+      const offset = Math.max(0, Math.min(10_000, Number.parseInt(String(req.query?.offset || '0'), 10) || 0));
+      const data = await loadExternalCareNetworkCentral(identity.account.id, limit, offset);
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar seus compartilhamentos.' });
+    }
+  });
 
   app.get('/api/external/evolution/:publicId/content', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     try {
       const publicId = sanitizeString(req.params?.publicId, 120);
       if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
-      const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
-      if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
-      const timeline = await loadExternalEvolutionTimelineForRecipient(loaded);
-      if (!timeline.length) return res.status(404).json({ success: false, error: 'Nenhum conteúdo compartilhado está disponível para este acesso.' });
-      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'VIEWED', metadata: { visibleMonthCount: timeline.length } });
+      const authorized = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!authorized.loaded || !authorized.account) {
+        if (authorized.mismatch) return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
+        return res.status(401).json({ success: false, code: 'EXTERNAL_AUTH_REQUIRED', error: 'Faça login para acessar este compartilhamento.' });
+      }
+      const { loaded, account } = authorized;
+      const fileResult = isUuid(loaded.item.patient_file_id)
+        ? await supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,created_at').eq('id', loaded.item.patient_file_id).eq('clinic_id', loaded.grant.clinic_id).eq('patient_id', loaded.grant.patient_id).maybeSingle()
+        : { data: null, error: null } as any;
+      if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
+      const commentsResult = await supabase.from('patient_evolution_external_comments').select('id,body,created_at').eq('grant_id', loaded.grant.id).eq('external_account_id', account.id).order('created_at', { ascending: true }).limit(200);
+      if (commentsResult.error && !isMissingRelationError(commentsResult.error)) throw commentsResult.error;
+      const viewResult = await supabase.rpc('record_external_evolution_view_v1', { p_grant_id: loaded.grant.id, p_external_account_id: account.id });
+      if (viewResult.error) throw viewResult.error;
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'VIEWED', metadata: { authenticatedExternalAccount: true } });
+      const attachment = fileResult.data?.id ? { id: fileResult.data.id, fileName: fileResult.data.file_name, mimeType: fileResult.data.mime_type, sizeBytes: fileResult.data.file_size_bytes, createdAt: fileResult.data.created_at } : null;
       return res.json({
         success: true,
         data: {
@@ -37138,74 +37631,72 @@ async function startServer() {
           patientName: sanitizeString(loaded.patient?.name, 180) || 'Paciente',
           sharedWith: sanitizeEmail(loaded.grant.recipient_email),
           entryItemId: loaded.item.id,
-          timeline,
-          readOnly: true,
+          item: {
+            id: loaded.item.id, monthKey: loaded.item.month_key, slot: loaded.item.slot, subject: loaded.item.subject,
+            content: loaded.item.content || '', createdAt: loaded.item.created_at, attachment,
+          },
+          canComment: loaded.grant.can_comment === true,
+          comments: (commentsResult.data || []).map((comment: any) => ({ id: comment.id, body: comment.body, createdAt: comment.created_at })),
+          view: viewResult.data || null,
         }
       });
     } catch (error: any) {
-      return res.status(500).json({ success: false, error: 'Não foi possível carregar a timeline compartilhada.' });
+      const message = sanitizeString(error?.message || String(error), 220);
+      if (message.includes('ACCESS_DENIED') || message.includes('PATIENT_INELIGIBLE') || message.includes('ITEM_ARCHIVED') || message.includes('CARE_LINK_INACTIVE')) {
+        return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      }
+      return res.status(500).json({ success: false, error: 'Não foi possível carregar o conteúdo compartilhado.' });
+    }
+  });
+
+  app.post('/api/external/evolution/:publicId/comments', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Comentário externo')) return;
+      const publicId = sanitizeString(req.params?.publicId, 120);
+      const authorized = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!authorized.loaded || !authorized.account) return res.status(authorized.mismatch ? 403 : 401).json({ success: false, code: authorized.mismatch ? 'EXTERNAL_ACCOUNT_MISMATCH' : 'EXTERNAL_AUTH_REQUIRED', error: 'Acesso não autorizado.' });
+      const body = normalizeExternalCommentBody(req.body?.comment || req.body?.body);
+      const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key, 120);
+      if (!body) return res.status(400).json({ success: false, code: 'EXTERNAL_COMMENT_INVALID', error: `O comentário deve ter entre 1 e ${EXTERNAL_EVOLUTION_COMMENT_MAX_LENGTH} caracteres e não pode conter HTML.` });
+      if (idempotencyKey.length < 8) return res.status(400).json({ success: false, code: 'EXTERNAL_COMMENT_IDEMPOTENCY_REQUIRED', error: 'Não foi possível identificar este envio. Atualize a página e tente novamente.' });
+      const { data, error } = await supabase.rpc('append_external_evolution_comment_v1', {
+        p_grant_id: authorized.loaded.grant.id, p_external_account_id: authorized.account.id, p_body: body, p_idempotency_key: idempotencyKey,
+      });
+      if (error) {
+        const message = sanitizeString(error?.message || String(error), 220);
+        if (message.includes('NOT_ALLOWED') || message.includes('PATIENT_INELIGIBLE') || message.includes('ITEM_ARCHIVED') || message.includes('CARE_LINK_INACTIVE')) return res.status(403).json({ success: false, error: 'Comentários não estão disponíveis para este compartilhamento.' });
+        throw error;
+      }
+      return res.status(data?.created === false ? 200 : 201).json({ success: true, data });
+    } catch {
+      return res.status(500).json({ success: false, error: 'Não foi possível enviar o comentário.' });
     }
   });
 
   const openExternalEvolutionAuthorizedFile = async (req: any, res: any, publicId: string, requestedItemId?: string | null) => {
     try {
       if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
-      const loaded = await resolveExternalEvolutionAuthorizedShare(req, publicId);
-      if (!loaded) return res.status(401).json({ success: false, code: 'EMAIL_VERIFICATION_REQUIRED', error: 'Confirme o e-mail autorizado para continuar.' });
+      const authorized = await resolveExternalEvolutionAuthorizedShare(req, publicId);
+      if (!authorized.loaded || !authorized.account) return res.status(authorized.mismatch ? 403 : 401).json({ success: false, error: 'Documento indisponível.' });
+      const { loaded } = authorized;
       const itemId = sanitizeString(requestedItemId || loaded.item?.id, 120);
-      if (!isUuid(itemId)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
-
-      const email = sanitizeEmail(loaded.grant.recipient_email);
-      const { data: authorizedGrant, error: grantError } = await supabase
-        .from('patient_evolution_share_grants')
-        .select('id,timeline_item_id,clinic_id,patient_id,recipient_email,status')
-        .eq('timeline_item_id', itemId)
-        .eq('clinic_id', loaded.grant.clinic_id)
-        .eq('patient_id', loaded.grant.patient_id)
-        .eq('status', 'ACTIVE')
-        .eq('recipient_email', email)
-        .maybeSingle();
-      if (grantError || !authorizedGrant?.id) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
-
-      const { data: item, error: itemError } = await supabase
-        .from('patient_evolution_timeline_items')
-        .select('id,patient_file_id,clinic_id,patient_id,archived_at')
-        .eq('id', itemId)
-        .eq('clinic_id', loaded.grant.clinic_id)
-        .eq('patient_id', loaded.grant.patient_id)
-        .is('archived_at', null)
-        .maybeSingle();
-      if (itemError || !item?.id || !isUuid(item.patient_file_id)) return res.status(404).json({ success: false, error: 'Este registro não possui documento anexado.' });
-
-      const { data: file, error } = await supabase
-        .from('patient_files')
-        .select('id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes')
-        .eq('id', item.patient_file_id)
-        .eq('clinic_id', loaded.grant.clinic_id)
-        .eq('patient_id', loaded.grant.patient_id)
-        .maybeSingle();
+      if (!isUuid(itemId) || itemId !== sanitizeString(loaded.item?.id, 120)) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
+      if (!isUuid(loaded.item?.patient_file_id)) return res.status(404).json({ success: false, error: 'Este registro não possui documento anexado.' });
+      const { data: file, error } = await supabase.from('patient_files').select('id,storage_bucket,storage_path,file_name,mime_type,file_size_bytes').eq('id', loaded.item.patient_file_id).eq('clinic_id', loaded.grant.clinic_id).eq('patient_id', loaded.grant.patient_id).maybeSingle();
       if (error || !file?.id || !file.storage_path) return res.status(404).json({ success: false, error: 'Documento indisponível.' });
       const bucket = sanitizeString(file.storage_bucket, 120) || 'patient-files-private';
       const { data: signed, error: signedError } = await supabase.storage.from(bucket).createSignedUrl(sanitizeString(file.storage_path, 800), 60 * 5);
       if (signedError || !signed?.signedUrl) return res.status(503).json({ success: false, error: 'Não foi possível abrir o documento agora.' });
-      await persistExternalEvolutionAccessAudit({ req, grant: authorizedGrant, item, action: 'FILE_ACCESSED' });
+      await persistExternalEvolutionAccessAudit({ req, grant: loaded.grant, item: loaded.item, action: 'FILE_ACCESSED', metadata: { authenticatedExternalAccount: true } });
       return res.json({ success: true, data: { url: sanitizeUrl(signed.signedUrl), fileName: file.file_name, expiresInSeconds: 300 } });
-    } catch (error: any) {
+    } catch {
       return res.status(500).json({ success: false, error: 'Não foi possível abrir o documento.' });
     }
   };
 
   app.get('/api/external/evolution/:publicId/file/:itemId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
-    return openExternalEvolutionAuthorizedFile(
-      req,
-      res,
-      sanitizeString(req.params?.publicId, 120),
-      sanitizeString(req.params?.itemId, 120)
-    );
+    return openExternalEvolutionAuthorizedFile(req, res, sanitizeString(req.params?.publicId, 120), sanitizeString(req.params?.itemId, 120));
   });
-
-  // Backward compatibility for links opened before Timeline v2: the original
-  // item remains addressable while its grant is active.
   app.get('/api/external/evolution/:publicId/file', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     return openExternalEvolutionAuthorizedFile(req, res, sanitizeString(req.params?.publicId, 120), null);
   });
@@ -38952,11 +39443,8 @@ async function startServer() {
       );
       const canRequestReschedule = await readClinicPatientReschedulePolicy(reminderClinicId);
 
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const result = await sendAppointmentNotification({
         supabase,
-        deploymentEnv,
         patientId,
         patientEmail,
         appointment: {
@@ -46258,6 +46746,71 @@ async function startServer() {
       return res.json({ success: true, data: { id: data.id, readAt: data.read_at } });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/clinical-note-mentions/:mentionId/read [PATCH]', error, { actorId, mentionId, requestId: requestIdForLogs(req) });
+    }
+  });
+
+
+  app.get('/api/clinical-notifications', checkAuth, async (req: any, res) => {
+    const actorId = sanitizeString(req.session?.user?.id, 120);
+    const activeClinicId = sanitizeString(currentClinicId(req.session?.user), 120);
+    const limit = parseBoundedListLimit(req.query?.limit, 16, 40);
+    if (!isUuid(actorId)) return res.status(401).json({ success: false, error: 'Sessão inválida.' });
+    try {
+      const unreadOnly = String(req.query?.unreadOnly || '').toLowerCase() === 'true';
+      let mentionQuery = supabase.from('clinical_note_mentions').select('id,clinic_id,patient_id,note_id,mentioned_by,note_subject,note_excerpt,read_at,created_at').eq('recipient_user_id', actorId).order('created_at', { ascending: false }).limit(limit);
+      let inboxQuery = supabase.from('clinical_inbox_notifications').select('id,clinic_id,patient_id,timeline_item_id,grant_id,comment_id,event_type,actor_label,read_at,created_at').eq('recipient_user_id', actorId).order('created_at', { ascending: false }).limit(limit);
+      if (isUuid(activeClinicId)) inboxQuery = inboxQuery.eq('clinic_id', activeClinicId);
+      if (unreadOnly) { mentionQuery = mentionQuery.is('read_at', null); inboxQuery = inboxQuery.is('read_at', null); }
+      const [mentionResult, inboxResult] = await Promise.all([mentionQuery, inboxQuery]);
+      if (mentionResult.error && !isMissingRelationError(mentionResult.error)) throw mentionResult.error;
+      if (inboxResult.error && !isMissingRelationError(inboxResult.error)) throw inboxResult.error;
+      const mentions = mentionResult.data || [];
+      const inbox = inboxResult.data || [];
+      const patientIds = Array.from(new Set([...mentions, ...inbox].map((row: any) => sanitizeString(row.patient_id, 120)).filter(isUuid)));
+      const actorIds = Array.from(new Set(mentions.map((row: any) => sanitizeString(row.mentioned_by, 120)).filter(isUuid)));
+      const [patientsResult, usersResult] = await Promise.all([
+        patientIds.length ? supabase.from('patients').select('id,name').in('id', patientIds) : Promise.resolve({ data: [], error: null } as any),
+        actorIds.length ? supabase.from('users').select('id,name').in('id', actorIds) : Promise.resolve({ data: [], error: null } as any),
+      ]);
+      if (patientsResult.error) throw patientsResult.error;
+      if (usersResult.error) throw usersResult.error;
+      const patientNames = new Map((patientsResult.data || []).map((row: any) => [String(row.id), sanitizeString(row.name, 180)]));
+      const actorNames = new Map((usersResult.data || []).map((row: any) => [String(row.id), sanitizeString(row.name, 180)]));
+      const data = [
+        ...mentions.map((row: any) => ({
+          id: row.id, source: 'mention', eventType: 'CLINICAL_NOTE_MENTION', patientId: row.patient_id, noteId: row.note_id,
+          patientName: patientNames.get(String(row.patient_id)) || 'Paciente', actorName: actorNames.get(String(row.mentioned_by)) || 'Profissional da equipe',
+          subject: row.note_subject || null, excerpt: row.note_excerpt || null, readAt: row.read_at || null, createdAt: row.created_at,
+        })),
+        ...inbox.map((row: any) => ({
+          id: row.id, source: 'clinical_inbox', eventType: row.event_type, patientId: row.patient_id, timelineItemId: row.timeline_item_id,
+          grantId: row.grant_id, commentId: row.comment_id, patientName: patientNames.get(String(row.patient_id)) || 'Paciente',
+          actorName: sanitizeString(row.actor_label, 180) || 'Profissional externo', readAt: row.read_at || null, createdAt: row.created_at,
+        })),
+      ].sort((a: any, b: any) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()).slice(0, limit);
+      return res.json({ success: true, data });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinical-notifications [GET]', error, { actorId, limit, requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.patch('/api/clinical-notifications/:notificationId/read', checkAuth, async (req: any, res) => {
+    const actorId = sanitizeString(req.session?.user?.id, 120);
+    const activeClinicId = sanitizeString(currentClinicId(req.session?.user), 120);
+    const notificationId = sanitizeString(req.params?.notificationId, 120);
+    const source = sanitizeString(req.body?.source || req.query?.source, 40);
+    if (!isUuid(actorId) || !isUuid(notificationId)) return res.status(400).json({ success: false, error: 'Notificação inválida.' });
+    try {
+      const now = new Date().toISOString();
+      const table = source === 'clinical_inbox' ? 'clinical_inbox_notifications' : 'clinical_note_mentions';
+      let updateQuery = supabase.from(table).update({ read_at: now, updated_at: now }).eq('id', notificationId).eq('recipient_user_id', actorId);
+      if (source === 'clinical_inbox' && isUuid(activeClinicId)) updateQuery = updateQuery.eq('clinic_id', activeClinicId);
+      const { data, error } = await updateQuery.select('id,read_at').maybeSingle();
+      if (error) throw error;
+      if (!data?.id) return res.status(404).json({ success: false, error: 'Notificação não encontrada.' });
+      return res.json({ success: true, data: { id: data.id, readAt: data.read_at } });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/clinical-notifications/:notificationId/read [PATCH]', error, { actorId, notificationId, requestId: requestIdForLogs(req) });
     }
   });
 
@@ -54323,8 +54876,6 @@ async function startServer() {
 
   app.get('/api/portal/notifications', checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const userId = sanitizeString(req.session.user?.id, 120);
       const userEmail = sanitizeEmail(req.session.user?.email);
       const patientIds = await getPortalPatientIdsForUser(req.session.user);
@@ -54339,7 +54890,6 @@ async function startServer() {
       let query = supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
-        .eq('deployment_env', deploymentEnv)
         .in('patient_id', patientIds)
         .order('created_at', { ascending: false })
         .limit(Math.min(200, limit * 4 + 1));
@@ -54610,8 +55160,6 @@ async function startServer() {
 
   app.patch('/api/portal/notifications/:notificationId', checkAuth, requirePatientPortalModule('appointments_communication'), portalActionLimiter, async (req: any, res) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const notificationId = sanitizeString(req.params.notificationId, 120);
       const userId = sanitizeString(req.session.user?.id, 120);
       const userEmail = sanitizeEmail(req.session.user?.email);
@@ -54621,7 +55169,6 @@ async function startServer() {
       const { data: existing, error: existingError } = await supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, recipient_user_id, recipient_email, type, scheduled_for, read_at, acknowledged_at, metadata')
-        .eq('deployment_env', deploymentEnv)
         .eq('id', notificationId)
         .limit(1)
         .maybeSingle();
@@ -54650,7 +55197,6 @@ async function startServer() {
           let siblingQuery = supabase
             .from('portal_notifications')
             .select('id, scheduled_for, metadata')
-            .eq('deployment_env', deploymentEnv)
             .eq('patient_id', existing.patient_id)
             .eq('type', existing.type)
             .is('acknowledged_at', null)
@@ -54692,7 +55238,6 @@ async function startServer() {
           ...(acknowledge ? { acknowledged_at: existing.acknowledged_at || now } : {}),
           updated_at: now
         })
-        .eq('deployment_env', deploymentEnv)
         .in('id', targetNotificationIds)
         .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata');
       if (error) throw error;
@@ -54844,7 +55389,6 @@ async function startServer() {
     action: string;
     notificationId?: unknown;
   }) => {
-    if (!vertoDeploymentEnv) return { ok: true, notificationIds: [] as string[] };
     const appointmentId = sanitizeString(params.appointment?.id, 120);
     const patientId = sanitizeString(params.appointment?.patient_id || params.appointment?.patientId, 120);
     if (!isUuid(appointmentId) || !isUuid(patientId)) return { ok: true, notificationIds: [] as string[] };
@@ -54862,7 +55406,6 @@ async function startServer() {
         acknowledged_at: now,
         updated_at: now
       })
-      .eq('deployment_env', vertoDeploymentEnv)
       .eq('appointment_id', appointmentId)
       .eq('patient_id', patientId);
     if (requestedNotificationId) query = query.eq('id', requestedNotificationId);
@@ -54883,7 +55426,6 @@ async function startServer() {
           read_at: now,
           acknowledged_at: now
         })
-        .eq('deployment_env', vertoDeploymentEnv)
         .eq('appointment_id', appointmentId)
         .eq('patient_id', patientId);
       if (requestedNotificationId) fallbackQuery = fallbackQuery.eq('id', requestedNotificationId);
@@ -54913,7 +55455,6 @@ async function startServer() {
   };
 
   const acknowledgeStaleAppointmentReminderNotifications = async (appointmentOrAppointments: any) => {
-    if (!vertoDeploymentEnv) return [] as string[];
     const appointments = (Array.isArray(appointmentOrAppointments) ? appointmentOrAppointments : [appointmentOrAppointments])
       .filter(Boolean);
     const appointmentIds = Array.from(new Set(
@@ -54941,7 +55482,6 @@ async function startServer() {
           acknowledged_at: now,
           ...(includeUpdatedAt ? { updated_at: now } : {})
         })
-        .eq('deployment_env', vertoDeploymentEnv)
         .in('appointment_id', appointmentIds)
         .in('patient_id', patientIds)
         .in('type', reminderTypes)
@@ -55978,10 +56518,6 @@ async function startServer() {
     scheduledStart: string;
   }) => {
     try {
-      if (!vertoDeploymentEnv) {
-        console.warn('[PortalReschedule] notificacao ignorada: VERTO_DEPLOYMENT_ENV ausente/invalida.');
-        return;
-      }
       const appointment = params.appointment || {};
       const patientId = sanitizeString(appointment?.patient_id || appointment?.patientId || params.originalAppointment?.patient_id || params.originalAppointment?.patientId, 120);
       if (!isUuid(patientId)) return;
@@ -56010,7 +56546,6 @@ async function startServer() {
       const sentAt = new Date().toISOString();
       if (recipientUserId || recipientEmail) {
         const notificationPayload = cleanObject({
-          deployment_env: vertoDeploymentEnv,
           organization_id: isUuid(params.organizationId) ? params.organizationId : clinicBranding.id || clinicId || null,
           clinic_id: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
           recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -56022,9 +56557,8 @@ async function startServer() {
           message,
           sent_at: sentAt,
           scheduled_for: scheduledAt || sentAt,
-          idempotency_key: `${vertoDeploymentEnv}:${sanitizeString(appointment?.id || params.originalAppointment?.id, 120)}:reschedule_approved:${scheduledAt || sentAt}`,
+          idempotency_key: `${sanitizeString(appointment?.id || params.originalAppointment?.id, 120)}:reschedule_approved:${scheduledAt || sentAt}`,
           metadata: sanitizeClinicalPayload({
-            deploymentEnv: vertoDeploymentEnv,
             reminderKind: 'reschedule_approved',
             scheduledAt,
             clinicName,
@@ -56035,14 +56569,13 @@ async function startServer() {
         });
         const { error } = await supabase
           .from('portal_notifications')
-          .upsert(notificationPayload, { onConflict: 'deployment_env,idempotency_key' });
+          .upsert(notificationPayload, { onConflict: 'idempotency_key' });
         if (error && !isMissingRelationError(error)) {
           console.warn('[PortalReschedule] internal notification skipped:', error.message);
         }
       }
       await sendAppointmentNotification({
         supabase,
-        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -56290,7 +56823,6 @@ async function startServer() {
         const notificationResult = await supabase
           .from('portal_notifications')
           .select('appointment_id')
-          .eq('deployment_env', vertoDeploymentEnv || '__disabled__')
           .in('patient_id', patientIds)
           .is('acknowledged_at', null)
           .limit(Math.min(200, limit * 4));
@@ -57708,13 +58240,10 @@ async function startServer() {
 
   app.get('/api/clinic/announcements', noStoreDynamicResponse, checkAuth, requireClinicModule('appointments_communication'), requireClinicCapability('communication.clinic_notifications.manage'), async (req: any, res) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const limit = Math.min(50, Math.max(1, Math.round(Number(req.query?.limit || 30) || 30)));
       const { data, error } = await supabase.from('clinic_announcements')
         .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at,updated_at')
-        .eq('deployment_env', deploymentEnv)
         .eq('clinic_id', clinicId).order('created_at', { ascending: false }).limit(limit);
       if (error) { if (isMissingRelationError(error)) return res.status(503).json({ success:false, error:'O módulo de avisos ainda não foi ativado no banco.' }); throw error; }
       return res.json({ success:true, data:data || [] });
@@ -57723,8 +58252,6 @@ async function startServer() {
 
   app.post('/api/clinic/announcements', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('appointments_communication'), requireClinicCapability('communication.clinic_notifications.manage'), async (req:any,res) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user),120);
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId,120);
       if(!isUuid(clinicId)) return res.status(400).json({success:false,error:'Clínica inválida.'});
@@ -57749,9 +58276,9 @@ async function startServer() {
       const normalizedScheduledFor = scheduledFor && new Date(scheduledFor).getTime() > Date.now() + 15_000 ? scheduledFor : null;
       const selectedIds=Array.from(new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((v:unknown)=>sanitizeString(v,120)).filter((v:string)=>isUuid(v)))).slice(0,500) as string[];
       if(audienceMode==='SELECTED' && !selectedIds.length) return res.status(400).json({success:false,error:'Selecione ao menos um paciente.'});
-      const idempotencyKey=`${deploymentEnv}:${sanitizeString(req.body?.idempotencyKey,100) || crypto.randomUUID()}`;
+      const idempotencyKey=sanitizeString(req.body?.idempotencyKey,120) || crypto.randomUUID();
       const announcementSelect='id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at';
-      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
+      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
       if(!existing.error && existing.data) return res.json({success:true,data:existing.data,duplicate:true});
       if(existing.error && !isMissingRelationError(existing.error)) throw existing.error;
       const context = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
@@ -57815,18 +58342,18 @@ async function startServer() {
       const deliveryRow=delivery.data && typeof delivery.data==='object' && !Array.isArray(delivery.data) ? delivery.data : {};
       const announcementId=sanitizeString(deliveryRow?.announcement_id || requestedAnnouncementId,120);
       if(deliveryRow?.created===false){
-        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
+        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
         if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true});
       }
 
       if(normalizedScheduledFor){
-        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
+        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
         if(scheduled.error) throw scheduled.error;
         return res.status(201).json({success:true,data:scheduled.data,scheduled:true});
       }
 
       const dispatched=await dispatchClinicAnnouncementNow(announcementId,'api_immediate');
-      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
+      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
       if(final.error) throw final.error;
       return res.status(201).json({
         success:true,
@@ -88929,8 +89456,6 @@ async function startServer() {
 
   app.post('/api/patient-finance/charges/:paymentId/reminder', portalActionLimiter, checkAuth, requireClinicCapability('finance.payments.edit'), async (req: any, res) => {
     try {
-      const deploymentEnv = requireNotificationDeploymentEnvironment(res);
-      if (!deploymentEnv) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const organizationId = clinicId;
       const paymentId = sanitizeString(req.params.paymentId, 120);
@@ -88994,10 +89519,9 @@ async function startServer() {
       const localDay = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
-      const idempotencyKey = `${deploymentEnv}:patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
+      const idempotencyKey = `patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
       const now = new Date().toISOString();
       const notificationPayload = cleanObject({
-        deployment_env: deploymentEnv,
         organization_id: organizationId,
         clinic_id: organizationId,
         recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -89011,7 +89535,6 @@ async function startServer() {
         scheduled_for: now,
         idempotency_key: idempotencyKey,
         metadata: sanitizeClinicalPayload({
-          deploymentEnv,
           paymentId,
           balance,
           dueDate: sanitizeDate(charge.due_date),
@@ -89038,7 +89561,6 @@ async function startServer() {
 
       await sendAppointmentNotification({
         supabase,
-        deploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -89170,18 +89692,6 @@ async function startServer() {
       .filter(Boolean)
   ));
   const isDuplicateFinancialSeriesError = (error: any) => sanitizeString(error?.code, 40) === '23505';
-  const CLINIC_RECURRING_COST_SELECT = 'id,name,amount,recurrence,starts_on,active,created_at,updated_at';
-  const clinicCostMonthRange = (value: unknown) => {
-    const rawMonthKey = String(value || '').trim();
-    const monthKey = rawMonthKey || new Date().toISOString().slice(0, 7);
-    if (!/^\d{4}-\d{2}$/.test(monthKey)) return null;
-    const [year, month] = monthKey.split('-').map(Number);
-    if (!year || month < 1 || month > 12) return null;
-    return {
-      monthKey,
-      end: new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10)
-    };
-  };
   const loadProfessionalPaymentIdentities = async (clinicId: string, professionalIds: string[]) => {
     const uniqueIds = Array.from(new Set(professionalIds.filter(isUuid)));
     if (uniqueIds.length === 0) return new Map<string, { name: string; specialty: string | null }>();
@@ -90088,113 +90598,6 @@ async function startServer() {
     } catch (error: any) {
       return sendRouteDbError(res, '/api/financial/entries [GET]', error, {
         limit: parseBoundedListLimit(req.query?.limit, 100, 200),
-        requestId: requestIdForLogs(req)
-      });
-    }
-  });
-
-  app.get('/api/financial/costs', checkAuth, requireClinicCapability('finance.entries.view'), async (req: any, res) => {
-    try {
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const monthRange = clinicCostMonthRange(req.query?.month);
-      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
-      if (!monthRange) return res.status(400).json({ success: false, error: 'Mês de referência inválido.' });
-
-      const result = await supabase
-        .from('clinic_recurring_costs')
-        .select(CLINIC_RECURRING_COST_SELECT)
-        .eq('clinic_id', clinicId)
-        .eq('active', true)
-        .lte('starts_on', monthRange.end)
-        .order('starts_on', { ascending: false })
-        .limit(200);
-      if (result.error) {
-        if (hasMissingFinancialSchema(result.error)) {
-          return res.json({ success: true, data: [], schemaPending: true });
-        }
-        throw result.error;
-      }
-      return res.json({ success: true, data: result.data || [], month: monthRange.monthKey });
-    } catch (error: any) {
-      return sendRouteDbError(res, '/api/financial/costs [GET]', error, {
-        requestId: requestIdForLogs(req)
-      });
-    }
-  });
-
-  app.post('/api/financial/costs', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
-    try {
-      if (!enforcePayloadLimit(req, res, 8 * 1024, 'Cadastro de custo')) return;
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const actorId = sanitizeString(req.session.user?.id, 120);
-      const id = sanitizeString(req.body?.id, 120);
-      const name = sanitizeString(req.body?.name, 120).trim();
-      const amount = Number(req.body?.amount);
-      const recurrence = sanitizeString(req.body?.recurrence, 20).toLowerCase();
-      const startsOn = dateGroupForClinic(undefined, req.session.user);
-
-      if (!clinicId) return res.status(400).json({ success: false, error: 'Clínica não identificada.' });
-      if (!isUuid(id)) return res.status(400).json({ success: false, error: 'Identificador do custo inválido.' });
-      if (!name) return res.status(400).json({ success: false, error: 'Informe o nome do custo.' });
-      if (!Number.isFinite(amount) || amount <= 0 || amount > 10_000_000) {
-        return res.status(400).json({ success: false, error: 'Informe um valor válido de até R$ 10.000.000,00.' });
-      }
-      if (!['weekly', 'monthly'].includes(recurrence)) {
-        return res.status(400).json({ success: false, error: 'Recorrência inválida.' });
-      }
-
-      const payload = {
-        id,
-        clinic_id: clinicId,
-        name,
-        amount: Math.round(amount * 100) / 100,
-        recurrence,
-        starts_on: startsOn,
-        active: true,
-        created_by: actorId,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      const inserted = await supabase
-        .from('clinic_recurring_costs')
-        .insert([payload])
-        .select(CLINIC_RECURRING_COST_SELECT)
-        .single();
-      if (!inserted.error) return res.status(201).json({ success: true, data: inserted.data });
-      if (sanitizeString(inserted.error?.code, 40) === '23505') {
-        const existing = await supabase
-          .from('clinic_recurring_costs')
-          .select(CLINIC_RECURRING_COST_SELECT)
-          .eq('clinic_id', clinicId)
-          .eq('id', id)
-          .maybeSingle();
-        if (
-          !existing.error &&
-          existing.data &&
-          sanitizeString(existing.data?.name, 120) === name &&
-          Number(existing.data?.amount) === payload.amount &&
-          sanitizeString(existing.data?.recurrence, 20) === recurrence
-        ) {
-          return res.json({
-            success: true,
-            idempotent: true,
-            code: 'CLINIC_COST_ALREADY_PERSISTED',
-            data: existing.data
-          });
-        }
-        return res.status(409).json({
-          success: false,
-          conflict: true,
-          code: 'CLINIC_COST_IDEMPOTENCY_CONFLICT',
-          error: 'Este identificador já foi usado para outro custo.'
-        });
-      }
-      if (hasMissingFinancialSchema(inserted.error)) {
-        return res.status(503).json({ success: false, error: 'Estrutura de custos da clínica ainda não aplicada.' });
-      }
-      throw inserted.error;
-    } catch (error: any) {
-      return sendRouteDbError(res, '/api/financial/costs [POST]', error, {
         requestId: requestIdForLogs(req)
       });
     }
@@ -97740,7 +98143,9 @@ async function startServer() {
         billingState,
         priceId: billingState.stripePriceId || resolveActivePatientPriceId()
       });
-      const currentPeriodEnd = Number((subscriptionRef.subscription as any)?.current_period_end || 0);
+      const currentPeriodEnd = Number(
+        resolveStripeSubscriptionCurrentPeriod(subscriptionRef.subscription).currentPeriodEnd || 0,
+      );
       const effectiveDate = currentPeriodEnd > 0
         ? new Date(currentPeriodEnd * 1000).toISOString()
         : new Date().toISOString();
@@ -98479,7 +98884,6 @@ async function startServer() {
   // --- STRUCTURED SCHOOL MANAGEMENT ---
   registerSchoolManagementRoutes(app, {
     supabase,
-    deploymentEnv: vertoDeploymentEnv,
     noStoreDynamicResponse,
     checkAuth,
     requireClinicCapability,
@@ -98700,7 +99104,6 @@ async function startServer() {
 
   startAppointmentReminderCron({
     supabase,
-    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,
@@ -98709,7 +99112,6 @@ async function startServer() {
   });
   startClinicAnnouncementCron({
     supabase,
-    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,
