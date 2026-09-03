@@ -190,12 +190,33 @@ export const PatientCareNetworkPanel = ({ mode, patientId = '', dark = false, re
               <div className="flex items-center gap-1">
                 {contact.email && <button type="button" onClick={() => void copyEmail(contact)} className={`rounded-lg p-2 ${dark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-white'}`} title="Copiar e-mail"><Copy size={15} />{copiedId === contact.id && <span className="sr-only">Copiado</span>}</button>}
                 {canEditContact(contact) && <button type="button" onClick={() => openEdit(contact)} className={`rounded-lg p-2 ${dark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-white'}`} title="Editar"><Pencil size={15} /></button>}
-                {!readOnly && <button type="button" onClick={() => void removeContact(contact)} className="rounded-lg p-2 text-rose-500 hover:bg-rose-50" title={isPatientMode ? 'Desfazer vínculo' : 'Remover da Rede de cuidado'}><Trash2 size={15} /></button>}
+                {!readOnly && !isPatientMode && <button type="button" onClick={() => void removeContact(contact)} className="rounded-lg p-2 text-rose-500 hover:bg-rose-50" title="Remover da Rede de cuidado"><Trash2 size={15} /></button>}
               </div>
             </div>
           </article>
         ))}
       </div>
+
+      {isPatientMode && !readOnly && loaded && !loading && contacts.length > 0 && (
+        <section className={`mt-7 rounded-3xl border p-4 sm:p-5 ${dark ? 'border-rose-900/50 bg-rose-950/15' : 'border-rose-100 bg-rose-50/45'}`} aria-label="Danger zone da Rede de cuidado">
+          <div className="flex items-start gap-3">
+            <span className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl ${dark ? 'bg-rose-500/10 text-rose-300' : 'bg-white text-rose-500'}`}><ShieldCheck size={17} /></span>
+            <div>
+              <p className={`text-[10px] font-medium uppercase tracking-[0.2em] ${dark ? 'text-rose-300' : 'text-rose-500'}`}>Danger zone</p>
+              <h3 className={`mt-1 text-sm font-semibold ${textClass}`}>Revogar acesso de um profissional</h3>
+              <p className={`mt-1 max-w-2xl text-xs leading-5 ${mutedClass}`}>Ao desfazer um vínculo, os compartilhamentos ativos deste profissional para você são revogados imediatamente. O histórico permanece preservado.</p>
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {contacts.map((contact) => (
+              <div key={`danger-${contact.id}`} className={`flex flex-col gap-3 rounded-2xl border px-3.5 py-3 sm:flex-row sm:items-center sm:justify-between ${dark ? 'border-rose-900/40 bg-slate-950/20' : 'border-rose-100 bg-white/80'}`}>
+                <div className="min-w-0"><p className={`truncate text-sm font-medium ${textClass}`}>{contactLabel(contact)}</p><p className={`mt-0.5 truncate text-[11px] ${mutedClass}`}>{contact.specialty || contact.email || 'Profissional da sua Rede de cuidado'}</p></div>
+                <button type="button" disabled={saving} onClick={() => void removeContact(contact)} className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl border border-rose-200 bg-white px-3 text-xs font-medium text-rose-600 transition hover:bg-rose-50 disabled:opacity-50"><Trash2 size={14} /> Desfazer vínculo</button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
     </section>
   );
 };
