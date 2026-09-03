@@ -3,6 +3,16 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 
+const currentPeriodHelperSource = server.match(
+  /const stripePositivePeriodTimestamp = \(value\) => \{[\s\S]*?\n  \};\n\n  const resolveStripeSubscriptionCurrentPeriod = \(subscription\) => \{[\s\S]*?\n  \};\n\n  const syncSalesSubscriptionDiscount = async \(/
+)?.[0]
+  ?.replace(/\n\n  const syncSalesSubscriptionDiscount = async \($/, '') || '';
+assert.ok(currentPeriodHelperSource, 'resolver central de período Stripe deve existir');
+
+const resolveStripeSubscriptionCurrentPeriod = new Function(
+  `${currentPeriodHelperSource}\nreturn resolveStripeSubscriptionCurrentPeriod;`,
+)();
+
 const helperSource = server.match(
   /const normalizeModularSchedulePhaseBoundaries = \([\s\S]*?\n  \};\n\n  const ensureModularSubscriptionSchedule = async \(/
 )?.[0]
@@ -19,8 +29,25 @@ const unix = (iso) => Math.floor(Date.parse(iso) / 1000);
 // depois em T1. O snapshot congelado continua com R$ 500 no primeiro ciclo e
 // R$ 600 no futuro; somente a fronteira operacional é ancorada na Stripe.
 const t0 = '2026-09-02T18:00:00.000Z';
+const t1 = '2026-09-02T18:07:00.000Z';
 const frozenBoundary = '2026-10-02T18:00:00.000Z';
 const stripeBoundary = '2026-10-02T18:07:00.000Z';
+const modernStripeSubscription = {
+  current_period_start: undefined,
+  current_period_end: undefined,
+  items: {
+    data: [
+      {
+        current_period_start: unix(t1),
+        current_period_end: unix(stripeBoundary),
+      },
+    ],
+  },
+};
+const modernPeriod = resolveStripeSubscriptionCurrentPeriod(modernStripeSubscription);
+assert.equal(modernPeriod.currentPeriodStart, unix(t1));
+assert.equal(modernPeriod.currentPeriodEnd, unix(stripeBoundary));
+
 const phases500to600 = [
   {
     startsAt: t0,
@@ -43,7 +70,7 @@ const phases500to600 = [
 ];
 const normalized = normalizeModularSchedulePhaseBoundaries(
   phases500to600,
-  unix(stripeBoundary),
+  modernPeriod.currentPeriodEnd,
   unix(stripeBoundary),
 );
 assert.equal(normalized.firstPlanEnd, unix(frozenBoundary));
@@ -65,6 +92,76 @@ assert.equal(
   60_000,
   'fase futura deve permanecer R$ 600',
 );
+
+// Stripe moderno com vários itens no mesmo ciclo permanece determinístico.
+const samePeriodItems = resolveStripeSubscriptionCurrentPeriod({
+  items: {
+    data: [
+      { current_period_start: unix(t1), current_period_end: unix(stripeBoundary) },
+      { current_period_start: unix(t1), current_period_end: unix(stripeBoundary) },
+      { current_period_start: unix(t1), current_period_end: unix(stripeBoundary) },
+    ],
+  },
+});
+assert.equal(samePeriodItems.currentPeriodStart, unix(t1));
+assert.equal(samePeriodItems.currentPeriodEnd, unix(stripeBoundary));
+
+// Períodos defensivamente diferentes nunca podem fazer a Schedule transicionar
+// antes do item com o maior current_period_end.
+const laterItemBoundary = '2026-10-02T18:17:00.000Z';
+const mixedItemPeriods = resolveStripeSubscriptionCurrentPeriod({
+  current_period_start: unix(t0),
+  current_period_end: unix(frozenBoundary),
+  items: {
+    data: [
+      { current_period_start: unix(t1), current_period_end: unix(stripeBoundary) },
+      { current_period_start: unix(t1) + 60, current_period_end: unix(laterItemBoundary) },
+      { current_period_start: 'invalid', current_period_end: -10 },
+    ],
+  },
+});
+assert.equal(mixedItemPeriods.currentPeriodStart, unix(t1));
+assert.equal(
+  mixedItemPeriods.currentPeriodEnd,
+  unix(laterItemBoundary),
+  'maior current_period_end válido entre itens deve vencer inclusive top-level legado menor',
+);
+const mixedNormalized = normalizeModularSchedulePhaseBoundaries(
+  phases500to600,
+  mixedItemPeriods.currentPeriodEnd,
+  mixedItemPeriods.currentPeriodEnd,
+);
+assert.equal(mixedNormalized.effectiveFirstTransitionEnd, unix(laterItemBoundary));
+assert.ok(
+  mixedNormalized.futurePhases[0].startDate >= unix(laterItemBoundary),
+  'fase futura nunca pode anteceder o maior período corrente dos itens',
+);
+
+// Compatibilidade antiga: se items não expõe período, aceita o top-level.
+const legacyPeriod = resolveStripeSubscriptionCurrentPeriod({
+  current_period_start: unix(t1),
+  current_period_end: unix(stripeBoundary),
+  items: { data: [] },
+});
+assert.equal(legacyPeriod.currentPeriodStart, unix(t1));
+assert.equal(legacyPeriod.currentPeriodEnd, unix(stripeBoundary));
+
+// Um top-level legado maior não é descartado defensivamente no period_end.
+const legacyLongerEnd = resolveStripeSubscriptionCurrentPeriod({
+  current_period_end: unix(laterItemBoundary),
+  items: {
+    data: [
+      { current_period_start: unix(t1), current_period_end: unix(stripeBoundary) },
+    ],
+  },
+});
+assert.equal(legacyLongerEnd.currentPeriodEnd, unix(laterItemBoundary));
+
+const missingModernPeriod = resolveStripeSubscriptionCurrentPeriod({
+  current_period_end: undefined,
+  items: { data: [{ current_period_end: 0 }, { current_period_end: 'x' }] },
+});
+assert.equal(missingModernPeriod.currentPeriodEnd, null);
 
 // Se a fronteira comercial já é posterior ao current_period_end, não há shift
 // nem encurtamento da condição comercial já congelada.
@@ -145,9 +242,16 @@ const provisionDirectorBlock = server.match(
 const finalizeActivationBlock = server.match(
   /async function finalizeSalesActivationForUser\([\s\S]*?\n  const mutationActionLabel/
 )?.[0] || '';
+const discountSyncBlock = server.match(
+  /const syncSalesSubscriptionDiscount = async \([\s\S]*?\n  const eventTypeSubscriptionIsActive/
+)?.[0] || '';
+const financialStateBlock = server.match(
+  /const persistPlatformSubscriptionFinancialState = async \([\s\S]*?\n  const persistPlatformBillingInvoiceLedger/
+)?.[0] || '';
 
 assert.ok(ensureBlock, 'ensureModularSubscriptionSchedule deve existir');
-assert.match(ensureBlock, /current_period_end/);
+assert.match(ensureBlock, /resolveStripeSubscriptionCurrentPeriod\(subscription\)/);
+assert.doesNotMatch(ensureBlock, /subscription as any\)\?\.current_period_end/);
 assert.match(ensureBlock, /normalizeModularSchedulePhaseBoundaries\(/);
 assert.match(helperSource, /MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END/);
 assert.match(ensureBlock, /phases\.length <= 1\) return null/);
@@ -176,5 +280,13 @@ assert.match(provisionDirectorBlock, /supabase\.auth\.admin\.createUser\(/);
 assert.match(finalizeActivationBlock, /applyModularEntitlementsForOrganization\(/);
 assert.match(finalizeActivationBlock, /verifySalesDirectorContractAccess\(/);
 assert.match(finalizeActivationBlock, /provisioning_status: "completed"/);
+assert.match(discountSyncBlock, /resolveStripeSubscriptionCurrentPeriod\(subscription\)/);
+assert.match(financialStateBlock, /resolveStripeSubscriptionCurrentPeriod\(subscription\)/);
+const serverWithoutCurrentPeriodResolver = server.replace(currentPeriodHelperSource, '');
+assert.doesNotMatch(
+  serverWithoutCurrentPeriodResolver,
+  /\.current_period_(?:start|end)\b/,
+  'nenhum fluxo comercial deve depender diretamente do período top-level removido',
+);
 
 console.log('salesStripeModularScheduleBoundaryP0_20260902.regression.test.mjs: ok');
