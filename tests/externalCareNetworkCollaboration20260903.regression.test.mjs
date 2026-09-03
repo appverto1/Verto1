@@ -9,6 +9,7 @@ const care = fs.readFileSync(new URL('../src/components/PatientCareNetworkPanel.
 const timeline = fs.readFileSync(new URL('../src/components/PatientEvolutionTimelinePanel.tsx', import.meta.url), 'utf8');
 const bell = fs.readFileSync(new URL('../src/components/ClinicalMentionNotifications.tsx', import.meta.url), 'utf8');
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const inviteContract = fs.readFileSync(new URL('../src/utils/externalEvolutionInviteContract.mjs', import.meta.url), 'utf8');
 
 // Identity is global by normalized email/Auth UID, separate from clinic role/membership.
 assert.match(migration, /external_professional_accounts_auth_user_uidx/);
@@ -44,7 +45,7 @@ assert.doesNotMatch(server, /\.ilike\('recipient_email', normalizedEmail\)/);
 // Activation link is high entropy, hash-only, one-time, expiring, and never OTP.
 assert.match(server, /crypto\.randomBytes\(32\)/);
 assert.match(server, /createHash\('sha256'\)/);
-assert.match(server, /#activation_token=/);
+assert.match(inviteContract, /activation_token/);
 assert.match(migration, /token_hash text NOT NULL/);
 assert.match(migration, /consumed_at timestamptz/);
 assert.match(migration, /invalidated_at timestamptz/);

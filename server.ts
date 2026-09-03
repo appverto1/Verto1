@@ -91,6 +91,11 @@ import {
   resolveUniqueTissServiceCatalogOptionByCode
 } from './src/utils/tissServiceCatalogResolution';
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
+import {
+  buildExternalEvolutionActivationAccessUrl,
+  buildExternalEvolutionInviteEmailContract,
+  resolveExternalEvolutionBootstrapMode
+} from './src/utils/externalEvolutionInviteContract.mjs';
 import { isKnownNewFeatureKey, type NewFeatureKey } from './src/constants/featureMetadata';
 import {
   resolveAppointmentConfirmationSnapshot
@@ -18550,23 +18555,11 @@ async function loadActiveExternalEvolutionShare(publicId: string) {
 }
 
 function buildExternalEvolutionInviteEmail(params: { clinicName: string; shareUrl: string }) {
-  const clinicName = escapeHtml(params.clinicName || 'Clínica');
-  const shareUrl = escapeHtml(params.shareUrl);
-  return {
-    subject: `${clinicName} compartilhou uma atualização clínica com você`,
-    html: `
-      <div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a;background:#f8fafc;padding:28px;">
-        <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:22px;padding:28px;">
-          <img src="${VERTO_EMAIL_HORIZONTAL_LOGO_URL}" alt="Verto" width="160" height="46" style="display:block;width:160px;height:auto;margin:0 0 20px;border:0;outline:none;" />
-          <h1 style="font-size:21px;margin:0 0 14px;">Timeline clínica compartilhada</h1>
-          <p style="font-size:15px;line-height:1.6;color:#334155;margin:0 0 18px;">
-            ${clinicName} disponibilizou uma atualização clínica para continuidade do cuidado. Após autenticar sua conta Verto, você verá a timeline compartilhada deste paciente contendo somente os registros autorizados para o seu e-mail.
-          </p>
-          <a href="${shareUrl}" style="display:inline-block;background:#7a32fc;color:#fff;text-decoration:none;border-radius:14px;padding:13px 18px;font-weight:800;">Ver timeline compartilhada</a>
-        </div>
-      </div>
-    `
-  };
+  return buildExternalEvolutionInviteEmailContract({
+    clinicName: params.clinicName,
+    shareUrl: params.shareUrl,
+    logoUrl: VERTO_EMAIL_HORIZONTAL_LOGO_URL,
+  });
 }
 
 function buildExternalEvolutionOtpEmail(params: { clinicName: string; code: string; shareUrl: string }) {
@@ -18757,7 +18750,7 @@ async function issueExternalEvolutionActivationLink(grant: any) {
   });
   if (error) throw error;
   const locator = getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`);
-  return { accessUrl: `${locator}#activation_token=${encodeURIComponent(token)}`, expiresAt };
+  return { accessUrl: buildExternalEvolutionActivationAccessUrl(locator, token), expiresAt };
 }
 
 async function validateExternalEvolutionActivationToken(publicId: string, rawToken: unknown) {
@@ -37340,35 +37333,54 @@ async function startServer() {
     }
   });
 
-  app.post('/api/external/evolution/:publicId/access-state', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+  const handleExternalEvolutionBootstrap = async (req: any, res: any) => {
     try {
       if (!enforcePayloadLimit(req, res, 4 * 1024, 'Acesso externo')) return;
       const publicId = sanitizeString(req.params?.publicId, 120);
-      if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      if (!isUuid(publicId)) return res.status(404).json({ success: false, code: 'EXTERNAL_SHARE_NOT_FOUND', error: 'Compartilhamento indisponível.' });
       const loaded = await loadActiveExternalEvolutionShare(publicId);
-      if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
+      if (!loaded) return res.status(404).json({ success: false, code: 'EXTERNAL_SHARE_NOT_FOUND', error: 'Compartilhamento indisponível.' });
+
       const identity = await resolveExternalProfessionalAccountFromExternalSession(req, sanitizeEmail(loaded.grant.recipient_email));
-      if (identity.account) return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
-      if (identity.mismatch) return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
+      const authenticatedMode = resolveExternalEvolutionBootstrapMode({
+        authenticated: Boolean(identity.account),
+        mismatch: identity.mismatch === true,
+        tokenState: 'MISSING',
+        authUserExists: false,
+      });
+      if (authenticatedMode === 'AUTHENTICATED') return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
+      if (authenticatedMode === 'MISMATCH') return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
 
       const rawActivationToken = req.body?.activationToken || req.body?.activation_token;
       const validated = await validateExternalEvolutionActivationToken(publicId, rawActivationToken);
-      if (!validated) {
-        const inspected = await inspectExternalEvolutionActivationToken(publicId, rawActivationToken);
-        if (inspected?.tokenRow?.consumed_at && !inspected.tokenRow.invalidated_at) {
-          return res.json({ success: true, data: { mode: 'LOGIN', email: sanitizeEmail(inspected.loaded.grant.recipient_email), displayName: sanitizeString(inspected.loaded.careContact?.professional_name, 180) || null, activationAlreadyConsumed: true } });
-        }
-        return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
+      if (validated) {
+        const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
+        const authUser = await findAuthUserByEmail(recipientEmail);
+        const mode = resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: false, tokenState: 'VALID', authUserExists: Boolean(authUser?.id) });
+        return res.json({ success: true, data: { mode, email: recipientEmail, displayName: sanitizeString(validated.loaded.careContact?.professional_name, 180) || null } });
       }
-      const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
-      const authUser = await findAuthUserByEmail(recipientEmail);
-      return res.json({ success: true, data: { mode: authUser?.id ? 'LOGIN' : 'ACTIVATE', email: recipientEmail, displayName: sanitizeString(validated.loaded.careContact?.professional_name, 180) || null } });
+
+      const inspected = await inspectExternalEvolutionActivationToken(publicId, rawActivationToken);
+      const consumed = Boolean(inspected?.tokenRow?.consumed_at && !inspected?.tokenRow?.invalidated_at);
+      const mode = resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: false, tokenState: consumed ? 'CONSUMED' : 'INVALID', authUserExists: false });
+      if (mode === 'LOGIN' && inspected?.loaded) {
+        return res.json({ success: true, data: { mode: 'LOGIN', email: sanitizeEmail(inspected.loaded.grant.recipient_email), displayName: sanitizeString(inspected.loaded.careContact?.professional_name, 180) || null, activationAlreadyConsumed: true } });
+      }
+      return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 180);
       if (message.includes('SCHEMA_UNAVAILABLE')) return res.status(503).json({ success: false, code: 'EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE', error: 'O acesso externo ainda não está disponível.' });
-      return res.status(500).json({ success: false, error: 'Não foi possível validar este acesso.' });
+      console.warn('[ExternalEvolutionShare] bootstrap failed', {
+        publicId: isUuid(sanitizeString(req.params?.publicId, 120)) ? sanitizeString(req.params?.publicId, 120) : null,
+        message,
+      });
+      return res.status(500).json({ success: false, code: 'EXTERNAL_ACCESS_BOOTSTRAP_FAILED', error: 'Não foi possível validar este acesso agora.' });
     }
-  });
+  };
+
+  app.post('/api/external/evolution/:publicId/bootstrap', portalActionLimiter, noStoreDynamicResponse, handleExternalEvolutionBootstrap);
+  // Compatibility alias for already-deployed clients while the invite surface migrates to /bootstrap.
+  app.post('/api/external/evolution/:publicId/access-state', portalActionLimiter, noStoreDynamicResponse, handleExternalEvolutionBootstrap);
 
   app.post('/api/external/evolution/:publicId/resend-access', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     const generic = { success: true, message: 'Se este compartilhamento estiver ativo, um novo acesso será enviado ao endereço autorizado.' };
