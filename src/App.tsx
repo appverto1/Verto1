@@ -213,6 +213,9 @@ const PortalRelationshipConfirmation = React.lazy(() =>
 const ExternalEvolutionShare = React.lazy(() =>
   import('./components/ExternalEvolutionShare').then((m) => ({ default: m.ExternalEvolutionShare }))
 );
+const ExternalCareNetworkCentral = React.lazy(() =>
+  import('./components/ExternalCareNetworkCentral').then((m) => ({ default: m.ExternalCareNetworkCentral }))
+);
 const PublicSalesOffer = React.lazy(() =>
   import('./components/PublicSalesOffer').then((m) => ({ default: m.PublicSalesOffer }))
 );
@@ -428,6 +431,8 @@ export default function App() {
       ? window.location.pathname.match(/^\/evolucao-compartilhada\/([^/]+)\/?$/i)
       : null;
   const isExternalEvolutionRoute = Boolean(externalEvolutionRouteMatch);
+  const isExternalCareNetworkRoute =
+    typeof window !== 'undefined' && /^\/rede-de-cuidado\/?$/i.test(window.location.pathname);
   const externalEvolutionPublicId = (() => {
     if (!externalEvolutionRouteMatch) return '';
     try {
@@ -1574,6 +1579,13 @@ export default function App() {
               .then(async () => {
                 try {
             if (event === 'SIGNED_IN' && session) {
+              // External care-network routes own their authenticated context. A Google OAuth
+              // return here must not create/overwrite clinic role or membership; the external
+              // surface exchanges the verified Supabase session for its isolated server session.
+              if (isExternalEvolutionRoute || isExternalCareNetworkRoute) {
+                setLoading(false);
+                return;
+              }
               const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
               localStorage.removeItem('verto_intended_role');
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
@@ -8237,6 +8249,8 @@ export default function App() {
         <Suspense fallback={lazyFallback}>
         {isExternalEvolutionRoute ? (
           <ExternalEvolutionShare publicId={externalEvolutionPublicId} />
+        ) : isExternalCareNetworkRoute ? (
+          <ExternalCareNetworkCentral />
         ) : isSalesOfferRoute ? (
           <PublicSalesOffer token={salesOfferToken} />
         ) : isSalesActivationRoute && !user ? (
