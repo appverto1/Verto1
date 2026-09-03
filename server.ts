@@ -20309,6 +20309,39 @@ async function startServer() {
     message: { success: false, error: 'Limite de reenvios de recuperação atingido. Tente novamente mais tarde.' }
   });
 
+  const stripePositivePeriodTimestamp = (value) => {
+    const seconds = Number(value || 0);
+    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    return Math.floor(seconds);
+  };
+
+  const resolveStripeSubscriptionCurrentPeriod = (subscription) => {
+    const rawSubscription = subscription || {};
+    const items = Array.isArray(rawSubscription?.items?.data)
+      ? rawSubscription.items.data
+      : [];
+    const itemStarts = items
+      .map((item) => stripePositivePeriodTimestamp(item?.current_period_start))
+      .filter((value) => value !== null);
+    const itemEnds = items
+      .map((item) => stripePositivePeriodTimestamp(item?.current_period_end))
+      .filter((value) => value !== null);
+    const legacyStart = stripePositivePeriodTimestamp(rawSubscription?.current_period_start);
+    const legacyEnd = stripePositivePeriodTimestamp(rawSubscription?.current_period_end);
+    const currentPeriodStart = itemStarts.length
+      ? Math.min(...itemStarts)
+      : legacyStart;
+    const itemCurrentPeriodEnd = itemEnds.length
+      ? Math.max(...itemEnds)
+      : null;
+    const currentPeriodEnd = itemCurrentPeriodEnd === null
+      ? legacyEnd
+      : legacyEnd === null
+        ? itemCurrentPeriodEnd
+        : Math.max(itemCurrentPeriodEnd, legacyEnd);
+    return { currentPeriodStart, currentPeriodEnd };
+  };
+
   const syncSalesSubscriptionDiscount = async (
     subscription: Stripe.Subscription,
   ) => {
@@ -20339,12 +20372,10 @@ async function startServer() {
       Number(discount?.start || 0) > 0
         ? new Date(Number(discount.start) * 1000).toISOString()
         : null;
-    const nextBillingAt =
-      Number(rawSubscription.current_period_end || 0) > 0
-        ? new Date(
-            Number(rawSubscription.current_period_end) * 1000,
-          ).toISOString()
-        : null;
+    const { currentPeriodEnd } = resolveStripeSubscriptionCurrentPeriod(subscription);
+    const nextBillingAt = currentPeriodEnd
+      ? new Date(currentPeriodEnd * 1000).toISOString()
+      : null;
     const durationMonths = Number(coupon?.duration_in_months || 0) || null;
     const percentage =
       coupon?.percent_off == null ? null : Number(coupon.percent_off);
@@ -21122,8 +21153,8 @@ async function startServer() {
     );
 
   const stripeTimestampToIso = (value: unknown): string | null => {
-    const seconds = Number(value || 0);
-    if (!Number.isFinite(seconds) || seconds <= 0) return null;
+    const seconds = stripePositivePeriodTimestamp(value);
+    if (seconds === null) return null;
     return new Date(seconds * 1000).toISOString();
   };
 
@@ -21154,6 +21185,8 @@ async function startServer() {
     const subscription = params.subscription;
     const subscriptionId = sanitizeString(subscription?.id, 200);
     if (!subscriptionId) return;
+    const { currentPeriodStart, currentPeriodEnd } =
+      resolveStripeSubscriptionCurrentPeriod(subscription);
     const invoice = params.invoice || null;
     const nowIso = new Date().toISOString();
     const organizationId = sanitizeString(
@@ -21181,8 +21214,8 @@ async function startServer() {
       stripe_status: sanitizeString(subscription.status, 50) || 'unknown',
       trial_start_at: stripeTimestampToIso((subscription as any)?.trial_start),
       trial_ends_at: stripeTimestampToIso((subscription as any)?.trial_end),
-      current_period_start: stripeTimestampToIso((subscription as any)?.current_period_start),
-      current_period_end: stripeTimestampToIso((subscription as any)?.current_period_end),
+      current_period_start: stripeTimestampToIso(currentPeriodStart),
+      current_period_end: stripeTimestampToIso(currentPeriodEnd),
       cancel_at_period_end: Boolean((subscription as any)?.cancel_at_period_end),
       cancel_at: stripeTimestampToIso((subscription as any)?.cancel_at),
       canceled_at: stripeTimestampToIso((subscription as any)?.canceled_at),
@@ -21773,12 +21806,11 @@ async function startServer() {
     if (!Number.isFinite(importedCurrentEnd) || importedCurrentEnd <= 0) {
       throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_END_MISSING");
     }
-    const stripeCurrentPeriodEnd = Number(
-      (subscription as any)?.current_period_end || 0,
-    );
+    const { currentPeriodEnd: stripeCurrentPeriodEnd } =
+      resolveStripeSubscriptionCurrentPeriod(subscription);
     const normalizedBoundaries = normalizeModularSchedulePhaseBoundaries(
       phases,
-      stripeCurrentPeriodEnd,
+      Number(stripeCurrentPeriodEnd || 0),
       importedCurrentEnd,
     );
     const effectiveFirstTransitionEnd = Number(
@@ -97607,7 +97639,9 @@ async function startServer() {
         billingState,
         priceId: billingState.stripePriceId || resolveActivePatientPriceId()
       });
-      const currentPeriodEnd = Number((subscriptionRef.subscription as any)?.current_period_end || 0);
+      const currentPeriodEnd = Number(
+        resolveStripeSubscriptionCurrentPeriod(subscriptionRef.subscription).currentPeriodEnd || 0,
+      );
       const effectiveDate = currentPeriodEnd > 0
         ? new Date(currentPeriodEnd * 1000).toISOString()
         : new Date().toISOString();
