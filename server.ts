@@ -92,10 +92,20 @@ import {
 } from './src/utils/tissServiceCatalogResolution';
 import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from './src/constants/vertoBranding';
 import {
-  buildExternalEvolutionActivationAccessUrl,
   buildExternalEvolutionInviteEmailContract,
   resolveExternalEvolutionBootstrapMode
 } from './src/utils/externalEvolutionInviteContract.mjs';
+import {
+  EXTERNAL_EVOLUTION_INVITE_CONTEXT_TTL_MS,
+  EXTERNAL_EVOLUTION_INVITE_HANDOFF_QUERY_PARAM,
+  buildExternalEvolutionActivationHandoffUrl,
+  buildExternalEvolutionCleanAccessPath,
+  externalEvolutionInvitationCookieClearOptions,
+  externalEvolutionInvitationCookieName,
+  externalEvolutionInvitationCookieOptions,
+  signExternalEvolutionInvitationContext,
+  verifyExternalEvolutionInvitationContext
+} from './src/utils/externalEvolutionInviteHandoff.mjs';
 import { isKnownNewFeatureKey, type NewFeatureKey } from './src/constants/featureMetadata';
 import {
   resolveAppointmentConfirmationSnapshot
@@ -18750,7 +18760,10 @@ async function issueExternalEvolutionActivationLink(grant: any) {
   });
   if (error) throw error;
   const locator = getAppPortalPathUrl(`/evolucao-compartilhada/${publicId}`);
-  return { accessUrl: buildExternalEvolutionActivationAccessUrl(locator, token), expiresAt };
+  return {
+    accessUrl: buildExternalEvolutionActivationHandoffUrl(locator, token),
+    expiresAt,
+  };
 }
 
 async function validateExternalEvolutionActivationToken(publicId: string, rawToken: unknown) {
@@ -18795,6 +18808,134 @@ async function inspectExternalEvolutionActivationToken(publicId: string, rawToke
   }
   if (!data?.id || sanitizeEmail(data.recipient_email_normalized) !== sanitizeEmail(loaded.grant.recipient_email)) return null;
   return { loaded, tokenHash, tokenRow: data };
+}
+
+type ExternalEvolutionInviteTransport = 'COOKIE' | 'BODY' | 'NONE';
+type ExternalEvolutionInviteTokenState = 'VALID' | 'MISSING' | 'INVALID' | 'CONSUMED';
+type ExternalEvolutionInvitationCredential = {
+  transport: ExternalEvolutionInviteTransport;
+  tokenState: ExternalEvolutionInviteTokenState;
+  loaded: any;
+  tokenHash: string | null;
+  tokenRow: any;
+};
+
+function externalEvolutionInviteCookieSecure(): boolean {
+  return process.env.NODE_ENV === 'production' || Boolean(process.env.RAILWAY_ENVIRONMENT);
+}
+
+function setExternalEvolutionInvitationCookie(res: any, loaded: any, tokenRow: any) {
+  const publicId = sanitizeString(loaded?.grant?.public_id, 120);
+  const grantId = sanitizeString(loaded?.grant?.id, 120);
+  const tokenId = sanitizeString(tokenRow?.id, 120);
+  const tokenExpiresAt = new Date(tokenRow?.expires_at || 0).getTime();
+  const expiresAt = Math.min(tokenExpiresAt, Date.now() + EXTERNAL_EVOLUTION_INVITE_CONTEXT_TTL_MS);
+  if (![publicId, grantId, tokenId].every(isUuid) || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    throw new Error('EXTERNAL_EVOLUTION_INVITE_CONTEXT_INVALID');
+  }
+  const signedContext = signExternalEvolutionInvitationContext(
+    { publicId, grantId, tokenId, expiresAt },
+    externalEvolutionShareSessionSecret(),
+  );
+  res.cookie(
+    externalEvolutionInvitationCookieName(publicId),
+    signedContext,
+    externalEvolutionInvitationCookieOptions({
+      secureValue: externalEvolutionInviteCookieSecure(),
+      maxAgeValue: expiresAt - Date.now(),
+    }),
+  );
+}
+
+function clearExternalEvolutionInvitationCookie(res: any, publicId: string) {
+  if (!isUuid(publicId)) return;
+  res.clearCookie(
+    externalEvolutionInvitationCookieName(publicId),
+    externalEvolutionInvitationCookieClearOptions({ secureValue: externalEvolutionInviteCookieSecure() }),
+  );
+}
+
+async function inspectExternalEvolutionInvitationCookie(req: any, publicId: string): Promise<ExternalEvolutionInvitationCredential> {
+  if (!isUuid(publicId)) return { transport: 'NONE', tokenState: 'MISSING', loaded: null, tokenHash: null, tokenRow: null };
+  const cookieValue = req?.cookies?.[externalEvolutionInvitationCookieName(publicId)];
+  if (!cookieValue) return { transport: 'NONE', tokenState: 'MISSING', loaded: null, tokenHash: null, tokenRow: null };
+  const context = verifyExternalEvolutionInvitationContext(cookieValue, externalEvolutionShareSessionSecret());
+  if (!context || context.publicId !== publicId || !isUuid(context.grantId) || !isUuid(context.tokenId)) {
+    return { transport: 'COOKIE', tokenState: 'INVALID', loaded: null, tokenHash: null, tokenRow: null };
+  }
+  const loaded = await loadActiveExternalEvolutionShare(publicId);
+  if (!loaded || sanitizeString(loaded.grant?.id, 120) !== context.grantId) {
+    return { transport: 'COOKIE', tokenState: 'INVALID', loaded: null, tokenHash: null, tokenRow: null };
+  }
+  const { data, error } = await supabase
+    .from('external_evolution_activation_tokens')
+    .select('id,grant_id,recipient_email_normalized,token_hash,expires_at,consumed_at,invalidated_at')
+    .eq('id', context.tokenId)
+    .eq('grant_id', context.grantId)
+    .maybeSingle();
+  if (error) {
+    if (isMissingRelationError(error)) throw new Error('EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE');
+    throw error;
+  }
+  if (!data?.id || sanitizeEmail(data.recipient_email_normalized) !== sanitizeEmail(loaded.grant.recipient_email)) {
+    return { transport: 'COOKIE', tokenState: 'INVALID', loaded: null, tokenHash: null, tokenRow: null };
+  }
+  if (data.invalidated_at) return { transport: 'COOKIE', tokenState: 'INVALID', loaded, tokenHash: null, tokenRow: data };
+  if (data.consumed_at) return { transport: 'COOKIE', tokenState: 'CONSUMED', loaded, tokenHash: sanitizeString(data.token_hash, 128) || null, tokenRow: data };
+  const expiresAtMs = new Date(data.expires_at || 0).getTime();
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) return { transport: 'COOKIE', tokenState: 'INVALID', loaded, tokenHash: null, tokenRow: data };
+  const tokenHash = sanitizeString(data.token_hash, 128);
+  if (!tokenHash) return { transport: 'COOKIE', tokenState: 'INVALID', loaded, tokenHash: null, tokenRow: data };
+  return { transport: 'COOKIE', tokenState: 'VALID', loaded, tokenHash, tokenRow: data };
+}
+
+async function resolveExternalEvolutionInvitationCredential(req: any, res: any, publicId: string, rawToken: unknown): Promise<ExternalEvolutionInvitationCredential> {
+  const raw = typeof rawToken === 'string' ? rawToken.trim() : '';
+  if (raw) {
+    const validated = await validateExternalEvolutionActivationToken(publicId, raw);
+    if (validated) {
+      setExternalEvolutionInvitationCookie(res, validated.loaded, validated.tokenRow);
+      return { transport: 'BODY', tokenState: 'VALID', ...validated };
+    }
+  }
+
+  const cookieCredential = await inspectExternalEvolutionInvitationCookie(req, publicId);
+  if (cookieCredential.tokenState === 'VALID') return cookieCredential;
+
+  if (raw) {
+    const inspected = await inspectExternalEvolutionActivationToken(publicId, raw);
+    if (inspected?.tokenRow?.consumed_at && !inspected?.tokenRow?.invalidated_at) {
+      return { transport: 'BODY', tokenState: 'CONSUMED', ...inspected };
+    }
+    return { transport: 'BODY', tokenState: 'INVALID', loaded: inspected?.loaded || null, tokenHash: null, tokenRow: inspected?.tokenRow || null };
+  }
+
+  if (cookieCredential.transport === 'COOKIE') return cookieCredential;
+  return { transport: 'NONE', tokenState: 'MISSING', loaded: null, tokenHash: null, tokenRow: null };
+}
+
+function externalEvolutionInviteDiagnosticsEnabled(): boolean {
+  return sanitizeString(process.env.VERTO_DEPLOYMENT_ENV || '', 40).toLowerCase() === 'staging';
+}
+
+function externalEvolutionInviteSessionState(req: any, recipientEmail: string): 'MATCH' | 'MISMATCH' | 'NONE' {
+  const sessionIdentity = readExternalClinicalIdentitySession(req);
+  if (!sessionIdentity) return 'NONE';
+  return sessionIdentity.normalizedEmail === sanitizeEmail(recipientEmail) ? 'MATCH' : 'MISMATCH';
+}
+
+function externalEvolutionInviteDiagnostics(params: {
+  inviteTransport: ExternalEvolutionInviteTransport;
+  tokenState: ExternalEvolutionInviteTokenState;
+  externalSessionState: 'MATCH' | 'MISMATCH' | 'NONE';
+  resolvedMode: 'ACTIVATE' | 'LOGIN' | 'AUTHENTICATED' | 'MISMATCH' | 'REFRESH';
+}) {
+  return externalEvolutionInviteDiagnosticsEnabled() ? {
+    inviteTransport: params.inviteTransport,
+    tokenState: params.tokenState,
+    externalSessionState: params.externalSessionState,
+    resolvedMode: params.resolvedMode,
+  } : undefined;
 }
 
 function normalizeExternalCommentBody(value: unknown): string | null {
@@ -37313,6 +37454,39 @@ async function startServer() {
     return { loaded, account: identity.account, mismatch: false };
   };
 
+  app.get('/evolucao-compartilhada/:publicId/convite', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
+    const publicId = sanitizeString(req.params?.publicId, 120);
+    const cleanPath = isUuid(publicId) ? buildExternalEvolutionCleanAccessPath(publicId) : '/rede-de-cuidado';
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    try {
+      if (!isUuid(publicId)) return res.redirect(303, cleanPath);
+      const rawToken = typeof req.query?.[EXTERNAL_EVOLUTION_INVITE_HANDOFF_QUERY_PARAM] === 'string'
+        ? String(req.query[EXTERNAL_EVOLUTION_INVITE_HANDOFF_QUERY_PARAM]).trim()
+        : '';
+      const validated = await validateExternalEvolutionActivationToken(publicId, rawToken);
+      if (!validated) {
+        console.info('[ExternalEvolutionInviteHandoff]', { publicId, grantId: null, result: 'INVALID_OR_EXPIRED' });
+        return res.redirect(303, cleanPath);
+      }
+      setExternalEvolutionInvitationCookie(res, validated.loaded, validated.tokenRow);
+      console.info('[ExternalEvolutionInviteHandoff]', {
+        publicId,
+        grantId: sanitizeString(validated.loaded?.grant?.id, 120) || null,
+        result: 'VALID',
+      });
+      return res.redirect(303, cleanPath);
+    } catch (error: any) {
+      console.warn('[ExternalEvolutionInviteHandoff]', {
+        publicId: isUuid(publicId) ? publicId : null,
+        grantId: null,
+        result: 'FAILED',
+        message: sanitizeString(error?.message || String(error), 160),
+      });
+      return res.redirect(303, cleanPath);
+    }
+  });
+
   app.get('/api/external/evolution/:publicId', portalActionLimiter, noStoreDynamicResponse, async (req: any, res) => {
     try {
       const publicId = sanitizeString(req.params?.publicId, 120);
@@ -37342,16 +37516,19 @@ async function startServer() {
       if (!loaded) return res.status(404).json({ success: false, code: 'EXTERNAL_SHARE_NOT_FOUND', error: 'Compartilhamento indisponível.' });
 
       const rawActivationToken = req.body?.activationToken || req.body?.activation_token;
-      const validated = await validateExternalEvolutionActivationToken(publicId, rawActivationToken);
-      if (validated) {
-        const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
-        // A valid invitation belongs to its recipient, not to whichever external-partner
-        // session happens to be left in this browser. A matching session may continue
-        // directly; a stale session is ignored for this bootstrap only and will be
-        // replaced after the recipient activates or logs in successfully.
+      const credential = await resolveExternalEvolutionInvitationCredential(req, res, publicId, rawActivationToken);
+      const recipientEmail = sanitizeEmail((credential.loaded || loaded).grant.recipient_email);
+      const externalSessionState = externalEvolutionInviteSessionState(req, recipientEmail);
+
+      if (credential.tokenState === 'VALID' && credential.loaded) {
+        // A validated invitation (new handoff cookie or legacy raw-token body) belongs to
+        // its recipient and outranks a stale external-partner session left in this browser.
         const invitedIdentity = await resolveExternalProfessionalAccountFromExternalSession(req, recipientEmail);
         if (invitedIdentity.account) {
-          return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
+          const diagnostics = externalEvolutionInviteDiagnostics({
+            inviteTransport: credential.transport, tokenState: 'VALID', externalSessionState, resolvedMode: 'AUTHENTICATED'
+          });
+          return res.json({ success: true, data: { mode: 'AUTHENTICATED', ...(diagnostics ? { diagnostics } : {}) } });
         }
         const authUser = await findAuthUserByEmail(recipientEmail);
         const mode = resolveExternalEvolutionBootstrapMode({
@@ -37360,28 +37537,71 @@ async function startServer() {
           tokenState: 'VALID',
           authUserExists: Boolean(authUser?.id),
         });
-        return res.json({ success: true, data: { mode, email: recipientEmail, displayName: sanitizeString(validated.loaded.careContact?.professional_name, 180) || null } });
+        const diagnostics = externalEvolutionInviteDiagnostics({
+          inviteTransport: credential.transport, tokenState: 'VALID', externalSessionState, resolvedMode: mode
+        });
+        return res.json({
+          success: true,
+          data: {
+            mode,
+            email: recipientEmail,
+            displayName: sanitizeString(credential.loaded.careContact?.professional_name, 180) || null,
+            ...(diagnostics ? { diagnostics } : {}),
+          },
+        });
       }
 
-      // Without a valid invitation, the existing external-partner session is still the
-      // authorization context. A locator for another identity must remain a mismatch.
+      // Without a VALID invitation, the existing partner session remains the auth context.
+      // This preserves the IDOR boundary for bookmarked locators and stale/invalid links.
       const identity = await resolveExternalProfessionalAccountFromExternalSession(req, sanitizeEmail(loaded.grant.recipient_email));
       const authenticatedMode = resolveExternalEvolutionBootstrapMode({
         authenticated: Boolean(identity.account),
         mismatch: identity.mismatch === true,
-        tokenState: 'MISSING',
+        tokenState: credential.tokenState,
         authUserExists: false,
       });
-      if (authenticatedMode === 'AUTHENTICATED') return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
-      if (authenticatedMode === 'MISMATCH') return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
-
-      const inspected = await inspectExternalEvolutionActivationToken(publicId, rawActivationToken);
-      const consumed = Boolean(inspected?.tokenRow?.consumed_at && !inspected?.tokenRow?.invalidated_at);
-      const mode = resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: false, tokenState: consumed ? 'CONSUMED' : 'INVALID', authUserExists: false });
-      if (mode === 'LOGIN' && inspected?.loaded) {
-        return res.json({ success: true, data: { mode: 'LOGIN', email: sanitizeEmail(inspected.loaded.grant.recipient_email), displayName: sanitizeString(inspected.loaded.careContact?.professional_name, 180) || null, activationAlreadyConsumed: true } });
+      if (authenticatedMode === 'AUTHENTICATED') {
+        const diagnostics = externalEvolutionInviteDiagnostics({
+          inviteTransport: credential.transport, tokenState: credential.tokenState, externalSessionState, resolvedMode: 'AUTHENTICATED'
+        });
+        return res.json({ success: true, data: { mode: 'AUTHENTICATED', ...(diagnostics ? { diagnostics } : {}) } });
       }
-      return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
+      if (authenticatedMode === 'MISMATCH') {
+        const diagnostics = externalEvolutionInviteDiagnostics({
+          inviteTransport: credential.transport, tokenState: credential.tokenState, externalSessionState, resolvedMode: 'MISMATCH'
+        });
+        return res.status(403).json({
+          success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.',
+          ...(diagnostics ? { diagnostics } : {}),
+        });
+      }
+
+      if (credential.tokenState === 'CONSUMED' && credential.loaded) {
+        const diagnostics = externalEvolutionInviteDiagnostics({
+          inviteTransport: credential.transport, tokenState: 'CONSUMED', externalSessionState, resolvedMode: 'LOGIN'
+        });
+        return res.json({
+          success: true,
+          data: {
+            mode: 'LOGIN',
+            email: sanitizeEmail(credential.loaded.grant.recipient_email),
+            displayName: sanitizeString(credential.loaded.careContact?.professional_name, 180) || null,
+            activationAlreadyConsumed: true,
+            ...(diagnostics ? { diagnostics } : {}),
+          },
+        });
+      }
+
+      const diagnostics = externalEvolutionInviteDiagnostics({
+        inviteTransport: credential.transport,
+        tokenState: credential.tokenState,
+        externalSessionState,
+        resolvedMode: 'REFRESH',
+      });
+      return res.status(401).json({
+        success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.',
+        ...(diagnostics ? { diagnostics } : {}),
+      });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 180);
       if (message.includes('SCHEMA_UNAVAILABLE')) return res.status(503).json({ success: false, code: 'EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE', error: 'O acesso externo ainda não está disponível.' });
@@ -37444,12 +37664,12 @@ async function startServer() {
       if (!email || !password || !supabaseAuthClient) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
 
       let loadedForLink: any = null;
-      let validatedToken: any = null;
+      let invitationCredential: any = null;
       if (publicId) {
         if (!isUuid(publicId)) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
         loadedForLink = await loadActiveExternalEvolutionShare(publicId);
         if (!loadedForLink || sanitizeEmail(loadedForLink.grant.recipient_email) !== email) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
-        if (activationToken) validatedToken = await validateExternalEvolutionActivationToken(publicId, activationToken);
+        invitationCredential = await resolveExternalEvolutionInvitationCredential(req, res, publicId, activationToken);
       }
 
       const signIn = await supabaseAuthClient.auth.signInWithPassword({ email, password });
@@ -37457,11 +37677,12 @@ async function startServer() {
       if (signIn.error || !authUser?.id || sanitizeEmail(authUser.email) !== email) return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
       const account = await ensureExternalProfessionalAccountForAuthUser(authUser, sanitizeString(loadedForLink?.careContact?.professional_name, 180) || null);
       await bindExternalProfessionalAccount(account.id);
-      if (validatedToken?.tokenHash) {
-        const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', { p_public_id: publicId, p_token_hash: validatedToken.tokenHash, p_account_id: account.id });
+      if (invitationCredential?.tokenState === 'VALID' && invitationCredential?.tokenHash) {
+        const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', { p_public_id: publicId, p_token_hash: invitationCredential.tokenHash, p_account_id: account.id });
         if (consumed.error && !sanitizeString(consumed.error?.message, 220).includes('EXPIRED_OR_USED')) throw consumed.error;
       }
       await setExternalClinicalIdentitySession(req, account);
+      if (isUuid(publicId)) clearExternalEvolutionInvitationCookie(res, publicId);
       return res.json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || null, redirectPublicId: isUuid(publicId) ? publicId : null } });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 220);
@@ -37476,8 +37697,10 @@ async function startServer() {
       const publicId = sanitizeString(req.params?.publicId, 120);
       const password = validateExternalPartnerPassword(req.body?.password);
       const displayName = sanitizeString(req.body?.displayName || req.body?.display_name, 180);
-      const validated = await validateExternalEvolutionActivationToken(publicId, req.body?.activationToken || req.body?.activation_token);
-      if (!validated) return res.status(401).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_INVALID', error: 'Este acesso expirou ou já foi utilizado. Solicite um novo link.' });
+      const validated = await resolveExternalEvolutionInvitationCredential(req, res, publicId, req.body?.activationToken || req.body?.activation_token);
+      if (validated.tokenState !== 'VALID' || !validated.loaded || !validated.tokenHash) {
+        return res.status(401).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_INVALID', error: 'Este acesso expirou ou já foi utilizado. Solicite um novo link.' });
+      }
       if (!displayName) return res.status(400).json({ success: false, code: 'EXTERNAL_DISPLAY_NAME_REQUIRED', error: 'Informe seu nome para criar o acesso.' });
       if (!password) return res.status(400).json({ success: false, code: 'PASSWORD_POLICY_INVALID', error: 'Use uma senha de 8 a 128 caracteres.' });
       const email = sanitizeEmail(validated.loaded.grant.recipient_email);
@@ -37533,6 +37756,7 @@ async function startServer() {
       }
       await bindExternalProfessionalAccount(account.id);
       await setExternalClinicalIdentitySession(req, account);
+      clearExternalEvolutionInvitationCookie(res, publicId);
       return res.status(createdNow ? 201 : 200).json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || displayName } });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 220);
@@ -37564,7 +37788,7 @@ async function startServer() {
       }
 
       let loadedForLink: any = null;
-      let validatedToken: any = null;
+      let invitationCredential: any = null;
       if (publicId) {
         if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
         loadedForLink = await loadActiveExternalEvolutionShare(publicId);
@@ -37572,12 +37796,10 @@ async function startServer() {
         if (sanitizeEmail(loadedForLink.grant.recipient_email) !== authEmail) {
           return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
         }
-        if (activationToken) {
-          validatedToken = await validateExternalEvolutionActivationToken(publicId, activationToken);
-          // A consumed/expired activation token is never authentication. Once the correct
-          // Supabase Auth identity is verified, publicId remains only a locator and the
-          // active grant + account identity are the authorization boundary.
-        }
+        invitationCredential = await resolveExternalEvolutionInvitationCredential(req, res, publicId, activationToken);
+        // A consumed/expired activation token is never authentication. Once the correct Supabase
+        // Auth identity is verified, publicId remains only a locator and the ACTIVE grant
+        // + account identity are the authorization boundary.
       }
 
       const account = await ensureExternalProfessionalAccountForAuthUser(
@@ -37585,15 +37807,16 @@ async function startServer() {
         sanitizeString(loadedForLink?.careContact?.professional_name || authUser?.user_metadata?.full_name || authUser?.user_metadata?.name, 180) || null,
       );
       await bindExternalProfessionalAccount(account.id);
-      if (validatedToken?.tokenHash && publicId) {
+      if (invitationCredential?.tokenState === 'VALID' && invitationCredential?.tokenHash && publicId) {
         const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', {
           p_public_id: publicId,
-          p_token_hash: validatedToken.tokenHash,
+          p_token_hash: invitationCredential.tokenHash,
           p_account_id: account.id,
         });
         if (consumed.error && !sanitizeString(consumed.error?.message, 220).includes('EXPIRED_OR_USED')) throw consumed.error;
       }
       await setExternalClinicalIdentitySession(req, account);
+      if (isUuid(publicId)) clearExternalEvolutionInvitationCookie(res, publicId);
       return res.json({
         success: true,
         data: {

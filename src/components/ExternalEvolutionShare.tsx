@@ -12,22 +12,15 @@ const safeJson = async (response: Response) => {
   try { return await response.json(); } catch { return { success: false, code: 'EXTERNAL_INVALID_JSON_RESPONSE', error: `Falha HTTP ${response.status}` }; }
 };
 
-const activationTokenStorageKey = (publicId: string) => `verto_external_activation:${publicId}`;
-
-const readActivationTokenFromFragment = (publicId: string) => {
+const readActivationTokenFromFragment = (_publicId: string) => {
   if (typeof window === 'undefined') return '';
+  // Legacy invitations may still carry #activation_token. Read it once, immediately
+  // remove the fragment from the visible URL and let the backend exchange it for the
+  // short-lived HttpOnly invitation context during bootstrap. Never persist raw tokens
+  // in localStorage/sessionStorage.
   const token = readExternalEvolutionActivationTokenFromUrl(window.location.href);
-  if (token) {
-    try { window.sessionStorage.setItem(activationTokenStorageKey(publicId), token); } catch { /* optional browser storage */ }
-    window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
-    return token;
-  }
-  try { return window.sessionStorage.getItem(activationTokenStorageKey(publicId)) || ''; } catch { return ''; }
-};
-
-const clearStoredActivationToken = (publicId: string) => {
-  if (typeof window === 'undefined') return;
-  try { window.sessionStorage.removeItem(activationTokenStorageKey(publicId)); } catch { /* optional browser storage */ }
+  if (token) window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
+  return token;
 };
 
 export const ExternalEvolutionShare = ({ publicId }: Props) => {
@@ -63,7 +56,6 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
       setError('Seu acesso foi validado, mas a timeline não pôde ser aberta agora. Tente novamente.');
       return false;
     }
-    clearStoredActivationToken(publicId);
     window.location.replace(path);
     return true;
   };
@@ -169,9 +161,6 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
   const loginWithGoogle = async () => {
     setBusy(true); setError(''); setMessage('');
     try {
-      if (activationToken) {
-        try { window.sessionStorage.setItem(activationTokenStorageKey(publicId), activationToken); } catch { /* optional browser storage */ }
-      }
       const supabase = await getSupabase();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',

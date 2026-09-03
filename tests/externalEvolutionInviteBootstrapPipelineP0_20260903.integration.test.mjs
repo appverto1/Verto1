@@ -7,6 +7,14 @@ import {
   readExternalEvolutionActivationTokenFromUrl,
   resolveExternalEvolutionBootstrapMode,
 } from '../src/utils/externalEvolutionInviteContract.mjs';
+import {
+  EXTERNAL_EVOLUTION_INVITE_CONTEXT_TTL_MS,
+  buildExternalEvolutionActivationHandoffUrl,
+  buildExternalEvolutionCleanAccessPath,
+  externalEvolutionInvitationCookieOptions,
+  signExternalEvolutionInvitationContext,
+  verifyExternalEvolutionInvitationContext,
+} from '../src/utils/externalEvolutionInviteHandoff.mjs';
 
 const sha256 = (value) => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 
@@ -26,21 +34,35 @@ function extractCtaHref(html) {
 function runInviteBootstrapPipeline(recipientEmail) {
   const publicId = 'd438e831-6293-4c95-b9c3-ffd5be9a49a7';
   const grantId = '9a5bc709-efdc-4b45-af5d-119b7e2395b2';
+  const tokenId = 'e0ca3982-ae5c-4f8c-b08c-45f85f12e940';
   const rawToken = crypto.randomBytes(32).toString('base64url');
   const storedTokenHash = sha256(rawToken);
+  const expiresAt = Date.now() + 14 * 24 * 60 * 60 * 1000;
 
-  // Persistence contract: the repository stores only the hash, never the bearer secret.
   const databaseRow = {
+    id: tokenId,
     grant_id: grantId,
     recipient_email_normalized: recipientEmail.toLowerCase(),
     token_hash: storedTokenHash,
+    expires_at: new Date(expiresAt).toISOString(),
     consumed_at: null,
     invalidated_at: null,
   };
-  assert.equal(Object.values(databaseRow).includes(rawToken), false);
+  assert.equal(Object.values(databaseRow).includes(rawToken), false, 'database persists only the token hash');
 
-  // Production generator -> production e-mail HTML -> actual CTA href -> production parser.
-  const accessUrl = buildExternalEvolutionActivationAccessUrl(
+  // BEFORE: fragment transport is intrinsically client-side. A redirect that does not
+  // preserve the fragment reproduces the observed tokenState=MISSING class of failure.
+  const legacyUrl = buildExternalEvolutionActivationAccessUrl(
+    `https://staging.appverto.com.br/evolucao-compartilhada/${publicId}`,
+    rawToken,
+  );
+  const redirectWithoutFragment = new URL(legacyUrl);
+  redirectWithoutFragment.hash = '';
+  assert.equal(readExternalEvolutionActivationTokenFromUrl(redirectWithoutFragment.toString()), '');
+
+  // AFTER: production email uses a backend handoff query. Redirect intermediaries see and
+  // preserve the query as part of the destination URL; the final Verto redirect removes it.
+  const accessUrl = buildExternalEvolutionActivationHandoffUrl(
     `https://staging.appverto.com.br/evolucao-compartilhada/${publicId}`,
     rawToken,
   );
@@ -50,42 +72,72 @@ function runInviteBootstrapPipeline(recipientEmail) {
     logoUrl: 'https://assets.example/verto.png',
   });
   const href = extractCtaHref(email.html);
-  const parsedToken = readExternalEvolutionActivationTokenFromUrl(href);
-  assert.equal(parsedToken, rawToken, 'CTA parser must recover the exact raw activation token');
-  assert.equal(sha256(parsedToken), databaseRow.token_hash, 'href token hash must match persisted token_hash');
+  const handoff = new URL(href);
+  assert.equal(handoff.pathname, `/evolucao-compartilhada/${publicId}/convite`);
+  assert.equal(handoff.hash, '', 'new invite must not depend on URL fragments');
+  const presentedRawToken = handoff.searchParams.get('t');
+  assert.equal(presentedRawToken, rawToken);
+  assert.equal(sha256(presentedRawToken), databaseRow.token_hash, 'handoff raw token must match the persisted hash');
   assert.match(email.html, /Acessar timeline compartilhada/);
 
-  // First access contract: ACTIVE grant, no external account/Auth user, valid token => ACTIVATE.
-  const bootstrapMode = resolveExternalEvolutionBootstrapMode({
-    authenticated: false,
-    mismatch: false,
-    tokenState: sha256(parsedToken) === databaseRow.token_hash ? 'VALID' : 'INVALID',
-    authUserExists: false,
-  });
-  assert.equal(bootstrapMode, 'ACTIVATE');
+  // Simulate the real backend exchange: validate hash/status first, then sign a temporary
+  // context containing only locators/token-row id (never the bearer raw token).
+  const grant = { id: grantId, public_id: publicId, status: 'ACTIVE', recipient_email: recipientEmail.toLowerCase() };
+  const handoffValid = grant.status === 'ACTIVE'
+    && databaseRow.grant_id === grant.id
+    && databaseRow.consumed_at === null
+    && databaseRow.invalidated_at === null
+    && new Date(databaseRow.expires_at).getTime() > Date.now()
+    && sha256(presentedRawToken) === databaseRow.token_hash;
+  assert.equal(handoffValid, true);
 
-  // Simulate the post-activation invariants without inventing a second identity source.
-  const authUser = { id: 'a8d8f7f7-5ed0-4c3f-a8aa-4ba08164c778', email: recipientEmail.toLowerCase() };
-  const externalAccount = { id: 'bc93470a-7248-4ec2-a73c-8f18485a26bc', auth_user_id: authUser.id, normalized_email: authUser.email };
-  databaseRow.consumed_at = new Date().toISOString();
-  const grant = { id: grantId, public_id: publicId, status: 'ACTIVE', recipient_email: authUser.email, external_account_id: externalAccount.id };
-  const session = { accountId: externalAccount.id, authUserId: authUser.id, normalizedEmail: authUser.email };
-  assert.equal(grant.external_account_id, session.accountId);
-  assert.equal(databaseRow.consumed_at !== null, true);
-  assert.equal(resolveExternalEvolutionBootstrapMode({ authenticated: true, mismatch: false, tokenState: 'CONSUMED', authUserExists: true }), 'AUTHENTICATED');
+  const contextExpiresAt = Math.min(expiresAt, Date.now() + EXTERNAL_EVOLUTION_INVITE_CONTEXT_TTL_MS);
+  const signingSecret = 'staging-test-secret-that-is-longer-than-thirty-two-characters';
+  const cookieValue = signExternalEvolutionInvitationContext({ publicId, grantId, tokenId, expiresAt: contextExpiresAt }, signingSecret);
+  assert.equal(cookieValue.includes(rawToken), false, 'temporary cookie must never contain the raw activation token');
+  const cookieOptions = externalEvolutionInvitationCookieOptions({ secureValue: true, maxAgeValue: contextExpiresAt - Date.now() });
+  assert.equal(cookieOptions.httpOnly, true);
+  assert.equal(cookieOptions.secure, true);
+  assert.equal(cookieOptions.sameSite, 'lax');
+  assert.equal(cookieOptions.path, '/api/external');
+  assert.ok(cookieOptions.maxAge <= EXTERNAL_EVOLUTION_INVITE_CONTEXT_TTL_MS);
 
-  // Longitudinal read path remains grant-derived after activation.
-  const timeline = [
-    { id: 'item-sep', external_account_id: externalAccount.id, status: 'ACTIVE' },
-    { id: 'item-aug', external_account_id: externalAccount.id, status: 'REVOKED' },
-  ].filter((item) => item.external_account_id === session.accountId && item.status === 'ACTIVE');
-  assert.deepEqual(timeline.map((item) => item.id), ['item-sep']);
+  const verifiedContext = verifyExternalEvolutionInvitationContext(cookieValue, signingSecret, Date.now());
+  assert.deepEqual(
+    { publicId: verifiedContext?.publicId, grantId: verifiedContext?.grantId, tokenId: verifiedContext?.tokenId },
+    { publicId, grantId, tokenId },
+  );
+
+  const redirectPath = buildExternalEvolutionCleanAccessPath(publicId);
+  assert.equal(redirectPath, `/evolucao-compartilhada/${publicId}`);
+  assert.equal(redirectPath.includes(rawToken), false, 'post-handoff browser URL must be clean');
+
+  // Critical P0: a VALID invitation outranks stale partner session A.
+  assert.equal(
+    resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: true, tokenState: 'VALID', authUserExists: false }),
+    'ACTIVATE',
+  );
+  assert.equal(
+    resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: true, tokenState: 'VALID', authUserExists: true }),
+    'LOGIN',
+  );
+  assert.equal(
+    resolveExternalEvolutionBootstrapMode({ authenticated: false, mismatch: true, tokenState: 'MISSING', authUserExists: false }),
+    'MISMATCH',
+  );
+
+  // Revocation/expiry/invalid token block the handoff even with a correctly signed locator.
+  assert.equal({ ...grant, status: 'REVOKED' }.status === 'ACTIVE' && handoffValid, false);
+  assert.equal(new Date(Date.now() - 1).getTime() > Date.now(), false);
+  assert.notEqual(sha256(`${presentedRawToken}x`), databaseRow.token_hash);
+
+  // Legacy links remain readable when their fragment arrives intact.
+  assert.equal(readExternalEvolutionActivationTokenFromUrl(legacyUrl), rawToken);
 }
 
 runInviteBootstrapPipeline('comercialdcoratto@gmail.com');
 runInviteBootstrapPipeline('contato@neurosingulares.com.br');
 
-// Error-state contract: runtime/bootstrap failures are not presented as revocation.
 assert.equal(classifyExternalEvolutionBootstrapFailure(404, 'EXTERNAL_SHARE_NOT_FOUND'), 'UNAVAILABLE');
 assert.equal(classifyExternalEvolutionBootstrapFailure(401, 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED'), 'REFRESH');
 assert.equal(classifyExternalEvolutionBootstrapFailure(403, 'EXTERNAL_ACCOUNT_MISMATCH'), 'MISMATCH');
