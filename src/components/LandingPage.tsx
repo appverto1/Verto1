@@ -794,6 +794,21 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
 
               <button
                 type="button"
+                onClick={() => { window.location.href = '/rede-de-cuidado'; }}
+                className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-violet-100 bg-white px-4 py-4 text-left transition hover:border-[#7a32fc]/35 hover:bg-violet-50/40 active:scale-[0.99]"
+              >
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]">
+                  <Users size={21} />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">Sou profissional parceiro</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos compartilhados por clínicas Verto</span>
+                </span>
+                <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400" />
+              </button>
+
+              <button
+                type="button"
                 onClick={() => {
                   setLoginType('patient');
                   setLoginStep('email');
@@ -825,15 +840,23 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
             <a href="#contato" className="text-sm font-semibold text-gray-500 transition-colors hover:text-[#7a32fc]">Contato</a>
           </div>
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+            <button type="button" onClick={() => { window.location.href = '/entrar'; }} className="rounded-full bg-[#7a32fc] px-4 py-2.5 text-xs font-medium text-white shadow-lg shadow-purple-500/20 sm:hidden">Entrar</button>
             <button
               onClick={() => {
                 setLoginType('patient');
                 setLoginStep('email');
                 setShowLogin(true);
               }}
-              className="whitespace-nowrap rounded-full border border-purple-100 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] shadow-sm transition-colors hover:border-[#7a32fc] hover:bg-purple-50 sm:px-4 sm:text-sm"
+              className="hidden whitespace-nowrap rounded-full border border-purple-100 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] shadow-sm transition-colors hover:border-[#7a32fc] hover:bg-purple-50 sm:inline-flex sm:px-4 sm:text-sm"
             >
               Sou Paciente
+            </button>
+            <button
+              onClick={() => { window.location.href = '/rede-de-cuidado'; }}
+              className="hidden whitespace-nowrap rounded-full border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs font-medium text-[#6d2ee8] shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 sm:inline-flex sm:px-4 sm:text-sm"
+              title="Acesse conteúdos compartilhados por clínicas que utilizam a Verto"
+            >
+              <span className="hidden sm:inline">Sou profissional </span>parceiro
             </button>
             <button
               onClick={() => {
@@ -841,7 +864,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                 setLoginStep('email');
                 setShowLogin(true);
               }}
-              className="whitespace-nowrap rounded-full bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95 sm:px-5 sm:py-2.5 sm:text-sm"
+              className="hidden whitespace-nowrap rounded-full bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95 sm:inline-flex sm:px-5 sm:py-2.5 sm:text-sm"
             >
               Sou Profissional
             </button>
