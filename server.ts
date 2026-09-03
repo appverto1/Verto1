@@ -37871,7 +37871,7 @@ async function startServer() {
     if (![accountId, clinicId, patientId].every(isUuid)) return null;
     const { data: grants, error: grantsError } = await supabase
       .from('patient_evolution_share_grants')
-      .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,created_at')
+      .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,care_network_contact_id,created_by_user_id,can_comment,first_viewed_at,last_viewed_at,view_count,created_at')
       .eq('external_account_id', accountId)
       .eq('clinic_id', clinicId)
       .eq('patient_id', patientId)
@@ -37886,7 +37886,7 @@ async function startServer() {
     const [clinicResult, patientResult, itemsResult, contactsResult] = await Promise.all([
       supabase.from('clinics').select('id,name').eq('id', clinicId).maybeSingle(),
       supabase.from('patients').select('id,clinic_id,name,is_active,deleted_at,archived_at,status').eq('id', patientId).eq('clinic_id', clinicId).maybeSingle(),
-      supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_at,updated_at,archived_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', itemIds).is('archived_at', null),
+      supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,slot,subject,content,patient_file_id,created_by_user_id,created_at,updated_at,archived_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', itemIds).is('archived_at', null),
       contactIds.length
         ? supabase.from('patient_care_network_contacts').select('id,clinic_id,patient_id,email,archived_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', contactIds).is('archived_at', null)
         : Promise.resolve({ data: [], error: null } as any),
@@ -37915,13 +37915,20 @@ async function startServer() {
 
     const eligibleGrantIds = eligibleGrants.map((row: any) => sanitizeString(row.id, 120)).filter(isUuid);
     const fileIds = Array.from(new Set(eligibleGrants.map((grant: any) => itemsById.get(String(grant.timeline_item_id))?.patient_file_id).map((value: any) => sanitizeString(value, 120)).filter(isUuid)));
-    const [commentsResult, filesResult] = await Promise.all([
+    const actorIds = Array.from(new Set([
+      ...eligibleGrants.map((grant: any) => sanitizeString(grant.created_by_user_id, 120)),
+      ...eligibleGrants.map((grant: any) => sanitizeString(itemsById.get(String(grant.timeline_item_id))?.created_by_user_id, 120)),
+    ].filter(isUuid)));
+    const [commentsResult, filesResult, actorsResult] = await Promise.all([
       supabase.from('patient_evolution_external_comments').select('id,grant_id,body,created_at').eq('external_account_id', accountId).in('grant_id', eligibleGrantIds).order('created_at', { ascending: true }),
       fileIds.length
         ? supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,created_at').eq('clinic_id', clinicId).eq('patient_id', patientId).in('id', fileIds)
         : Promise.resolve({ data: [], error: null } as any),
+      actorIds.length
+        ? supabase.from('users').select('id,name').in('id', actorIds)
+        : Promise.resolve({ data: [], error: null } as any),
     ]);
-    for (const result of [commentsResult, filesResult]) if (result.error && !isMissingRelationError(result.error)) throw result.error;
+    for (const result of [commentsResult, filesResult, actorsResult]) if (result.error && !isMissingRelationError(result.error)) throw result.error;
 
     const commentsByGrant = new Map<string, any[]>();
     for (const comment of commentsResult.data || []) {
@@ -37931,6 +37938,7 @@ async function startServer() {
       commentsByGrant.set(key, list);
     }
     const filesById = new Map((filesResult.data || []).map((row: any) => [String(row.id), row]));
+    const actorsById = new Map((actorsResult.data || []).map((row: any) => [String(row.id), row]));
 
     const timelineItems = eligibleGrants.flatMap((grant: any) => {
       const item: any = itemsById.get(String(grant.timeline_item_id));
@@ -37947,6 +37955,8 @@ async function startServer() {
         createdAt: item.created_at,
         updatedAt: item.updated_at || item.created_at,
         sharedAt: grant.created_at,
+        authorName: sanitizeString(actorsById.get(String(item.created_by_user_id || ''))?.name, 180) || null,
+        senderName: sanitizeString(actorsById.get(String(grant.created_by_user_id || ''))?.name, 180) || null,
         canComment: grant.can_comment === true,
         firstViewedAt: grant.first_viewed_at || null,
         lastViewedAt: grant.last_viewed_at || null,
