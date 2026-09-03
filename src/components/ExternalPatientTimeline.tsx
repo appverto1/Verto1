@@ -132,7 +132,12 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
         setStage('forbidden'); return;
       }
       if (first.status !== 401 && firstResult?.code !== 'EXTERNAL_AUTH_REQUIRED') throw new Error(firstResult?.error || 'Não foi possível carregar esta timeline.');
-      if (await bridgeSupabaseSession()) {
+      const query = new URLSearchParams(window.location.search);
+      const isPartnerOauthReturn = query.get('partner_oauth') === '1';
+      if (isPartnerOauthReturn && await bridgeSupabaseSession()) {
+        query.delete('partner_oauth');
+        const nextQuery = query.toString();
+        window.history.replaceState({}, document.title, `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ''}`);
         await fetchTimeline();
         return;
       }
@@ -167,7 +172,7 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.href.split('#')[0],
+          redirectTo: `${window.location.origin}${window.location.pathname}?partner_oauth=1`,
           scopes: 'https://www.googleapis.com/auth/userinfo.email',
           queryParams: { prompt: 'select_account', ...(email.trim() ? { login_hint: email.trim().toLowerCase() } : {}) },
         },
@@ -186,9 +191,9 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ email: email.trim().toLowerCase() }),
       });
-      setMessage('Se este e-mail estiver cadastrado para acesso por senha, enviaremos instruções.');
+      setMessage('Se este e-mail estiver cadastrado, enviaremos instruções para recuperar o acesso.');
     } catch {
-      setMessage('Se este e-mail estiver cadastrado para acesso por senha, enviaremos instruções.');
+      setMessage('Se este e-mail estiver cadastrado, enviaremos instruções para recuperar o acesso.');
     } finally { setBusy(false); }
   };
 

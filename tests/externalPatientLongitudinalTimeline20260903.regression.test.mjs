@@ -21,7 +21,7 @@ assert.match(app, /\/rede-de-cuidado\\\/paciente\\\/\(\[\^\/\]\+\)\\\/\(\[\^\/\]
 assert.match(app, /ExternalPatientTimeline clinicId=\{externalCarePatientClinicId\} patientId=\{externalCarePatientId\}/);
 assert.match(timeline, /\/api\/external\/auth\/login/);
 assert.match(timeline, /signInWithOAuth/);
-assert.match(timeline, /redirectTo: window\.location\.href\.split\('#'\)\[0\]/);
+assert.match(timeline, /redirectTo: `\$\{window\.location\.origin\}\$\{window\.location\.pathname\}\?partner_oauth=1`/);
 assert.match(timeline, /EXTERNAL_PATIENT_TIMELINE_FORBIDDEN/);
 assert.match(timeline, /Trocar conta/);
 
@@ -69,8 +69,8 @@ assert.match(server, /A consumed\/expired activation token is never authenticati
 
 // Central groups by clinic/patient and opens patient timeline instead of one grant.
 assert.match(central, /openPatientTimeline/);
-assert.match(central, /registros compartilhados/);
-assert.match(central, /Última atualização/);
+assert.match(central, /evoluções/);
+assert.match(central, /formatFriendlyUpdate/);
 assert.doesNotMatch(central, /openShare\(/);
 
 // Authorization epochs remain immutable and only ACTIVE grants participate in the longitudinal read path.

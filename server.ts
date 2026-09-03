@@ -18593,6 +18593,14 @@ function buildExternalEvolutionOtpEmail(params: { clinicName: string; code: stri
 
 const EXTERNAL_EVOLUTION_ACTIVATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const EXTERNAL_EVOLUTION_COMMENT_MAX_LENGTH = 4000;
+const EXTERNAL_PARTNER_PASSWORD_MIN_LENGTH = 8;
+const EXTERNAL_PARTNER_PASSWORD_MAX_LENGTH = 128;
+
+function validateExternalPartnerPassword(password: unknown): string | null {
+  if (typeof password !== 'string') return null;
+  if (password.length < EXTERNAL_PARTNER_PASSWORD_MIN_LENGTH || password.length > EXTERNAL_PARTNER_PASSWORD_MAX_LENGTH) return null;
+  return password;
+}
 
 type ExternalClinicalIdentitySession = {
   accountId: string;
@@ -18624,6 +18632,24 @@ async function setExternalClinicalIdentitySession(req: any, account: any) {
   await saveExpressSession(req);
 }
 
+async function resolveExternalProfessionalAccountFromExternalSession(req: any, expectedEmail?: string | null) {
+  const expected = sanitizeEmail(expectedEmail || '');
+  const sessionIdentity = readExternalClinicalIdentitySession(req);
+  if (!sessionIdentity) return { account: null, mismatch: false };
+  if (expected && sessionIdentity.normalizedEmail !== expected) return { account: null, mismatch: true };
+  const { data, error } = await supabase
+    .from('external_professional_accounts')
+    .select('id,auth_user_id,normalized_email,display_name')
+    .eq('id', sessionIdentity.accountId)
+    .eq('auth_user_id', sessionIdentity.authUserId)
+    .eq('normalized_email', sessionIdentity.normalizedEmail)
+    .maybeSingle();
+  if (error && !isMissingRelationError(error)) throw error;
+  if (!data?.id) return { account: null, mismatch: false };
+  if (expected && sanitizeEmail(data.normalized_email) !== expected) return { account: null, mismatch: true };
+  return { account: data, mismatch: false };
+}
+
 async function ensureExternalProfessionalAccountForAuthUser(authUser: any, displayName?: string | null) {
   const authUserId = sanitizeString(authUser?.id, 120);
   const normalizedEmail = sanitizeEmail(authUser?.email);
@@ -18641,7 +18667,22 @@ async function ensureExternalProfessionalAccountForAuthUser(authUser: any, displ
   const byEmail = byEmailResult.data;
   if (byAuth?.id && sanitizeEmail(byAuth.normalized_email) !== normalizedEmail) throw new Error('EXTERNAL_AUTH_EMAIL_CHANGED_REQUIRES_REVIEW');
   if (byEmail?.id && sanitizeString(byEmail.auth_user_id, 120) !== authUserId) throw new Error('EXTERNAL_EMAIL_ACCOUNT_CONFLICT');
-  if (byAuth?.id || byEmail?.id) return byAuth || byEmail;
+  const existingAccount = byAuth || byEmail;
+  if (existingAccount?.id) {
+    const requestedDisplayName = sanitizeString(displayName, 180);
+    if (requestedDisplayName && !sanitizeString(existingAccount.display_name, 180)) {
+      const updated = await supabase
+        .from('external_professional_accounts')
+        .update({ display_name: requestedDisplayName, updated_at: new Date().toISOString() })
+        .eq('id', existingAccount.id)
+        .eq('auth_user_id', authUserId)
+        .select('id,auth_user_id,normalized_email,display_name')
+        .single();
+      if (updated.error) throw updated.error;
+      return updated.data;
+    }
+    return existingAccount;
+  }
 
   const grantCheck = await supabase
     .from('patient_evolution_share_grants')
@@ -18678,19 +18719,8 @@ async function bindExternalProfessionalAccount(accountId: string) {
 
 async function resolveExternalProfessionalAccount(req: any, expectedEmail?: string | null) {
   const expected = sanitizeEmail(expectedEmail || '');
-  const sessionIdentity = readExternalClinicalIdentitySession(req);
-  if (sessionIdentity) {
-    if (expected && sessionIdentity.normalizedEmail !== expected) return { account: null, mismatch: true };
-    const { data, error } = await supabase
-      .from('external_professional_accounts')
-      .select('id,auth_user_id,normalized_email,display_name')
-      .eq('id', sessionIdentity.accountId)
-      .eq('auth_user_id', sessionIdentity.authUserId)
-      .eq('normalized_email', sessionIdentity.normalizedEmail)
-      .maybeSingle();
-    if (error && !isMissingRelationError(error)) throw error;
-    if (data?.id) return { account: data, mismatch: false };
-  }
+  const externalSession = await resolveExternalProfessionalAccountFromExternalSession(req, expected);
+  if (externalSession.account || externalSession.mismatch) return externalSession;
 
   const internalUserId = sanitizeString(req?.session?.user?.id, 120);
   const internalEmail = sanitizeEmail(req?.session?.user?.email);
@@ -37295,7 +37325,7 @@ async function startServer() {
       const publicId = sanitizeString(req.params?.publicId, 120);
       const loaded = await loadActiveExternalEvolutionShare(publicId);
       if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
-      const identity = await resolveExternalProfessionalAccount(req, sanitizeEmail(loaded.grant.recipient_email));
+      const identity = await resolveExternalProfessionalAccountFromExternalSession(req, sanitizeEmail(loaded.grant.recipient_email));
       return res.json({
         success: true,
         data: {
@@ -37317,7 +37347,7 @@ async function startServer() {
       if (!isUuid(publicId)) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
       const loaded = await loadActiveExternalEvolutionShare(publicId);
       if (!loaded) return res.status(404).json({ success: false, error: 'Compartilhamento indisponível.' });
-      const identity = await resolveExternalProfessionalAccount(req, sanitizeEmail(loaded.grant.recipient_email));
+      const identity = await resolveExternalProfessionalAccountFromExternalSession(req, sanitizeEmail(loaded.grant.recipient_email));
       if (identity.account) return res.json({ success: true, data: { mode: 'AUTHENTICATED' } });
       if (identity.mismatch) return res.status(403).json({ success: false, code: 'EXTERNAL_ACCOUNT_MISMATCH', error: 'Este compartilhamento pertence a outra conta. Troque de conta para continuar.' });
 
@@ -37326,13 +37356,13 @@ async function startServer() {
       if (!validated) {
         const inspected = await inspectExternalEvolutionActivationToken(publicId, rawActivationToken);
         if (inspected?.tokenRow?.consumed_at && !inspected.tokenRow.invalidated_at) {
-          return res.json({ success: true, data: { mode: 'LOGIN', email: sanitizeEmail(inspected.loaded.grant.recipient_email), activationAlreadyConsumed: true } });
+          return res.json({ success: true, data: { mode: 'LOGIN', email: sanitizeEmail(inspected.loaded.grant.recipient_email), displayName: sanitizeString(inspected.loaded.careContact?.professional_name, 180) || null, activationAlreadyConsumed: true } });
         }
         return res.status(401).json({ success: false, code: 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED', error: 'Este link precisa ser renovado para continuar com segurança.' });
       }
       const recipientEmail = sanitizeEmail(validated.loaded.grant.recipient_email);
       const authUser = await findAuthUserByEmail(recipientEmail);
-      return res.json({ success: true, data: { mode: authUser?.id ? 'LOGIN' : 'ACTIVATE', email: recipientEmail } });
+      return res.json({ success: true, data: { mode: authUser?.id ? 'LOGIN' : 'ACTIVATE', email: recipientEmail, displayName: sanitizeString(validated.loaded.careContact?.professional_name, 180) || null } });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 180);
       if (message.includes('SCHEMA_UNAVAILABLE')) return res.status(503).json({ success: false, code: 'EXTERNAL_CARE_NETWORK_SCHEMA_UNAVAILABLE', error: 'O acesso externo ainda não está disponível.' });
@@ -37408,7 +37438,7 @@ async function startServer() {
       return res.json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || null, redirectPublicId: isUuid(publicId) ? publicId : null } });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 220);
-      if (message.includes('NO_ACTIVE_SHARES')) return res.status(403).json({ success: false, code: 'EXTERNAL_NO_ACTIVE_SHARES', error: 'Não há compartilhamentos ativos para esta conta.' });
+      if (message.includes('NO_ACTIVE_SHARES')) return res.status(403).json({ success: false, code: 'EXTERNAL_NO_ACTIVE_SHARES', error: 'Não encontramos compartilhamentos ativos para esta conta.' });
       return res.status(401).json({ success: false, code: 'INVALID_CREDENTIALS', error: 'E-mail ou senha inválidos.' });
     }
   });
@@ -37417,32 +37447,66 @@ async function startServer() {
     try {
       if (!enforcePayloadLimit(req, res, 8 * 1024, 'Ativação da Rede de cuidado')) return;
       const publicId = sanitizeString(req.params?.publicId, 120);
-      const password = validateStrongPassword(req.body?.password);
+      const password = validateExternalPartnerPassword(req.body?.password);
+      const displayName = sanitizeString(req.body?.displayName || req.body?.display_name, 180);
       const validated = await validateExternalEvolutionActivationToken(publicId, req.body?.activationToken || req.body?.activation_token);
       if (!validated) return res.status(401).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_INVALID', error: 'Este acesso expirou ou já foi utilizado. Solicite um novo link.' });
-      if (!password) return res.status(400).json({ success: false, code: 'PASSWORD_POLICY_INVALID', error: 'Use uma senha de 12 a 128 caracteres com maiúscula, minúscula, número e símbolo.' });
+      if (!displayName) return res.status(400).json({ success: false, code: 'EXTERNAL_DISPLAY_NAME_REQUIRED', error: 'Informe seu nome para criar o acesso.' });
+      if (!password) return res.status(400).json({ success: false, code: 'PASSWORD_POLICY_INVALID', error: 'Use uma senha de 8 a 128 caracteres.' });
       const email = sanitizeEmail(validated.loaded.grant.recipient_email);
-      const existingAuth = await findAuthUserByEmail(email);
-      if (existingAuth?.id) return res.status(409).json({ success: false, code: 'EXTERNAL_ACCOUNT_EXISTS_LOGIN_REQUIRED', error: 'Esta conta já existe. Entre com sua senha para continuar.' });
+      if (!email || !supabaseAuthClient) return res.status(503).json({ success: false, error: 'Não foi possível criar seu acesso agora.' });
 
-      const created = await supabase.auth.admin.createUser({
-        email,
-        password,
-        email_confirm: true,
-        user_metadata: { external_clinical_access: true },
-      });
-      if (created.error || !created.data?.user?.id) {
-        const duplicate = /already\s+(registered|exists)|user\s+already\s+registered|email.*already/i.test(String(created.error?.message || ''));
-        if (duplicate) return res.status(409).json({ success: false, code: 'EXTERNAL_ACCOUNT_EXISTS_LOGIN_REQUIRED', error: 'Esta conta já existe. Entre com sua senha para continuar.' });
-        throw created.error || new Error('EXTERNAL_AUTH_CREATE_FAILED');
+      let authUser = await findAuthUserByEmail(email);
+      let createdNow = false;
+      if (authUser?.id) {
+        // Idempotent convergence for a double submit: if the first request already
+        // created the Auth user with this password, the retry reuses the same UID.
+        const signIn = await supabaseAuthClient.auth.signInWithPassword({ email, password });
+        const signedInUser = signIn.data?.user || null;
+        if (signIn.error || !signedInUser?.id || sanitizeEmail(signedInUser.email) !== email) {
+          return res.status(409).json({ success: false, code: 'EXTERNAL_ACCOUNT_EXISTS_LOGIN_REQUIRED', error: 'Esta conta já está cadastrada. Entre com sua senha para continuar.' });
+        }
+        authUser = signedInUser;
+      } else {
+        const created = await supabase.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { external_clinical_access: true },
+        });
+        if (created.error || !created.data?.user?.id) {
+          const duplicate = /already\s+(registered|exists)|user\s+already\s+registered|email.*already/i.test(String(created.error?.message || ''));
+          if (duplicate) return res.status(409).json({ success: false, code: 'EXTERNAL_ACCOUNT_EXISTS_LOGIN_REQUIRED', error: 'Esta conta já está cadastrada. Entre com sua senha para continuar.' });
+          throw created.error || new Error('EXTERNAL_AUTH_CREATE_FAILED');
+        }
+        authUser = created.data.user;
+        createdNow = true;
+        invalidateAuthUserEmailCache(email);
       }
-      invalidateAuthUserEmailCache(email);
-      const account = await ensureExternalProfessionalAccountForAuthUser(created.data.user, sanitizeString(validated.loaded.careContact?.professional_name, 180) || null);
-      const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', { p_public_id: publicId, p_token_hash: validated.tokenHash, p_account_id: account.id });
-      if (consumed.error) throw consumed.error;
+
+      const account = await ensureExternalProfessionalAccountForAuthUser(authUser, displayName);
+      const consumed = await supabase.rpc('consume_external_evolution_activation_token_v1', {
+        p_public_id: publicId,
+        p_token_hash: validated.tokenHash,
+        p_account_id: account.id,
+      });
+      if (consumed.error) {
+        const consumedMessage = sanitizeString(consumed.error?.message, 220);
+        if (!consumedMessage.includes('EXPIRED_OR_USED')) throw consumed.error;
+        const grantCheck = await supabase
+          .from('patient_evolution_share_grants')
+          .select('id,external_account_id,status')
+          .eq('public_id', publicId)
+          .eq('status', 'ACTIVE')
+          .maybeSingle();
+        if (grantCheck.error || sanitizeString(grantCheck.data?.external_account_id, 120) !== sanitizeString(account.id, 120)) {
+          if (createdNow) console.warn('[ExternalCare] activation token consumed after Auth creation; account preserved for safe login retry.');
+          return res.status(409).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_USED', error: 'Este acesso já foi utilizado. Entre com sua senha para continuar.' });
+        }
+      }
       await bindExternalProfessionalAccount(account.id);
       await setExternalClinicalIdentitySession(req, account);
-      return res.status(201).json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || null } });
+      return res.status(createdNow ? 201 : 200).json({ success: true, data: { email: account.normalized_email, displayName: account.display_name || displayName } });
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 220);
       if (message.includes('EXPIRED_OR_USED')) return res.status(409).json({ success: false, code: 'EXTERNAL_ACTIVATION_TOKEN_USED', error: 'Este acesso já foi utilizado. Entre com sua senha ou solicite um novo link.' });
@@ -37514,7 +37578,7 @@ async function startServer() {
     } catch (error: any) {
       const message = sanitizeString(error?.message || String(error), 220);
       if (message.includes('NO_ACTIVE_SHARES')) {
-        return res.status(403).json({ success: false, code: 'EXTERNAL_NO_ACTIVE_SHARES', error: 'Não há compartilhamentos ativos para esta conta.' });
+        return res.status(403).json({ success: false, code: 'EXTERNAL_NO_ACTIVE_SHARES', error: 'Não encontramos compartilhamentos ativos para esta conta.' });
       }
       if (message.includes('EXTERNAL_EMAIL_ACCOUNT_CONFLICT') || message.includes('EXTERNAL_AUTH_EMAIL_CHANGED_REQUIRES_REVIEW')) {
         return res.status(409).json({ success: false, code: 'EXTERNAL_AUTH_IDENTITY_CONFLICT', error: 'Não foi possível vincular esta identidade automaticamente.' });
@@ -37559,7 +37623,7 @@ async function startServer() {
   const loadExternalCareNetworkCentral = async (accountId: string, limit: number, offset: number) => {
     const { data: grants, error: grantsError } = await supabase
       .from('patient_evolution_share_grants')
-      .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,care_network_contact_id,can_comment,first_viewed_at,last_viewed_at,view_count,last_invited_at,created_at')
+      .select('id,public_id,timeline_item_id,clinic_id,patient_id,recipient_email,care_network_contact_id,created_by_user_id,can_comment,first_viewed_at,last_viewed_at,view_count,last_invited_at,created_at')
       .eq('external_account_id', accountId)
       .eq('status', 'ACTIVE')
       .order('created_at', { ascending: false })
@@ -37573,19 +37637,22 @@ async function startServer() {
     const patientIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.patient_id, 120)).filter(isUuid)));
     const itemIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.timeline_item_id, 120)).filter(isUuid)));
     const contactIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.care_network_contact_id, 120)).filter(isUuid)));
+    const actorIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.created_by_user_id, 120)).filter(isUuid)));
     const grantIds = rows.map((row: any) => sanitizeString(row.id, 120)).filter(isUuid);
-    const [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult] = await Promise.all([
+    const [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult, actorsResult] = await Promise.all([
       supabase.from('clinics').select('id,name').in('id', clinicIds),
       supabase.from('patients').select('id,clinic_id,name,is_active,deleted_at,archived_at,status').in('id', patientIds),
       supabase.from('patient_evolution_timeline_items').select('id,clinic_id,patient_id,month_key,subject,created_at,updated_at,archived_at').in('id', itemIds),
       contactIds.length ? supabase.from('patient_care_network_contacts').select('id,clinic_id,patient_id,email,archived_at').in('id', contactIds) : Promise.resolve({ data: [], error: null } as any),
       grantIds.length ? supabase.from('patient_evolution_external_comments').select('id,grant_id').in('grant_id', grantIds) : Promise.resolve({ data: [], error: null } as any),
+      actorIds.length ? supabase.from('users').select('id,name').in('id', actorIds) : Promise.resolve({ data: [], error: null } as any),
     ]);
-    for (const result of [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult]) if (result.error) throw result.error;
+    for (const result of [clinicsResult, patientsResult, itemsResult, contactsResult, commentsResult, actorsResult]) if (result.error) throw result.error;
     const clinics = new Map((clinicsResult.data || []).map((row: any) => [String(row.id), row]));
     const patients = new Map((patientsResult.data || []).map((row: any) => [`${row.clinic_id}:${row.id}`, row]));
     const timelineItemsByScope = new Map((itemsResult.data || []).map((row: any) => [`${row.clinic_id}:${row.patient_id}:${row.id}`, row]));
     const contacts = new Map((contactsResult.data || []).map((row: any) => [String(row.id), row]));
+    const actors = new Map((actorsResult.data || []).map((row: any) => [String(row.id), row]));
     const commentCountByGrant = new Map<string, number>();
     for (const comment of commentsResult.data || []) commentCountByGrant.set(String(comment.grant_id), (commentCountByGrant.get(String(comment.grant_id)) || 0) + 1);
     const sharedItems = rows.flatMap((grant: any) => {
@@ -37612,6 +37679,7 @@ async function startServer() {
         commentCount: commentCountByGrant.get(String(grant.id)) || 0,
         sharedAt: grant.created_at,
         itemUpdatedAt: item.updated_at || item.created_at || grant.created_at,
+        senderName: sanitizeString(actors.get(String(grant.created_by_user_id))?.name, 180) || null,
       }];
     });
     return { items: sharedItems, nextOffset: hasMore ? offset + limit : null };

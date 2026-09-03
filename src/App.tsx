@@ -1598,7 +1598,7 @@ export default function App() {
               // External care-network routes own their authenticated context. A Google OAuth
               // return here must not create/overwrite clinic role or membership; the external
               // surface exchanges the verified Supabase session for its isolated server session.
-              if (isExternalEvolutionRoute || isExternalCareNetworkRoute) {
+              if (isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) {
                 setLoading(false);
                 return;
               }

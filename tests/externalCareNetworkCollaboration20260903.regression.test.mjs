@@ -36,7 +36,7 @@ assert.match(server, /getUserFromAccessToken\(accessToken\)/);
 assert.match(server, /tokenMatchesCurrentProject\(accessToken\)/);
 assert.match(external, /signInWithOAuth/);
 assert.match(external, /provider: 'google'/);
-assert.match(external, /Definir ou recuperar senha/);
+assert.match(external, /Esqueci minha senha/);
 assert.match(central, /signInWithOAuth/);
 assert.match(app, /External care-network routes own their authenticated context/);
 assert.doesNotMatch(server, /\.ilike\('recipient_email', normalizedEmail\)/);
