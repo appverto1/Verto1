@@ -7,6 +7,7 @@ const timeline = fs.readFileSync(new URL('../src/components/ExternalPatientTimel
 const central = fs.readFileSync(new URL('../src/components/ExternalCareNetworkCentral.tsx', import.meta.url), 'utf8');
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const epochMigration = fs.readFileSync(new URL('../supabase/migrations/20260903123000_external_share_grant_authorization_epochs.sql', import.meta.url), 'utf8');
+const inviteContract = fs.readFileSync(new URL('../src/utils/externalEvolutionInviteContract.mjs', import.meta.url), 'utf8');
 
 // Invite/public_id is only the authenticated entry point; it normalizes to a stable patient timeline route.
 assert.match(server, /app\.get\('\/api\/external\/evolution\/:publicId\/context'/);
@@ -14,7 +15,7 @@ assert.match(server, /externalPatientTimelinePath/);
 assert.match(locator, /openAuthorizedTimeline/);
 assert.match(locator, /window\.location\.replace\(path\)/);
 assert.doesNotMatch(locator, /\/content`/);
-assert.match(server, /Ver timeline compartilhada/);
+assert.match(inviteContract, /Acessar timeline compartilhada/);
 
 // Stable route is first-class and can survive another browser/device after normal authentication.
 assert.match(app, /\/rede-de-cuidado\\\/paciente\\\/\(\[\^\/\]\+\)\\\/\(\[\^\/\]\+\)/);

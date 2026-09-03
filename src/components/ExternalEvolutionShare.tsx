@@ -3,20 +3,20 @@ import { Eye, EyeOff, Loader2, LockKeyhole, LogIn, RefreshCw, ShieldCheck, UserR
 import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
 import { getSupabase } from '../lib/supabase';
+import { classifyExternalEvolutionBootstrapFailure, readExternalEvolutionActivationTokenFromUrl } from '../utils/externalEvolutionInviteContract.mjs';
 
 type Props = { publicId: string };
-type Stage = 'loading' | 'activate' | 'login' | 'refresh' | 'mismatch' | 'unavailable';
+type Stage = 'loading' | 'activate' | 'login' | 'refresh' | 'mismatch' | 'unavailable' | 'temporary-error';
 
 const safeJson = async (response: Response) => {
-  try { return await response.json(); } catch { return { success: false, error: `Falha HTTP ${response.status}` }; }
+  try { return await response.json(); } catch { return { success: false, code: 'EXTERNAL_INVALID_JSON_RESPONSE', error: `Falha HTTP ${response.status}` }; }
 };
 
 const activationTokenStorageKey = (publicId: string) => `verto_external_activation:${publicId}`;
 
 const readActivationTokenFromFragment = (publicId: string) => {
   if (typeof window === 'undefined') return '';
-  const fragment = window.location.hash.replace(/^#/, '');
-  const token = new URLSearchParams(fragment).get('activation_token') || '';
+  const token = readExternalEvolutionActivationTokenFromUrl(window.location.href);
   if (token) {
     try { window.sessionStorage.setItem(activationTokenStorageKey(publicId), token); } catch { /* optional browser storage */ }
     window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`);
@@ -42,12 +42,27 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
 
+  const applyAccessFailure = (status: number, payload: any) => {
+    const failure = classifyExternalEvolutionBootstrapFailure(status, payload?.code);
+    if (failure === 'MISMATCH') setStage('mismatch');
+    else if (failure === 'REFRESH') setStage('refresh');
+    else if (failure === 'UNAVAILABLE') setStage('unavailable');
+    else {
+      setStage('temporary-error');
+      setError('Não foi possível validar seu acesso agora. Tente novamente em instantes.');
+    }
+  };
+
   const openAuthorizedTimeline = async () => {
     const response = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}/context`, { credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' } });
     const result = await safeJson(response);
-    if (result?.code === 'EXTERNAL_ACCOUNT_MISMATCH') { setStage('mismatch'); return false; }
+    if (!response.ok || !result?.success) { applyAccessFailure(response.status, result); return false; }
     const path = String(result?.data?.timelinePath || '').trim();
-    if (!response.ok || !result?.success || !path.startsWith('/rede-de-cuidado/paciente/')) return false;
+    if (!path.startsWith('/rede-de-cuidado/paciente/')) {
+      setStage('temporary-error');
+      setError('Seu acesso foi validado, mas a timeline não pôde ser aberta agora. Tente novamente.');
+      return false;
+    }
     clearStoredActivationToken(publicId);
     window.location.replace(path);
     return true;
@@ -80,28 +95,18 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
 
   const resolveAccessState = async () => {
     setError('');
-    const metaResponse = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}`, { credentials: 'include', cache: 'no-store', headers: { Accept: 'application/json' } });
-    const meta = await safeJson(metaResponse);
-    if (!metaResponse.ok || !meta?.success) { setStage('unavailable'); return; }
-    if (meta?.data?.accountMismatch) { setStage('mismatch'); return; }
-    if (meta?.data?.authenticated) {
-      if (!(await openAuthorizedTimeline())) setStage('unavailable');
-      return;
-    }
-
-    const stateResponse = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}/access-state`, {
-      method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    const stateResponse = await fetch(`/api/external/evolution/${encodeURIComponent(publicId)}/bootstrap`, {
+      method: 'POST', credentials: 'include', cache: 'no-store', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ activationToken }),
     });
     const state = await safeJson(stateResponse);
-    if (state?.code === 'EXTERNAL_ACCOUNT_MISMATCH') { setStage('mismatch'); return; }
     if (!stateResponse.ok || !state?.success) {
-      setStage(state?.code === 'EXTERNAL_ACCESS_LINK_REFRESH_REQUIRED' ? 'refresh' : 'unavailable');
+      applyAccessFailure(stateResponse.status, state);
       return;
     }
     const mode = String(state?.data?.mode || '');
     if (mode === 'AUTHENTICATED') {
-      if (!(await openAuthorizedTimeline())) setStage('unavailable');
+      await openAuthorizedTimeline();
       return;
     }
     const resolvedEmail = String(state?.data?.email || '').trim().toLowerCase();
@@ -109,13 +114,22 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
     setEmail(resolvedEmail);
     if (suggestedDisplayName) setDisplayName((current) => current || suggestedDisplayName);
     if (mode === 'LOGIN' && await bridgeSupabaseSession(resolvedEmail)) {
-      if (!(await openAuthorizedTimeline())) setStage('unavailable');
+      await openAuthorizedTimeline();
       return;
     }
-    setStage(mode === 'ACTIVATE' ? 'activate' : 'login');
+    if (mode === 'ACTIVATE') { setStage('activate'); return; }
+    if (mode === 'LOGIN') { setStage('login'); return; }
+    setStage('temporary-error');
+    setError('Não foi possível determinar o modo de acesso deste convite. Tente novamente.');
   };
 
-  useEffect(() => { setStage('loading'); void resolveAccessState().catch(() => setStage('unavailable')); }, [publicId]);
+  useEffect(() => {
+    setStage('loading');
+    void resolveAccessState().catch(() => {
+      setStage('temporary-error');
+      setError('Não foi possível validar seu acesso agora. Verifique sua conexão e tente novamente.');
+    });
+  }, [publicId]);
 
   const activate = async () => {
     const name = displayName.trim();
@@ -215,6 +229,7 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
         <div className="p-5 sm:p-7">
           {stage === 'loading' && <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-center"><Loader2 size={30} className="animate-spin text-[#7a32fc]" /><p className="text-sm font-medium text-slate-500">Preparando sua timeline compartilhada...</p></div>}
           {stage === 'unavailable' && <StateCard icon={<LockKeyhole size={30} />} title="Compartilhamento indisponível" text="Este acesso pode ter sido revogado, arquivado ou não estar mais disponível." />}
+          {stage === 'temporary-error' && <StateCard icon={<RefreshCw size={30} />} title="Não foi possível validar seu acesso agora" text="Seu compartilhamento não foi marcado como indisponível. Tente novamente em instantes."><button type="button" onClick={() => { setStage('loading'); setError(''); void resolveAccessState(); }} disabled={busy} className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white disabled:opacity-60"><RefreshCw size={16} /> Tentar novamente</button></StateCard>}
           {stage === 'refresh' && <StateCard icon={<RefreshCw size={30} />} title="Este acesso precisa ser renovado" text="Por segurança, links antigos não funcionam como credencial permanente."><button type="button" onClick={() => void resendAccess()} disabled={busy} className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white disabled:opacity-60">{busy ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} Enviar novo acesso</button></StateCard>}
           {stage === 'mismatch' && <StateCard icon={<LockKeyhole size={30} />} title="Este compartilhamento pertence a outra conta" text="Troque de conta para continuar. Nenhum dado clínico foi exibido."><button type="button" onClick={() => void switchAccount()} disabled={busy} className="mt-5 inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-5 text-sm font-semibold text-white disabled:opacity-60">{busy ? <Loader2 size={16} className="animate-spin" /> : <LogIn size={16} />} Trocar conta</button></StateCard>}
 
