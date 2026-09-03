@@ -7,9 +7,9 @@ import {
   FileText,
   Loader2,
   LogOut,
+  Menu,
   Search,
   ShieldCheck,
-  Sparkles,
   UserRound,
 } from 'lucide-react';
 import { LogoVerto } from './Common';
@@ -45,8 +45,11 @@ type PatientGroup = {
   latestAt: string | null;
   latestSenderName: string | null;
   senderNames: string[];
+  unreadCount: number;
+  latestUnreadAt: string | null;
+  latestUnreadMonth: string | null;
 };
-type ClinicGroup = { clinicId: string; clinicName: string; patients: PatientGroup[] };
+type ClinicGroup = { clinicId: string; clinicName: string; patients: PatientGroup[]; unreadCount: number };
 
 const safeJson = async (response: Response) => {
   try { return await response.json(); } catch { return { success: false, error: `Falha HTTP ${response.status}` }; }
@@ -85,6 +88,8 @@ export const ExternalCareNetworkCentral = () => {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const hasNextPage = nextOffset !== null;
 
   const fetchSharedPage = async (offset = 0) => {
@@ -261,7 +266,7 @@ export const ExternalCareNetworkCentral = () => {
       if (!clinics.has(clinicKey)) clinics.set(clinicKey, { clinicId: row.clinicId, clinicName: row.clinicName, patients: new Map() });
       const clinic = clinics.get(clinicKey)!;
       const patientKey = `${row.patientId}:${row.patientName}`;
-      if (!clinic.patients.has(patientKey)) clinic.patients.set(patientKey, { patientId: row.patientId, patientName: row.patientName, items: [], latestAt: null, latestSenderName: null, senderNames: [], senderSet: new Set() });
+      if (!clinic.patients.has(patientKey)) clinic.patients.set(patientKey, { patientId: row.patientId, patientName: row.patientName, items: [], latestAt: null, latestSenderName: null, senderNames: [], senderSet: new Set(), unreadCount: 0, latestUnreadAt: null, latestUnreadMonth: null });
       const patient = clinic.patients.get(patientKey)!;
       patient.items.push(row);
       const sender = String(row.senderName || '').trim();
@@ -271,12 +276,26 @@ export const ExternalCareNetworkCentral = () => {
         patient.latestAt = candidate;
         patient.latestSenderName = sender || null;
       }
+      if (!row.firstViewedAt) {
+        patient.unreadCount += 1;
+        const unreadCandidate = String(row.sharedAt || row.itemUpdatedAt || '');
+        if (unreadCandidate && (!patient.latestUnreadAt || new Date(unreadCandidate).getTime() > new Date(patient.latestUnreadAt).getTime())) {
+          patient.latestUnreadAt = unreadCandidate;
+          patient.latestUnreadMonth = String(row.monthKey || '').slice(0, 7) || null;
+        }
+      }
     });
-    return Array.from(clinics.values()).map((clinic) => ({
-      clinicId: clinic.clinicId,
-      clinicName: clinic.clinicName,
-      patients: Array.from(clinic.patients.values()).map(({ senderSet, ...patient }) => ({ ...patient, senderNames: Array.from(senderSet) })),
-    }));
+    return Array.from(clinics.values()).map((clinic) => {
+      const patients = Array.from(clinic.patients.values())
+        .map(({ senderSet, ...patient }) => ({ ...patient, senderNames: Array.from(senderSet) }))
+        .sort((left, right) => {
+          if ((right.unreadCount > 0 ? 1 : 0) !== (left.unreadCount > 0 ? 1 : 0)) return (right.unreadCount > 0 ? 1 : 0) - (left.unreadCount > 0 ? 1 : 0);
+          const rightTime = new Date(right.unreadCount > 0 ? (right.latestUnreadAt || right.latestAt || 0) : (right.latestAt || 0)).getTime();
+          const leftTime = new Date(left.unreadCount > 0 ? (left.latestUnreadAt || left.latestAt || 0) : (left.latestAt || 0)).getTime();
+          return rightTime - leftTime;
+        });
+      return { clinicId: clinic.clinicId, clinicName: clinic.clinicName, patients, unreadCount: patients.reduce((total, patient) => total + patient.unreadCount, 0) };
+    }).sort((left, right) => (right.unreadCount > 0 ? 1 : 0) - (left.unreadCount > 0 ? 1 : 0));
   }, [rows]);
 
   const visibleGrouped = useMemo(() => {
@@ -298,9 +317,13 @@ export const ExternalCareNetworkCentral = () => {
     setExpandedClinics((current) => current.size ? current : new Set([visibleGrouped[0].clinicId]));
   }, [searchTerm, grouped.length]);
 
-  const openPatientTimeline = (clinicId: string, patientId: string) => {
-    window.location.href = `/rede-de-cuidado/paciente/${encodeURIComponent(clinicId)}/${encodeURIComponent(patientId)}`;
+  const openPatientTimeline = (clinicId: string, patientId: string, monthKey?: string | null) => {
+    const normalizedMonth = String(monthKey || '').match(/^\d{4}-\d{2}/)?.[0] || '';
+    window.location.href = `/rede-de-cuidado/paciente/${encodeURIComponent(clinicId)}/${encodeURIComponent(patientId)}${normalizedMonth ? `?month=${encodeURIComponent(normalizedMonth)}` : ''}`;
   };
+
+  const unreadRows = useMemo(() => rows.filter((row) => !row.firstViewedAt).slice().sort((left, right) => new Date(right.sharedAt || right.itemUpdatedAt || 0).getTime() - new Date(left.sharedAt || left.itemUpdatedAt || 0).getTime()), [rows]);
+  const unreadCount = unreadRows.length;
 
   const toggleClinic = (clinicId: string) => {
     setExpandedClinics((current) => {
@@ -350,75 +373,92 @@ export const ExternalCareNetworkCentral = () => {
 
   const firstName = String(profile.displayName || '').trim().split(/\s+/)[0] || '';
 
+  const notificationList = (
+    <div className="space-y-2">
+      {unreadRows.length === 0 ? (
+        <div className="rounded-2xl bg-slate-50 px-4 py-6 text-center"><Bell size={20} className="mx-auto text-slate-300" /><p className="mt-2 text-sm font-medium text-slate-600">Tudo visto por aqui</p><p className="mt-1 text-xs text-slate-400">Novos compartilhamentos aparecem aqui até a primeira visualização.</p></div>
+      ) : unreadRows.slice(0, 12).map((item) => (
+        <button key={item.grantId} type="button" onClick={() => openPatientTimeline(item.clinicId, item.patientId, item.monthKey)} className="flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">
+          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600"><FileText size={14} /></span>
+          <span className="min-w-0 flex-1"><span className="block text-xs font-semibold text-slate-800">Novo conteúdo</span><span className="mt-0.5 block truncate text-[11px] text-slate-500">{item.clinicName} · {item.patientName}</span><span className="mt-0.5 block truncate text-[11px] text-slate-400">{item.subject || 'Evolução compartilhada'}{item.sharedAt ? ` · ${formatDateTime(item.sharedAt)}` : ''}</span></span>
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <main className="min-h-screen bg-[#faf9fd]">
-      <header className="border-b border-violet-100/70 bg-white/90 backdrop-blur-md">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
-          <div><LogoVerto size={32} showText /><p className="mt-1 text-[11px] font-normal text-slate-400">Rede de cuidado</p></div>
-          <button type="button" disabled={busy} onClick={() => void logout()} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-medium text-slate-600 transition hover:bg-slate-50"><LogOut size={15} /> Sair</button>
+      <header className="sticky top-0 z-30 border-b border-violet-100/70 bg-white/95 backdrop-blur-md">
+        <div className="relative mx-auto flex max-w-6xl items-center justify-between px-4 py-3 sm:px-6">
+          <div><LogoVerto size={29} showText /><p className="mt-0.5 text-[10px] text-slate-400">Rede de cuidado</p></div>
+          <div className="flex items-center gap-1.5">
+            <div className="relative">
+              <button type="button" onClick={() => setNotificationsOpen((current) => !current)} aria-label={`Notificações${unreadCount ? `, ${unreadCount} novas` : ''}`} aria-expanded={notificationsOpen} className="relative flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 transition hover:bg-violet-50 hover:text-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">
+                <Bell size={18} />
+                {unreadCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-white ring-2 ring-white">{Math.min(99, unreadCount)}</span>}
+              </button>
+              {notificationsOpen && <div className="absolute right-0 top-12 z-40 w-[min(360px,calc(100vw-2rem))] rounded-[22px] border border-violet-100 bg-white p-3 shadow-[0_24px_70px_rgba(49,32,92,.16)]"><div className="mb-2 flex items-center justify-between px-2"><div><p className="text-xs font-semibold text-slate-800">Notificações</p><p className="text-[10px] text-slate-400">Conteúdos ainda não visualizados</p></div>{unreadCount > 0 && <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">{unreadCount} {unreadCount === 1 ? 'novo' : 'novos'}</span>}</div>{notificationList}</div>}
+            </div>
+            <button type="button" onClick={() => setMobileMenuOpen((current) => !current)} aria-label="Abrir menu" aria-expanded={mobileMenuOpen} className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-600 transition hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 md:hidden"><Menu size={19} /></button>
+          </div>
         </div>
+        {mobileMenuOpen && <div className="border-t border-slate-100 bg-white px-4 py-3 md:hidden"><div className="mx-auto max-w-6xl space-y-1">
+          <button type="button" onClick={() => { setTab('shared'); setMobileMenuOpen(false); }} className={`flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-sm font-medium ${tab === 'shared' ? 'bg-violet-50 text-violet-700' : 'text-slate-600'}`}><FileText size={16} /> Compartilhados comigo</button>
+          <button type="button" onClick={() => { setTab('notifications'); setMobileMenuOpen(false); }} className={`flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-sm font-medium ${tab === 'notifications' ? 'bg-violet-50 text-violet-700' : 'text-slate-600'}`}><Bell size={16} /> Notificações {unreadCount > 0 && <span className="ml-auto rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{unreadCount}</span>}</button>
+          <button type="button" onClick={() => { setTab('profile'); setMobileMenuOpen(false); }} className={`flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-sm font-medium ${tab === 'profile' ? 'bg-violet-50 text-violet-700' : 'text-slate-600'}`}><UserRound size={16} /> Meu perfil</button>
+          <button type="button" disabled={busy} onClick={() => void logout()} className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 text-sm font-medium text-rose-600 hover:bg-rose-50"><LogOut size={16} /> {busy ? 'Saindo...' : 'Sair'}</button>
+        </div></div>}
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 py-7 sm:px-6 sm:py-10">
-        <section className="relative overflow-hidden rounded-[30px] bg-white px-5 py-5 shadow-[0_20px_70px_rgba(67,45,122,0.07)] ring-1 ring-violet-100/60 sm:px-8 sm:py-7">
-          <div className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-violet-100/50 blur-3xl" aria-hidden="true" />
-          <div className="relative max-w-2xl">
-            <span className="inline-flex items-center gap-2 rounded-full bg-violet-50 px-3 py-1.5 text-[11px] font-medium text-[#7a32fc]"><Sparkles size={13} /> Seu espaço Verto</span>
-            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{firstName ? `Olá, ${firstName}.` : 'Olá.'}</h1>
-            <p className="mt-2 text-sm font-normal leading-6 text-slate-500 sm:text-base">Tudo o que suas clínicas parceiras compartilharam com você, organizado em um só lugar.</p>
-          </div>
+      <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-7">
+        <section className="relative overflow-hidden rounded-[26px] bg-white px-5 py-4 shadow-[0_18px_55px_rgba(67,45,122,0.06)] ring-1 ring-violet-100/60 sm:px-7 sm:py-5">
+          <div className="absolute -right-16 -top-24 h-44 w-44 rounded-full bg-violet-100/50 blur-3xl" aria-hidden="true" />
+          <div className="relative"><h1 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">{firstName ? `Olá, ${firstName}.` : 'Olá.'}</h1><p className="mt-1 text-sm text-slate-500">Seus compartilhamentos, organizados em um só lugar.</p></div>
         </section>
 
-        <div className="mt-6 grid gap-5 md:grid-cols-[210px_minmax(0,1fr)]">
-          <nav className="flex h-fit gap-1 overflow-x-auto rounded-2xl bg-white p-2 shadow-sm ring-1 ring-slate-100 md:block">
-            {([
-              ['shared', 'Compartilhados comigo', FileText],
-              ['notifications', 'Notificações', Bell],
-              ['profile', 'Meu perfil', UserRound],
-            ] as const).map(([key, label, Icon]) => <button key={key} type="button" onClick={() => { setTab(key); setError(''); setMessage(''); }} className={`flex min-h-11 shrink-0 items-center gap-2 rounded-xl px-3 text-left text-sm font-medium transition md:w-full ${tab === key ? 'bg-violet-50 text-[#7a32fc]' : 'text-slate-600 hover:bg-slate-50'}`}><Icon size={16} /> {label}</button>)}
+        <div className="mt-5 grid gap-5 md:grid-cols-[205px_minmax(0,1fr)]">
+          <nav className="hidden min-h-[440px] flex-col rounded-2xl bg-white p-2 shadow-sm ring-1 ring-slate-100 md:flex" aria-label="Navegação da Rede de cuidado">
+            <button type="button" onClick={() => { setTab('shared'); setError(''); setMessage(''); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 text-left text-sm font-medium transition ${tab === 'shared' ? 'bg-violet-50 text-[#7a32fc]' : 'text-slate-600 hover:bg-slate-50'}`}><FileText size={16} /> Compartilhados comigo</button>
+            <button type="button" onClick={() => { setTab('profile'); setError(''); setMessage(''); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 text-left text-sm font-medium transition ${tab === 'profile' ? 'bg-violet-50 text-[#7a32fc]' : 'text-slate-600 hover:bg-slate-50'}`}><UserRound size={16} /> Meu perfil</button>
+            <div className="flex-1" />
+            <button type="button" disabled={busy} onClick={() => void logout()} className="flex min-h-11 items-center gap-2 rounded-xl px-3 text-left text-sm font-medium text-rose-600 transition hover:bg-rose-50 disabled:opacity-50"><LogOut size={16} /> {busy ? 'Saindo...' : 'Sair'}</button>
           </nav>
 
           <section className="min-w-0">
-            {error && <p className="mb-4 rounded-xl bg-rose-50 px-4 py-3 text-xs font-normal text-rose-700">{error}</p>}
-            {message && <p className="mb-4 rounded-xl bg-emerald-50 px-4 py-3 text-xs font-normal text-emerald-700">{message}</p>}
+            {error && <p className="mb-4 rounded-xl bg-rose-50 px-4 py-3 text-xs text-rose-700">{error}</p>}
+            {message && <p className="mb-4 rounded-xl bg-emerald-50 px-4 py-3 text-xs text-emerald-700">{message}</p>}
 
             {tab === 'shared' && <div>
-              <div className="mb-5 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-                <div><h2 className="text-xl font-semibold text-slate-900">Compartilhados comigo</h2><p className="mt-1 text-sm font-normal text-slate-500">Clínicas, pacientes e timelines disponíveis para a sua conta.</p></div>
-              </div>
+              <div className="mb-4"><h2 className="text-xl font-semibold text-slate-900">Compartilhados comigo</h2><p className="mt-1 text-sm text-slate-500">Clínicas, pacientes e timelines disponíveis para a sua conta.</p></div>
+              <label className="relative mb-5 block"><Search size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" /><input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Buscar clínica, paciente ou profissional..." className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-11 text-sm outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100/50" />{searchLoading && <Loader2 size={16} className="absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-[#7a32fc]" />}</label>
 
-              <label className="relative mb-5 block">
-                <Search size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Buscar clínica, paciente ou profissional..." className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white pl-11 pr-11 text-sm outline-none transition focus:border-violet-300 focus:ring-4 focus:ring-violet-100/50" />
-                {searchLoading && <Loader2 size={16} className="absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-[#7a32fc]" />}
-              </label>
-
-              {visibleGrouped.length === 0 ? <div className="rounded-[24px] border border-dashed border-slate-200 bg-white p-10 text-center"><Search size={24} className="mx-auto text-slate-300" /><p className="mt-3 text-sm font-medium text-slate-600">Nenhum resultado por aqui.</p><p className="mt-1 text-xs font-normal leading-5 text-slate-400">Tente buscar pelo nome da clínica, do paciente ou de quem compartilhou.</p></div> : <div className="space-y-3">{visibleGrouped.map((clinic) => {
+              {visibleGrouped.length === 0 ? <div className="rounded-[24px] border border-dashed border-slate-200 bg-white p-10 text-center"><Search size={24} className="mx-auto text-slate-300" /><p className="mt-3 text-sm font-medium text-slate-600">Nenhum resultado por aqui.</p><p className="mt-1 text-xs leading-5 text-slate-400">Tente buscar pelo nome da clínica, do paciente ou de quem compartilhou.</p></div> : <div className="space-y-3">{visibleGrouped.map((clinic) => {
                 const expanded = expandedClinics.has(clinic.clinicId);
                 return <section key={clinic.clinicId} className="overflow-hidden rounded-[24px] bg-white shadow-sm ring-1 ring-slate-100">
-                  <button type="button" onClick={() => toggleClinic(clinic.clinicId)} className="flex w-full items-center gap-4 px-4 py-4 text-left transition hover:bg-violet-50/35 sm:px-5">
+                  <button type="button" onClick={() => toggleClinic(clinic.clinicId)} aria-expanded={expanded} className="flex w-full items-center gap-4 px-4 py-4 text-left transition hover:bg-violet-50/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-300 sm:px-5">
                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-50 text-[#7a32fc]"><Building2 size={19} /></span>
-                    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-900">{clinic.clinicName}</span><span className="mt-0.5 block text-xs font-normal text-slate-500">{clinic.patients.length} {clinic.patients.length === 1 ? 'paciente compartilhado' : 'pacientes compartilhados'}</span></span>
-                    <span className="flex h-8 min-w-8 items-center justify-center rounded-full bg-slate-50 px-2 text-xs font-medium text-slate-500">{clinic.patients.length}</span>
+                    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-900">{clinic.clinicName}</span><span className="mt-0.5 block text-xs text-slate-500">{clinic.patients.length} {clinic.patients.length === 1 ? 'paciente compartilhado' : 'pacientes compartilhados'}</span></span>
+                    {clinic.unreadCount > 0 ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-700">{clinic.unreadCount} {clinic.unreadCount === 1 ? 'novo' : 'novos'}</span> : <span className="flex h-8 min-w-8 items-center justify-center rounded-full bg-slate-50 px-2 text-xs font-medium text-slate-500">{clinic.patients.length}</span>}
                     <ChevronDown size={17} className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
                   </button>
-                  {expanded && <div className="border-t border-slate-100 px-3 py-3 sm:px-4">{clinic.patients.map((patient) => <button key={patient.patientId} type="button" onClick={() => openPatientTimeline(clinic.clinicId, patient.patientId)} className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3.5 text-left transition hover:bg-violet-50/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-500 transition group-hover:bg-white group-hover:text-[#7a32fc]"><FileText size={17} /></span>
-                    <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{patient.patientName}</span><span className="mt-0.5 block text-[11px] font-normal text-slate-500">{patient.items.length} {patient.items.length === 1 ? 'evolução' : 'evoluções'} · {formatFriendlyUpdate(patient.latestAt)}</span>{patient.latestSenderName && <span className="mt-0.5 block truncate text-[11px] font-normal text-slate-400">Compartilhado por {patient.latestSenderName}</span>}</span>
+                  {expanded && <div className="border-t border-slate-100 px-3 py-3 sm:px-4">{clinic.patients.map((patient) => <button key={patient.patientId} type="button" onClick={() => openPatientTimeline(clinic.clinicId, patient.patientId, patient.latestUnreadMonth)} className={`group flex w-full items-center gap-3 rounded-2xl px-3 py-3.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300 ${patient.unreadCount > 0 ? 'border-l-2 border-emerald-400 bg-emerald-50/45 hover:bg-emerald-50/70' : 'hover:bg-violet-50/60'}`}>
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition ${patient.unreadCount > 0 ? 'bg-white text-emerald-600 shadow-sm' : 'bg-slate-50 text-slate-500 group-hover:bg-white group-hover:text-[#7a32fc]'}`}><FileText size={17} /></span>
+                    <span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="truncate text-sm font-medium text-slate-800">{patient.patientName}</span>{patient.unreadCount > 0 && <span className="rounded-full bg-emerald-100/80 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700">Novo · {patient.unreadCount}</span>}</span><span className="mt-0.5 block text-[11px] text-slate-500">{patient.items.length} {patient.items.length === 1 ? 'evolução' : 'evoluções'} · {formatFriendlyUpdate(patient.latestAt)}</span>{patient.latestSenderName && <span className="mt-0.5 block truncate text-[11px] text-slate-400">Compartilhado por {patient.latestSenderName}</span>}</span>
                     <ChevronRight size={16} className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-[#7a32fc]" />
                   </button>)}</div>}
                 </section>;
               })}</div>}
 
-              {hasNextPage && !searchTerm.trim() && <div className="mt-5 flex justify-center"><button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await loadShared(nextOffset, true); } catch (loadError: any) { setError(loadError?.message || 'Não foi possível carregar mais compartilhamentos.'); } finally { setBusy(false); } }} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">{busy ? <Loader2 size={14} className="animate-spin" /> : null} Carregar mais</button></div>}
+              {hasNextPage && !searchTerm.trim() && <div className="mt-5 flex justify-center"><button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await loadShared(nextOffset, true); } catch (loadError: any) { setError(loadError?.message || 'Não foi possível carregar mais compartilhamentos.'); } finally { setBusy(false); } }} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">{busy ? <Loader2 size={14} className="animate-spin" /> : null} {busy ? 'Carregando...' : 'Carregar mais'}</button></div>}
             </div>}
 
-            {tab === 'notifications' && <div><div className="mb-5"><h2 className="text-xl font-semibold text-slate-900">Notificações</h2><p className="mt-1 text-sm font-normal text-slate-500">Compartilhamentos recentes enviados para sua conta.</p></div><div className="space-y-2">{rows.length === 0 ? <div className="rounded-[24px] border border-dashed border-slate-200 bg-white p-10 text-center text-sm font-normal text-slate-500">Nenhuma notificação recente.</div> : rows.map((item) => <button key={item.grantId} type="button" onClick={() => openPatientTimeline(item.clinicId, item.patientId)} className="flex w-full items-start gap-3 rounded-[22px] bg-white p-4 text-left shadow-sm ring-1 ring-slate-100 transition hover:ring-violet-200"><span className="rounded-xl bg-violet-50 p-2 text-[#7a32fc]"><Bell size={15} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-slate-800">Novo conteúdo compartilhado</span><span className="mt-1 block text-xs font-normal text-slate-500">{item.clinicName} · {item.patientName}</span>{item.senderName && <span className="mt-1 block text-[11px] font-normal text-slate-400">Compartilhado por {item.senderName}</span>}<span className="mt-1 block text-[11px] font-normal text-slate-400">{item.subject || 'Evolução clínica'} · {formatDateTime(item.sharedAt)}</span></span></button>)}</div></div>}
+            {tab === 'notifications' && <div><div className="mb-5"><h2 className="text-xl font-semibold text-slate-900">Notificações</h2><p className="mt-1 text-sm text-slate-500">Conteúdos ativos que você ainda não visualizou.</p></div>{notificationList}</div>}
 
-            {tab === 'profile' && <div className="rounded-[26px] bg-white p-5 shadow-sm ring-1 ring-slate-100 sm:p-6"><h2 className="text-xl font-semibold text-slate-900">Meu perfil</h2><p className="mt-1 text-sm font-normal text-slate-500">Sua conta é única para todos os compartilhamentos enviados ao mesmo e-mail.</p><div className="mt-6 max-w-lg space-y-4"><label className="block"><span className="text-xs font-medium text-slate-600">E-mail</span><input value={profile.email} readOnly className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500" /></label><label className="block"><span className="text-xs font-medium text-slate-600">Nome</span><input value={displayName} maxLength={180} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none transition focus:border-[#7a32fc]" /></label><button type="button" disabled={busy || !displayName.trim()} onClick={() => void saveProfile()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-medium text-white disabled:opacity-50">{busy ? <Loader2 size={16} className="animate-spin" /> : null} Salvar</button></div></div>}
+            {tab === 'profile' && <div className="rounded-[26px] bg-white p-5 shadow-sm ring-1 ring-slate-100 sm:p-6"><h2 className="text-xl font-semibold text-slate-900">Meu perfil</h2><p className="mt-1 text-sm text-slate-500">Sua conta é única para todos os compartilhamentos enviados ao mesmo e-mail.</p><div className="mt-6 max-w-lg space-y-4"><label className="block"><span className="text-xs font-medium text-slate-600">E-mail</span><input value={profile.email} readOnly className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500" /></label><label className="block"><span className="text-xs font-medium text-slate-600">Nome</span><input value={displayName} maxLength={180} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none transition focus:border-[#7a32fc]" /></label><button type="button" disabled={busy || !displayName.trim()} onClick={() => void saveProfile()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-medium text-white disabled:opacity-50">{busy ? <Loader2 size={16} className="animate-spin" /> : message === 'Perfil atualizado.' ? <ShieldCheck size={16} /> : null} {busy ? 'Salvando...' : message === 'Perfil atualizado.' ? 'Salvo' : 'Salvar'}</button></div></div>}
           </section>
         </div>
       </div>
     </main>
   );
+
 };

@@ -36870,7 +36870,7 @@ async function startServer() {
     const itemIds = itemRows.map((item: any) => sanitizeString(item?.id, 120)).filter(isUuid);
     const fileIds = itemRows.map((item: any) => sanitizeString(item?.patient_file_id, 120)).filter(isUuid);
 
-    const [grantResult, fileResult] = await Promise.all([
+    const [grantResult, fileResult, auditResult] = await Promise.all([
       itemIds.length
         ? supabase
             .from('patient_evolution_share_grants')
@@ -36889,24 +36889,61 @@ async function startServer() {
             .eq('clinic_id', clinicId)
             .eq('patient_id', patientId)
         : Promise.resolve({ data: [], error: null } as any),
+      itemIds.length
+        ? supabase
+            .from('patient_evolution_external_access_audit')
+            .select('grant_id,timeline_item_id,recipient_email,action,created_at')
+            .eq('clinic_id', clinicId)
+            .eq('patient_id', patientId)
+            .in('timeline_item_id', itemIds)
+            .in('action', ['VIEWED', 'FILE_ACCESSED'])
+            .order('created_at', { ascending: false })
+            .limit(500)
+        : Promise.resolve({ data: [], error: null } as any),
     ]);
     if (grantResult.error) throw grantResult.error;
     if (fileResult.error && !isMissingRelationError(fileResult.error)) throw fileResult.error;
+    if (auditResult.error && !isMissingRelationError(auditResult.error)) throw auditResult.error;
 
     const grantRows = grantResult.data || [];
     const grantIds = grantRows.map((grant: any) => sanitizeString(grant?.id, 120)).filter(isUuid);
     const careContactIds = Array.from(new Set(grantRows.map((grant: any) => sanitizeString(grant?.care_network_contact_id, 120)).filter(isUuid)));
-    const [careContactResult, commentResult] = await Promise.all([
+    const auditRows = auditResult.data || [];
+    const [careContactResult, commentResult, auditContactResult] = await Promise.all([
       careContactIds.length
         ? supabase.from('patient_care_network_contacts').select('id,professional_name,specialty,professional_registry,email,source').in('id', careContactIds).eq('clinic_id', clinicId).eq('patient_id', patientId)
         : Promise.resolve({ data: [], error: null } as any),
       grantIds.length
         ? supabase.from('patient_evolution_external_comments').select('id,grant_id,body,created_at').in('grant_id', grantIds).eq('clinic_id', clinicId).eq('patient_id', patientId).order('created_at', { ascending: true }).limit(300)
         : Promise.resolve({ data: [], error: null } as any),
+      auditRows.length
+        ? supabase.from('patient_care_network_contacts').select('professional_name,email').eq('clinic_id', clinicId).eq('patient_id', patientId).limit(300)
+        : Promise.resolve({ data: [], error: null } as any),
     ]);
     if (careContactResult.error && !isMissingRelationError(careContactResult.error)) throw careContactResult.error;
     if (commentResult.error && !isMissingRelationError(commentResult.error)) throw commentResult.error;
+    if (auditContactResult.error && !isMissingRelationError(auditContactResult.error)) throw auditContactResult.error;
     const careContactById = new Map((careContactResult.data || []).map((row: any) => [String(row.id), row]));
+    const auditContactByEmail = new Map((auditContactResult.data || []).map((row: any) => [sanitizeEmail(row?.email), row]));
+    const activeGrantIds = new Set(grantIds);
+    const accessActivityByItem = new Map<string, any[]>();
+    for (const audit of auditRows) {
+      const itemId = sanitizeString(audit?.timeline_item_id, 120);
+      const action = sanitizeString(audit?.action, 40);
+      if (!isUuid(itemId) || !['VIEWED', 'FILE_ACCESSED'].includes(action)) continue;
+      const email = sanitizeEmail(audit?.recipient_email);
+      const contact = auditContactByEmail.get(email);
+      const list = accessActivityByItem.get(itemId) || [];
+      list.push({
+        grantId: isUuid(audit?.grant_id) ? audit.grant_id : null,
+        action,
+        createdAt: audit?.created_at || null,
+        recipientEmail: email || null,
+        recipientName: sanitizeString(contact?.professional_name, 180) || email || 'Profissional externo',
+        previousAuthorization: isUuid(audit?.grant_id) ? !activeGrantIds.has(audit.grant_id) : false,
+      });
+      accessActivityByItem.set(itemId, list);
+    }
     const commentsByGrant = new Map<string, any[]>();
     for (const comment of commentResult.data || []) {
       const key = String(comment.grant_id || '');
@@ -36964,6 +37001,12 @@ async function startServer() {
           createdAt: file.created_at,
         } : null,
         grants: grantsByItem.get(String(item.id)) || [],
+        accessActivity: (accessActivityByItem.get(String(item.id)) || []).map((event: any) => ({
+          ...event,
+          subject: item.subject,
+          monthKey: item.month_key,
+          fileName: event.action === 'FILE_ACCESSED' && file ? file.file_name : null,
+        })),
       };
     });
   };
