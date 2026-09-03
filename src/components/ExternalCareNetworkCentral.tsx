@@ -85,6 +85,7 @@ export const ExternalCareNetworkCentral = () => {
   const [displayName, setDisplayName] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const hasNextPage = nextOffset !== null;
 
   const fetchSharedPage = async (offset = 0) => {
     const response = await fetch(`/api/external/care-network/shared?limit=100&offset=${Math.max(0, offset)}`, {
@@ -359,11 +360,11 @@ export const ExternalCareNetworkCentral = () => {
       </header>
 
       <div className="mx-auto max-w-6xl px-4 py-7 sm:px-6 sm:py-10">
-        <section className="relative overflow-hidden rounded-[30px] bg-white px-5 py-7 shadow-[0_20px_70px_rgba(67,45,122,0.07)] ring-1 ring-violet-100/60 sm:px-8 sm:py-9">
+        <section className="relative overflow-hidden rounded-[30px] bg-white px-5 py-5 shadow-[0_20px_70px_rgba(67,45,122,0.07)] ring-1 ring-violet-100/60 sm:px-8 sm:py-7">
           <div className="absolute -right-16 -top-20 h-48 w-48 rounded-full bg-violet-100/50 blur-3xl" aria-hidden="true" />
           <div className="relative max-w-2xl">
             <span className="inline-flex items-center gap-2 rounded-full bg-violet-50 px-3 py-1.5 text-[11px] font-medium text-[#7a32fc]"><Sparkles size={13} /> Seu espaço Verto</span>
-            <h1 className="mt-4 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{firstName ? `Olá, ${firstName}.` : 'Olá.'}</h1>
+            <h1 className="mt-3 text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{firstName ? `Olá, ${firstName}.` : 'Olá.'}</h1>
             <p className="mt-2 text-sm font-normal leading-6 text-slate-500 sm:text-base">Tudo o que suas clínicas parceiras compartilharam com você, organizado em um só lugar.</p>
           </div>
         </section>
@@ -401,15 +402,15 @@ export const ExternalCareNetworkCentral = () => {
                     <span className="flex h-8 min-w-8 items-center justify-center rounded-full bg-slate-50 px-2 text-xs font-medium text-slate-500">{clinic.patients.length}</span>
                     <ChevronDown size={17} className={`text-slate-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
                   </button>
-                  {expanded && <div className="border-t border-slate-100 px-3 py-3 sm:px-4">{clinic.patients.map((patient) => <button key={patient.patientId} type="button" onClick={() => openPatientTimeline(clinic.clinicId, patient.patientId)} className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3.5 text-left transition hover:bg-violet-50/60">
+                  {expanded && <div className="border-t border-slate-100 px-3 py-3 sm:px-4">{clinic.patients.map((patient) => <button key={patient.patientId} type="button" onClick={() => openPatientTimeline(clinic.clinicId, patient.patientId)} className="group flex w-full items-center gap-3 rounded-2xl px-3 py-3.5 text-left transition hover:bg-violet-50/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300">
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-50 text-slate-500 transition group-hover:bg-white group-hover:text-[#7a32fc]"><FileText size={17} /></span>
                     <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{patient.patientName}</span><span className="mt-0.5 block text-[11px] font-normal text-slate-500">{patient.items.length} {patient.items.length === 1 ? 'evolução' : 'evoluções'} · {formatFriendlyUpdate(patient.latestAt)}</span>{patient.latestSenderName && <span className="mt-0.5 block truncate text-[11px] font-normal text-slate-400">Compartilhado por {patient.latestSenderName}</span>}</span>
-                    <span className="hidden text-xs font-medium text-[#7a32fc] sm:block">Abrir timeline</span><ChevronRight size={16} className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-[#7a32fc]" />
+                    <ChevronRight size={16} className="text-slate-300 transition group-hover:translate-x-0.5 group-hover:text-[#7a32fc]" />
                   </button>)}</div>}
                 </section>;
               })}</div>}
 
-              {nextOffset !== null && !searchTerm.trim() && <div className="mt-5 flex justify-center"><button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await loadShared(nextOffset, true); } catch (loadError: any) { setError(loadError?.message || 'Não foi possível carregar mais compartilhamentos.'); } finally { setBusy(false); } }} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">{busy ? <Loader2 size={14} className="animate-spin" /> : null} Carregar mais</button></div>}
+              {hasNextPage && !searchTerm.trim() && <div className="mt-5 flex justify-center"><button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await loadShared(nextOffset, true); } catch (loadError: any) { setError(loadError?.message || 'Não foi possível carregar mais compartilhamentos.'); } finally { setBusy(false); } }} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50">{busy ? <Loader2 size={14} className="animate-spin" /> : null} Carregar mais</button></div>}
             </div>}
 
             {tab === 'notifications' && <div><div className="mb-5"><h2 className="text-xl font-semibold text-slate-900">Notificações</h2><p className="mt-1 text-sm font-normal text-slate-500">Compartilhamentos recentes enviados para sua conta.</p></div><div className="space-y-2">{rows.length === 0 ? <div className="rounded-[24px] border border-dashed border-slate-200 bg-white p-10 text-center text-sm font-normal text-slate-500">Nenhuma notificação recente.</div> : rows.map((item) => <button key={item.grantId} type="button" onClick={() => openPatientTimeline(item.clinicId, item.patientId)} className="flex w-full items-start gap-3 rounded-[22px] bg-white p-4 text-left shadow-sm ring-1 ring-slate-100 transition hover:ring-violet-200"><span className="rounded-xl bg-violet-50 p-2 text-[#7a32fc]"><Bell size={15} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-slate-800">Novo conteúdo compartilhado</span><span className="mt-1 block text-xs font-normal text-slate-500">{item.clinicName} · {item.patientName}</span>{item.senderName && <span className="mt-1 block text-[11px] font-normal text-slate-400">Compartilhado por {item.senderName}</span>}<span className="mt-1 block text-[11px] font-normal text-slate-400">{item.subject || 'Evolução clínica'} · {formatDateTime(item.sharedAt)}</span></span></button>)}</div></div>}
