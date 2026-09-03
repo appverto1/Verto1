@@ -20,6 +20,7 @@ type SharedRow = {
   viewCount?: number;
   commentCount?: number;
   sharedAt?: string | null;
+  itemUpdatedAt?: string | null;
 };
 
 type Profile = { email: string; displayName?: string | null };
@@ -168,19 +169,24 @@ export const ExternalCareNetworkCentral = () => {
   };
 
   const grouped = useMemo(() => {
-    const clinics = new Map<string, { clinicId: string; clinicName: string; patients: Map<string, { patientId: string; patientName: string; items: SharedRow[] }> }>();
+    const clinics = new Map<string, { clinicId: string; clinicName: string; patients: Map<string, { patientId: string; patientName: string; items: SharedRow[]; latestAt: string | null }> }>();
     rows.forEach((row) => {
       const clinicKey = `${row.clinicId}:${row.clinicName}`;
       if (!clinics.has(clinicKey)) clinics.set(clinicKey, { clinicId: row.clinicId, clinicName: row.clinicName, patients: new Map() });
       const clinic = clinics.get(clinicKey)!;
       const patientKey = `${row.patientId}:${row.patientName}`;
-      if (!clinic.patients.has(patientKey)) clinic.patients.set(patientKey, { patientId: row.patientId, patientName: row.patientName, items: [] });
-      clinic.patients.get(patientKey)!.items.push(row);
+      if (!clinic.patients.has(patientKey)) clinic.patients.set(patientKey, { patientId: row.patientId, patientName: row.patientName, items: [], latestAt: null });
+      const patient = clinic.patients.get(patientKey)!;
+      patient.items.push(row);
+      const candidate = String(row.itemUpdatedAt || row.sharedAt || '');
+      if (candidate && (!patient.latestAt || new Date(candidate).getTime() > new Date(patient.latestAt).getTime())) patient.latestAt = candidate;
     });
     return Array.from(clinics.values()).map((clinic) => ({ ...clinic, patients: Array.from(clinic.patients.values()) }));
   }, [rows]);
 
-  const openShare = (publicId: string) => { window.location.href = `/evolucao-compartilhada/${encodeURIComponent(publicId)}`; };
+  const openPatientTimeline = (clinicId: string, patientId: string) => {
+    window.location.href = `/rede-de-cuidado/paciente/${encodeURIComponent(clinicId)}/${encodeURIComponent(patientId)}`;
+  };
 
   if (loading) {
     return <main className="flex min-h-screen items-center justify-center bg-slate-50"><div className="flex items-center gap-3 text-sm font-medium text-slate-500"><Loader2 size={20} className="animate-spin text-[#7a32fc]" /> Carregando sua Rede de cuidado...</div></main>;
@@ -225,11 +231,11 @@ export const ExternalCareNetworkCentral = () => {
 
           {tab === 'shared' && <div>
             <div className="mb-5"><h1 className="text-xl font-semibold text-slate-900">Compartilhados comigo</h1><p className="mt-1 text-sm text-slate-500">Somente conteúdos que foram compartilhados explicitamente com sua conta.</p></div>
-            {grouped.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Nenhum compartilhamento ativo no momento.</div> : <div className="space-y-5">{grouped.map((clinic) => <section key={clinic.clinicId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><h2 className="text-sm font-semibold text-slate-900">{clinic.clinicName}</h2><div className="mt-4 space-y-4">{clinic.patients.map((patient) => <div key={patient.patientId}><p className="text-xs font-semibold text-slate-600">{patient.patientName}</p><div className="mt-2 space-y-2">{patient.items.map((item) => <button key={item.grantId} type="button" onClick={() => openShare(item.publicId)} className="flex w-full items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3 text-left transition hover:border-violet-200 hover:bg-violet-50"><span className="rounded-lg bg-white p-2 text-[#7a32fc]"><FileText size={16} /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{item.subject || 'Evolução compartilhada'}</span><span className="mt-0.5 block text-[11px] text-slate-400">Compartilhado em {formatDateTime(item.sharedAt) || 'data não informada'}{item.canComment ? ' · comentários permitidos' : ''}</span>{Number(item.commentCount || 0) > 0 && <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-violet-600"><MessageCircle size={11} /> {item.commentCount} comentário(s)</span>}</span><ChevronRight size={16} className="text-slate-400" /></button>)}</div></div>)}</div></section>)}</div>}
+            {grouped.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Nenhum compartilhamento ativo no momento.</div> : <div className="space-y-5">{grouped.map((clinic) => <section key={clinic.clinicId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5"><h2 className="text-sm font-semibold text-slate-900">{clinic.clinicName}</h2><div className="mt-3 space-y-2">{clinic.patients.map((patient) => <button key={patient.patientId} type="button" onClick={() => openPatientTimeline(clinic.clinicId, patient.patientId)} className="flex w-full items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-3.5 text-left transition hover:border-violet-200 hover:bg-violet-50"><span className="rounded-lg bg-white p-2 text-[#7a32fc]"><FileText size={16} /></span><span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-slate-800">{patient.patientName}</span><span className="mt-0.5 block text-[11px] text-slate-500">{patient.items.length} {patient.items.length === 1 ? 'registro compartilhado' : 'registros compartilhados'}</span><span className="mt-0.5 block text-[10px] text-slate-400">Última atualização: {formatDateTime(patient.latestAt) || 'data não informada'}</span></span><ChevronRight size={16} className="text-slate-400" /></button>)}</div></section>)}</div>}
             {nextOffset !== null && <div className="mt-5 flex justify-center"><button type="button" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await loadShared(nextOffset, true); } catch (loadError: any) { setError(loadError?.message || 'Não foi possível carregar mais compartilhamentos.'); } finally { setBusy(false); } }} className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-xs font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-50">{busy ? <Loader2 size={14} className="animate-spin" /> : null} Carregar mais</button></div>}
           </div>}
 
-          {tab === 'notifications' && <div><div className="mb-5"><h1 className="text-xl font-semibold text-slate-900">Notificações</h1><p className="mt-1 text-sm text-slate-500">Compartilhamentos recentes enviados para sua conta.</p></div><div className="space-y-2">{rows.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Nenhuma notificação recente.</div> : rows.map((item) => <button key={item.grantId} type="button" onClick={() => openShare(item.publicId)} className="flex w-full items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-violet-200"><span className="rounded-xl bg-violet-50 p-2 text-[#7a32fc]"><Bell size={15} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-slate-800">Novo conteúdo compartilhado</span><span className="mt-1 block text-xs text-slate-500">{item.clinicName} · {item.patientName}</span><span className="mt-1 block text-[11px] text-slate-400">{item.subject || 'Evolução clínica'} · {formatDateTime(item.sharedAt)}</span></span></button>)}</div></div>}
+          {tab === 'notifications' && <div><div className="mb-5"><h1 className="text-xl font-semibold text-slate-900">Notificações</h1><p className="mt-1 text-sm text-slate-500">Compartilhamentos recentes enviados para sua conta.</p></div><div className="space-y-2">{rows.length === 0 ? <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">Nenhuma notificação recente.</div> : rows.map((item) => <button key={item.grantId} type="button" onClick={() => openPatientTimeline(item.clinicId, item.patientId)} className="flex w-full items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm hover:border-violet-200"><span className="rounded-xl bg-violet-50 p-2 text-[#7a32fc]"><Bell size={15} /></span><span className="min-w-0 flex-1"><span className="block text-sm font-medium text-slate-800">Novo conteúdo compartilhado</span><span className="mt-1 block text-xs text-slate-500">{item.clinicName} · {item.patientName}</span><span className="mt-1 block text-[11px] text-slate-400">{item.subject || 'Evolução clínica'} · {formatDateTime(item.sharedAt)}</span></span></button>)}</div></div>}
 
           {tab === 'profile' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"><h1 className="text-xl font-semibold text-slate-900">Meu perfil</h1><p className="mt-1 text-sm text-slate-500">Sua conta é única para todos os compartilhamentos enviados ao mesmo e-mail.</p><div className="mt-6 max-w-lg space-y-4"><label className="block"><span className="text-xs font-medium text-slate-600">E-mail</span><input value={profile.email} readOnly className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-500" /></label><label className="block"><span className="text-xs font-medium text-slate-600">Nome</span><input value={displayName} maxLength={180} onChange={(event) => setDisplayName(event.target.value)} className="mt-1.5 min-h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]" /></label><button type="button" disabled={busy || !displayName.trim()} onClick={() => void saveProfile()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-semibold text-white disabled:opacity-50">{busy ? <Loader2 size={16} className="animate-spin" /> : null} Salvar</button></div></div>}
         </section>
