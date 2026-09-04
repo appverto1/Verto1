@@ -8587,7 +8587,7 @@ export default function App() {
             therapistNotes={therapistNotes}
             onAddNote={handleAddNote}
             onUpdateProfile={(data: any) => {
-              void (async () => {
+              return (async () => {
                 const baseUser = { ...user, ...data };
                 try {
                   const profileUpload = await uploadProfileAssetIfNeeded(
@@ -8757,7 +8757,7 @@ export default function App() {
                         professionalProfile: nextUser.professionalProfile,
                         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
                       };
-                  await dataService.saveUserProfile(user.id, persistencePayload);
+                  return await dataService.saveUserProfile(user.id, persistencePayload);
                 } catch (error) {
                   console.error('Profile asset upload error:', error);
                   if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
@@ -8785,7 +8785,7 @@ export default function App() {
                         professionalProfile: baseUser.professionalProfile,
                         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
                       };
-                  await dataService.saveUserProfile(user.id, fallbackPersistencePayload);
+                  return await dataService.saveUserProfile(user.id, fallbackPersistencePayload);
                 }
               })();
             }}

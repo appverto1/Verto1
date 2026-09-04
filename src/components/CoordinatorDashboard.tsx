@@ -548,7 +548,7 @@ interface CoordinatorDashboardProps {
     visibility: string,
     subject?: string,
   ) => void;
-  onUpdateProfile: (updates: any) => void;
+  onUpdateProfile: (updates: any) => Promise<any> | void;
   onUpdatePatient?: (patient: any) => Promise<any> | any;
   onRecordTrial?: (
     pid: any,
@@ -3231,7 +3231,9 @@ export function CoordinatorDashboard({
     const loadOwnProfessionalSettings = async () => {
       const [globalResult, billingResult] = await Promise.all([
         dataService.getUserProfile(professionalId),
-        dataService.getOwnProfessionalBillingProfile(),
+        hasInsuranceTissModule
+          ? dataService.getOwnProfessionalBillingProfile()
+          : Promise.resolve({ success: true, data: null }),
       ]);
       if (cancelled) return;
 
@@ -3356,15 +3358,17 @@ export function CoordinatorDashboard({
         setTherapistSpecialtyName(specialty);
         setTherapistSpecialties(specialty);
       }
-      setTherapistProviderCode(firstText(
-        globalProfile?.provider_code,
-        globalMetadata?.providerCode,
-        globalMetadata?.provider_code,
-        billingProfile?.provider_code,
-        billingProfile?.providerCode,
-        user?.professionalProfile?.providerCode,
-        user?.professional_profile?.provider_code,
-      ));
+      if (hasInsuranceTissModule) {
+        setTherapistProviderCode(firstText(
+          billingProfile?.provider_code,
+          billingProfile?.providerCode,
+          globalProfile?.provider_code,
+          globalMetadata?.providerCode,
+          globalMetadata?.provider_code,
+          user?.professionalProfile?.providerCode,
+          user?.professional_profile?.provider_code,
+        ));
+      }
       if (miniCurriculum) setTherapistMiniCurriculum(miniCurriculum);
       const profilePhoto = firstText(globalProfile?.profile_photo_url, globalProfile?.profilePhotoUrl);
       const signature = firstText(globalProfile?.signature_data_url, globalProfile?.signatureDataUrl);
@@ -3383,7 +3387,7 @@ export function CoordinatorDashboard({
     return () => {
       cancelled = true;
     };
-  }, [activeTab, user?.id]);
+  }, [activeTab, hasInsuranceTissModule, user?.id]);
 
   const refreshSignedMediaUrls = useCallback(async () => {
     try {
@@ -8640,27 +8644,10 @@ export function CoordinatorDashboard({
     }
 
     const ownProfessionalId = String(user?.id || "").trim();
-    const shouldPersistOwnBillingProfile = Boolean(saveScope === "professional" && ownProfessionalId);
-    if (shouldPersistOwnBillingProfile) {
-      const professionalBillingResult = await dataService.updateOwnProfessionalBillingProfile({
-            displayName: cleanFullName || null,
-            documentType: normalizedTherapistDocumentType,
-            documentNumber: cleanProfessionalDocument || null,
-            councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
-            councilNumber: cleanCrp || null,
-            councilState: cleanCouncilState || null,
-            cboCode: cleanCboCode || null,
-            specialtyName: cleanSpecialtyName || cleanSpecialties || null,
-            providerCode: cleanTherapistProviderCode || null,
-          });
-      if (!professionalBillingResult?.success) {
-        showToast(professionalBillingResult?.error || "Não foi possível salvar o perfil faturável do profissional.", "error");
-        return;
-      }
-    }
+    let professionalTissSyncWarning = "";
 
     if (saveScope === "professional") {
-      onUpdateProfile({
+      const professionalProfileResult = await onUpdateProfile({
         profileSaveScope: "professional",
         name: cleanFullName || user?.name,
         cpf: normalizedTherapistDocumentType === "CPF" ? cleanProfessionalDocument || null : null,
@@ -8685,7 +8672,6 @@ export function CoordinatorDashboard({
           councilState: cleanCouncilState || null,
           cboCode: cleanCboCode || null,
           specialtyName: cleanSpecialtyName || null,
-          providerCode: cleanTherapistProviderCode || null,
           specialties: cleanSpecialties,
           miniCurriculum: cleanMiniCurriculum,
           address: {
@@ -8701,6 +8687,31 @@ export function CoordinatorDashboard({
           signatureDataUrl: therapistSignatureDataUrl,
         },
       });
+      if (professionalProfileResult?.success === false) {
+        showToast(professionalProfileResult?.error || "Não foi possível salvar o perfil profissional.", "error");
+        return;
+      }
+
+      if (hasInsuranceTissModule && ownProfessionalId) {
+        try {
+          const professionalBillingResult = await dataService.updateOwnProfessionalBillingProfile({
+            displayName: cleanFullName || null,
+            documentType: normalizedTherapistDocumentType,
+            documentNumber: cleanProfessionalDocument || null,
+            councilType: cleanCouncilType || cleanCrp.split(/\s|\//)[0] || null,
+            councilNumber: cleanCrp || null,
+            councilState: cleanCouncilState || null,
+            cboCode: cleanCboCode || null,
+            specialtyName: cleanSpecialtyName || cleanSpecialties || null,
+            providerCode: cleanTherapistProviderCode || null,
+          });
+          if (!professionalBillingResult?.success) {
+            professionalTissSyncWarning = "Perfil profissional salvo. Não foi possível atualizar os dados de faturamento TISS.";
+          }
+        } catch {
+          professionalTissSyncWarning = "Perfil profissional salvo. Não foi possível atualizar os dados de faturamento TISS.";
+        }
+      }
     } else {
       onUpdateProfile({
         profileSaveScope: "clinic",
@@ -8718,7 +8729,11 @@ export function CoordinatorDashboard({
         : "A Direção ou Coordenação atualizou os dados institucionais, horários e branding da clínica.",
       "management",
     );
-    showToast(saveScope === "professional" ? "Perfil profissional salvo com sucesso!" : "Configurações da clínica salvas. Pré-guias afetadas serão atualizadas automaticamente.");
+    if (professionalTissSyncWarning) {
+      showToast(professionalTissSyncWarning, "info");
+    } else {
+      showToast(saveScope === "professional" ? "Perfil profissional salvo com sucesso!" : "Configurações da clínica salvas. Pré-guias afetadas serão atualizadas automaticamente.");
+    }
     } catch (error: any) {
       console.error("Falha ao salvar configurações da clínica:", error);
       showToast(error?.message || "Não foi possível salvar as configurações agora. Nenhum dado foi confirmado como salvo.", "error");
@@ -14107,7 +14122,7 @@ export function CoordinatorDashboard({
                   canManageBilling={false}
                   canManagePermissions={hasCapability("team.permissions.manage")}
                   normalizedPlanName={normalizedPlanName}
-                  hasInsuranceTissModule={hasModule("insurance_tiss")}
+                  hasInsuranceTissModule={hasInsuranceTissModule}
                   moduleAccessMode={moduleAccessMode}
                   organizationModules={organizationModules}
                   navigateToTab={navigateToTab}

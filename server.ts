@@ -66690,13 +66690,11 @@ async function startServer() {
     return { data, tissPipeline };
   };
 
-  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
+  app.get('/api/tiss/professional-profile/me', noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.session.user?.id, 120);
       if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
-      const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
-      if (!owner) return res.status(404).json(payerSafeError(404));
       const data = await fetchTissPreGuideProfile(
         'professional_billing_profiles',
         PROFESSIONAL_BILLING_PROFILE_SELECT,
@@ -66711,14 +66709,12 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireAnyClinicCapability('session.billing_evidence.generate', 'session.start'), async (req: any, res) => {
+  app.patch('/api/tiss/professional-profile/me', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Perfil faturável do profissional')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       const professionalId = sanitizeString(req.session.user?.id, 120);
       if (!isUuid(organizationId) || !isUuid(professionalId)) return res.status(400).json(payerSafeError(400));
-      const owner = await assertProfessionalBillingProfileScope(organizationId, professionalId);
-      if (!owner) return res.status(404).json(payerSafeError(404));
       const result = await upsertProfessionalBillingProfile({
         organizationId,
         professionalId,
