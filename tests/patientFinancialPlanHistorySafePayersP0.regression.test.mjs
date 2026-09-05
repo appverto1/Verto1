@@ -29,8 +29,14 @@ assert.match(server, /preserveInsuranceContext: payerMutationBoundary\.preserveI
 assert.match(server, /rows = rows\.filter\(\(row: any\) => !patientFinancialPlanIsInsurance\(row\)\)/);
 
 // Current reads are canonical ACTIVE rows only.
-assert.match(server, /\/financial-plans'[\s\S]{0,900}\.eq\('status', 'ACTIVE'\)/);
-assert.match(server, /capabilities\?\.has\('patient\.demographics\.edit'\)[\s\S]{0,700}financialPlans: canonicalPlansResult\.data/);
+const financialPlansGetStart = server.indexOf("app.get('/api/patients/:patientId/financial-plans'");
+const financialPlansGetEnd = server.indexOf("app.put('/api/patients/:patientId/financial-plans'", financialPlansGetStart);
+assert.ok(financialPlansGetStart >= 0 && financialPlansGetEnd > financialPlansGetStart);
+assert.match(server.slice(financialPlansGetStart, financialPlansGetEnd), /\.eq\('status', 'ACTIVE'\)/);
+const patientRecordGetStart = server.indexOf("app.get('/api/patient-records/:patientId'");
+const patientRecordGetEnd = server.indexOf('const NOTE_VISIBILITY_ALLOWED', patientRecordGetStart);
+assert.ok(patientRecordGetStart >= 0 && patientRecordGetEnd > patientRecordGetStart);
+assert.match(server.slice(patientRecordGetStart, patientRecordGetEnd), /capabilities\?\.has\('patient\.demographics\.edit'\)[\s\S]*financialPlans: canonicalPlansResult\.data/);
 
 // Convênio as payer identity no longer implies TISS.
 assert.match(server, /billingMode=INSURANCE and payer identity are generic financial master data/);
