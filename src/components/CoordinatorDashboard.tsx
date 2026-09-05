@@ -258,6 +258,7 @@ import {
   getFinancialPlanMonthlyProjectionValue,
   getFinancialPlanPrimaryBillingMethod,
   isPatientFinancialPlanComplete,
+  isMonthlySessionBillingPlan,
   normalizePatientFinancialPlans,
   serializePatientFinancialPlanForPayload,
 } from "../utils/patientFinancialPlan";
@@ -6425,6 +6426,13 @@ export function CoordinatorDashboard({
                 authorizationValidUntil: "",
               }
             : {}),
+          ...(field === "billingMode" && !["PRIVATE", "INSURANCE"].includes(String(value))
+            ? {
+                billingFrequency: value === "MONTHLY" ? "MONTHLY" : "",
+                pricingUnit: value === "MONTHLY" ? "FIXED_PERIOD" : "",
+                aggregationMethod: "",
+              }
+            : {}),
           ...(field === "serviceType" && value !== "CUSTOM" ? { customServiceName: "" } : {}),
           ...(field === "payerNameSnapshot" ? { insuranceName: value } : {}),
         });
@@ -6434,6 +6442,32 @@ export function CoordinatorDashboard({
         financialPlans: nextPlans,
       };
     });
+  };
+
+  const setFinancialPlanMonthlySessionBilling = (planId: string, enabled: boolean) => {
+    setNewPatientForm((prev: any) => ({
+      ...prev,
+      financialPlans: normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => {
+        if (plan.id !== planId) return plan;
+        if (enabled) {
+          return createPatientFinancialPlan({
+            ...plan,
+            billingFrequency: "MONTHLY",
+            pricingUnit: "SESSION",
+            aggregationMethod: "ELIGIBLE_COMPLETED_SESSIONS",
+            quantityPeriod: "SESSION",
+            sessionsQuantity: "",
+          });
+        }
+        return createPatientFinancialPlan({
+          ...plan,
+          billingFrequency: plan.billingMode === "PRIVATE" ? "AT_SESSION" : "",
+          pricingUnit: plan.billingMode === "PRIVATE" ? "SESSION" : "",
+          aggregationMethod: "",
+          quantityPeriod: plan.billingMode === "INSURANCE" ? "AUTHORIZATION" : "SESSION",
+        });
+      }),
+    }));
   };
 
   const handleCreateFinancialPayer = async (financialPlanId: string) => {
@@ -17127,6 +17161,8 @@ export function CoordinatorDashboard({
                         const isPackagePlan = plan.billingMode === "PACKAGE";
                         const isCourtesyPlan = plan.billingMode === "COURTESY";
                         const isMonthlyPlan = plan.billingMode === "MONTHLY";
+                        const isMonthlySessionPlan = isMonthlySessionBillingPlan(plan);
+                        const supportsMonthlySessionBilling = ["PRIVATE", "INSURANCE"].includes(plan.billingMode);
                         const suggestedFinancialPlanAuthorization = isInsurancePlan
                           ? findSuggestedTissAuthorizationForFinancialPlan(plan, patientTissAuthorizationGroups)
                           : null;
@@ -17179,8 +17215,20 @@ export function CoordinatorDashboard({
                                     ))}
                                 </select>
                               </FormField>
+                            {supportsMonthlySessionBilling && (
+                              <FormField label="Forma de faturamento">
+                                <select
+                                  className={patientFormInputClass}
+                                  value={isMonthlySessionPlan ? "MONTHLY_SESSION" : "CURRENT"}
+                                  onChange={(e) => setFinancialPlanMonthlySessionBilling(plan.id, e.target.value === "MONTHLY_SESSION")}
+                                >
+                                  <option value="CURRENT">{isInsurancePlan ? "Conforme configuração atual" : "Recebível por sessão"}</option>
+                                  <option value="MONTHLY_SESSION">Faturamento mensal por sessões realizadas</option>
+                                </select>
+                              </FormField>
+                            )}
                             {!isCourtesyPlan && (
-                              <FormField label={isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
+                              <FormField label={isMonthlySessionPlan ? "Valor por sessão" : isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
                                 <input
                                   className={patientFormInputClass}
                                   placeholder="R$ 0,00"
@@ -17190,38 +17238,52 @@ export function CoordinatorDashboard({
                                 />
                               </FormField>
                             )}
-                              <FormField label={isInsurancePlan ? "Quantidade planejada" : "Quantidade"}>
-                                <div className="flex items-center gap-2">
-                                  <input
-                                    className="min-w-0 flex-1 rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
-                                    placeholder={isInsurancePlan ? "Qtde. planejada" : "Sessões"}
-                                    type="number"
-                                    min={1}
-                                    value={plan.sessionsQuantity}
-                                    onChange={(e) => handleFinancialPlanChange(plan.id, "sessionsQuantity", e.target.value)}
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => removeFinancialPlanRow(plan.id)}
-                                    className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                                    title="Remover plano financeiro"
+                            {!isMonthlySessionPlan && (
+                              <>
+                                <FormField label={isInsurancePlan ? "Quantidade planejada" : "Quantidade"}>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      className="min-w-0 flex-1 rounded-xl border border-transparent bg-slate-50 p-3 text-sm text-slate-800 outline-none transition-all placeholder:text-slate-400 focus:border-[#7a32fc] focus:bg-white focus:ring-4 focus:ring-[#7a32fc]/10"
+                                      placeholder={isInsurancePlan ? "Qtde. planejada" : "Sessões"}
+                                      type="number"
+                                      min={1}
+                                      value={plan.sessionsQuantity}
+                                      onChange={(e) => handleFinancialPlanChange(plan.id, "sessionsQuantity", e.target.value)}
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => removeFinancialPlanRow(plan.id)}
+                                      className="rounded-xl p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                                      title="Remover plano financeiro"
+                                    >
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </div>
+                                </FormField>
+                                <FormField label="Frequência">
+                                  <select
+                                    className={patientFormInputClass}
+                                    value={plan.quantityPeriod}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "quantityPeriod", e.target.value)}
                                   >
-                                    <Trash2 size={16} />
-                                  </button>
-                                </div>
-                              </FormField>
-                              <FormField label="Frequência">
-                                <select
-                                  className={patientFormInputClass}
-                                  value={plan.quantityPeriod}
-                                  onChange={(e) => handleFinancialPlanChange(plan.id, "quantityPeriod", e.target.value)}
-                                >
-                                  {PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.map((option) => (
-                                    <option key={option.value} value={option.value}>{option.label}</option>
-                                  ))}
-                                </select>
-                              </FormField>
-                            {isMonthlyPlan && (
+                                    {PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.map((option) => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                </FormField>
+                              </>
+                            )}
+                            {isMonthlySessionPlan && (
+                              <button
+                                type="button"
+                                onClick={() => removeFinancialPlanRow(plan.id)}
+                                className="self-end rounded-xl border border-slate-100 p-3 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                                title="Remover plano financeiro"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
+                            {(isMonthlyPlan || isMonthlySessionPlan) && (
                               <FormField label="Dia de vencimento">
                                 <input
                                   className={patientFormInputClass}

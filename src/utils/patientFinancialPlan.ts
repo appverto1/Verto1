@@ -34,6 +34,20 @@ export const PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS = [
   { value: 'AUTHORIZATION', label: 'planejadas' },
 ] as const;
 
+export const PATIENT_FINANCIAL_BILLING_FREQUENCY_OPTIONS = [
+  { value: 'AT_SESSION', label: 'Por sessão' },
+  { value: 'MONTHLY', label: 'Mensal' },
+] as const;
+
+export const PATIENT_FINANCIAL_PRICING_UNIT_OPTIONS = [
+  { value: 'SESSION', label: 'Sessão' },
+  { value: 'FIXED_PERIOD', label: 'Período fixo' },
+] as const;
+
+export const PATIENT_FINANCIAL_AGGREGATION_METHODS = [
+  { value: 'ELIGIBLE_COMPLETED_SESSIONS', label: 'Sessões realizadas elegíveis' },
+] as const;
+
 export type PatientFinancialBillingMode =
   (typeof PATIENT_FINANCIAL_BILLING_MODE_OPTIONS)[number]['value'];
 
@@ -154,6 +168,35 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
     overrides.serviceType || overrides.service_type,
     overrides.specialty,
   );
+  const requestedBillingFrequency = cleanText(
+    overrides.billingFrequency || overrides.billing_frequency,
+    40,
+  ).toUpperCase();
+  const requestedPricingUnit = cleanText(
+    overrides.pricingUnit || overrides.pricing_unit,
+    40,
+  ).toUpperCase();
+  const requestedAggregationMethod = cleanText(
+    overrides.aggregationMethod || overrides.aggregation_method,
+    80,
+  ).toUpperCase();
+  const billingFrequency = PATIENT_FINANCIAL_BILLING_FREQUENCY_OPTIONS.some((option) => option.value === requestedBillingFrequency)
+    ? requestedBillingFrequency
+    : billingMode === 'PRIVATE'
+      ? 'AT_SESSION'
+      : billingMode === 'MONTHLY'
+        ? 'MONTHLY'
+        : '';
+  const pricingUnit = PATIENT_FINANCIAL_PRICING_UNIT_OPTIONS.some((option) => option.value === requestedPricingUnit)
+    ? requestedPricingUnit
+    : billingMode === 'PRIVATE'
+      ? 'SESSION'
+      : billingMode === 'MONTHLY'
+        ? 'FIXED_PERIOD'
+        : '';
+  const aggregationMethod = PATIENT_FINANCIAL_AGGREGATION_METHODS.some((option) => option.value === requestedAggregationMethod)
+    ? requestedAggregationMethod
+    : '';
   const customServiceName =
     serviceType === 'CUSTOM'
       ? cleanText(overrides.customServiceName || overrides.custom_service_name || overrides.specialty, 120)
@@ -191,6 +234,9 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
     serviceType,
     customServiceName,
     billingMode,
+    billingFrequency,
+    pricingUnit,
+    aggregationMethod,
     payerId: cleanText(overrides.payerId || overrides.payer_id, 120),
     payerNameSnapshot,
     insurancePlanName: cleanText(overrides.insurancePlanName || overrides.insurance_plan_name, 160),
@@ -253,15 +299,17 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
     ),
     sessionsQuantity: sessionsQuantity ? String(Math.max(1, Math.round(sessionsQuantity))) : '',
     quantityPeriod:
-      PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.some((option) => option.value === quantityPeriod)
-        ? quantityPeriod
-        : billingMode === 'INSURANCE'
-          ? 'AUTHORIZATION'
-          : billingMode === 'PACKAGE'
-            ? 'PACKAGE'
-            : billingMode === 'MONTHLY'
-              ? 'MONTH'
-              : 'SESSION',
+      billingFrequency === 'MONTHLY' && pricingUnit === 'SESSION' && aggregationMethod === 'ELIGIBLE_COMPLETED_SESSIONS'
+        ? 'SESSION'
+        : PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS.some((option) => option.value === quantityPeriod)
+          ? quantityPeriod
+          : billingMode === 'INSURANCE'
+            ? 'AUTHORIZATION'
+            : billingMode === 'PACKAGE'
+              ? 'PACKAGE'
+              : billingMode === 'MONTHLY'
+                ? 'MONTH'
+                : 'SESSION',
     amountCents,
     amount:
       overrides.amount !== undefined
@@ -332,6 +380,13 @@ export const normalizePatientFinancialPlans = (plans: any, fallback: any = {}) =
   ];
 };
 
+export const isMonthlySessionBillingPlan = (plan: any) => {
+  const normalized = createPatientFinancialPlan(plan);
+  return normalized.billingFrequency === 'MONTHLY' &&
+    normalized.pricingUnit === 'SESSION' &&
+    normalized.aggregationMethod === 'ELIGIBLE_COMPLETED_SESSIONS';
+};
+
 export const financialPlanRequiresPaymentMethod = (plan: any) => {
   const normalized = createPatientFinancialPlan(plan);
   if (normalized.billingMode === 'INSURANCE') return normalized.copaymentAmountCents > 0;
@@ -380,6 +435,9 @@ export const serializePatientFinancialPlanForPayload = (plan: any) => {
     customServiceName: normalized.customServiceName,
     serviceNameSnapshot,
     billingMode: normalized.billingMode,
+    billingFrequency: normalized.billingFrequency || null,
+    pricingUnit: normalized.pricingUnit || null,
+    aggregationMethod: normalized.aggregationMethod || null,
     payerId: normalized.payerId || null,
     payerNameSnapshot: normalized.payerNameSnapshot || null,
     insurancePlanName: normalized.insurancePlanName || null,

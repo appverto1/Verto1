@@ -7315,6 +7315,9 @@ const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'custom_service_name',
   'service_name_snapshot',
   'billing_mode',
+  'billing_frequency',
+  'pricing_unit',
+  'aggregation_method',
   'payer_id',
   'payer_name_snapshot',
   'sessions_quantity',
@@ -19541,6 +19544,9 @@ function patientFinancialPlanSemanticFingerprint(row: any) {
     custom_service_name: normalizeFinancialPlanSemanticText(source.custom_service_name ?? source.customServiceName, 120),
     service_name_snapshot: normalizeFinancialPlanSemanticText(source.service_name_snapshot ?? source.serviceNameSnapshot ?? source.specialty, 120),
     billing_mode: normalizeFinancialPlanSemanticEnum(source.billing_mode ?? source.billingMode, 40) || 'PRIVATE',
+    billing_frequency: normalizeFinancialPlanSemanticEnum(source.billing_frequency ?? source.billingFrequency, 40),
+    pricing_unit: normalizeFinancialPlanSemanticEnum(source.pricing_unit ?? source.pricingUnit, 40),
+    aggregation_method: normalizeFinancialPlanSemanticEnum(source.aggregation_method ?? source.aggregationMethod, 80),
     payer_id: isUuid(sanitizeString(source.payer_id ?? source.payerId, 120)) ? sanitizeString(source.payer_id ?? source.payerId, 120) : null,
     // payer_name_snapshot is intentionally excluded: payer_id is the tenant-scoped identity.
     // TISS-only operational fields are intentionally excluded from replay equality. A caller
@@ -20030,6 +20036,9 @@ function buildPatientFinancialPlanRows(params: {
       custom_service_name: sanitizeString(plan.customServiceName, 120) || null,
       service_name_snapshot: sanitizeString(plan.serviceNameSnapshot || plan.specialty, 120) || null,
       billing_mode: sanitizeString(plan.billingMode, 40) || 'PRIVATE',
+      billing_frequency: sanitizeString(plan.billingFrequency, 40).toUpperCase() || null,
+      pricing_unit: sanitizeString(plan.pricingUnit, 40).toUpperCase() || null,
+      aggregation_method: sanitizeString(plan.aggregationMethod, 80).toUpperCase() || null,
       payer_id: isUuid(sanitizeString(plan.payerId, 120)) ? sanitizeString(plan.payerId, 120) : null,
       payer_name_snapshot: sanitizeString(plan.payerNameSnapshot || plan.insuranceName, 160) || null,
       insurance_plan_name: sanitizeString(plan.insurancePlanName, 160) || null,
@@ -20093,7 +20102,28 @@ async function persistPatientFinancialPlans(params: {
     ));
   }
 
-  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v1', {
+  for (const row of rows) {
+    const isMonthlySessionPlan =
+      sanitizeString(row?.billing_frequency, 40).toUpperCase() === 'MONTHLY' &&
+      sanitizeString(row?.pricing_unit, 40).toUpperCase() === 'SESSION' &&
+      sanitizeString(row?.aggregation_method, 80).toUpperCase() === 'ELIGIBLE_COMPLETED_SESSIONS';
+    if (!isMonthlySessionPlan) continue;
+    const billingMode = sanitizeString(row?.billing_mode, 40).toUpperCase();
+    if (!['PRIVATE', 'INSURANCE'].includes(billingMode)) {
+      return { success: false, error: 'Faturamento mensal por sessões realizadas exige pagador Particular ou Convênio.' };
+    }
+    if (Math.max(0, Math.round(Number(row?.amount_cents || 0) || 0)) <= 0) {
+      return { success: false, error: 'Informe um valor por sessão maior que zero.' };
+    }
+    if (!Number.isInteger(Number(row?.due_day)) || Number(row?.due_day) < 1 || Number(row?.due_day) > 31) {
+      return { success: false, error: 'Informe o dia de vencimento da cobrança mensal.' };
+    }
+    if (billingMode === 'INSURANCE' && !isUuid(sanitizeString(row?.payer_id, 120))) {
+      return { success: false, error: 'Selecione o convênio pagador para esta cobrança mensal.' };
+    }
+  }
+
+  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v2', {
     p_organization_id: params.clinicId,
     p_patient_id: params.patientId,
     p_actor_id: isUuid(sanitizeString(params.actorId, 120)) ? sanitizeString(params.actorId, 120) : null,
@@ -20102,7 +20132,7 @@ async function persistPatientFinancialPlans(params: {
   });
   if (reconciliation.error) {
     const message = sanitizeString(reconciliation.error?.message || reconciliation.error, 500);
-    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v1')) {
+    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v2')) {
       return {
         success: false,
         error: 'A migração de persistência histórica dos planos financeiros ainda não foi aplicada.',
@@ -89773,7 +89803,10 @@ async function startServer() {
     'private_price_rule_id', 'patient_pricing_agreement_id', 'financial_snapshot_id',
     'private_price_source', 'private_price_source_label',
     'private_financial_classification', 'cancellation_free_until',
-    'pricing_override_reason'
+    'pricing_override_reason',
+    'billing_frequency', 'pricing_unit', 'aggregation_method',
+    'monthly_billing_group_key', 'patient_financial_plan_logical_id',
+    'monthly_session_count', 'monthly_adjustment_required'
   ].join(',');
   // `source_payload` is optional in legacy appointment schemas and is not required by the ledger.
   const PATIENT_FINANCE_APPOINTMENT_SELECT = [
@@ -89824,6 +89857,12 @@ async function startServer() {
     const raw = sanitizeString(error?.message || error?.details || String(error || ''), 500);
     if (raw.includes('PATIENT_FINANCE_APPOINTMENT_ALREADY_CHARGED')) {
       return { status: 409, error: 'Uma das sessões selecionadas já possui cobrança ativa. Abra a cobrança existente para continuar.' };
+    }
+    if (raw.includes('MONTHLY_SESSION_MANUAL_APPOINTMENT_CHARGE_FORBIDDEN')) {
+      return { status: 409, error: 'Esta sessão pertence ao faturamento mensal automático por sessões realizadas. Use o recebível mensal consolidado ou crie um lançamento manual sem vincular esta sessão.' };
+    }
+    if (raw.includes('MONTHLY_SESSION_FINANCIAL_ENGINE_AMBIGUOUS')) {
+      return { status: 409, error: 'A regra financeira desta sessão está ambígua. Revise o contexto financeiro do paciente antes de criar uma cobrança manual.' };
     }
     if (raw.includes('PATIENT_FINANCE_PAYMENT_EXCEEDS_BALANCE')) {
       return { status: 409, error: 'O pagamento informado é maior que o saldo da cobrança. Confirme o valor antes de continuar.' };
@@ -90190,11 +90229,21 @@ async function startServer() {
         else if (!hasMissingFinancialSchema(billingResult.error)) throw billingResult.error;
       }
 
+      const monthlySessionChargeIds = new Set(
+        (chargesResult.data || [])
+          .filter((charge: any) => sanitizeString(charge?.source, 80) === 'MONTHLY_SESSION_AGGREGATE')
+          .map((charge: any) => sanitizeString(charge?.id, 120))
+          .filter(Boolean),
+      );
+      const visibleLedgerItems = (relatedPayload?.items || []).filter((item: any) => (
+        !monthlySessionChargeIds.has(sanitizeString(item?.payment_id, 120)) || item?.active === true
+      ));
+
       return res.json({
         success: true,
         data: {
           charges: chargesResult.data || [],
-          items: relatedPayload?.items || [],
+          items: visibleLedgerItems,
           transactions: relatedPayload?.transactions || [],
           events: relatedPayload?.events || [],
           appointments: appointmentsResult.data || [],

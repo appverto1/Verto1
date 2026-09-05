@@ -7,7 +7,7 @@ const migration = fs.readFileSync('supabase/migrations/20260904173500_patient_fi
 const privateEngine = fs.readFileSync('supabase/migrations/20260812022000_private_finance_membership_authority_v2.sql', 'utf8');
 
 // P0: no destructive delete-all/insert-all in the server persistence path.
-assert.match(server, /supabase\.rpc\('reconcile_patient_financial_plans_v1'/);
+assert.match(server, /supabase\.rpc\('reconcile_patient_financial_plans_v2'/);
 assert.doesNotMatch(server, /from\('patient_financial_plans'\)[\s\S]{0,120}\.delete\(\)[\s\S]{0,160}\.eq\('patient_id', params\.patientId\)/);
 
 // Versioning foundation and historical protection.
@@ -22,6 +22,9 @@ assert.match(migration, /PATIENT_FINANCIAL_PLAN_PAYER_SCOPE_INVALID/);
 assert.match(migration, /PATIENT_FINANCIAL_PLAN_STALE_VERSION/);
 assert.match(server, /client_plan_key: sanitizeString\(plan\.id, 120\)/);
 assert.match(migration, /grant execute on function public\.reconcile_patient_financial_plans_v1\(uuid, uuid, uuid, jsonb, boolean\)[\s\S]{0,80}service_role/);
+const monthlyMigration = fs.readFileSync('supabase/migrations/20260905101500_monthly_session_patient_billing.sql', 'utf8');
+assert.match(monthlyMigration, /create or replace function public\.reconcile_patient_financial_plans_v2/);
+assert.match(monthlyMigration, /appointment_private_financial_snapshots[\s\S]{0,260}payment_appointment_items[\s\S]{0,180}patient_financial_plan_id/);
 assert.match(migration, /p_preserve_insurance_context boolean default false/);
 assert.match(migration, /PATIENT_FINANCIAL_PLAN_INSURANCE_MUTATION_NOT_ALLOWED/);
 assert.match(migration, /not coalesce\(p_preserve_insurance_context, false\)[\s\S]{0,120}billing_mode[\s\S]{0,80}INSURANCE/);

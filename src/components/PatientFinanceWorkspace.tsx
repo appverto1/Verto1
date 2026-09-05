@@ -23,7 +23,7 @@ import {
 import { dataService } from '../services/dataService';
 import { PrivatePricingManagement } from './PrivatePricingManagement';
 import { formatDisplayDate, formatDisplayDateTime } from '../utils/dateFormatting';
-import { normalizePatientFinancialPlans } from '../utils/patientFinancialPlan';
+import { isMonthlySessionBillingPlan, normalizePatientFinancialPlans } from '../utils/patientFinancialPlan';
 import {
   PATIENT_FINANCIAL_STATUS_CLASSES,
   PATIENT_FINANCIAL_STATUS_LABELS,
@@ -176,6 +176,15 @@ const monthKeyFor = (value: any) => {
   return year && monthPart ? `${year}-${monthPart}` : '';
 };
 
+const formatCompetenceMonth = (value: any) => {
+  const key = String(value || '').slice(0, 7);
+  if (!/^\d{4}-\d{2}$/.test(key)) return '';
+  const [year, monthPart] = key.split('-').map(Number);
+  if (!year || !monthPart) return '';
+  return new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(year, monthPart - 1, 1)));
+};
+
 const auditEventLabel = (value: any) => ({
   CHARGE_CREATED: 'Cobrança criada',
   PAYMENT_RECORDED: 'Pagamento registrado',
@@ -188,7 +197,10 @@ const auditEventLabel = (value: any) => ({
   CHARGE_ACTIVATED_BY_APPOINTMENT: 'Cobrança efetivada pela sessão',
   CHARGE_CANCELED_BY_APPOINTMENT: 'Cobrança cancelada pela política da clínica',
   CHARGE_CANCELED_BY_RESCHEDULE: 'Cobrança anterior encerrada após remarcação',
-  CHARGE_RECREATED_AFTER_RESCHEDULE: 'Cobrança recriada após remarcação'
+  CHARGE_RECREATED_AFTER_RESCHEDULE: 'Cobrança recriada após remarcação',
+  MONTHLY_SESSION_INCLUDED: 'Sessão incluída na cobrança mensal',
+  MONTHLY_SESSION_REMOVED: 'Sessão retirada da cobrança mensal',
+  MONTHLY_SESSION_ADJUSTMENT_REQUIRED: 'Ajuste financeiro necessário'
 } as Record<string, string>)[String(value || '').toUpperCase()] || 'Atualização financeira';
 
 const documentStatusLabel = (status: any) => ({
@@ -320,6 +332,7 @@ export function PatientFinanceWorkspace({
     const plans = normalizePatientFinancialPlans(patient?.financialPlans || patient?.financial_plans || [], patient || {});
     const privateSessionPlans = plans.filter((plan: any) =>
       plan.billingMode === 'PRIVATE' &&
+      !isMonthlySessionBillingPlan(plan) &&
       String(plan.quantityPeriod || 'SESSION').toUpperCase() === 'SESSION' &&
       Number(plan.amountCents || 0) > 0
     );
@@ -330,6 +343,18 @@ export function PatientFinanceWorkspace({
     );
     const selectedPlan = exact || (privateSessionPlans.length === 1 ? privateSessionPlans[0] : null);
     return selectedPlan ? Number(selectedPlan.amountCents || 0) / 100 : 0;
+  };
+
+  const monthlySessionPlanForAppointment = (row: any) => {
+    const patient = patients.find((item: any) => String(item?.id || '') === String(row?.patientId || ''));
+    const plans = normalizePatientFinancialPlans(patient?.financialPlans || patient?.financial_plans || [], patient || {})
+      .filter((plan: any) => isMonthlySessionBillingPlan(plan));
+    const serviceKey = String(row?.serviceType || '').trim().toLocaleLowerCase('pt-BR');
+    const exact = plans.find((plan: any) =>
+      [plan.specialty, plan.customServiceName, plan.serviceType]
+        .some((value) => String(value || '').trim().toLocaleLowerCase('pt-BR') === serviceKey)
+    );
+    return exact || (plans.length === 1 ? plans[0] : null);
   };
 
   const filteredAppointments = useMemo(() => {
@@ -356,7 +381,8 @@ export function PatientFinanceWorkspace({
     const sourceCharge = sourceRow?.charge || source?.charge || (source?.id ? source : null);
     setOperation(nextOperation);
     setSelectedPatientId(String(sourceRow?.patientId || sourceCharge?.patient_id || source?.patientId || ''));
-    setSelectedAppointmentIds(sourceRow?.appointmentId ? [String(sourceRow.appointmentId)] : []);
+    const sourceUsesMonthlySessionBilling = sourceRow?.appointmentId && monthlySessionPlanForAppointment(sourceRow);
+    setSelectedAppointmentIds(sourceRow?.appointmentId && !sourceUsesMonthlySessionBilling ? [String(sourceRow.appointmentId)] : []);
     setSelectedChargeId(String(sourceRow?.chargeId || sourceCharge?.id || source?.id || ''));
     const sourceBalance = Number(sourceRow?.balance ?? source?.balance ?? sourceCharge?.balance_amount ?? 0);
     const sourcePaid = Number(sourceRow?.paidGross ?? source?.paidGross ?? sourceCharge?.paid_amount ?? 0);
@@ -456,6 +482,10 @@ export function PatientFinanceWorkspace({
     }
     if (['charge', 'payment'].includes(operation) && !selectedChargeId && selectedAppointmentIds.length === 0 && !manualCompetence) {
       setOperationError('Selecione pelo menos uma sessão ou marque o lançamento por competência.');
+      return;
+    }
+    if (!selectedChargeId && ['charge', 'payment'].includes(operation) && selectedAppointments.some((row: any) => monthlySessionPlanForAppointment(row))) {
+      setOperationError('Esta sessão pertence ao faturamento mensal automático por sessões realizadas. Use o recebível mensal consolidado ou um lançamento manual por competência sem vincular a sessão.');
       return;
     }
     if (!selectedPatientId && !selectedChargeId) {
@@ -759,8 +789,8 @@ export function PatientFinanceWorkspace({
       />
       <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-white p-5 shadow-sm lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h3 className="text-base font-semibold text-slate-900">Financeiro por sessão</h3>
-          <p className="mt-1 text-sm text-slate-500">Cobranças, pagamentos e documentos ligados ao atendimento que originou o valor.</p>
+          <h3 className="text-base font-semibold text-slate-900">Financeiro de pacientes</h3>
+          <p className="mt-1 text-sm text-slate-500">Cobranças, pagamentos e documentos com composição rastreável por atendimento.</p>
         </div>
         <button type="button" onClick={() => openOperation('charge')} className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-violet-700">
           <Plus size={17} /> Nova operação
@@ -859,17 +889,21 @@ export function PatientFinanceWorkspace({
           <div className="divide-y divide-slate-100">
             {visibleChargeRows.map((charge: any) => {
               const services = Array.from(new Set(charge.items.map((item: any) => String(item.service_type_snapshot || 'Sessão'))));
+              const competenceLabel = formatCompetenceMonth(charge.competenceMonth);
               const origin = charge.items.length
-                ? `${charge.items.length} sessão${charge.items.length === 1 ? '' : 's'} vinculada${charge.items.length === 1 ? '' : 's'}`
+                ? `${charge.items.length} sessão${charge.items.length === 1 ? '' : 's'}${competenceLabel ? ` · ${competenceLabel}` : ''}`
                 : charge.competenceMonth
-                  ? `Competência ${formatDisplayDate(charge.competenceMonth)}`
+                  ? `Competência ${competenceLabel || formatDisplayDate(charge.competenceMonth)}`
                   : 'Lançamento legado';
               return <div key={charge.id} className="grid gap-3 px-4 py-4 text-sm xl:grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.3fr)_minmax(180px,1.2fr)_115px_120px_120px_80px] xl:items-center">
                 <div><p className="font-medium text-slate-900">{charge.patientName}</p><p className="mt-1 text-xs text-slate-500">{origin}</p></div>
                 <div><p className="text-slate-700">{services.join(', ') || 'Sem sessão vinculada'}</p><p className="mt-1 text-xs text-slate-400">{charge.items.length ? charge.items.map((item: any) => formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })).join(' · ') : 'Histórico preservado sem associação inferida'}</p></div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500"><span>Original</span><span className="text-right text-slate-800">{currency(charge.original)}</span><span>Desconto</span><span className="text-right">{currency(charge.discount)}</span><span>Pago</span><span className="text-right text-emerald-700">{currency(charge.paid)}</span></div>
                 <p className="text-slate-600">{charge.dueDateLabel}</p>
-                <StatusBadge status={charge.status} />
+                <div className="flex flex-col items-start gap-1">
+                  <StatusBadge status={charge.status} />
+                  {charge.monthlyAdjustmentRequired && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">Ajuste necessário</span>}
+                </div>
                 <p className={`font-semibold ${charge.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{currency(charge.balance)}</p>
                 <div className="relative group">
                   <button type="button" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:border-violet-200 hover:text-violet-600" aria-label="Ações da cobrança"><ChevronDown size={16} /></button>
@@ -925,7 +959,7 @@ export function PatientFinanceWorkspace({
       {expandedChargeId && chargesById.get(expandedChargeId) && (() => {
         const charge: any = chargesById.get(expandedChargeId);
         return <div className="rounded-3xl border border-violet-100 bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-slate-900">Composição e histórico</h4><p className="mt-1 text-sm text-slate-500">{charge.patientName} · vencimento {charge.dueDateLabel}</p></div><button onClick={() => setExpandedChargeId('')} className="rounded-lg p-2 text-slate-400 hover:bg-slate-50"><X size={18} /></button></div>
+          <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-slate-900">Composição e histórico</h4><p className="mt-1 text-sm text-slate-500">{charge.patientName} · vencimento {charge.dueDateLabel}</p>{charge.monthlyAdjustmentRequired && <p className="mt-2 inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700"><AlertCircle size={13} /> Há uma correção de sessão após movimentação financeira. Revise a trilha antes de ajustar valores.</p>}</div><button onClick={() => setExpandedChargeId('')} className="rounded-lg p-2 text-slate-400 hover:bg-slate-50"><X size={18} /></button></div>
           <div className="mt-4 grid gap-3 sm:grid-cols-5">
             {[['Original', charge.original], ['Adicional', charge.additional], ['Desconto', charge.discount], ['Pago', charge.paid], ['Saldo', charge.balance]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900">{currency(value)}</p></div>)}
           </div>
@@ -981,7 +1015,7 @@ export function PatientFinanceWorkspace({
               </label>
               {!manualCompetence ? <>
                 <div className="flex items-center justify-between"><p className="text-sm font-medium text-slate-800">Sessões</p><span className="text-xs text-slate-400">Selecione uma ou várias</span></div>
-                <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 p-2">{operationAppointments.map((row: any) => { const disabled = Boolean(row.chargeId); const selected = selectedAppointmentIds.includes(row.appointmentId); return <label key={row.appointmentId} className={`flex items-start gap-3 rounded-lg p-3 ${disabled ? 'cursor-not-allowed bg-slate-50 opacity-60' : 'cursor-pointer hover:bg-slate-50'}`}><input type="checkbox" disabled={disabled} checked={selected} onChange={(event) => setSelectedAppointmentIds((current) => event.target.checked ? [...current, row.appointmentId] : current.filter((id) => id !== row.appointmentId))} className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600" /><span className="min-w-0"><span className="block text-sm font-medium text-slate-800">{row.appointmentDateLabel} · {row.serviceType}</span><span className="mt-1 block text-xs text-slate-500">{row.professionalName}{disabled ? ` · ${row.statusLabel}` : ''}</span></span></label>; })}{selectedPatientId && !operationAppointments.length && <p className="p-3 text-sm text-slate-500">Nenhuma sessão particular encontrada para este paciente no intervalo carregado.</p>}</div>
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-100 p-2">{operationAppointments.map((row: any) => { const monthlyAutomatic = Boolean(monthlySessionPlanForAppointment(row)); const disabled = Boolean(row.chargeId) || monthlyAutomatic; const selected = selectedAppointmentIds.includes(row.appointmentId); return <label key={row.appointmentId} className={`flex items-start gap-3 rounded-lg p-3 ${disabled ? 'cursor-not-allowed bg-slate-50 opacity-60' : 'cursor-pointer hover:bg-slate-50'}`}><input type="checkbox" disabled={disabled} checked={selected} onChange={(event) => setSelectedAppointmentIds((current) => event.target.checked ? [...current, row.appointmentId] : current.filter((id) => id !== row.appointmentId))} className="mt-1 h-4 w-4 rounded border-slate-300 text-violet-600" /><span className="min-w-0"><span className="block text-sm font-medium text-slate-800">{row.appointmentDateLabel} · {row.serviceType}</span><span className="mt-1 block text-xs text-slate-500">{row.professionalName}{monthlyAutomatic ? ' · Faturamento mensal automático por sessões realizadas' : disabled ? ` · ${row.statusLabel}` : ''}</span></span></label>; })}{selectedPatientId && !operationAppointments.length && <p className="p-3 text-sm text-slate-500">Nenhuma sessão particular encontrada para este paciente no intervalo carregado.</p>}</div>
               </> : <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4 text-sm text-violet-800">Competência: {formatDisplayDate(`${month}-01`)}. O lançamento ficará identificado como mensal e não será apresentado como pagamento de uma sessão específica.</div>}
             </div>}
 
