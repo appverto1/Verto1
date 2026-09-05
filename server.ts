@@ -43873,6 +43873,45 @@ async function startServer() {
       const returnedPatientIds = patientsAlphabetical
         .map((patient: any) => sanitizeString(patient?.id, 120))
         .filter(Boolean);
+
+      // patient_financial_plans is the canonical source for patient billing rules.
+      // Keep the patient list hydration consistent with the dedicated/detail read paths
+      // so a workspace refresh cannot replace a persisted financial plan with an empty
+      // React snapshot. Fetch in bounded batches (never one query per patient) and keep
+      // the Etapa 1 TISS read boundary capability-aware.
+      let activeFinancialPlansByPatient: Map<string, any[]> | null = null;
+      if (context.capabilities.has('patient.demographics.edit') && returnedPatientIds.length > 0) {
+        activeFinancialPlansByPatient = new Map<string, any[]>();
+        const financialPlanSelect = patientFinancialPlanSelectForCapabilities(context.capabilities);
+        const patientIdBatches: string[][] = [];
+        for (let index = 0; index < returnedPatientIds.length; index += 100) {
+          patientIdBatches.push(returnedPatientIds.slice(index, index + 100));
+        }
+        for (const patientIdBatch of patientIdBatches) {
+          const financialPlanResult = await supabase
+            .from('patient_financial_plans')
+            .select(financialPlanSelect)
+            .eq('organization_id', context.clinicId)
+            .eq('status', 'ACTIVE')
+            .in('patient_id', patientIdBatch)
+            .order('created_at', { ascending: true });
+          if (financialPlanResult.error) {
+            if (isMissingRelationError(financialPlanResult.error)) {
+              activeFinancialPlansByPatient = null;
+              break;
+            }
+            throw financialPlanResult.error;
+          }
+          for (const plan of financialPlanResult.data || []) {
+            const patientId = sanitizeString((plan as any)?.patient_id, 120);
+            if (!patientId) continue;
+            const current = activeFinancialPlansByPatient.get(patientId) || [];
+            current.push(plan);
+            activeFinancialPlansByPatient.set(patientId, current);
+          }
+        }
+      }
+
       let activeProfessionalLinksByPatient: Map<string, any[]> | null = null;
       if (
         context.capabilities.has('team.view') &&
@@ -43908,13 +43947,21 @@ async function startServer() {
         success: true,
         data: patientsAlphabetical.map((patient: any) => {
           const serialized = serializePatientMediaForClient(patient);
-          const withProfessionalLinks = activeProfessionalLinksByPatient
+          const patientId = sanitizeString(patient?.id, 120);
+          const withCanonicalFinancialPlans = activeFinancialPlansByPatient
             ? {
                 ...serialized,
-                professional_links:
-                  activeProfessionalLinksByPatient.get(sanitizeString(patient?.id, 120)) || [],
+                financialPlans: activeFinancialPlansByPatient.get(patientId) || [],
+                financial_plans: activeFinancialPlansByPatient.get(patientId) || [],
               }
             : serialized;
+          const withProfessionalLinks = activeProfessionalLinksByPatient
+            ? {
+                ...withCanonicalFinancialPlans,
+                professional_links:
+                  activeProfessionalLinksByPatient.get(patientId) || [],
+              }
+            : withCanonicalFinancialPlans;
           return redactPatientListRowForCapabilities(
             withProfessionalLinks,
             context.capabilities,
@@ -61475,6 +61522,10 @@ async function startServer() {
     const payerName = sanitizeString(hydratedRow?.payer_name || hydratedRow?.payer_name_snapshot, 180);
     const hasRealPayer = isUuid(sanitizeString(hydratedRow?.payer_id, 120)) || Boolean(payerName && payerName !== 'Sem pagador');
     const suggestedPayerName = sanitizeString(hydratedRow?.suggested_payer_name, 180);
+    const financialContextType = normalizeAppointmentFinancialContextType(
+      hydratedRow?.financial_context_type || hydratedRow?.payer_type
+    );
+    const skipsInsuranceBilling = financialContextSkipsInsuranceBilling(financialContextType);
     return items.map((item: any) => {
       const normalizedItem = {
         ...item,
@@ -61482,6 +61533,25 @@ async function startServer() {
         message: repairChecklistDisplayText(item?.message, 800) || item?.message
       };
       if (normalizedItem?.key !== 'payer_linked') return normalizedItem;
+      if (skipsInsuranceBilling) {
+        return {
+          ...normalizedItem,
+          status: 'PASSED',
+          required: false,
+          severity: 'LOW',
+          message: `Contexto ${financialContextType === 'PRIVATE' ? 'Particular' : financialContextType || 'não convênio'}; pagador de convênio não se aplica.`,
+          section: 'preSession',
+          operationalStatus: 'passed',
+          evidence: {
+            ...(item?.evidence || {}),
+            present: false,
+            suggested: false,
+            suggestedPayerName: null,
+            payerName: null,
+            notApplicable: true
+          }
+        };
+      }
       return {
         ...normalizedItem,
         status: hasRealPayer ? 'PASSED' : 'FAILED',
@@ -61985,9 +62055,10 @@ async function startServer() {
       let billingContext: any = null;
       let billingDocuments: any[] = [];
       let patientFinance: any = null;
+      let patientFinancialEngine: string | null = null;
 
       if (isUuid(eventId) && isUuid(organizationId)) {
-        const [requestsResult, auditResult, signaturesResult, billingResult, documentsResult, patientFinanceResult] = await Promise.all([
+        const [requestsResult, auditResult, signaturesResult, billingResult, documentsResult, patientFinanceResult, financialEngineResult] = await Promise.all([
           supabase
             .from('appointment_action_requests')
             .select(APPOINTMENT_ACTION_REQUEST_SELECT)
@@ -62036,6 +62107,15 @@ async function startServer() {
                 .eq('appointment_id', eventId)
                 .limit(1)
                 .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+          canViewPatientFinance && isUuid(patientId)
+            ? supabase.rpc('resolve_appointment_financial_engine_v1', {
+                p_organization_id: organizationId,
+                p_appointment_id: eventId,
+                p_patient_id: patientId,
+                p_service_type: sanitizeString(event.type || event.service_type, 120) || null,
+                p_source: parseCalendarSourcePayload(row?.source_payload) || {},
+              })
             : Promise.resolve({ data: null, error: null })
         ]);
         if (!requestsResult.error) actionRequests = requestsResult.data || [];
@@ -62056,6 +62136,8 @@ async function startServer() {
         else if (!hasMissingFinancialSchema(documentsResult.error)) throw documentsResult.error;
         if (!patientFinanceResult.error) patientFinance = patientFinanceResult.data || null;
         else if (!hasMissingFinancialSchema(patientFinanceResult.error) && !isMissingRelationError(patientFinanceResult.error)) throw patientFinanceResult.error;
+        if (!financialEngineResult.error) patientFinancialEngine = sanitizeString(financialEngineResult.data, 40).toUpperCase() || null;
+        else if (!hasMissingFinancialSchema(financialEngineResult.error) && !isMissingRelationError(financialEngineResult.error)) throw financialEngineResult.error;
       }
 
       if (isUuid(patientId) && canViewClinicalPlanning) {
@@ -62177,7 +62259,14 @@ async function startServer() {
                 appointment_id: eventId,
                 patient_id: event.patient_id,
                 service_type: event.type || event.service_type || null
-              }, null, billingDocuments, await resolveAppointmentBillingSuggestion({
+              }, null, billingDocuments, financialContextSkipsInsuranceBilling(
+                normalizeAppointmentFinancialContextType(
+                  billingContext?.payer_type ||
+                    event.financial_context_type ||
+                    event.payer_type ||
+                    (event.payer_id || billingContext?.payer_id ? 'INSURANCE' : '')
+                )
+              ) ? null : await resolveAppointmentBillingSuggestion({
                 organizationId,
                 patientId: event.patient_id,
                 serviceType: event.type || event.service_type || null,
@@ -62188,6 +62277,7 @@ async function startServer() {
               }))
             : null,
           patientFinance: canViewPatientFinance ? patientFinance : null,
+          patientFinancialEngine: canViewPatientFinance ? patientFinancialEngine : null,
           actionRequests,
           statusHistory,
           signatures
@@ -73270,10 +73360,12 @@ async function startServer() {
       const billingItem = !financialContextSkipsInsuranceBilling(billingContextType)
         ? billingItemsBundle.itemsByAppointment.get(sanitizeString(row?.appointment_id, 120))
         : null;
-      const financialPlan = selectConferenceFinancialPlan(financialPlansByPatient.get(sanitizeString(row?.patient_id, 120)) || [], {
-        ...row,
-        payer_name: base.payer_name
-      });
+      const financialPlan = !financialContextSkipsInsuranceBilling(billingContextType)
+        ? selectConferenceFinancialPlan(financialPlansByPatient.get(sanitizeString(row?.patient_id, 120)) || [], {
+            ...row,
+            payer_name: base.payer_name
+          })
+        : null;
       const competenceMonth = getConferenceCompetenceMonth(row?.scheduled_start || row?.actual_start);
       const statusRow = statusMap.get(`${sanitizeString(row?.appointment_id, 120)}:${competenceMonth}`);
       const conferenceStatus = statusRow?.status || (base.readiness_status === 'NOT_BILLABLE' ? 'non_billable' : 'pending_review');

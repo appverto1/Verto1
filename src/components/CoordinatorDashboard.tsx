@@ -8979,8 +8979,15 @@ export function CoordinatorDashboard({
           PATIENT_FINANCIAL_BILLING_MODE_OPTIONS.find((option) => option.value === plan.billingMode)?.label ||
           "Particular",
         insuranceName: String(plan.payerNameSnapshot || plan.insuranceName || patient?.insuranceName || "").trim(),
+        isMonthlySessionVariable:
+          String(plan.billingFrequency || "").toUpperCase() === "MONTHLY" &&
+          String(plan.pricingUnit || "").toUpperCase() === "SESSION" &&
+          String(plan.aggregationMethod || "").toUpperCase() === "ELIGIBLE_COMPLETED_SESSIONS",
       }))
       .filter((plan: any) => plan.amount > 0);
+
+  const getFixedProjectionPlanAmount = (plan: any) =>
+    plan?.isMonthlySessionVariable ? 0 : Number(plan?.amount || 0);
 
   const isSameFinancialMonth = (dateValue: any, monthKey: string) => {
     const raw = String(dateValue || "").trim();
@@ -9127,14 +9134,15 @@ export function CoordinatorDashboard({
     activePatients.forEach((patient: any) => {
       const plans = getPatientPlans(patient);
       plans.forEach((plan: any) => {
-        projection += plan.amount;
-        addSpecialtyMetric(plan.specialty, plan.amount, "projected", patient.id);
-        addToMap(payerMap, plan.payerLabel, plan.amount, { patientId: patient.id });
+        const projectedPlanAmount = getFixedProjectionPlanAmount(plan);
+        projection += projectedPlanAmount;
+        addSpecialtyMetric(plan.specialty, projectedPlanAmount, "projected", patient.id);
+        addToMap(payerMap, plan.payerLabel, projectedPlanAmount, { patientId: patient.id });
         if (plan.payerType === "convenio") {
-          addToMap(insuranceMap, plan.insuranceName || "Convênio não informado", plan.amount, { patientId: patient.id });
+          addToMap(insuranceMap, plan.insuranceName || "Convênio não informado", projectedPlanAmount, { patientId: patient.id });
         }
-        addToMap(billingMethodMap, plan.billingMethod ? plan.billingMethod.toUpperCase() : plan.payerLabel, plan.amount, { patientId: patient.id });
-        if (plan.dueDay) {
+        addToMap(billingMethodMap, plan.billingMethod ? plan.billingMethod.toUpperCase() : plan.payerLabel, projectedPlanAmount, { patientId: patient.id });
+        if (plan.dueDay && !plan.isMonthlySessionVariable) {
           const dueDate = new Date(`${financialMonth || new Date().toISOString().slice(0, 7)}-01T00:00:00`);
           dueDate.setDate(Math.min(plan.dueDay, new Date(dueDate.getFullYear(), dueDate.getMonth() + 1, 0).getDate()));
           dueRows.push({
@@ -9165,14 +9173,14 @@ export function CoordinatorDashboard({
     const averageTicket = activePatients.length ? projection / activePatients.length : 0;
     const newPatients = activePatients.filter((patient: any) => isSameFinancialMonth(patient?.created_at || patient?.createdAt, financialMonth));
     const newEntriesValue = newPatients.reduce(
-      (sum: number, patient: any) => sum + getPatientPlans(patient).reduce((planSum: number, plan: any) => planSum + plan.amount, 0),
+      (sum: number, patient: any) => sum + getPatientPlans(patient).reduce((planSum: number, plan: any) => planSum + getFixedProjectionPlanAmount(plan), 0),
       0,
     );
     const cancellations = inactivePatients.filter((patient: any) =>
       isSameFinancialMonth(patient?.deletedAt || patient?.unlinkedAt || patient?.cancelledAt || patient?.updated_at || patient?.updatedAt, financialMonth),
     );
     const cancellationValue = cancellations.reduce(
-      (sum: number, patient: any) => sum + getPatientPlans(patient).reduce((planSum: number, plan: any) => planSum + plan.amount, 0),
+      (sum: number, patient: any) => sum + getPatientPlans(patient).reduce((planSum: number, plan: any) => planSum + getFixedProjectionPlanAmount(plan), 0),
       0,
     );
     const outstanding = Math.max(projection - realized, 0);
@@ -9233,7 +9241,7 @@ export function CoordinatorDashboard({
     });
 
     const dreRows = [
-      { label: "Faturamento projetado", value: projection, type: "income", info: "Soma das mensalidades cadastradas nos pacientes ativos." },
+      { label: "Faturamento projetado", value: projection, type: "income", info: "Soma conservadora dos valores fixos cadastrados; planos mensais por sessão são variáveis e entram pelos recebíveis consolidados." },
       { label: "Faturamento realizado", value: realized, type: "income", info: "Pagamentos com status pago no mês selecionado." },
       { label: "Cobranças pendentes registradas", value: pendingAmount, type: "total", info: "Cobranças já lançadas sem comprovante/pagamento." },
       { label: "Inadimplência", value: -overdueAmount, type: "expense", info: `${overduePayments.length} pagamento(s) vencido(s) sem baixa.` },
@@ -11895,7 +11903,7 @@ export function CoordinatorDashboard({
                     <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                       {[
                         { label: "Pacientes ativos", value: financialDashboard.patientCount, rawValue: financialDashboard.patientCount, hint: "Com plano financeiro ativo", semantic: "neutral" as const },
-                        { label: "Receita projetada", value: formatCurrency(financialDashboard.projection), rawValue: financialDashboard.projection, hint: "Projetado: mensalidades/planos ativos no mês", semantic: "positive" as const },
+                        { label: "Receita projetada", value: formatCurrency(financialDashboard.projection), rawValue: financialDashboard.projection, hint: "Somente valores fixos; mensal por sessões entra pelos recebíveis consolidados", semantic: "positive" as const },
                         { label: "Receita realizada", value: formatCurrency(financialDashboard.realized), rawValue: financialDashboard.realized, hint: "Realizado: pagamentos confirmados no mês", semantic: "positive" as const },
                         { label: "A receber", value: formatCurrency(financialDashboard.pendingAmount), rawValue: financialDashboard.pendingAmount, hint: "Pendente: cobranças em aberto no mês", semantic: "neutral" as const },
                         { label: "Em atraso", value: formatCurrency(financialDashboard.overdueAmount), rawValue: financialDashboard.overdueAmount, hint: "Pendente vencido no período", semantic: "negative" as const },
@@ -17216,16 +17224,19 @@ export function CoordinatorDashboard({
                                 </select>
                               </FormField>
                             {supportsMonthlySessionBilling && (
-                              <FormField label="Forma de faturamento">
-                                <select
-                                  className={patientFormInputClass}
-                                  value={isMonthlySessionPlan ? "MONTHLY_SESSION" : "CURRENT"}
-                                  onChange={(e) => setFinancialPlanMonthlySessionBilling(plan.id, e.target.value === "MONTHLY_SESSION")}
-                                >
-                                  <option value="CURRENT">{isInsurancePlan ? "Conforme configuração atual" : "Recebível por sessão"}</option>
-                                  <option value="MONTHLY_SESSION">Faturamento mensal por sessões realizadas</option>
-                                </select>
-                              </FormField>
+                              <div className="min-w-0 md:col-span-2 xl:col-span-2">
+                                <FormField label="Forma de faturamento">
+                                  <select
+                                    className={`${patientFormInputClass} min-w-0 w-full`}
+                                    title={isMonthlySessionPlan ? "Faturamento mensal por sessões realizadas" : isInsurancePlan ? "Conforme configuração atual" : "Recebível por sessão"}
+                                    value={isMonthlySessionPlan ? "MONTHLY_SESSION" : "CURRENT"}
+                                    onChange={(e) => setFinancialPlanMonthlySessionBilling(plan.id, e.target.value === "MONTHLY_SESSION")}
+                                  >
+                                    <option value="CURRENT">{isInsurancePlan ? "Conforme configuração atual" : "Recebível por sessão"}</option>
+                                    <option value="MONTHLY_SESSION">Faturamento mensal por sessões realizadas</option>
+                                  </select>
+                                </FormField>
+                              </div>
                             )}
                             {!isCourtesyPlan && (
                               <FormField label={isMonthlySessionPlan ? "Valor por sessão" : isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>

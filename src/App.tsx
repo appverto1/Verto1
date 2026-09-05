@@ -6497,7 +6497,7 @@ export default function App() {
         (patientForSession as any)?.insurancePayerId ||
         '',
     ).trim();
-    if (!effectivePayerId && canonicalPatientPayerId) {
+    if (!financialContextType && !effectivePayerId && canonicalPatientPayerId) {
       effectivePayerId = canonicalPatientPayerId;
       effectivePayerName =
         effectivePayerName ||
