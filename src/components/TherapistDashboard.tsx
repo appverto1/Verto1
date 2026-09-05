@@ -1429,7 +1429,18 @@ export const TherapistDashboard = ({
                 clinicalRecords.find(
                   (r: any) => r.patientId === selectedPatientId,
                 ) || {};
-              const patientData = { ...patient, ...clinicalRecord };
+              const patientData = {
+                ...patient,
+                ...clinicalRecord,
+                // Patient identity/media is canonical on the patient row. Legacy clinical
+                // snapshots must not hide a valid photo by overwriting it with null/stale data.
+                profilePicture: patient?.profilePicture || patient?.profile_picture || clinicalRecord?.profilePicture || clinicalRecord?.profile_picture || null,
+                profile_picture: patient?.profile_picture || patient?.profilePicture || clinicalRecord?.profile_picture || clinicalRecord?.profilePicture || null,
+                profilePicturePath: patient?.profilePicturePath || patient?.profile_picture_path || clinicalRecord?.profilePicturePath || clinicalRecord?.profile_picture_path || null,
+                profile_picture_path: patient?.profile_picture_path || patient?.profilePicturePath || clinicalRecord?.profile_picture_path || clinicalRecord?.profilePicturePath || null,
+                portalProfilePicture: patient?.portalProfilePicture || patient?.portal_profile_picture || clinicalRecord?.portalProfilePicture || clinicalRecord?.portal_profile_picture || null,
+                portal_profile_picture: patient?.portal_profile_picture || patient?.portalProfilePicture || clinicalRecord?.portal_profile_picture || clinicalRecord?.portalProfilePicture || null,
+              };
               return (
                 <PatientDetailView
                   patient={patientData}
