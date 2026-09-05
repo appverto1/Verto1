@@ -21,9 +21,10 @@ assert.match(server, /app\.get\('\/api\/patients\/:patientId\/financial-plans', 
 // financial-plan payload.
 assert.match(coordinator, /hasInsuranceTissModule && canViewPatientInsurance/);
 assert.match(coordinator, /hasInsuranceTissModule && canViewPatientTissAuthorizations/);
-assert.match(coordinator, /filter\(\(option\) => hasInsuranceTissModule \|\| option\.value !== "INSURANCE"\)/);
+assert.match(coordinator, /filter\(\(option\) => canAccessClinicFinance \|\| hasInsuranceTissModule \|\| option\.value !== "INSURANCE"\)/);
 assert.match(server, /source\?\.recordPayload\?\.financialPlans/);
-assert.match(server, /normalizedMode === 'INSURANCE'/);
+assert.match(server, /function patientPayloadRequestsGenericPayerCapability[\s\S]{0,2200}normalizedMode === 'INSURANCE'/);
+assert.match(server, /billingMode=INSURANCE and payer identity are generic financial master data/);
 assert.match(server, /PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED/);
 
 console.log('patientFinancialPlanCoreEntitlement.test.mjs: ok');

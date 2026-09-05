@@ -5932,9 +5932,12 @@ const PATIENT_FINANCIAL_PAYLOAD_KEYS = new Set([
   'dreMetrics'
 ]);
 
-const PATIENT_INSURANCE_PAYLOAD_KEYS = new Set([
+const PATIENT_GENERIC_PAYER_PAYLOAD_KEYS = new Set([
   'insurancePayerId','insurance_payer_id','convenioPayerId','convenio_payer_id',
   'insuranceType','insurance_type','convenioTipo','insuranceName','insurance_name','convenioNome',
+]);
+
+const PATIENT_INSURANCE_PAYLOAD_KEYS = new Set([
   'insuranceCardNumber','insurance_card_number','cardNumber','convenioCarteirinha',
   'insuranceCardValidUntil','insurance_card_valid_until','convenioCarteirinhaValidade',
   'insurancePlanCategory','insurance_plan_category','convenioPlanoCategoria',
@@ -5974,10 +5977,16 @@ function redactPatientRecordPayloadForCapabilities(
   if (!capabilities) return redactPatientFinancialPayload(input, user);
 
   let redacted = input;
-  if (!capabilities.has('patient.demographics.edit')) {
+  const canViewPatientFinancialPlan = capabilities.has('patient.demographics.edit');
+  const canViewFinance = capabilities.has('finance.payments.view');
+  const canViewTissInsurance = capabilities.has('patient.insurance.view');
+  if (!canViewPatientFinancialPlan) {
     redacted = redactPatientPayloadKeys(redacted, PATIENT_FINANCIAL_PAYLOAD_KEYS);
   }
-  if (!capabilities.has('patient.insurance.view')) {
+  if (!canViewFinance && !canViewTissInsurance) {
+    redacted = redactPatientPayloadKeys(redacted, PATIENT_GENERIC_PAYER_PAYLOAD_KEYS);
+  }
+  if (!canViewTissInsurance) {
     redacted = redactPatientPayloadKeys(redacted, PATIENT_INSURANCE_PAYLOAD_KEYS);
   }
   return redacted;
@@ -19269,39 +19278,19 @@ function normalizePatientInsuranceTypeForPersistence(value: any) {
   return normalized || 'particular';
 }
 
-const PATIENT_INSURANCE_TYPE_PAYLOAD_KEYS = new Set([
-  'insuranceType', 'insurance_type', 'convenioTipo',
-]);
-
-function patientPayloadRequestsInsuranceCreateCapability(body: any): boolean {
+function patientPayloadRequestsGenericPayerCapability(body: any): boolean {
   const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
-  const sources = [
-    source,
-    source?.anamnesisData,
-    source?.anamnesis_data,
-    source?.anamnese,
-  ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+  const sources = [source, source?.anamnesisData, source?.anamnesis_data, source?.anamnese]
+    .filter((value) => value && typeof value === 'object' && !Array.isArray(value));
 
   for (const candidate of sources) {
-    const requestedTypeRaw =
-      candidate?.insuranceType ?? candidate?.insurance_type ?? candidate?.convenioTipo;
-    const requestedTypeProvided =
-      requestedTypeRaw !== undefined &&
-      requestedTypeRaw !== null &&
-      String(requestedTypeRaw).trim() !== '';
-    if (
-      requestedTypeProvided &&
-      normalizePatientInsuranceTypeForPersistence(requestedTypeRaw) !== 'particular'
-    ) {
-      return true;
-    }
-
-    for (const key of PATIENT_INSURANCE_PAYLOAD_KEYS) {
-      if (PATIENT_INSURANCE_TYPE_PAYLOAD_KEYS.has(key)) continue;
+    const requestedType = normalizePatientInsuranceTypeForPersistence(
+      candidate?.insuranceType ?? candidate?.insurance_type ?? candidate?.convenioTipo,
+    );
+    if (requestedType === 'convenio') return true;
+    for (const key of ['insurancePayerId','insurance_payer_id','convenioPayerId','convenio_payer_id','insuranceName','insurance_name','convenioNome']) {
       const value = candidate?.[key];
-      if (value !== undefined && value !== null && String(value).trim() !== '') {
-        return true;
-      }
+      if (value !== undefined && value !== null && String(value).trim() !== '') return true;
     }
   }
 
@@ -19320,13 +19309,54 @@ function patientPayloadRequestsInsuranceCreateCapability(body: any): boolean {
         .replace(/[\u0300-\u036f]/g, '')
         .trim()
         .toLowerCase();
-      if (normalizedMode === 'INSURANCE' || normalizedPayerType === 'convenio' || normalizedPayerType === 'insurance') {
+      if (normalizedMode === 'INSURANCE' || normalizedPayerType === 'convenio' || normalizedPayerType === 'insurance') return true;
+      for (const key of ['payerId','payer_id','payerNameSnapshot','payer_name_snapshot','insuranceName','insurance_name']) {
+        const value = plan?.[key];
+        if (value !== undefined && value !== null && String(value).trim() !== '') return true;
+      }
+    }
+  }
+  return false;
+}
+
+function patientPayloadRequestsInsuranceCreateCapability(body: any): boolean {
+  const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const sources = [
+    source,
+    source?.anamnesisData,
+    source?.anamnesis_data,
+    source?.anamnese,
+  ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+
+  for (const candidate of sources) {
+    // Generic payer identity (type/name/payer id) is shared master data and does
+    // not by itself request TISS. Only operational beneficiary/TISS fields do.
+    for (const key of PATIENT_INSURANCE_PAYLOAD_KEYS) {
+      const value = candidate?.[key];
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
         return true;
       }
+    }
+  }
+
+  const financialPlanLists = [
+    source?.financialPlans,
+    source?.financial_plans,
+    source?.recordPayload?.financialPlans,
+    source?.recordPayload?.financial_plans,
+  ].filter(Array.isArray);
+  for (const list of financialPlanLists) {
+    for (const rawPlan of list) {
+      const plan = rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan) ? rawPlan : {};
+      // billingMode=INSURANCE and payer identity are generic financial master data.
+      // Only operational beneficiary/authorization fields request TISS capability.
       for (const key of [
-        'payerId','payer_id','payerNameSnapshot','payer_name_snapshot',
-        'insuranceName','insurance_name','insurancePlanName','insurance_plan_name',
-        'insuranceCardNumber','insurance_card_number','authorizationCode','authorization_code',
+        'insurancePlanName','insurance_plan_name',
+        'insuranceCardNumber','insurance_card_number',
+        'insuranceCardHolder','insurance_card_holder',
+        'insuranceCardValidUntil','insurance_card_valid_until',
+        'authorizationCode','authorization_code',
+        'authorizationValidUntil','authorization_valid_until',
       ]) {
         const value = plan?.[key];
         if (value !== undefined && value !== null && String(value).trim() !== '') return true;
@@ -19334,6 +19364,322 @@ function patientPayloadRequestsInsuranceCreateCapability(body: any): boolean {
     }
   }
   return false;
+}
+
+
+function patientFinancialPlanPayloadSources(body: any): Array<Record<string, any>> {
+  const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const recordPayload = source?.recordPayload && typeof source.recordPayload === 'object' && !Array.isArray(source.recordPayload)
+    ? source.recordPayload
+    : source?.record_payload && typeof source.record_payload === 'object' && !Array.isArray(source.record_payload)
+      ? source.record_payload
+      : null;
+  const payload = source?.payload && typeof source.payload === 'object' && !Array.isArray(source.payload)
+    ? source.payload
+    : null;
+  return [
+    source,
+    source?.anamnesisData,
+    source?.anamnesis_data,
+    source?.anamnese,
+    recordPayload,
+    recordPayload?.anamnesisData,
+    recordPayload?.anamnesis_data,
+    recordPayload?.anamnese,
+    payload,
+    payload?.anamnesisData,
+    payload?.anamnesis_data,
+    payload?.anamnese,
+  ].filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function extractExplicitPatientFinancialPlans(body: any): { provided: boolean; plans: any[] } {
+  const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const candidates = [
+    [source, 'financialPlans'],
+    [source, 'financial_plans'],
+    [source?.recordPayload, 'financialPlans'],
+    [source?.recordPayload, 'financial_plans'],
+    [source?.record_payload, 'financialPlans'],
+    [source?.record_payload, 'financial_plans'],
+    [source?.payload, 'financialPlans'],
+    [source?.payload, 'financial_plans'],
+  ] as Array<[any, string]>;
+  for (const [container, key] of candidates) {
+    if (!container || typeof container !== 'object' || Array.isArray(container)) continue;
+    if (!Object.prototype.hasOwnProperty.call(container, key)) continue;
+    return { provided: true, plans: Array.isArray(container[key]) ? container[key] : [] };
+  }
+  return { provided: false, plans: [] };
+}
+
+function patientPayloadTouchesGenericPayerOutsideFinancialPlans(body: any): boolean {
+  for (const candidate of patientFinancialPlanPayloadSources(body)) {
+    if (candidate === body?.recordPayload?.financialPlans || candidate === body?.financialPlans) continue;
+    for (const key of PATIENT_GENERIC_PAYER_PAYLOAD_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(candidate, key)) return true;
+    }
+  }
+  return false;
+}
+
+function patientPayloadRequestsInsuranceOperationalOutsideFinancialPlans(body: any): boolean {
+  for (const candidate of patientFinancialPlanPayloadSources(body)) {
+    for (const key of PATIENT_INSURANCE_PAYLOAD_KEYS) {
+      const value = candidate?.[key];
+      if (value !== undefined && value !== null && String(value).trim() !== '') return true;
+    }
+  }
+  return false;
+}
+
+function inspectFinancialPlanInsuranceOperationalFields(plans: any[]): {
+  any: boolean;
+  onNonInsurance: boolean;
+  hasUnverifiableFields: boolean;
+} {
+  let any = false;
+  let onNonInsurance = false;
+  let hasUnverifiableFields = false;
+  for (const rawPlan of Array.isArray(plans) ? plans : []) {
+    const plan = rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan) ? rawPlan : {};
+    const billingMode = sanitizeString(plan?.billingMode || plan?.billing_mode, 40).trim().toUpperCase() || 'PRIVATE';
+    const persistedOperationalKeys = [
+      'insurancePlanName','insurance_plan_name',
+      'authorizationCode','authorization_code',
+      'authorizationValidUntil','authorization_valid_until',
+    ];
+    const unverifiableOperationalKeys = [
+      'insuranceCardNumber','insurance_card_number',
+      'insuranceCardHolder','insurance_card_holder',
+      'insuranceCardValidUntil','insurance_card_valid_until',
+    ];
+    const hasPersistedOperationalField = persistedOperationalKeys.some((key) => {
+      const value = plan?.[key];
+      return value !== undefined && value !== null && String(value).trim() !== '';
+    });
+    const hasUnverifiableOperationalField = unverifiableOperationalKeys.some((key) => {
+      const value = plan?.[key];
+      return value !== undefined && value !== null && String(value).trim() !== '';
+    });
+    if (!hasPersistedOperationalField && !hasUnverifiableOperationalField) continue;
+    any = true;
+    if (billingMode !== 'INSURANCE') onNonInsurance = true;
+    if (hasUnverifiableOperationalField) hasUnverifiableFields = true;
+  }
+  return { any, onNonInsurance, hasUnverifiableFields };
+}
+
+function normalizeFinancialPlanSemanticText(value: any, limit = 1000) {
+  const text = sanitizeString(value, limit).replace(/\s+/g, ' ').trim();
+  return text || null;
+}
+
+function normalizeFinancialPlanSemanticEnum(value: any, limit = 80) {
+  const text = normalizeFinancialPlanSemanticText(value, limit);
+  return text ? text.toUpperCase() : null;
+}
+
+function normalizeFinancialPlanSemanticDate(value: any) {
+  return sanitizeIsoDateOnly(value) || null;
+}
+
+function normalizeFinancialPlanSemanticInteger(value: any) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.round(parsed) : null;
+}
+
+function patientFinancialPlanSemanticFingerprint(row: any) {
+  const source = row && typeof row === 'object' && !Array.isArray(row) ? row : {};
+  return JSON.stringify({
+    service_type: normalizeFinancialPlanSemanticEnum(source.service_type ?? source.serviceType, 60) || 'CUSTOM',
+    custom_service_name: normalizeFinancialPlanSemanticText(source.custom_service_name ?? source.customServiceName, 120),
+    service_name_snapshot: normalizeFinancialPlanSemanticText(source.service_name_snapshot ?? source.serviceNameSnapshot ?? source.specialty, 120),
+    billing_mode: normalizeFinancialPlanSemanticEnum(source.billing_mode ?? source.billingMode, 40) || 'PRIVATE',
+    payer_id: isUuid(sanitizeString(source.payer_id ?? source.payerId, 120)) ? sanitizeString(source.payer_id ?? source.payerId, 120) : null,
+    // payer_name_snapshot is intentionally excluded: payer_id is the tenant-scoped identity.
+    insurance_plan_name: normalizeFinancialPlanSemanticText(source.insurance_plan_name ?? source.insurancePlanName, 160),
+    authorization_code: normalizeFinancialPlanSemanticText(source.authorization_code ?? source.authorizationCode, 120),
+    authorization_valid_until: normalizeFinancialPlanSemanticDate(source.authorization_valid_until ?? source.authorizationValidUntil),
+    sessions_quantity: normalizeFinancialPlanSemanticInteger(source.sessions_quantity ?? source.sessionsQuantity),
+    quantity_period: normalizeFinancialPlanSemanticEnum(source.quantity_period ?? source.quantityPeriod, 40),
+    amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.amount_cents ?? source.amountCents) || 0),
+    copayment_amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.copayment_amount_cents ?? source.copaymentAmountCents) || 0),
+    payment_method: normalizeFinancialPlanSemanticEnum(source.payment_method ?? source.paymentMethod ?? source.billingMethod, 40),
+    due_day: normalizeFinancialPlanSemanticInteger(source.due_day ?? source.dueDay),
+    package_valid_until: normalizeFinancialPlanSemanticDate(source.package_valid_until ?? source.packageValidUntil),
+    notes: normalizeFinancialPlanSemanticText(source.notes, 1000),
+  });
+}
+
+function patientFinancialPlanIdentityKeys(row: any) {
+  const source = row && typeof row === 'object' && !Array.isArray(row) ? row : {};
+  return [
+    source.id,
+    source.client_plan_key,
+    source.clientPlanKey,
+    source.logical_plan_id,
+    source.logicalPlanId,
+  ]
+    .map((value) => sanitizeString(value, 120))
+    .filter(Boolean);
+}
+
+function patientFinancialPlanIsInsurance(row: any) {
+  return normalizeFinancialPlanSemanticEnum(row?.billing_mode ?? row?.billingMode, 40) === 'INSURANCE';
+}
+
+function areInsuranceFinancialPlanSetsSemanticallyEqual(canonicalRows: any[], incomingRows: any[]) {
+  const canonical = (Array.isArray(canonicalRows) ? canonicalRows : []).filter(patientFinancialPlanIsInsurance);
+  const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter(patientFinancialPlanIsInsurance);
+  if (canonical.length !== incoming.length) return false;
+
+  const usedCanonical = new Set<number>();
+  const unmatchedIncoming: any[] = [];
+  for (const incomingRow of incoming) {
+    const incomingKeys = new Set(patientFinancialPlanIdentityKeys(incomingRow));
+    let matchedIndex = -1;
+    if (incomingKeys.size > 0) {
+      matchedIndex = canonical.findIndex((canonicalRow, index) => {
+        if (usedCanonical.has(index)) return false;
+        return patientFinancialPlanIdentityKeys(canonicalRow).some((key) => incomingKeys.has(key));
+      });
+    }
+    if (matchedIndex < 0) {
+      unmatchedIncoming.push(incomingRow);
+      continue;
+    }
+    if (patientFinancialPlanSemanticFingerprint(canonical[matchedIndex]) !== patientFinancialPlanSemanticFingerprint(incomingRow)) {
+      return false;
+    }
+    usedCanonical.add(matchedIndex);
+  }
+
+  for (const incomingRow of unmatchedIncoming) {
+    const fingerprint = patientFinancialPlanSemanticFingerprint(incomingRow);
+    const matchedIndex = canonical.findIndex((canonicalRow, index) => (
+      !usedCanonical.has(index) && patientFinancialPlanSemanticFingerprint(canonicalRow) === fingerprint
+    ));
+    if (matchedIndex < 0) return false;
+    usedCanonical.add(matchedIndex);
+  }
+  return usedCanonical.size === canonical.length;
+}
+
+function topLevelGenericPayerReplayMatchesCanonical(body: any, canonicalRows: any[]) {
+  if (!patientPayloadTouchesGenericPayerOutsideFinancialPlans(body)) return true;
+  const sources = patientFinancialPlanPayloadSources(body);
+  const currentInsuranceRows = (Array.isArray(canonicalRows) ? canonicalRows : []).filter(patientFinancialPlanIsInsurance);
+  const payerIds = Array.from(new Set(
+    currentInsuranceRows
+      .map((row: any) => sanitizeString(row?.payer_id ?? row?.payerId, 120))
+      .filter((value: string) => isUuid(value)),
+  ));
+  const canonicalPayerId = payerIds.length === 1 ? payerIds[0] : null;
+
+  let payerIdWasProvided = false;
+  for (const candidate of sources) {
+    const requestedTypeKey = ['insuranceType','insurance_type','convenioTipo']
+      .find((key) => Object.prototype.hasOwnProperty.call(candidate, key));
+    if (requestedTypeKey) {
+      const requestedType = normalizePatientInsuranceTypeForPersistence(candidate?.[requestedTypeKey]);
+      if (currentInsuranceRows.length > 0 && requestedType !== 'convenio') return false;
+      if (currentInsuranceRows.length === 0 && requestedType === 'convenio') return false;
+    }
+
+    const payerKey = ['insurancePayerId','insurance_payer_id','convenioPayerId','convenio_payer_id']
+      .find((key) => Object.prototype.hasOwnProperty.call(candidate, key));
+    if (payerKey) {
+      payerIdWasProvided = true;
+      const requestedPayerId = sanitizeString(candidate?.[payerKey], 120);
+      if (!canonicalPayerId || !isUuid(requestedPayerId) || requestedPayerId !== canonicalPayerId) return false;
+    }
+
+    const nameKey = ['insuranceName','insurance_name','convenioNome']
+      .find((key) => Object.prototype.hasOwnProperty.call(candidate, key));
+    if (nameKey && currentInsuranceRows.length > 0 && !payerIdWasProvided) {
+      // Free text never proves payer identity; a tenant-scoped payer_id must anchor the replay.
+      return false;
+    }
+  }
+  return true;
+}
+
+async function loadCanonicalActivePatientFinancialPlansForAuthorization(params: { clinicId: string; patientId: string }) {
+  const baseQuery = () => supabase
+    .from('patient_financial_plans')
+    .select(`${PATIENT_FINANCIAL_PLAN_SELECT},client_plan_key,logical_plan_id`)
+    .eq('organization_id', params.clinicId)
+    .eq('patient_id', params.patientId)
+    .eq('status', 'ACTIVE')
+    .order('created_at', { ascending: true });
+  let result = await baseQuery();
+  if (result.error && ['client_plan_key', 'logical_plan_id'].includes(extractMissingColumnName(result.error) || '')) {
+    result = await supabase
+      .from('patient_financial_plans')
+      .select(PATIENT_FINANCIAL_PLAN_SELECT)
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('status', 'ACTIVE')
+      .order('created_at', { ascending: true });
+  }
+  if (result.error) throw result.error;
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+async function assessPatientPayerMutationBoundary(params: {
+  clinicId: string;
+  patientId: string;
+  body: any;
+  capabilities?: ReadonlySet<CapabilityKey> | null;
+}) {
+  const canMutatePayer =
+    params.capabilities?.has('finance.entries.manage') === true ||
+    params.capabilities?.has('patient.insurance.edit') === true;
+  const explicitPlans = extractExplicitPatientFinancialPlans(params.body);
+  const touchesGenericPayer = patientPayloadTouchesGenericPayerOutsideFinancialPlans(params.body);
+  if (canMutatePayer || (!explicitPlans.provided && !touchesGenericPayer)) {
+    return { ok: true as const, preserveInsuranceContext: false, explicitPlans };
+  }
+
+  const canonicalRows = await loadCanonicalActivePatientFinancialPlansForAuthorization({
+    clinicId: params.clinicId,
+    patientId: params.patientId,
+  });
+  const incomingRows = explicitPlans.provided
+    ? buildPatientFinancialPlanRows({
+        financialPlans: explicitPlans.plans,
+        patientId: params.patientId,
+        clinicId: params.clinicId,
+        actorId: null,
+      })
+    : [];
+
+  if (explicitPlans.provided && !areInsuranceFinancialPlanSetsSemanticallyEqual(canonicalRows, incomingRows)) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: 'PATIENT_PAYER_CONTEXT_CAPABILITY_REQUIRED',
+      preserveInsuranceContext: false,
+      explicitPlans,
+    };
+  }
+  if (touchesGenericPayer && !topLevelGenericPayerReplayMatchesCanonical(params.body, canonicalRows)) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: 'PATIENT_PAYER_CONTEXT_CAPABILITY_REQUIRED',
+      preserveInsuranceContext: false,
+      explicitPlans,
+    };
+  }
+
+  return {
+    ok: true as const,
+    preserveInsuranceContext: explicitPlans.provided,
+    explicitPlans,
+  };
 }
 
 function readPatientInsurancePayerId(body: any): { provided: boolean; value: string | null; invalid: boolean } {
@@ -19633,6 +19979,7 @@ function buildPatientFinancialPlanRows(params: {
     .map(serializePatientFinancialPlanForPayload)
     .map((plan: any) => cleanObject({
       id: isUuid(sanitizeString(plan.id, 120)) ? sanitizeString(plan.id, 120) : undefined,
+      client_plan_key: sanitizeString(plan.id, 120) || undefined,
       organization_id: params.clinicId,
       patient_id: params.patientId,
       service_type: sanitizeString(plan.serviceType, 60) || 'CUSTOM',
@@ -19663,49 +20010,71 @@ async function persistPatientFinancialPlans(params: {
   clinicId: string;
   actorId?: string | null;
   financialPlans: any[];
+  preserveInsuranceContext?: boolean;
 }) {
   if (!isUuid(params.patientId) || !isUuid(params.clinicId)) {
     return { success: false, error: 'Paciente ou clínica inválidos.' };
   }
-  const rows = buildPatientFinancialPlanRows(params);
+  let rows = buildPatientFinancialPlanRows(params);
+  if (params.preserveInsuranceContext === true) {
+    // Authorization boundary: replayed INSURANCE rows were proven equal against
+    // the canonical ACTIVE state. Do not send them to reconciliation at all.
+    // The RPC preserves the live INSURANCE rows transactionally while allowing
+    // independent PRIVATE/base plan mutations to continue.
+    rows = rows.filter((row: any) => !patientFinancialPlanIsInsurance(row));
+  }
   const payerIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.payer_id, 120)).filter((id: string) => isUuid(id))));
   if (payerIds.length > 0) {
     const { data: payers, error: payerError } = await supabase
       .from('clinic_payers')
-      .select('id')
+      .select('id,name')
       .eq('organization_id', params.clinicId)
       .in('id', payerIds);
     if (payerError && !isMissingRelationError(payerError)) throw payerError;
-    const validPayers = new Set((Array.isArray(payers) ? payers : []).map((payer: any) => sanitizeString(payer?.id, 120)));
-    if (!payerIds.every((payerId) => validPayers.has(payerId))) {
+    const payerMap = new Map(
+      (Array.isArray(payers) ? payers : []).map((payer: any) => [
+        sanitizeString(payer?.id, 120),
+        sanitizeString(payer?.name, 180),
+      ]),
+    );
+    if (!payerIds.every((payerId) => payerMap.has(payerId))) {
       return { success: false, error: 'Pagador fora do escopo da clínica.' };
     }
+    // payer_id is authoritative. Never let free-text payerNameSnapshot switch or
+    // rename a payer indirectly; hydrate the display snapshot from tenant master data.
+    rows = rows.map((row: any) => (
+      isUuid(sanitizeString(row?.payer_id, 120))
+        ? { ...row, payer_name_snapshot: payerMap.get(sanitizeString(row.payer_id, 120)) || null }
+        : row
+    ));
   }
 
-  const deleteResult = await supabase
-    .from('patient_financial_plans')
-    .delete()
-    .eq('organization_id', params.clinicId)
-    .eq('patient_id', params.patientId);
-  if (deleteResult.error) {
-    if (isMissingRelationError(deleteResult.error)) {
-      return { success: false, warning: 'Tabela patient_financial_plans ainda não configurada.' };
+  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v1', {
+    p_organization_id: params.clinicId,
+    p_patient_id: params.patientId,
+    p_actor_id: isUuid(sanitizeString(params.actorId, 120)) ? sanitizeString(params.actorId, 120) : null,
+    p_plans: rows,
+    p_preserve_insurance_context: params.preserveInsuranceContext === true,
+  });
+  if (reconciliation.error) {
+    const message = sanitizeString(reconciliation.error?.message || reconciliation.error, 500);
+    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v1')) {
+      return {
+        success: false,
+        error: 'A migração de persistência histórica dos planos financeiros ainda não foi aplicada.',
+        code: 'PATIENT_FINANCIAL_PLAN_RECONCILIATION_MIGRATION_REQUIRED',
+      };
     }
-    throw deleteResult.error;
+    throw reconciliation.error;
   }
-  if (!rows.length) return { success: true, data: [] };
-
-  const insertResult = await supabase
-    .from('patient_financial_plans')
-    .insert(rows)
-    .select(PATIENT_FINANCIAL_PLAN_SELECT);
-  if (insertResult.error) {
-    if (isMissingRelationError(insertResult.error)) {
-      return { success: false, warning: 'Tabela patient_financial_plans ainda não configurada.' };
-    }
-    throw insertResult.error;
+  if (reconciliation.data?.success === false) {
+    return {
+      success: false,
+      error: sanitizeString(reconciliation.data?.error, 500) || 'Não foi possível persistir o plano financeiro.',
+      code: sanitizeString(reconciliation.data?.code, 120) || 'PATIENT_FINANCIAL_PLAN_RECONCILIATION_REJECTED',
+    };
   }
-  return { success: true, data: insertResult.data || [] };
+  return { success: true, data: Array.isArray(reconciliation.data?.data) ? reconciliation.data.data : [] };
 }
 
 async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
@@ -41977,6 +42346,13 @@ async function startServer() {
       });
       const context = req.authorizationContext as ResolvedClinicCapabilityContext;
       if (
+        patientPayloadRequestsGenericPayerCapability(req.body) &&
+        !context.capabilities.has('finance.entries.manage') &&
+        !context.capabilities.has('patient.insurance.create')
+      ) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PAYER_CONTEXT_CAPABILITY_REQUIRED' });
+      }
+      if (
         patientPayloadRequestsInsuranceCreateCapability(req.body) &&
         !context.capabilities.has('patient.insurance.create')
       ) {
@@ -43544,6 +43920,14 @@ async function startServer() {
           error: 'CLINICAL_RECORD_CAPABILITY_REQUIRED'
         });
       }
+      const hasGenericPayerCreatePayload = patientPayloadRequestsGenericPayerCapability(req.body);
+      if (
+        hasGenericPayerCreatePayload &&
+        !context.capabilities.has('finance.entries.manage') &&
+        !context.capabilities.has('patient.insurance.create')
+      ) {
+        return res.status(403).json({ success: false, error: 'PATIENT_PAYER_CONTEXT_CAPABILITY_REQUIRED' });
+      }
       const hasInsuranceCreatePayload = patientPayloadRequestsInsuranceCreateCapability(req.body);
       if (hasInsuranceCreatePayload && !context.capabilities.has('patient.insurance.create')) {
         return res.status(403).json({
@@ -43788,10 +44172,13 @@ async function startServer() {
               : [],
           });
           if (!financialPlanSync.success) {
-            financialPlanSyncWarning = sanitizeString(
-              financialPlanSync.warning || financialPlanSync.error || 'O plano financeiro permanecerá disponível no prontuário criptografado.',
-              500,
-            );
+            return res.status(409).json({
+              success: false,
+              code: sanitizeString((financialPlanSync as any).code, 120) || 'PATIENT_FINANCIAL_PLAN_PERSISTENCE_FAILED',
+              patientPersisted: true,
+              financialPlanPersisted: false,
+              error: sanitizeString(financialPlanSync.error || financialPlanSync.warning || 'O paciente foi salvo, mas o plano financeiro canônico não foi persistido.', 500),
+            });
           }
         }
       } else {
@@ -44338,22 +44725,28 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'CPF inválido. Informe 11 dígitos.' });
       }
 
-      const hasInsurancePatch = [
-        req.body?.insuranceType,
-        req.body?.insurance_type,
-        req.body?.convenioTipo,
-        req.body?.insurancePayerId,
-        req.body?.insurance_payer_id,
-        req.body?.convenioPayerId,
-        req.body?.convenio_payer_id,
-        req.body?.insuranceName,
-        req.body?.insurance_name,
-        req.body?.insuranceCardNumber,
-        req.body?.insurance_card_number,
-        req.body?.insuranceAuthorization,
-        req.body?.insurance_authorization,
-      ].some((value) => value !== undefined);
-      if (hasInsurancePatch && !context.capabilities.has('patient.insurance.edit')) {
+      const payerMutationBoundary = await assessPatientPayerMutationBoundary({
+        clinicId: scopedClinicId,
+        patientId: sanitizeString(req.params.id, 120),
+        body: req.body,
+        capabilities: context.capabilities,
+      });
+      if (!payerMutationBoundary.ok) {
+        return res.status(payerMutationBoundary.status).json({ success: false, error: payerMutationBoundary.error });
+      }
+      const requestedPlanInsuranceFields = inspectFinancialPlanInsuranceOperationalFields(
+        payerMutationBoundary.explicitPlans.plans,
+      );
+      const hasInsurancePatchOutsideFinancialPlans = patientPayloadRequestsInsuranceOperationalOutsideFinancialPlans(req.body);
+      if (
+        !context.capabilities.has('patient.insurance.edit') &&
+        (
+          hasInsurancePatchOutsideFinancialPlans ||
+          requestedPlanInsuranceFields.onNonInsurance ||
+          requestedPlanInsuranceFields.hasUnverifiableFields ||
+          (requestedPlanInsuranceFields.any && !payerMutationBoundary.preserveInsuranceContext)
+        )
+      ) {
         return res.status(403).json({ success: false, error: 'PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED' });
       }
       const hasClinicalPatch = [
@@ -44828,6 +45221,24 @@ async function startServer() {
       }
       
       if (error) throw error;
+      if (aggregateRecordPayloadRaw && Object.prototype.hasOwnProperty.call(aggregateRecordPayloadRaw, 'financialPlans')) {
+        const canonicalFinancialPlanSync = await persistPatientFinancialPlans({
+          patientId: sanitizeString(req.params.id, 120),
+          clinicId: sanitizeString(updatedPatient?.clinic_id || scopedClinicId, 120),
+          actorId: sanitizeString(req.session.user?.id, 120),
+          financialPlans: Array.isArray(aggregateRecordPayloadRaw.financialPlans) ? aggregateRecordPayloadRaw.financialPlans : [],
+          preserveInsuranceContext: payerMutationBoundary.preserveInsuranceContext,
+        });
+        if (!canonicalFinancialPlanSync.success) {
+          return res.status(409).json({
+            success: false,
+            code: sanitizeString((canonicalFinancialPlanSync as any).code, 120) || 'PATIENT_FINANCIAL_PLAN_PERSISTENCE_FAILED',
+            patientPersisted: true,
+            financialPlanPersisted: false,
+            error: sanitizeString(canonicalFinancialPlanSync.error || canonicalFinancialPlanSync.warning || 'Os dados cadastrais foram preservados, mas o plano financeiro canônico não foi atualizado.', 500),
+          });
+        }
+      }
       const explicitClinicPatch = Object.prototype.hasOwnProperty.call(updates, 'clinic_id')
         ? updates.clinic_id
         : undefined;
@@ -44912,6 +45323,7 @@ async function startServer() {
         .select(PATIENT_FINANCIAL_PLAN_SELECT)
         .eq('organization_id', clinicId)
         .eq('patient_id', patientId)
+        .eq('status', 'ACTIVE')
         .order('created_at', { ascending: true });
       if (error) {
         if (isMissingRelationError(error)) {
@@ -44946,9 +45358,23 @@ async function startServer() {
         : Array.isArray(req.body?.plans)
           ? req.body.plans
           : [];
+      const payerMutationBoundary = await assessPatientPayerMutationBoundary({
+        clinicId,
+        patientId,
+        body: { financialPlans },
+        capabilities: req.authorizationContext?.capabilities,
+      });
+      if (!payerMutationBoundary.ok) {
+        return res.status(payerMutationBoundary.status).json({ success: false, error: payerMutationBoundary.error });
+      }
+      const requestedPlanInsuranceFields = inspectFinancialPlanInsuranceOperationalFields(financialPlans);
       if (
-        patientPayloadRequestsInsuranceCreateCapability({ financialPlans }) &&
-        req.authorizationContext?.capabilities?.has('patient.insurance.edit') !== true
+        req.authorizationContext?.capabilities?.has('patient.insurance.edit') !== true &&
+        (
+          requestedPlanInsuranceFields.onNonInsurance ||
+          requestedPlanInsuranceFields.hasUnverifiableFields ||
+          (requestedPlanInsuranceFields.any && !payerMutationBoundary.preserveInsuranceContext)
+        )
       ) {
         return res.status(403).json({
           success: false,
@@ -44959,7 +45385,8 @@ async function startServer() {
         patientId,
         clinicId,
         actorId: sanitizeString(req.session.user?.id, 120),
-        financialPlans
+        financialPlans,
+        preserveInsuranceContext: payerMutationBoundary.preserveInsuranceContext,
       });
       if (!result.success && result.warning) {
         return res.status(200).json(result);
@@ -45003,15 +45430,34 @@ async function startServer() {
 
       const payloadRawBase = req.body?.payload && typeof req.body.payload === 'object' ? req.body.payload : {};
       const capabilityContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
-      if (
-        Object.prototype.hasOwnProperty.call(payloadRawBase, 'financialPlans') &&
-        patientPayloadRequestsInsuranceCreateCapability({ financialPlans: payloadRawBase.financialPlans }) &&
-        capabilityContext?.capabilities?.has('patient.insurance.edit') !== true
-      ) {
-        return res.status(403).json({
-          success: false,
-          error: 'PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED',
+      let preserveInsuranceContextForFinancialPlans = false;
+      if (Object.prototype.hasOwnProperty.call(payloadRawBase, 'financialPlans')) {
+        const payerMutationBoundary = await assessPatientPayerMutationBoundary({
+          clinicId,
+          patientId,
+          body: { financialPlans: payloadRawBase.financialPlans },
+          capabilities: capabilityContext?.capabilities,
         });
+        if (!payerMutationBoundary.ok) {
+          return res.status(payerMutationBoundary.status).json({ success: false, error: payerMutationBoundary.error });
+        }
+        const requestedPlanInsuranceFields = inspectFinancialPlanInsuranceOperationalFields(
+          Array.isArray(payloadRawBase.financialPlans) ? payloadRawBase.financialPlans : [],
+        );
+        if (
+          capabilityContext?.capabilities?.has('patient.insurance.edit') !== true &&
+          (
+            requestedPlanInsuranceFields.onNonInsurance ||
+            requestedPlanInsuranceFields.hasUnverifiableFields ||
+            (requestedPlanInsuranceFields.any && !payerMutationBoundary.preserveInsuranceContext)
+          )
+        ) {
+          return res.status(403).json({
+            success: false,
+            error: 'PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED',
+          });
+        }
+        preserveInsuranceContextForFinancialPlans = payerMutationBoundary.preserveInsuranceContext;
       }
       const payloadRaw = redactPatientRecordPayloadForCapabilities(
         payloadRawBase,
@@ -45115,7 +45561,8 @@ async function startServer() {
           patientId,
           clinicId,
           actorId: sanitizeString(req.session.user?.id, 120),
-          financialPlans: Array.isArray(payloadRawBase.financialPlans) ? payloadRawBase.financialPlans : []
+          financialPlans: Array.isArray(payloadRawBase.financialPlans) ? payloadRawBase.financialPlans : [],
+          preserveInsuranceContext: preserveInsuranceContextForFinancialPlans,
         });
         if (!financialPlanSync.success && financialPlanSync.warning) {
           financialPlanSyncWarning = sanitizeString(financialPlanSync.warning, 300);
@@ -46924,13 +47371,27 @@ async function startServer() {
         });
       }
       const capabilityContext = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
-      const responsePayload = decryptedPayload
+      let responsePayload = decryptedPayload
         ? redactPatientRecordPayloadForCapabilities(
             normalizePatientInsuranceEligibilityPayload(decryptedPayload),
             req.session.user,
             capabilityContext?.capabilities,
           )
         : null;
+      if (responsePayload && capabilityContext?.capabilities?.has('patient.demographics.edit') === true) {
+        const canonicalPlansResult = await supabase
+          .from('patient_financial_plans')
+          .select(PATIENT_FINANCIAL_PLAN_SELECT)
+          .eq('organization_id', clinicId)
+          .eq('patient_id', patientId)
+          .eq('status', 'ACTIVE')
+          .order('created_at', { ascending: true });
+        if (canonicalPlansResult.error) {
+          if (!isMissingRelationError(canonicalPlansResult.error)) throw canonicalPlansResult.error;
+        } else {
+          responsePayload = { ...responsePayload, financialPlans: canonicalPlansResult.data || [] };
+        }
+      }
       res.json({
         success: true,
         data: data
@@ -69510,7 +69971,7 @@ async function startServer() {
   app.post('/api/tiss/pre-guides/:appointmentId/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
   app.post('/api/appointments/:appointmentId/tiss-pre-guide/revalidate', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('billing.preguide.manage'), handleTissPreGuideRevalidation);
 
-  app.get('/api/payer-options', noStoreDynamicResponse, checkAuth, requireClinicCapability('patient.insurance.view'), async (req: any, res) => {
+  app.get('/api/payer-options', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('finance.payments.view', 'patient.insurance.view'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) {
@@ -69544,7 +70005,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/admin/payers', checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.get('/api/admin/payers', checkAuth, requireAnyClinicCapability('finance.payments.view', 'billing.mapping.manage'), async (req: any, res) => {
     try {
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
       if (!isUuid(organizationId)) return res.status(400).json(payerSafeError(400));
@@ -69570,7 +70031,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.post('/api/admin/payers', portalActionLimiter, checkAuth, requireAnyClinicCapability('finance.entries.manage', 'billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
@@ -69621,7 +70082,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.mapping.manage'), async (req: any, res) => {
+  app.patch('/api/admin/payers/:payerId', portalActionLimiter, checkAuth, requireAnyClinicCapability('finance.entries.manage', 'billing.mapping.manage'), async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 32 * 1024, 'Payload de pagador')) return;
       const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
