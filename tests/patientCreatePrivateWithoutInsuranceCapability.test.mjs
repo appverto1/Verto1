@@ -4,9 +4,9 @@ import fs from 'node:fs';
 const server = fs.readFileSync('server.ts', 'utf8');
 const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 
-// Private-pay patient creation deliberately keeps insuranceType="particular"
-// even when the clinic has no insurance/TISS module. This is a core patient
-// classification, not an insurance-management operation.
+// Private-pay classification is core patient data. Generic payer identity is
+// shared master data (Finance OR TISS), while operational beneficiary fields
+// remain protected by patient.insurance.*.
 assert.match(
   coordinator,
   /: \{ insuranceType: "particular" \};/,
@@ -19,8 +19,8 @@ assert.match(
 );
 assert.match(
   server,
-  /normalizePatientInsuranceTypeForPersistence\(requestedTypeRaw\) !== 'particular'/,
-  'particular/private classification alone must not require patient.insurance.create',
+  /Generic payer identity \(type\/name\/payer id\) is shared master data/,
+  'generic payer identity must not by itself request patient.insurance.create',
 );
 assert.match(
   server,
@@ -29,12 +29,25 @@ assert.match(
 assert.match(
   server,
   /hasInsuranceCreatePayload && !context\.capabilities\.has\('patient\.insurance\.create'\)/,
-  'real insurance payload remains protected by capability enforcement',
+  'operational TISS payload remains protected by capability enforcement',
 );
 
-for (const protectedAlias of [
+for (const genericAlias of [
   'insurancePayerId',
+  'convenioPayerId',
+  'insuranceType',
+  'convenioTipo',
+  'insuranceName',
   'convenioNome',
+]) {
+  assert.match(
+    server,
+    new RegExp(`PATIENT_GENERIC_PAYER_PAYLOAD_KEYS[\\s\\S]{0,500}['"]${genericAlias}['"]`),
+    `${genericAlias} must remain shared payer identity`,
+  );
+}
+
+for (const tissAlias of [
   'convenioCarteirinha',
   'insuranceCardValidUntil',
   'insurancePlanCategory',
@@ -43,8 +56,8 @@ for (const protectedAlias of [
 ]) {
   assert.match(
     server,
-    new RegExp(`['\"]${protectedAlias}['\"]`),
-    `${protectedAlias} must remain capability-protected`,
+    new RegExp(`PATIENT_INSURANCE_PAYLOAD_KEYS[\\s\\S]{0,800}['"]${tissAlias}['"]`),
+    `${tissAlias} must remain TISS capability-protected`,
   );
 }
 

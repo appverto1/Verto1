@@ -774,8 +774,9 @@ export function CoordinatorDashboard({
   const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = hasCapability("finance.payments.view");
-  // Patient treatment pricing is part of the mandatory patient core.
-  // Full finance (payments, ledger, DRE, transfers) remains an optional module.
+  const canManageSharedPayers = hasCapability("finance.entries.manage") || hasCapability("billing.mapping.manage");
+  // Patient treatment pricing remains part of the patient core. Finance and TISS
+  // only unlock their respective payer/operational extensions.
   const canManagePatientFinancialPlan = hasCapability("patient.demographics.edit");
   const canViewPatientInsurance = hasCapability("patient.insurance.view");
   const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
@@ -1812,6 +1813,8 @@ export function CoordinatorDashboard({
     quote: any | null;
   }>({ loading: false, error: "", quote: null });
   const [clinicPayers, setClinicPayers] = useState<any[]>([]);
+  const [newFinancialPayerName, setNewFinancialPayerName] = useState("");
+  const [financialPayerCreatePending, setFinancialPayerCreatePending] = useState(false);
   const [clinicPayerOptionsState, setClinicPayerOptionsState] = useState<{
     loading: boolean;
     error: string;
@@ -2976,7 +2979,11 @@ export function CoordinatorDashboard({
   }, [activeTab, canAccessClinicFinance, isReceptionist]);
 
   useEffect(() => {
-    if (!isPatientRegistrationModalOpen || !canCreatePatients || !hasInsuranceTissModule || !canViewPatientInsurance) return;
+    if (
+      !isPatientRegistrationModalOpen ||
+      !canCreatePatients ||
+      !(canAccessClinicFinance || (hasInsuranceTissModule && canViewPatientInsurance))
+    ) return;
     let cancelled = false;
     setClinicPayerOptionsState({ loading: true, error: "" });
     dataService.getPayerOptions({ limit: 80 }).then((result: any) => {
@@ -2994,7 +3001,7 @@ export function CoordinatorDashboard({
     return () => {
       cancelled = true;
     };
-  }, [canCreatePatients, canViewPatientInsurance, hasInsuranceTissModule, isPatientRegistrationModalOpen]);
+  }, [canAccessClinicFinance, canCreatePatients, canViewPatientInsurance, hasInsuranceTissModule, isPatientRegistrationModalOpen]);
 
   useEffect(() => {
     if (
@@ -6427,6 +6434,32 @@ export function CoordinatorDashboard({
         financialPlans: nextPlans,
       };
     });
+  };
+
+  const handleCreateFinancialPayer = async (financialPlanId: string) => {
+    const name = String(newFinancialPayerName || "").trim();
+    if (!canManageSharedPayers || name.length < 2 || financialPayerCreatePending) return;
+    setFinancialPayerCreatePending(true);
+    try {
+      const result = await dataService.createPayer({ name, payerType: "INSURANCE", status: "ACTIVE" });
+      if (!result?.success || !result?.data?.id) {
+        showToast(String(result?.error || "Não foi possível cadastrar o convênio."), "error");
+        return;
+      }
+      const payer = result.data;
+      setClinicPayers((current: any[]) => {
+        const next = current.filter((item: any) => String(item?.id) !== String(payer.id));
+        return [...next, payer].sort((a: any, b: any) => String(a?.name || "").localeCompare(String(b?.name || ""), "pt-BR"));
+      });
+      handleFinancialPlanChange(financialPlanId, "payerId", String(payer.id));
+      handleFinancialPlanChange(financialPlanId, "payerNameSnapshot", String(payer.name || name));
+      setNewFinancialPayerName("");
+      showToast("Convênio cadastrado e selecionado.", "success");
+    } catch (error: any) {
+      showToast(String(error?.message || "Não foi possível cadastrar o convênio."), "error");
+    } finally {
+      setFinancialPayerCreatePending(false);
+    }
   };
 
   const addFinancialPlanRow = () => {
@@ -17140,7 +17173,7 @@ export function CoordinatorDashboard({
                                   onChange={(e) => handleFinancialPlanChange(plan.id, "billingMode", e.target.value)}
                                 >
                                   {PATIENT_FINANCIAL_BILLING_MODE_OPTIONS
-                                    .filter((option) => hasInsuranceTissModule || option.value !== "INSURANCE")
+                                    .filter((option) => canAccessClinicFinance || hasInsuranceTissModule || option.value !== "INSURANCE")
                                     .map((option) => (
                                       <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
@@ -17216,7 +17249,7 @@ export function CoordinatorDashboard({
                                 <div className="xl:col-span-2">
                                   <FormField
                                     label="Convênio"
-                                    helperText={financialPlanPayerDisplayName ? `Convênio: ${financialPlanPayerDisplayName}` : "Convênio não definido. Defina o convênio na aba Convênio e elegibilidade."}
+                                    helperText={financialPlanPayerDisplayName ? `Convênio: ${financialPlanPayerDisplayName}` : "Selecione ou cadastre o pagador desta linha financeira."}
                                   >
                                     <select
                                       className={patientFormInputClass}
@@ -17235,6 +17268,25 @@ export function CoordinatorDashboard({
                                       ))}
                                     </select>
                                   </FormField>
+                                  {canManageSharedPayers && (
+                                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                                      <input
+                                        className={patientFormInputClass}
+                                        placeholder="Cadastrar novo convênio"
+                                        value={newFinancialPayerName}
+                                        maxLength={180}
+                                        onChange={(e) => setNewFinancialPayerName(e.target.value)}
+                                      />
+                                      <button
+                                        type="button"
+                                        disabled={financialPayerCreatePending || newFinancialPayerName.trim().length < 2}
+                                        onClick={() => void handleCreateFinancialPayer(String(plan.id))}
+                                        className="rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-xs font-bold text-[#7a32fc] disabled:cursor-not-allowed disabled:opacity-50"
+                                      >
+                                        {financialPayerCreatePending ? "Salvando..." : "Cadastrar"}
+                                      </button>
+                                    </div>
+                                  )}
                                 </div>
                                 {!resolvedFinancialPlanPayer && plan.payerNameSnapshot && (
                                   <FormField label="Convênio exibido">
@@ -17246,6 +17298,8 @@ export function CoordinatorDashboard({
                                     />
                                   </FormField>
                                 )}
+                                {hasInsuranceTissModule && (
+                                  <>
                                 <FormField
                                   label="Plano / categoria"
                                   helperText="Fonte oficial para o agendamento quando este convênio for selecionado."
@@ -17290,6 +17344,8 @@ export function CoordinatorDashboard({
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "insuranceCardValidUntil", e.target.value)}
                                   />
                                 </FormField>
+                                  </>
+                                )}
                                 <label className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3 text-xs font-medium text-slate-600 xl:col-span-2">
                                   <input
                                     type="checkbox"
@@ -17313,6 +17369,7 @@ export function CoordinatorDashboard({
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "copaymentAmount", e.target.value)}
                                   />
                                 </FormField>
+                                {hasInsuranceTissModule && (
                                 <div className="md:col-span-2 xl:col-span-6">
                                   <div className={`rounded-2xl border px-4 py-3 text-xs ${
                                     suggestedFinancialPlanAuthorization
@@ -17341,6 +17398,7 @@ export function CoordinatorDashboard({
                                     </p>
                                   </div>
                                 </div>
+                                )}
                               </>
                             )}
                             {showPaymentMethod && (
