@@ -22,15 +22,16 @@ assert.match(server, /payer_name_snapshot is intentionally excluded: payer_id is
 assert.match(server, /Free text never proves payer identity; a tenant-scoped payer_id must anchor the replay/);
 assert.match(server, /payer_name_snapshot: payerMap\.get\(sanitizeString\(row\.payer_id, 120\)\) \|\| null/);
 
-// Every persisted financial dimension on an INSURANCE rule is part of semantic authorization.
+// Generic financial dimensions are part of replay equality. TISS-only operational fields are
+// deliberately excluded because callers without TISS must not receive or echo them.
 for (const field of [
   'service_type', 'custom_service_name', 'service_name_snapshot', 'billing_mode', 'payer_id',
-  'insurance_plan_name', 'authorization_code', 'authorization_valid_until', 'sessions_quantity',
-  'quantity_period', 'amount_cents', 'copayment_amount_cents', 'payment_method', 'due_day',
-  'package_valid_until', 'notes',
+  'sessions_quantity', 'quantity_period', 'amount_cents', 'copayment_amount_cents',
+  'payment_method', 'due_day', 'package_valid_until', 'notes',
 ]) {
   assert.match(server, new RegExp(`${field}:`));
 }
+assert.match(server, /TISS-only operational fields are intentionally excluded from replay equality/);
 
 // Replay is a real financial NO-OP: incoming INSURANCE rows are stripped server-side,
 // and the transaction does not end current INSURANCE rows when preserve mode is active.
@@ -42,7 +43,7 @@ assert.match(migration, /not coalesce\(p_preserve_insurance_context, false\)[\s\
 
 // PRIVATE remains under the base patient financial-plan contract; the guard only protects INSURANCE mutations.
 assert.match(server, /app\.put\('\/api\/patients\/:patientId\/financial-plans'[\s\S]{0,160}requireClinicCapability\('patient\.demographics\.edit'\)/);
-assert.match(server, /requestedPlanInsuranceFields[\s\S]{0,340}hasUnverifiableFields[\s\S]{0,220}payerMutationBoundary\.preserveInsuranceContext/);
+assert.match(server, /patient\.insurance\.edit'[\s\S]{0,180}requestedPlanInsuranceFields\.any/);
 
 // Evaluate the exact semantic comparator implementation extracted from server.ts.
 const start = server.indexOf('function normalizeFinancialPlanSemanticText');
@@ -81,9 +82,9 @@ const canonicalInsurance = {
   billing_mode: 'INSURANCE',
   payer_id: payerA,
   payer_name_snapshot: 'Unimed',
-  insurance_plan_name: null,
-  authorization_code: null,
-  authorization_valid_until: null,
+  insurance_plan_name: 'Plano Ouro',
+  authorization_code: 'AUTH-HISTORICA-123',
+  authorization_valid_until: '2027-12-31',
   sessions_quantity: 1,
   quantity_period: 'SESSION',
   amount_cents: 10000,
@@ -115,7 +116,11 @@ const privateCanonical = {
 };
 const privateChanged = { ...privateCanonical, amount_cents: 19000 };
 
-assert.equal(compareInsurance([canonicalInsurance], [sameReplay]), true, 'identical INSURANCE replay must pass');
+assert.equal(
+  compareInsurance([canonicalInsurance], [sameReplay]),
+  true,
+  'replay must not require echoing canonical TISS-only operational fields',
+);
 assert.equal(compareInsurance([privateCanonical, canonicalInsurance], [sameReplay, privateChanged]), true, 'PRIVATE changes must not grant or block INSURANCE replay');
 assert.equal(compareInsurance([canonicalInsurance], [{ ...sameReplay, payerId: payerB }]), false, 'payer swap must be blocked');
 assert.equal(compareInsurance([canonicalInsurance], [{ ...sameReplay, amountCents: 12000 }]), false, 'price change must be blocked');
@@ -124,6 +129,22 @@ assert.equal(compareInsurance([], [sameReplay]), false, 'new INSURANCE link must
 assert.equal(compareInsurance([canonicalInsurance], [{ ...sameReplay, serviceNameSnapshot: 'Terapia Ocupacional' }]), false, 'service/specialty mutation must be blocked');
 assert.equal(compareInsurance([canonicalInsurance], [{ ...sameReplay, sessionsQuantity: 2 }]), false, 'quantity mutation must be blocked');
 assert.equal(compareInsurance([canonicalInsurance], [{ ...sameReplay, dueDay: 15 }]), false, 'due settings mutation must be blocked');
+
+// Explicit presence of a protected TISS field is a mutation attempt even when the client sends
+// null/empty to clear it. Omission is the only replay-safe representation without TISS edit.
+const inspectStart = server.indexOf('function inspectFinancialPlanInsuranceOperationalFields');
+const inspectEnd = server.indexOf('function normalizeFinancialPlanSemanticText');
+assert.ok(inspectStart >= 0 && inspectEnd > inspectStart, 'TISS operational-field inspector must be present');
+const inspectSource = server.slice(inspectStart, inspectEnd);
+const inspectContext = { sanitizeString: context.sanitizeString };
+vm.createContext(inspectContext);
+const transpiledInspect = ts.transpileModule(inspectSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
+vm.runInContext(`${transpiledInspect}\nglobalThis.inspectTiss = inspectFinancialPlanInsuranceOperationalFields;`, inspectContext);
+const inspectTiss = inspectContext.inspectTiss;
+assert.equal(inspectTiss([sameReplay]).any, false, 'omitted TISS-only fields must not be treated as mutations');
+assert.equal(inspectTiss([{ ...sameReplay, authorizationCode: '' }]).any, true, 'explicit empty authorizationCode must be protected');
+assert.equal(inspectTiss([{ ...sameReplay, authorizationValidUntil: null }]).any, true, 'explicit null authorizationValidUntil must be protected');
+assert.equal(inspectTiss([{ ...sameReplay, insurancePlanName: 'Outro plano' }]).any, true, 'explicit insurancePlanName must be protected');
 
 // A manually tampered demographic-save payload cannot use free text to change payer identity.
 const topStart = server.indexOf('function topLevelGenericPayerReplayMatchesCanonical');

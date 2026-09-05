@@ -5961,6 +5961,36 @@ function redactPatientPayloadKeys(input: any, keys: ReadonlySet<string>): any {
   return redacted;
 }
 
+function redactPatientFinancialPlanTissOperationalFields(input: any): any {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input;
+  const redactPlans = (value: any) => {
+    if (!Array.isArray(value)) return value;
+    return value.map((rawPlan: any) => {
+      if (!rawPlan || typeof rawPlan !== 'object' || Array.isArray(rawPlan)) return rawPlan;
+      const plan = { ...rawPlan };
+      for (const key of [
+        'insurancePlanName','insurance_plan_name',
+        'authorizationCode','authorization_code',
+        'authorizationValidUntil','authorization_valid_until',
+        'insuranceCardNumber','insurance_card_number',
+        'insuranceCardHolder','insurance_card_holder',
+        'insuranceCardValidUntil','insurance_card_valid_until',
+      ]) {
+        delete plan[key];
+      }
+      return plan;
+    });
+  };
+  const redacted: Record<string, any> = { ...input };
+  if (Object.prototype.hasOwnProperty.call(redacted, 'financialPlans')) {
+    redacted.financialPlans = redactPlans(redacted.financialPlans);
+  }
+  if (Object.prototype.hasOwnProperty.call(redacted, 'financial_plans')) {
+    redacted.financial_plans = redactPlans(redacted.financial_plans);
+  }
+  return redacted;
+}
+
 function redactPatientFinancialPayload(input: any, user: any): any {
   if (canAccessClinicFinance(user)) return input;
   return redactPatientPayloadKeys(input, PATIENT_FINANCIAL_PAYLOAD_KEYS);
@@ -5988,6 +6018,7 @@ function redactPatientRecordPayloadForCapabilities(
   }
   if (!canViewTissInsurance) {
     redacted = redactPatientPayloadKeys(redacted, PATIENT_INSURANCE_PAYLOAD_KEYS);
+    redacted = redactPatientFinancialPlanTissOperationalFields(redacted);
   }
   return redacted;
 }
@@ -7276,7 +7307,7 @@ const CLINIC_PAYER_SELECT = [
   'updated_at'
 ].join(',');
 
-const PATIENT_FINANCIAL_PLAN_SELECT = [
+const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'id',
   'organization_id',
   'patient_id',
@@ -7286,9 +7317,6 @@ const PATIENT_FINANCIAL_PLAN_SELECT = [
   'billing_mode',
   'payer_id',
   'payer_name_snapshot',
-  'insurance_plan_name',
-  'authorization_code',
-  'authorization_valid_until',
   'sessions_quantity',
   'quantity_period',
   'amount_cents',
@@ -7302,6 +7330,23 @@ const PATIENT_FINANCIAL_PLAN_SELECT = [
   'created_at',
   'updated_at'
 ].join(',');
+
+const PATIENT_FINANCIAL_PLAN_TISS_OPERATIONAL_SELECT = [
+  'insurance_plan_name',
+  'authorization_code',
+  'authorization_valid_until',
+].join(',');
+
+const PATIENT_FINANCIAL_PLAN_SELECT = [
+  PATIENT_FINANCIAL_PLAN_BASE_SELECT,
+  PATIENT_FINANCIAL_PLAN_TISS_OPERATIONAL_SELECT,
+].join(',');
+
+function patientFinancialPlanSelectForCapabilities(capabilities?: ReadonlySet<CapabilityKey> | null) {
+  return capabilities?.has('patient.insurance.view') === true
+    ? PATIENT_FINANCIAL_PLAN_SELECT
+    : PATIENT_FINANCIAL_PLAN_BASE_SELECT;
+}
 
 const PATIENT_MUTATION_SELECT = [
   'id',
@@ -19426,8 +19471,7 @@ function patientPayloadTouchesGenericPayerOutsideFinancialPlans(body: any): bool
 function patientPayloadRequestsInsuranceOperationalOutsideFinancialPlans(body: any): boolean {
   for (const candidate of patientFinancialPlanPayloadSources(body)) {
     for (const key of PATIENT_INSURANCE_PAYLOAD_KEYS) {
-      const value = candidate?.[key];
-      if (value !== undefined && value !== null && String(value).trim() !== '') return true;
+      if (Object.prototype.hasOwnProperty.call(candidate || {}, key)) return true;
     }
   }
   return false;
@@ -19454,14 +19498,14 @@ function inspectFinancialPlanInsuranceOperationalFields(plans: any[]): {
       'insuranceCardHolder','insurance_card_holder',
       'insuranceCardValidUntil','insurance_card_valid_until',
     ];
-    const hasPersistedOperationalField = persistedOperationalKeys.some((key) => {
-      const value = plan?.[key];
-      return value !== undefined && value !== null && String(value).trim() !== '';
-    });
-    const hasUnverifiableOperationalField = unverifiableOperationalKeys.some((key) => {
-      const value = plan?.[key];
-      return value !== undefined && value !== null && String(value).trim() !== '';
-    });
+    // Presence is itself a protected mutation attempt for callers without TISS edit.
+    // Omitted fields are different from an explicit null/empty value intended to clear them.
+    const hasPersistedOperationalField = persistedOperationalKeys.some((key) =>
+      Object.prototype.hasOwnProperty.call(plan, key)
+    );
+    const hasUnverifiableOperationalField = unverifiableOperationalKeys.some((key) =>
+      Object.prototype.hasOwnProperty.call(plan, key)
+    );
     if (!hasPersistedOperationalField && !hasUnverifiableOperationalField) continue;
     any = true;
     if (billingMode !== 'INSURANCE') onNonInsurance = true;
@@ -19499,9 +19543,9 @@ function patientFinancialPlanSemanticFingerprint(row: any) {
     billing_mode: normalizeFinancialPlanSemanticEnum(source.billing_mode ?? source.billingMode, 40) || 'PRIVATE',
     payer_id: isUuid(sanitizeString(source.payer_id ?? source.payerId, 120)) ? sanitizeString(source.payer_id ?? source.payerId, 120) : null,
     // payer_name_snapshot is intentionally excluded: payer_id is the tenant-scoped identity.
-    insurance_plan_name: normalizeFinancialPlanSemanticText(source.insurance_plan_name ?? source.insurancePlanName, 160),
-    authorization_code: normalizeFinancialPlanSemanticText(source.authorization_code ?? source.authorizationCode, 120),
-    authorization_valid_until: normalizeFinancialPlanSemanticDate(source.authorization_valid_until ?? source.authorizationValidUntil),
+    // TISS-only operational fields are intentionally excluded from replay equality. A caller
+    // without patient.insurance.edit neither receives nor needs to echo them; explicit presence
+    // is rejected separately before persistence, while the canonical row remains untouched.
     sessions_quantity: normalizeFinancialPlanSemanticInteger(source.sessions_quantity ?? source.sessionsQuantity),
     quantity_period: normalizeFinancialPlanSemanticEnum(source.quantity_period ?? source.quantityPeriod, 40),
     amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.amount_cents ?? source.amountCents) || 0),
@@ -44742,9 +44786,7 @@ async function startServer() {
         !context.capabilities.has('patient.insurance.edit') &&
         (
           hasInsurancePatchOutsideFinancialPlans ||
-          requestedPlanInsuranceFields.onNonInsurance ||
-          requestedPlanInsuranceFields.hasUnverifiableFields ||
-          (requestedPlanInsuranceFields.any && !payerMutationBoundary.preserveInsuranceContext)
+          requestedPlanInsuranceFields.any
         )
       ) {
         return res.status(403).json({ success: false, error: 'PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED' });
@@ -45318,9 +45360,12 @@ async function startServer() {
         return res.status(404).json({ success: false, error: 'Paciente não encontrado.' });
       }
 
+      const financialPlanSelect = patientFinancialPlanSelectForCapabilities(
+        req.authorizationContext?.capabilities,
+      );
       const { data, error } = await supabase
         .from('patient_financial_plans')
-        .select(PATIENT_FINANCIAL_PLAN_SELECT)
+        .select(financialPlanSelect)
         .eq('organization_id', clinicId)
         .eq('patient_id', patientId)
         .eq('status', 'ACTIVE')
@@ -45371,9 +45416,7 @@ async function startServer() {
       if (
         req.authorizationContext?.capabilities?.has('patient.insurance.edit') !== true &&
         (
-          requestedPlanInsuranceFields.onNonInsurance ||
-          requestedPlanInsuranceFields.hasUnverifiableFields ||
-          (requestedPlanInsuranceFields.any && !payerMutationBoundary.preserveInsuranceContext)
+          requestedPlanInsuranceFields.any
         )
       ) {
         return res.status(403).json({
@@ -45447,9 +45490,7 @@ async function startServer() {
         if (
           capabilityContext?.capabilities?.has('patient.insurance.edit') !== true &&
           (
-            requestedPlanInsuranceFields.onNonInsurance ||
-            requestedPlanInsuranceFields.hasUnverifiableFields ||
-            (requestedPlanInsuranceFields.any && !payerMutationBoundary.preserveInsuranceContext)
+            requestedPlanInsuranceFields.any
           )
         ) {
           return res.status(403).json({
@@ -47381,7 +47422,7 @@ async function startServer() {
       if (responsePayload && capabilityContext?.capabilities?.has('patient.demographics.edit') === true) {
         const canonicalPlansResult = await supabase
           .from('patient_financial_plans')
-          .select(PATIENT_FINANCIAL_PLAN_SELECT)
+          .select(patientFinancialPlanSelectForCapabilities(capabilityContext?.capabilities))
           .eq('organization_id', clinicId)
           .eq('patient_id', patientId)
           .eq('status', 'ACTIVE')
