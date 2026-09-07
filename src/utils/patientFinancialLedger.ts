@@ -273,6 +273,28 @@ export const buildPatientFinancialChargeRows = (ledger: any, patients: any[] = [
     const patientId = String(charge?.patient_id || charge?.patientId || '');
     const status = resolvePatientFinancialStatus(charge);
     const snapshot = snapshotByChargeId.get(id) || null;
+    const items = itemsByChargeId.get(id) || [];
+    const firstItemWithPayer = items.find((item: any) => String(item?.payer_name_snapshot || '').trim());
+    const firstItemWithSpecialty = items.find((item: any) => String(item?.specialty_snapshot || '').trim());
+    const firstItemWithService = items.find((item: any) => String(item?.service_type_snapshot || '').trim());
+    const payerId = snapshot?.payer_id || charge?.payer_id || firstItemWithPayer?.payer_id_snapshot || null;
+    const payerName = String(
+      snapshot?.payer_name ||
+      charge?.payer_name ||
+      charge?.insurance_name ||
+      firstItemWithPayer?.payer_name_snapshot ||
+      ''
+    ).trim() || null;
+    const source = String(charge?.source || 'LEGACY');
+    const billingFrequency = charge?.billing_frequency || charge?.billingFrequency || null;
+    const pricingUnit = charge?.pricing_unit || charge?.pricingUnit || null;
+    const aggregationMethod = charge?.aggregation_method || charge?.aggregationMethod || null;
+    const isMonthlySession =
+      source === 'MONTHLY_SESSION_AGGREGATE' ||
+      (String(billingFrequency || '').toUpperCase() === 'MONTHLY' &&
+        String(pricingUnit || '').toUpperCase() === 'SESSION' &&
+        String(aggregationMethod || '').toUpperCase() === 'ELIGIBLE_COMPLETED_SESSIONS');
+    const monthlySessionCount = Number(charge?.monthly_session_count ?? charge?.monthlySessionCount ?? items.length ?? 0) || items.length || 0;
     return {
       id,
       patientId,
@@ -281,22 +303,27 @@ export const buildPatientFinancialChargeRows = (ledger: any, patients: any[] = [
       statusLabel: PATIENT_FINANCIAL_STATUS_LABELS[status],
       dueDate: charge?.due_date || charge?.dueDate || null,
       dueDateLabel: formatDisplayDate(charge?.due_date || charge?.dueDate, 'Não definido'),
-      competenceMonth: charge?.competence_month || charge?.competenceMonth || null,
+      competenceMonth: charge?.competence_month || charge?.competenceMonth || items[0]?.competence_month || null,
       method: charge?.method || null,
-      source: charge?.source || 'LEGACY',
-      specialty: snapshot?.specialty_name || charge?.specialty || null,
-      serviceName: snapshot?.service_name || charge?.service_type || null,
-      payerId: snapshot?.payer_id || charge?.payer_id || null,
-      payerName: snapshot?.payer_name || charge?.payer_name || null,
+      source,
+      specialty: snapshot?.specialty_name || charge?.specialty || firstItemWithSpecialty?.specialty_snapshot || null,
+      serviceName: snapshot?.service_name || charge?.service_type || firstItemWithService?.service_type_snapshot || null,
+      payerId,
+      payerName,
+      billingOrigin: payerName ? 'INSURANCE' : 'PRIVATE',
+      originLabel: payerName ? `Convênio · ${payerName}` : 'Particular',
       priceSource: snapshot?.price_source || charge?.private_price_source || null,
       priceSourceLabel: snapshot?.price_source_label || charge?.private_price_source_label || null,
       financialClassification: snapshot?.financial_classification || charge?.private_financial_classification || null,
-      billingFrequency: charge?.billing_frequency || charge?.billingFrequency || null,
-      pricingUnit: charge?.pricing_unit || charge?.pricingUnit || null,
-      aggregationMethod: charge?.aggregation_method || charge?.aggregationMethod || null,
-      monthlySessionCount: Number(charge?.monthly_session_count ?? charge?.monthlySessionCount ?? 0) || 0,
+      billingFrequency,
+      pricingUnit,
+      aggregationMethod,
+      isMonthlySession,
+      billingModelLabel: isMonthlySession ? 'Mensal por sessões' : null,
+      monthlySessionCount,
+      sessionCount: items.length || monthlySessionCount,
       monthlyAdjustmentRequired: charge?.monthly_adjustment_required === true || charge?.monthlyAdjustmentRequired === true,
-      items: itemsByChargeId.get(id) || [],
+      items,
       transactions: transactionsByChargeId.get(id) || [],
       events: eventsByChargeId.get(id) || [],
       snapshot,
