@@ -68,6 +68,7 @@ import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
 import { buildPatientFinancialChargeRows, resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
+import { formatDisplayDateTime } from "../utils/dateFormatting";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
@@ -490,6 +491,49 @@ const getRevenueOriginColor = (label: any) => {
   if (normalized.includes("conven")) return "#16a34a";
   if (normalized.includes("particular")) return "#22c55e";
   return "#64748b";
+};
+
+const matchesFinancialDrilldownCharge = (charge, drilldown, normalizeText, normalizeOrigin) => {
+  const kind = String(drilldown?.kind || "");
+  const filter = String(drilldown?.filter || "").trim();
+  const series = String(drilldown?.series || "").trim();
+  const status = String(charge?.status || "").trim().toLowerCase();
+
+  if (kind === "receivables-status") {
+    if (!filter) return true;
+    if (filter === "Recebido") return status === "paid";
+    if (filter === "A receber") return ["pending", "overdue"].includes(status);
+    if (filter === "Em atraso") return status === "overdue";
+    if (filter === "Cancelado") return status === "canceled";
+    return false;
+  }
+
+  if (kind === "revenue-by-origin") {
+    if (!["paid", "pending", "overdue"].includes(status)) return false;
+    if (!filter) return true;
+    return normalizeOrigin(charge?.originLabel || charge?.billingOrigin) === normalizeOrigin(filter);
+  }
+
+  if (["revenue-by-specialty", "profit-by-specialty"].includes(kind)) {
+    if (filter) {
+      const expectedSpecialty = normalizeText(filter);
+      const chargeSpecialties = [
+        charge?.specialty,
+        ...(charge?.items || []).map((item) => item?.specialty_snapshot || item?.service_type_snapshot),
+      ];
+      if (!chargeSpecialties.some((value) => normalizeText(value) === expectedSpecialty)) return false;
+    }
+    if (kind === "revenue-by-specialty" && series === "Receita projetada") return false;
+    if (kind === "profit-by-specialty" && ["Repasses", "Despesas alocadas"].includes(series)) return false;
+    return status === "paid";
+  }
+
+  if (kind === "realized-vs-projected") {
+    if (series === "Projetado") return false;
+    return status === "paid";
+  }
+
+  return true;
 };
 
 const getFinancialSemanticValueClass = (semantic: "positive" | "negative" | "neutral" | "profit", value?: any) => {
@@ -2011,7 +2055,7 @@ export function CoordinatorDashboard({
   const [patientFinanceLedger, setPatientFinanceLedger] = useState<any>(null);
   const [patientFinanceLedgerLoading, setPatientFinanceLedgerLoading] = useState(false);
   const [patientFinanceLedgerError, setPatientFinanceLedgerError] = useState("");
-  const [financialDrilldown, setFinancialDrilldown] = useState<{ kind: string; title: string; filter?: string } | null>(null);
+  const [financialDrilldown, setFinancialDrilldown] = useState<{ kind: string; title: string; filter?: string; series?: string } | null>(null);
   const [financialDrilldownPaymentId, setFinancialDrilldownPaymentId] = useState("");
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
   const [financialEntries, setFinancialEntries] = useState<any[]>([]);
@@ -9256,6 +9300,9 @@ export function CoordinatorDashboard({
       const patientId = payment?.patient_id || payment?.patientId;
       distributePaymentAmountBySpecialty(payment, parseCurrencyValue(payment?.amount))
         .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "realized", patientId));
+    });
+    [...paidPayments, ...pendingPayments].forEach((payment: any) => {
+      const patientId = payment?.patient_id || payment?.patientId;
       const chargeReadModel = chargeReadModelById.get(String(payment?.id || ''));
       const originLabel = chargeReadModel?.billingOrigin === 'INSURANCE' ? 'Convênios' : 'Particular';
       addToMap(revenueOriginMap, originLabel, parseCurrencyValue(payment?.amount), { patientId });
@@ -9600,6 +9647,7 @@ export function CoordinatorDashboard({
   const financialProjectedVsRealizedRows = useMemo(() =>
     financialDashboard.revenueRows.map((row: any) => ({
       name: row.month,
+      monthKey: row.monthKey,
       monthFull: row.monthFull,
       Projetado: row.projected,
       Realizado: row.realized,
@@ -9718,8 +9766,21 @@ export function CoordinatorDashboard({
     return rows;
   }, [allPatients]);
 
+  const openFinancialDrilldown = (kind: string, title: string, filter?: string, series?: string) => {
+    setFinancialDrilldownPaymentId("");
+    setFinancialDrilldown({
+      kind,
+      title,
+      ...(filter ? { filter } : {}),
+      ...(series ? { series } : {}),
+    });
+  };
+
   const financialDrilldownPayments = useMemo(() => {
     if (!financialDrilldown) return [];
+    const referenceMonth = financialDrilldown.kind === "realized-vs-projected" && /^\d{4}-\d{2}$/.test(financialDrilldown.filter || "")
+      ? String(financialDrilldown.filter)
+      : financialMonth;
     return patientFinanceChargeRows.filter((charge: any) => {
       const raw = charge?.charge || {};
       const referenceValues = [
@@ -9730,13 +9791,30 @@ export function CoordinatorDashboard({
         raw?.created_at,
         ...(charge?.items || []).map((item: any) => item?.competence_month || item?.completion_at || item?.appointment_scheduled_at),
       ];
-      if (!referenceValues.some((value) => isSameFinancialMonth(value, financialMonth))) return false;
-      if (["revenue-by-origin", "revenue-by-specialty", "profit-by-specialty"].includes(financialDrilldown.kind)) {
-        return charge?.status === "paid";
-      }
-      return true;
+      if (!referenceValues.some((value) => isSameFinancialMonth(value, referenceMonth))) return false;
+      return matchesFinancialDrilldownCharge(charge, financialDrilldown, normalizeLookupText, normalizeRevenueOriginLabel);
     });
   }, [financialDrilldown, financialMonth, patientFinanceChargeRows]);
+
+  const financialDrilldownProjectionRows = useMemo(() => {
+    if (!financialDrilldown) return [];
+    if (financialDrilldown.kind === "realized-vs-projected") {
+      if (financialDrilldown.series === "Realizado") return [];
+      if (financialDrilldown.filter && financialDrilldown.filter !== financialMonth) return [];
+      return financialProjectionFormingRows;
+    }
+    if (financialDrilldown.kind === "revenue-by-specialty" && financialDrilldown.series === "Receita projetada") {
+      const expectedSpecialty = normalizeLookupText(financialDrilldown.filter);
+      return financialProjectionFormingRows.filter((row: any) => !expectedSpecialty || normalizeLookupText(row?.specialty) === expectedSpecialty);
+    }
+    return [];
+  }, [financialDrilldown, financialMonth, financialProjectionFormingRows]);
+
+  const financialDrilldownProfitRows = useMemo(() => {
+    if (financialDrilldown?.kind !== "profit-by-specialty" || !financialDrilldown.filter) return financialProfitSpecialtyRows;
+    const expectedSpecialty = normalizeLookupText(financialDrilldown.filter);
+    return financialProfitSpecialtyRows.filter((row: any) => normalizeLookupText(row?.name) === expectedSpecialty);
+  }, [financialDrilldown, financialProfitSpecialtyRows]);
 
   const selectedFinancialDrilldownPayment = useMemo(
     () => patientFinanceChargeRows.find((charge: any) => String(charge?.id || "") === financialDrilldownPaymentId) || null,
@@ -9797,10 +9875,7 @@ export function CoordinatorDashboard({
           <button
             type="button"
             data-financial-drilldown-trigger={chartId}
-            onClick={() => {
-              setFinancialDrilldownPaymentId("");
-              setFinancialDrilldown({ kind: chartId, title });
-            }}
+            onClick={() => openFinancialDrilldown(chartId, title)}
             className="shrink-0 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-[10px] font-semibold text-violet-700 transition hover:bg-violet-100"
           >
             Ver registros formadores
@@ -12107,8 +12182,16 @@ export function CoordinatorDashboard({
                               <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} />
                               <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
                               <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
-                              <Bar name="Projetado" dataKey="Projetado" fill="#86efac" radius={[6, 6, 0, 0]} />
-                              <Bar name="Realizado" dataKey="Realizado" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                              <Bar name="Projetado" dataKey="Projetado" fill="#86efac" radius={[6, 6, 0, 0]}>
+                                {financialProjectedVsRealizedRows.map((row: any) => (
+                                  <Cell key={`projected-cell-${row.monthKey}`} cursor="pointer" onClick={() => openFinancialDrilldown("realized-vs-projected", "Realizado vs projetado por mês", row.monthKey, "Projetado")} />
+                                ))}
+                              </Bar>
+                              <Bar name="Realizado" dataKey="Realizado" fill="#22c55e" radius={[6, 6, 0, 0]}>
+                                {financialProjectedVsRealizedRows.map((row: any) => (
+                                  <Cell key={`realized-cell-${row.monthKey}`} cursor="pointer" onClick={() => openFinancialDrilldown("realized-vs-projected", "Realizado vs projetado por mês", row.monthKey, "Realizado")} />
+                                ))}
+                              </Bar>
                             </BarChart>
                           </SafeResponsiveContainer>,
                         )}
@@ -12116,13 +12199,18 @@ export function CoordinatorDashboard({
                         {renderFinancialChartCard(
                           "revenue-by-origin",
                           "Receita por origem",
-                          "Mostra a composição entre particular, convênio e outras origens registradas.",
+                          "Mostra a composição dos recebíveis registrados entre particular, convênio e outras origens.",
                           hasFinancialChartData(financialRevenueOriginRows, ["Receita"]),
                           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                             <RePieChart>
                               <Pie data={financialRevenueOriginRows} dataKey="Receita" nameKey="name" innerRadius={58} outerRadius={92} paddingAngle={3}>
                                 {financialRevenueOriginRows.map((entry: any, index: number) => (
-                                  <Cell key={`origin-cell-${entry.name}`} fill={entry.color || COLORS[index % COLORS.length]} />
+                                  <Cell
+                                    key={`origin-cell-${entry.name}`}
+                                    fill={entry.color || COLORS[index % COLORS.length]}
+                                    cursor="pointer"
+                                    onClick={() => openFinancialDrilldown("revenue-by-origin", "Receita por origem", entry.name, "Receita")}
+                                  />
                                 ))}
                               </Pie>
                               <Tooltip content={renderFinancialTooltip} />
@@ -12149,8 +12237,16 @@ export function CoordinatorDashboard({
                               <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 11 }} />
                               <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
                               <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
-                              <Bar name="Receita projetada" dataKey="Receita projetada" fill="#86efac" radius={[6, 6, 0, 0]} />
-                              <Bar name="Receita realizada" dataKey="Receita realizada" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                              <Bar name="Receita projetada" dataKey="Receita projetada" fill="#86efac" radius={[6, 6, 0, 0]}>
+                                {financialRevenueSpecialtyRows.map((row: any) => (
+                                  <Cell key={`specialty-projected-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("revenue-by-specialty", "Receita por especialidade", row.name, "Receita projetada")} />
+                                ))}
+                              </Bar>
+                              <Bar name="Receita realizada" dataKey="Receita realizada" fill="#22c55e" radius={[6, 6, 0, 0]}>
+                                {financialRevenueSpecialtyRows.map((row: any) => (
+                                  <Cell key={`specialty-realized-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("revenue-by-specialty", "Receita por especialidade", row.name, "Receita realizada")} />
+                                ))}
+                              </Bar>
                             </BarChart>
                           </SafeResponsiveContainer>,
                         )}
@@ -12166,10 +12262,26 @@ export function CoordinatorDashboard({
                               <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 11 }} />
                               <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} tickFormatter={(value) => formatCurrency(value)} />
                               <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
-                              <Bar name="Receita" dataKey="Receita" fill="#22c55e" radius={[6, 6, 0, 0]} />
-                              <Bar name="Repasses" dataKey="Repasses" fill="#fb7185" radius={[6, 6, 0, 0]} />
-                              <Bar name="Despesas alocadas" dataKey="Despesas alocadas" fill="#ef4444" radius={[6, 6, 0, 0]} />
-                              <Bar name="Lucro estimado" dataKey="Lucro estimado" fill="#22c55e" radius={[6, 6, 0, 0]} />
+                              <Bar name="Receita" dataKey="Receita" fill="#22c55e" radius={[6, 6, 0, 0]}>
+                                {financialProfitSpecialtyRows.map((row: any) => (
+                                  <Cell key={`profit-revenue-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Receita")} />
+                                ))}
+                              </Bar>
+                              <Bar name="Repasses" dataKey="Repasses" fill="#fb7185" radius={[6, 6, 0, 0]}>
+                                {financialProfitSpecialtyRows.map((row: any) => (
+                                  <Cell key={`profit-transfer-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Repasses")} />
+                                ))}
+                              </Bar>
+                              <Bar name="Despesas alocadas" dataKey="Despesas alocadas" fill="#ef4444" radius={[6, 6, 0, 0]}>
+                                {financialProfitSpecialtyRows.map((row: any) => (
+                                  <Cell key={`profit-expense-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Despesas alocadas")} />
+                                ))}
+                              </Bar>
+                              <Bar name="Lucro estimado" dataKey="Lucro estimado" fill="#22c55e" radius={[6, 6, 0, 0]}>
+                                {financialProfitSpecialtyRows.map((row: any) => (
+                                  <Cell key={`profit-net-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Lucro estimado")} />
+                                ))}
+                              </Bar>
                             </BarChart>
                           </SafeResponsiveContainer>,
                         )}
@@ -12204,6 +12316,8 @@ export function CoordinatorDashboard({
                                   <Cell
                                     key={`receivable-cell-${entry.name}`}
                                     fill={["#22c55e", "#7a32fc", "#f59e0b", "#94a3b8"][index % 4]}
+                                    cursor="pointer"
+                                    onClick={() => openFinancialDrilldown("receivables-status", "Recebimentos e pendências", entry.name, "Valor")}
                                   />
                                 ))}
                               </Pie>
@@ -13287,7 +13401,7 @@ export function CoordinatorDashboard({
                       <div className="min-h-0 flex-1 overflow-y-auto p-5">
                         {financialDrilldown.kind === "profit-by-specialty" && (
                           <div data-financial-profit-components className="mb-5 space-y-2">
-                            {financialProfitSpecialtyRows.map((row: any) => (
+                            {financialDrilldownProfitRows.map((row: any) => (
                               <div key={`profit-drilldown-${row.name}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
                                 <p className="text-sm font-semibold text-slate-900">{row.name}</p>
                                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
@@ -13301,14 +13415,14 @@ export function CoordinatorDashboard({
                           </div>
                         )}
 
-                        {financialDrilldown.kind === "realized-vs-projected" && (
+                        {financialDrilldownProjectionRows.length > 0 && (
                           <section data-financial-projection-forming-plans className="mb-6">
                             <div className="mb-3">
                               <h4 className="text-sm font-semibold text-slate-900">Planos fixos formadores da projeção</h4>
                               <p className="mt-1 text-xs text-slate-500">Referências projetadas; não são pagamentos nem recebíveis realizados.</p>
                             </div>
                             <div className="space-y-2">
-                              {financialProjectionFormingRows.map((row: any) => (
+                              {financialDrilldownProjectionRows.map((row: any) => (
                                 <div key={row.id} className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4">
                                   <div className="flex items-start justify-between gap-3">
                                     <div><p className="text-sm font-medium text-slate-900">{row.patientName}</p><p className="mt-1 text-xs text-slate-500">{row.originLabel} · {row.specialty}</p></div>
@@ -13317,7 +13431,6 @@ export function CoordinatorDashboard({
                                   <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-sky-700">Plano fixo formador da projeção</p>
                                 </div>
                               ))}
-                              {!financialProjectionFormingRows.length && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">Nenhum plano fixo formador da projeção neste período.</p>}
                             </div>
                           </section>
                         )}
