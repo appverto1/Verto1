@@ -493,6 +493,34 @@ const getRevenueOriginColor = (label: any) => {
   return "#64748b";
 };
 
+const classifyFinancialDashboardPayments = (
+  sourcePayments: any[],
+  resolveStatus: (payment: any) => string,
+) => {
+  const uniquePayments = new Map<string, any>();
+  (sourcePayments || []).forEach((payment: any, index: number) => {
+    const paymentId = String(payment?.id || "").trim();
+    const identity = paymentId || `__financial_payment_row_${index}`;
+    if (!uniquePayments.has(identity)) uniquePayments.set(identity, payment);
+  });
+
+  const classified = Array.from(uniquePayments.values()).map((payment: any) => ({
+    payment,
+    status: resolveStatus(payment),
+  }));
+  const byStatus = (status: string) => classified.filter((entry: any) => entry.status === status).map((entry: any) => entry.payment);
+
+  return {
+    paidPayments: byStatus("paid"),
+    pendingPayments: byStatus("pending"),
+    overduePayments: byStatus("overdue"),
+    cancelledPayments: byStatus("canceled"),
+    materialRevenuePayments: classified
+      .filter((entry: any) => ["paid", "pending", "overdue"].includes(entry.status))
+      .map((entry: any) => entry.payment),
+  };
+};
+
 const matchesFinancialDrilldownCharge = (charge, drilldown, normalizeText, normalizeOrigin) => {
   const kind = String(drilldown?.kind || "");
   const filter = String(drilldown?.filter || "").trim();
@@ -502,7 +530,7 @@ const matchesFinancialDrilldownCharge = (charge, drilldown, normalizeText, norma
   if (kind === "receivables-status") {
     if (!filter) return true;
     if (filter === "Recebido") return status === "paid";
-    if (filter === "A receber") return ["pending", "overdue"].includes(status);
+    if (filter === "A receber") return status === "pending";
     if (filter === "Em atraso") return status === "overdue";
     if (filter === "Cancelado") return status === "canceled";
     return false;
@@ -9126,9 +9154,20 @@ export function CoordinatorDashboard({
         payment?.dueDate;
       return isSameFinancialMonth(referenceDate, financialMonth) && belongsToClinicPatient;
     });
-    const paidPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "paid");
-    const pendingPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "pending");
-    const cancelledPayments = monthPayments.filter((payment: any) => normalizeStatus(payment?.status) === "canceled");
+    const resolveDashboardPaymentStatus = (payment: any) => {
+      const rawStatus = normalizeStatus(
+        payment?.financial_status || payment?.financialStatus || payment?.status,
+      );
+      if (rawStatus === "overdue") return "overdue";
+      return resolvePatientFinancialStatus(payment);
+    };
+    const {
+      paidPayments,
+      pendingPayments,
+      overduePayments,
+      cancelledPayments,
+      materialRevenuePayments,
+    } = classifyFinancialDashboardPayments(monthPayments, resolveDashboardPaymentStatus);
     const monthProfessionalPayments = (professionalPayments || []).filter((payment: any) => {
       const referenceDate =
         payment?.payment_date ||
@@ -9267,10 +9306,6 @@ export function CoordinatorDashboard({
     const realized = paidPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const pendingAmount = pendingPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const cancelledAmount = cancelledPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
-    const overduePayments = pendingPayments.filter((payment: any) => {
-      const days = daysUntilDate(payment?.due_date || payment?.dueDate);
-      return days !== null && days < 0;
-    });
     const overdueAmount = overduePayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const professionalPaid = paidProfessionalPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
     const professionalPending = pendingProfessionalPayments.reduce((sum: number, payment: any) => sum + parseCurrencyValue(payment?.amount), 0);
@@ -9301,7 +9336,7 @@ export function CoordinatorDashboard({
       distributePaymentAmountBySpecialty(payment, parseCurrencyValue(payment?.amount))
         .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "realized", patientId));
     });
-    [...paidPayments, ...pendingPayments].forEach((payment: any) => {
+    materialRevenuePayments.forEach((payment: any) => {
       const patientId = payment?.patient_id || payment?.patientId;
       const chargeReadModel = chargeReadModelById.get(String(payment?.id || ''));
       const originLabel = chargeReadModel?.billingOrigin === 'INSURANCE' ? 'Convênios' : 'Particular';
@@ -9309,15 +9344,13 @@ export function CoordinatorDashboard({
     });
     pendingPayments.forEach((payment: any) => {
       const patientId = payment?.patient_id || payment?.patientId;
-      const paymentKey = String(payment?.id || "").trim();
-      const isOverdue = overduePayments.some((overdue: any) =>
-        overdue === payment || (paymentKey && String(overdue?.id || "").trim() === paymentKey),
-      );
       distributePaymentAmountBySpecialty(payment, parseCurrencyValue(payment?.amount))
-        .forEach((entry: any) => {
-          addSpecialtyMetric(entry.specialty, entry.amount, "pending", patientId);
-          if (isOverdue) addSpecialtyMetric(entry.specialty, entry.amount, "overdue", patientId);
-        });
+        .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "pending", patientId));
+    });
+    overduePayments.forEach((payment: any) => {
+      const patientId = payment?.patient_id || payment?.patientId;
+      distributePaymentAmountBySpecialty(payment, parseCurrencyValue(payment?.amount))
+        .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "overdue", patientId));
     });
     paidProfessionalPayments.forEach((payment: any) => {
       const professionalId = String(payment?.professional_id || payment?.professionalId || "").trim();
