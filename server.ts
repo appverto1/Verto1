@@ -88652,7 +88652,7 @@ async function startServer() {
   const fetchConventionalSessionNote = async (appointmentId: string, patientId: string) => {
     const { data, error } = await supabase
       .from('notes')
-      .select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
+      .select('id,appointment_id,patient_id,therapist_id,text,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
       .eq('appointment_id', appointmentId)
       .eq('patient_id', patientId)
       .eq('source', 'conventional_session')
@@ -88872,11 +88872,11 @@ async function startServer() {
         if (existing?.id) {
           const { data, error } = await supabase
             .from('notes')
-            .update({ content, visibility: 'shared_clinic', type: 'professional', subject: 'Evolução da sessão', shared_with_professionals: true })
+            .update({ text: content, content, visibility: 'shared_clinic', type: 'professional', subject: 'Evolução da sessão', shared_with_professionals: true })
             .eq('id', existing.id)
             .eq('patient_id', patientId)
             .eq('appointment_id', appointmentId)
-            .select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
+            .select('id,appointment_id,patient_id,therapist_id,text,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
             .maybeSingle();
           if (error) throw error;
           note = data;
@@ -88888,6 +88888,7 @@ async function startServer() {
               id: noteId,
               patient_id: patientId,
               appointment_id: appointmentId,
+              text: content,
               content,
               visibility: 'shared_clinic',
               type: 'professional',
@@ -88902,13 +88903,13 @@ async function startServer() {
               created_by: actorId,
               is_active: true
             })
-            .select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
+            .select('id,appointment_id,patient_id,therapist_id,text,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
             .single();
           if (error) {
             if (String(error?.code || '') === '23505') {
               const canonical = await fetchConventionalSessionNote(appointmentId, patientId);
               if (canonical?.id) {
-                const retry = await supabase.from('notes').update({ content }).eq('id', canonical.id).select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at').maybeSingle();
+                const retry = await supabase.from('notes').update({ text: content, content }).eq('id', canonical.id).select('id,appointment_id,patient_id,therapist_id,text,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at').maybeSingle();
                 if (retry.error) throw retry.error;
                 note = retry.data;
               } else throw error;
