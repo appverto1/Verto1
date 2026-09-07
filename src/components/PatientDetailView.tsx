@@ -4070,6 +4070,33 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (isCreatingNewTask) { setFinalTaskTitle(newTaskName); setFinalTaskSubtitle(newTaskObjective); } 
   }, [newTaskName, newTaskObjective, isCreatingNewTask]); 
 
+  const conventionalSessionEvolutions = useMemo(() => {
+    const targetPatientId = String(patient?.id || '').trim();
+    return (Array.isArray(notes) ? notes : [])
+      .filter((note: any) => {
+        const notePatientId = String(note?.patientId ?? note?.patient_id ?? '').trim();
+        return notePatientId === targetPatientId && String(note?.source || '').trim().toLowerCase() === 'conventional_session';
+      })
+      .map((note: any) => {
+        const occurredAt = note?.appointment_date_time || note?.appointment_scheduled_at || note?.created_at || note?.date || null;
+        const timestamp = new Date(occurredAt || 0).getTime();
+        return {
+          ...note,
+          occurredAt,
+          timestamp: Number.isFinite(timestamp) ? timestamp : 0,
+          appointmentId: note?.appointment_id || note?.appointmentId || null,
+          serviceType: note?.service_type || note?.serviceType || 'Sessão',
+          durationMinutes: Number(note?.actual_duration_minutes ?? note?.actualDurationMinutes ?? 0) || null,
+          therapistId: note?.therapist_id || note?.therapistId || null,
+          therapistName: note?.therapist_name || note?.therapistName || 'Profissional não informado',
+          authorId: note?.author_id || note?.authorId || note?.created_by || note?.createdBy || null,
+          authorName: note?.author_name || note?.authorName || null,
+          text: String(note?.text ?? note?.content ?? '').trim(),
+        };
+      })
+      .sort((left: any, right: any) => right.timestamp - left.timestamp);
+  }, [notes, patient?.id]);
+
   const historyWithFamilyNotes = useMemo(() => {
     const baseHistory = Array.isArray(history) ? history : [];
     if (!isKidsProfile) return baseHistory;
@@ -4935,6 +4962,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const filteredNotes = useMemo(() => {
     return (notes || []).filter((n: any) => {
       if (isSystemMilestoneEvent(n)) return false;
+      if (String(n?.source || '').trim().toLowerCase() === 'conventional_session') return false;
       const matchPatient = n.patientId === patient.id;
       const matchVisibility = (n.visibility || n.type || 'private') === noteMode;
       
@@ -10840,6 +10868,47 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         <div className="mx-auto w-full max-w-[1480px]">
         {activeTab === 'history' ? ( 
           <div className="space-y-6"> 
+            {conventionalSessionEvolutions.length > 0 && (
+              <section className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-labelledby="conventional-session-evolutions-heading">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h2 id="conventional-session-evolutions-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Evoluções de sessão</h2>
+                    <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Evoluções convencionais vinculadas ao atendimento original, sem duplicar anotações.</p>
+                  </div>
+                  <span className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{conventionalSessionEvolutions.length} registro{conventionalSessionEvolutions.length === 1 ? '' : 's'}</span>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {conventionalSessionEvolutions.map((evolution: any) => {
+                    const date = evolution.occurredAt ? new Date(evolution.occurredAt) : null;
+                    const dateLabel = date && !Number.isNaN(date.getTime())
+                      ? date.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                      : 'Data não informada';
+                    const showAuthor = Boolean(
+                      evolution.authorName &&
+                      evolution.authorId &&
+                      evolution.therapistId &&
+                      String(evolution.authorId) !== String(evolution.therapistId)
+                    );
+                    return (
+                      <article key={`conventional-evolution-${evolution.id}`} className={`rounded-2xl border p-4 ${isPanelDark ? 'border-slate-700 bg-slate-900/60' : 'border-slate-100 bg-slate-50/70'}`}>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div>
+                            <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Evolução da sessão</p>
+                            <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{dateLabel} · {evolution.serviceType}{evolution.durationMinutes ? ` · ${Math.round(evolution.durationMinutes)} min` : ''}</p>
+                          </div>
+                          {evolution.appointmentId && <span className={`rounded-full border px-2.5 py-1 text-[10px] ${isPanelDark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>Atendimento {String(evolution.appointmentId).slice(0, 8)}</span>}
+                        </div>
+                        <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                          <p className={isPanelDark ? 'text-slate-300' : 'text-slate-600'}><span className="font-semibold">Profissional:</span> {evolution.therapistName}</p>
+                          {showAuthor && <p className={isPanelDark ? 'text-slate-300' : 'text-slate-600'}><span className="font-semibold">Registrado por:</span> {evolution.authorName}</p>}
+                        </div>
+                        <p className={`mt-3 whitespace-pre-wrap text-sm leading-6 ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>{normalizeNoteText(evolution.text) || 'Sem texto de evolução registrado.'}</p>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
             {!isKidsProfile && (
               <div className="space-y-4 mb-6">
                 <AdultWellbeingTrendChart

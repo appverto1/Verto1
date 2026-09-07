@@ -277,9 +277,12 @@ export const NOTE_SELECT_COLUMNS = [
   'id',
   'patient_id',
   'patient_email',
+  'appointment_id',
+  'therapist_id',
   'visibility',
   'type',
   'subject',
+  'text',
   'content',
   'original_id',
   'assigned_task_id',
@@ -835,6 +838,7 @@ const PATIENT_LIST_OPTIONAL_COLUMNS = new Set([
 
 const NOTE_OPTIONAL_COLUMNS = new Set([
   'patient_email',
+  'appointment_id',
   'type',
   'visibility',
   'subject',

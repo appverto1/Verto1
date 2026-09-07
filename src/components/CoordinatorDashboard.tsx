@@ -67,7 +67,7 @@ import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
-import { resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
+import { buildPatientFinancialChargeRows, resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
@@ -904,6 +904,7 @@ export function CoordinatorDashboard({
     | "birthdays"
   >("dashboard");
   const patientListEnsureAttemptedWorkspaceRef = useRef("");
+  const [patientListEnsureLoading, setPatientListEnsureLoading] = useState(false);
   const featureDiscoveryRequestSeqRef = useRef(0);
   const persistedFeatureAccessRef = useRef<Set<NewFeatureKey>>(new Set());
   const [featureAccessByKey, setFeatureAccessByKey] = useState<Partial<Record<NewFeatureKey, string | null>>>({});
@@ -1043,25 +1044,29 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     patientListEnsureAttemptedWorkspaceRef.current = "";
+    setPatientListEnsureLoading(false);
   }, [workspaceScopeKey]);
 
   useEffect(() => {
-    const patientListSurfaceVisible = activeTab === "patients" || activeTab === "notices" || activeTab === "agenda";
+    const patientListSurfaceVisible = activeTab === "patients" || activeTab === "notices" || activeTab === "agenda" || activeTab === "financial";
     if (!patientListSurfaceVisible || !onEnsurePatientList || !workspaceScopeKey) return;
     if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) return;
 
-    // A lista de pacientes é compartilhada por Pacientes, Avisos e Agenda. O bootstrap pode
+    // A lista de pacientes é compartilhada por Pacientes, Avisos, Agenda e Financeiro. O bootstrap pode
     // chegar com um snapshot local vazio ou parcial; portanto uma lista não vazia não
     // é evidência de que a leitura canônica já aconteceu. Faça exatamente uma leitura
     // canônica por workspace quando uma dessas superfícies for aberta e reutilize o
-    // mesmo estado nas três telas, sem exigir que o usuário visite Pacientes ou Avisos primeiro.
+    // mesmo estado, sem exigir que o usuário visite Pacientes primeiro.
     patientListEnsureAttemptedWorkspaceRef.current = workspaceScopeKey;
+    setPatientListEnsureLoading(true);
     void Promise.resolve(onEnsurePatientList()).catch(() => {
       // Permite nova tentativa ao reabrir a superfície após uma falha transitória,
       // preservando no App a única fonte de verdade da lista de pacientes.
       if (patientListEnsureAttemptedWorkspaceRef.current === workspaceScopeKey) {
         patientListEnsureAttemptedWorkspaceRef.current = "";
       }
+    }).finally(() => {
+      setPatientListEnsureLoading(false);
     });
   }, [activeTab, onEnsurePatientList, workspaceScopeKey]);
 
@@ -2003,6 +2008,11 @@ export function CoordinatorDashboard({
   }, [allPatients, onOpenPatientDetails, selectedPatientId, view, workspaceScopeKey]);
 
   const [payments, setPayments] = useState<any[]>([]);
+  const [patientFinanceLedger, setPatientFinanceLedger] = useState<any>(null);
+  const [patientFinanceLedgerLoading, setPatientFinanceLedgerLoading] = useState(false);
+  const [patientFinanceLedgerError, setPatientFinanceLedgerError] = useState("");
+  const [financialDrilldown, setFinancialDrilldown] = useState<{ kind: string; title: string; filter?: string } | null>(null);
+  const [financialDrilldownPaymentId, setFinancialDrilldownPaymentId] = useState("");
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
   const [financialEntries, setFinancialEntries] = useState<any[]>([]);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -2961,23 +2971,35 @@ export function CoordinatorDashboard({
   };
 
   useEffect(() => {
+    let cancelled = false;
     const fetchFinancialData = async () => {
       if (!canAccessClinicFinance && !isReceptionist) return;
-      const paymentsResult = await dataService.getPayments();
-      if (paymentsResult.success) setPayments(paymentsResult.data || []);
-      if (canAccessClinicFinance) {
-        const [professionalResult, entriesResult] = await Promise.all([
-          dataService.getProfessionalPayments(),
-          dataService.getClinicFinancialEntries(),
-        ]);
-        if (professionalResult.success) setProfessionalPayments(professionalResult.data || []);
-        if (entriesResult.success) setFinancialEntries(entriesResult.data || []);
+      setPatientFinanceLedgerLoading(true);
+      setPatientFinanceLedgerError("");
+      const ledgerPromise = dataService.getPatientFinanceLedger(financialMonth);
+      const supportingPromise = canAccessClinicFinance
+        ? Promise.all([dataService.getProfessionalPayments(), dataService.getClinicFinancialEntries()])
+        : Promise.resolve([null, null] as any[]);
+      const [ledgerResult, [professionalResult, entriesResult]] = await Promise.all([ledgerPromise, supportingPromise]);
+      if (cancelled) return;
+      if (!ledgerResult?.success) {
+        setPatientFinanceLedger(null);
+        setPayments([]);
+        setPatientFinanceLedgerError(ledgerResult?.error || "Não foi possível carregar o Financeiro.");
+      } else {
+        const nextLedger = ledgerResult.data || {};
+        setPatientFinanceLedger(nextLedger);
+        setPayments(Array.isArray(nextLedger.charges) ? nextLedger.charges : []);
       }
+      if (professionalResult?.success) setProfessionalPayments(professionalResult.data || []);
+      if (entriesResult?.success) setFinancialEntries(entriesResult.data || []);
+      setPatientFinanceLedgerLoading(false);
     };
     if (activeTab === "financial" && (canAccessClinicFinance || isReceptionist)) {
-      fetchFinancialData();
+      void fetchFinancialData();
     }
-  }, [activeTab, canAccessClinicFinance, isReceptionist]);
+    return () => { cancelled = true; };
+  }, [activeTab, canAccessClinicFinance, isReceptionist, financialMonth, workspaceScopeKey]);
 
   useEffect(() => {
     if (
@@ -9025,9 +9047,24 @@ export function CoordinatorDashboard({
     return label.charAt(0).toUpperCase() + label.slice(1).replace(".", "");
   };
 
+  const patientFinanceChargeRows = useMemo(
+    () => buildPatientFinancialChargeRows(patientFinanceLedger || { charges: payments, items: [] }, allPatients),
+    [patientFinanceLedger, payments, allPatients],
+  );
+
   const financialDashboard = useMemo(() => {
     const clinicPatientIds = new Set((allPatients || []).map((patient: any) => String(patient?.id)));
     const patientById = new Map((allPatients || []).map((patient: any) => [String(patient?.id), patient]));
+    const chargeReadModelById = new Map(patientFinanceChargeRows.map((charge: any) => [String(charge?.id || ''), charge]));
+    const ledgerItemsByPaymentId = new Map<string, any[]>();
+    (patientFinanceLedger?.items || []).forEach((item: any) => {
+      if (item?.active === false) return;
+      const paymentId = String(item?.payment_id || item?.paymentId || '').trim();
+      if (!paymentId) return;
+      const current = ledgerItemsByPaymentId.get(paymentId) || [];
+      current.push(item);
+      ledgerItemsByPaymentId.set(paymentId, current);
+    });
     const activePatients = (allPatients || []).filter(isPatientFinanciallyActive);
     const inactivePatients = (allPatients || []).filter((patient: any) => !isPatientFinanciallyActive(patient));
     const normalizeStatus = (status: any) => {
@@ -9070,6 +9107,7 @@ export function CoordinatorDashboard({
 
     const specialtyMap = new Map<string, any>();
     const payerMap = new Map<string, any>();
+    const revenueOriginMap = new Map<string, any>();
     const insuranceMap = new Map<string, any>();
     const billingMethodMap = new Map<string, any>();
     const dueRows: any[] = [];
@@ -9127,6 +9165,28 @@ export function CoordinatorDashboard({
       return plans.map((plan: any) => ({
         specialty: plan.specialty,
         amount: safeAmount * ((Number(plan.amount) || 0) / total),
+      }));
+    };
+
+    const distributePaymentAmountBySpecialty = (payment: any, amount: number) => {
+      const paymentId = String(payment?.id || '').trim();
+      const items = paymentId ? (ledgerItemsByPaymentId.get(paymentId) || []) : [];
+      if (!items.length) {
+        const patientId = payment?.patient_id || payment?.patientId;
+        return distributePatientAmountBySpecialty(patientById.get(String(patientId)), amount, payment?.specialty);
+      }
+      const grouped = new Map<string, number>();
+      let itemTotal = 0;
+      items.forEach((item: any) => {
+        const subtotal = Math.max(0, parseCurrencyValue(item?.subtotal ?? item?.unit_amount));
+        const specialty = String(item?.specialty_snapshot || item?.service_type_snapshot || 'Não informado').trim() || 'Não informado';
+        grouped.set(specialty, (grouped.get(specialty) || 0) + subtotal);
+        itemTotal += subtotal;
+      });
+      if (itemTotal <= 0) return [{ specialty: 'Não informado', amount: Number(amount) || 0 }];
+      return Array.from(grouped.entries()).map(([specialty, subtotal]) => ({
+        specialty,
+        amount: (Number(amount) || 0) * (subtotal / itemTotal),
       }));
     };
 
@@ -9194,18 +9254,19 @@ export function CoordinatorDashboard({
 
     paidPayments.forEach((payment: any) => {
       const patientId = payment?.patient_id || payment?.patientId;
-      const patient = patientById.get(String(patientId));
-      distributePatientAmountBySpecialty(patient, parseCurrencyValue(payment?.amount), payment?.specialty)
+      distributePaymentAmountBySpecialty(payment, parseCurrencyValue(payment?.amount))
         .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "realized", patientId));
+      const chargeReadModel = chargeReadModelById.get(String(payment?.id || ''));
+      const originLabel = chargeReadModel?.billingOrigin === 'INSURANCE' ? 'Convênios' : 'Particular';
+      addToMap(revenueOriginMap, originLabel, parseCurrencyValue(payment?.amount), { patientId });
     });
     pendingPayments.forEach((payment: any) => {
       const patientId = payment?.patient_id || payment?.patientId;
-      const patient = patientById.get(String(patientId));
       const paymentKey = String(payment?.id || "").trim();
       const isOverdue = overduePayments.some((overdue: any) =>
         overdue === payment || (paymentKey && String(overdue?.id || "").trim() === paymentKey),
       );
-      distributePatientAmountBySpecialty(patient, parseCurrencyValue(payment?.amount), payment?.specialty)
+      distributePaymentAmountBySpecialty(payment, parseCurrencyValue(payment?.amount))
         .forEach((entry: any) => {
           addSpecialtyMetric(entry.specialty, entry.amount, "pending", patientId);
           if (isOverdue) addSpecialtyMetric(entry.specialty, entry.amount, "overdue", patientId);
@@ -9224,6 +9285,29 @@ export function CoordinatorDashboard({
         "Não informado",
       ).trim();
       addSpecialtyMetric(specialty, parseCurrencyValue(payment?.amount), "professionalPaid");
+    });
+
+    (payments || []).forEach((payment: any) => {
+      const status = resolvePatientFinancialStatus(payment);
+      const dueDate = String(payment?.due_date || payment?.dueDate || '').slice(0, 10);
+      const patientId = String(payment?.patient_id || payment?.patientId || '').trim();
+      if (!dueDate || !clinicPatientIds.has(patientId) || !['pending', 'partial', 'overdue'].includes(status)) return;
+      if (financialMonth && !isSameFinancialMonth(dueDate, financialMonth)) return;
+      const chargeReadModel = chargeReadModelById.get(String(payment?.id || ''));
+      dueRows.push({
+        source: 'payment',
+        paymentId: String(payment?.id || ''),
+        patientId,
+        patientName: chargeReadModel?.patientName || payment?.patient_name || payment?.patientName || patientById.get(patientId)?.name || 'Paciente',
+        specialty: chargeReadModel?.specialty || payment?.specialty || 'Não informado',
+        amount: Number(payment?.balance_amount ?? payment?.balanceAmount ?? payment?.amount ?? 0) || 0,
+        dueDay: Number(dueDate.slice(8, 10)) || 0,
+        dueDate,
+        billingMethod: String(payment?.method || 'Não informado').toUpperCase(),
+        payerType: chargeReadModel?.originLabel || 'Particular',
+        insuranceName: chargeReadModel?.payerName || '',
+        isMonthlySession: chargeReadModel?.isMonthlySession === true || String(payment?.source || '') === 'MONTHLY_SESSION_AGGREGATE',
+      });
     });
 
     const specialtyBasisTotal = realized > 0 ? realized : projection;
@@ -9345,6 +9429,7 @@ export function CoordinatorDashboard({
       unallocatedSpecialtyRows,
       unallocatedSpecialtyTotals,
       payerRows: Array.from(payerMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
+      revenueOriginRows: Array.from(revenueOriginMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       insuranceRows: Array.from(insuranceMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       billingMethodRows: Array.from(billingMethodMap.values()).map((row: any) => ({ ...row, patients: row.patients.size })).sort((a, b) => b.amount - a.amount),
       dueRows: dueRows.sort((a, b) => a.dueDay - b.dueDay || a.patientName.localeCompare(b.patientName, "pt-BR")),
@@ -9356,11 +9441,13 @@ export function CoordinatorDashboard({
       paidProfessionalPayments,
       pendingProfessionalPayments,
     };
-  }, [allPatients, financialEntries, financialMonth, payments, professionalPayments, therapistMembersById]);
+  }, [allPatients, financialEntries, financialMonth, payments, professionalPayments, therapistMembersById, patientFinanceLedger, patientFinanceChargeRows]);
 
   const dreData = financialDashboard.dreRows;
   const compensationForecast = financialDashboard.dueRows.slice(0, 6);
   const activeFinancialSection = financialNavigationContext.breadcrumb[1] || (isReceptionist ? "Recebimentos de pacientes" : "Visão geral da clínica");
+  const financialSurfaceLoading = activeTab === "financial" && (patientListEnsureLoading || patientFinanceLedgerLoading);
+  const financialSurfaceError = activeTab === "financial" ? String(patientListError || patientFinanceLedgerError || "") : "";
   const isFinancialDashboardSection = [
     "Dashboard financeiro",
     "Financeiro da clínica",
@@ -9521,7 +9608,7 @@ export function CoordinatorDashboard({
 
   const financialRevenueOriginRows = useMemo(() => {
     const originMap = new Map<string, any>();
-    financialDashboard.payerRows.forEach((row: any) => {
+    financialDashboard.revenueOriginRows.forEach((row: any) => {
       const name = normalizeRevenueOriginLabel(row.label);
       const current = originMap.get(name) || {
         name,
@@ -9541,7 +9628,7 @@ export function CoordinatorDashboard({
         Participação: total > 0 ? (row.Receita / total) * 100 : 0,
       }))
       .sort((a: any, b: any) => b.Receita - a.Receita);
-  }, [financialDashboard.payerRows]);
+  }, [financialDashboard.revenueOriginRows]);
 
   const financialRevenueSpecialtyRows = useMemo(() =>
     financialDashboard.specialtyRows.map((row: any) => ({
@@ -9610,6 +9697,52 @@ export function CoordinatorDashboard({
     })),
   [financialDashboard.revenueRows]);
 
+  const financialProjectionFormingRows = useMemo(() => {
+    const rows: any[] = [];
+    (allPatients || []).filter(isPatientFinanciallyActive).forEach((patient: any) => {
+      getPatientPlans(patient).forEach((plan: any) => {
+        const amount = getFixedProjectionPlanAmount(plan);
+        if (amount <= 0) return;
+        rows.push({
+          id: `plan:${patient?.id || "patient"}:${plan?.logicalId || plan?.logical_id || plan?.id || rows.length}`,
+          patientName: patient?.name || "Paciente",
+          specialty: plan?.specialty || "Não informado",
+          originLabel: plan?.billingMode === "INSURANCE"
+            ? `Convênio${plan?.insuranceName ? ` · ${plan.insuranceName}` : ""}`
+            : "Particular",
+          amount,
+          kind: "projection_plan",
+        });
+      });
+    });
+    return rows;
+  }, [allPatients]);
+
+  const financialDrilldownPayments = useMemo(() => {
+    if (!financialDrilldown) return [];
+    return patientFinanceChargeRows.filter((charge: any) => {
+      const raw = charge?.charge || {};
+      const referenceValues = [
+        charge?.competenceMonth,
+        charge?.dueDate,
+        raw?.payment_date,
+        raw?.paymentDate,
+        raw?.created_at,
+        ...(charge?.items || []).map((item: any) => item?.competence_month || item?.completion_at || item?.appointment_scheduled_at),
+      ];
+      if (!referenceValues.some((value) => isSameFinancialMonth(value, financialMonth))) return false;
+      if (["revenue-by-origin", "revenue-by-specialty", "profit-by-specialty"].includes(financialDrilldown.kind)) {
+        return charge?.status === "paid";
+      }
+      return true;
+    });
+  }, [financialDrilldown, financialMonth, patientFinanceChargeRows]);
+
+  const selectedFinancialDrilldownPayment = useMemo(
+    () => patientFinanceChargeRows.find((charge: any) => String(charge?.id || "") === financialDrilldownPaymentId) || null,
+    [financialDrilldownPaymentId, patientFinanceChargeRows],
+  );
+
   const hasFinancialChartData = (rows: any[], keys: string[]) =>
     rows.some((row) => keys.some((key) => Math.abs(Number(row?.[key]) || 0) > 0));
 
@@ -9655,9 +9788,24 @@ export function CoordinatorDashboard({
     legend?: React.ReactNode,
   ) => (
     <div data-financial-chart={chartId} className="rounded-[28px] border border-slate-100 bg-white p-5 shadow-sm">
-      <div>
-        <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
-        <p className="mt-1 text-xs text-slate-500">{description}</p>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-900">{title}</h4>
+          <p className="mt-1 text-xs text-slate-500">{description}</p>
+        </div>
+        {["realized-vs-projected", "revenue-by-origin", "revenue-by-specialty", "profit-by-specialty", "receivables-status"].includes(chartId) && (
+          <button
+            type="button"
+            data-financial-drilldown-trigger={chartId}
+            onClick={() => {
+              setFinancialDrilldownPaymentId("");
+              setFinancialDrilldown({ kind: chartId, title });
+            }}
+            className="shrink-0 rounded-xl border border-violet-100 bg-violet-50 px-3 py-2 text-[10px] font-semibold text-violet-700 transition hover:bg-violet-100"
+          >
+            Ver registros formadores
+          </button>
+        )}
       </div>
       {hasData ? (
         <>
@@ -11876,6 +12024,17 @@ export function CoordinatorDashboard({
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-8"
               >
+                {financialSurfaceLoading && (
+                  <div data-financial-cold-load className="flex min-h-48 items-center justify-center rounded-3xl border border-slate-100 bg-white p-8 text-sm font-medium text-slate-500 shadow-sm">
+                    <Loader2 size={18} className="mr-2 animate-spin text-violet-600" /> Carregando Financeiro
+                  </div>
+                )}
+                {!financialSurfaceLoading && financialSurfaceError && (
+                  <div data-financial-load-error className="rounded-3xl border border-rose-100 bg-rose-50 p-5 text-sm text-rose-700">
+                    <div className="flex items-start gap-3"><AlertCircle size={18} className="mt-0.5" /><p>{financialSurfaceError}</p></div>
+                  </div>
+                )}
+                <div className={financialSurfaceLoading || financialSurfaceError ? "hidden" : "contents"}>
                 {!isReceptionist && isFinancialDashboardSection && (
                   <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -12240,6 +12399,9 @@ export function CoordinatorDashboard({
                         workspaceScopeKey={workspaceScopeKey}
                         activeSection={patientFinanceActiveSection}
                         month={financialMonth}
+                        preloadedLedger={patientFinanceLedger}
+                        preloadedLedgerLoading={patientFinanceLedgerLoading}
+                        preloadedLedgerError={patientFinanceLedgerError}
                         patients={allPatients}
                         professionals={therapistFilterOptions}
                         currentUser={user}
@@ -13036,7 +13198,7 @@ export function CoordinatorDashboard({
                         ))}
                         {!compensationForecast.length && (
                           <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
-                            Cadastre mensalidades no paciente para ver vencimentos.
+                            Nenhum vencimento financeiro encontrado no período.
                           </p>
                         )}
                       </div>
@@ -13094,6 +13256,128 @@ export function CoordinatorDashboard({
                   </div>
                 </div>
                 )}
+
+                {financialDrilldown && (
+                  <div
+                    data-financial-drilldown-panel={financialDrilldown.kind}
+                    className="fixed inset-0 z-[180] flex items-start justify-end bg-slate-950/35 p-3 backdrop-blur-sm sm:p-5"
+                    onMouseDown={(event) => {
+                      if (event.target === event.currentTarget) {
+                        setFinancialDrilldown(null);
+                        setFinancialDrilldownPaymentId("");
+                      }
+                    }}
+                  >
+                    <aside className="flex h-full w-full max-w-2xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
+                      <div className="flex items-start justify-between gap-4 border-b border-slate-100 p-5">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-violet-600">Registros formadores</p>
+                          <h3 className="mt-1 text-lg font-semibold text-slate-900">{financialDrilldown.title}</h3>
+                          <p className="mt-1 text-xs text-slate-500">Do indicador ao recebível e, quando houver, à composição congelada por sessão.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => { setFinancialDrilldown(null); setFinancialDrilldownPaymentId(""); }}
+                          className="rounded-xl p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-700"
+                          aria-label="Fechar registros formadores"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                        {financialDrilldown.kind === "profit-by-specialty" && (
+                          <div data-financial-profit-components className="mb-5 space-y-2">
+                            {financialProfitSpecialtyRows.map((row: any) => (
+                              <div key={`profit-drilldown-${row.name}`} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                                <p className="text-sm font-semibold text-slate-900">{row.name}</p>
+                                <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+                                  <div><p className="text-slate-400">Receita</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row.Receita)}</p></div>
+                                  <div><p className="text-slate-400">Repasses</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row.Repasses)}</p></div>
+                                  <div><p className="text-slate-400">Despesas alocadas</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row["Despesas alocadas"])}</p></div>
+                                  <div><p className="text-slate-400">Lucro estimado</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row["Lucro estimado"])}</p></div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {financialDrilldown.kind === "realized-vs-projected" && (
+                          <section data-financial-projection-forming-plans className="mb-6">
+                            <div className="mb-3">
+                              <h4 className="text-sm font-semibold text-slate-900">Planos fixos formadores da projeção</h4>
+                              <p className="mt-1 text-xs text-slate-500">Referências projetadas; não são pagamentos nem recebíveis realizados.</p>
+                            </div>
+                            <div className="space-y-2">
+                              {financialProjectionFormingRows.map((row: any) => (
+                                <div key={row.id} className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div><p className="text-sm font-medium text-slate-900">{row.patientName}</p><p className="mt-1 text-xs text-slate-500">{row.originLabel} · {row.specialty}</p></div>
+                                    <p className="text-sm font-semibold text-slate-900">{formatCurrency(row.amount)}</p>
+                                  </div>
+                                  <p className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-sky-700">Plano fixo formador da projeção</p>
+                                </div>
+                              ))}
+                              {!financialProjectionFormingRows.length && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">Nenhum plano fixo formador da projeção neste período.</p>}
+                            </div>
+                          </section>
+                        )}
+
+                        <section data-financial-drilldown-payments>
+                          <div className="mb-3">
+                            <h4 className="text-sm font-semibold text-slate-900">Recebíveis / pagamentos formadores</h4>
+                            <p className="mt-1 text-xs text-slate-500">Valores materiais do ledger; clique para abrir a composição por sessão.</p>
+                          </div>
+                          <div className="space-y-2">
+                            {financialDrilldownPayments.map((charge: any) => (
+                              <button
+                                key={`financial-drilldown-payment-${charge.id}`}
+                                type="button"
+                                data-financial-drilldown-payment={charge.id}
+                                onClick={() => setFinancialDrilldownPaymentId(String(charge.id || ""))}
+                                className={`w-full rounded-2xl border p-4 text-left transition ${financialDrilldownPaymentId === String(charge.id || "") ? "border-violet-300 bg-violet-50" : "border-slate-100 bg-white hover:border-violet-200"}`}
+                              >
+                                <div className="flex items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-sm font-medium text-slate-900">{charge.patientName}</p>
+                                    <p className="mt-1 text-xs text-slate-500">{charge.originLabel || "Particular"} · {charge.specialty || charge.serviceName || "Serviço não informado"}</p>
+                                    <p className="mt-1 text-xs text-slate-400">{charge.isMonthlySession ? `Mensal por sessões · ${formatFinancialMonthLabel(String(charge.competenceMonth || financialMonth).slice(0, 7), "long")} · ${charge.sessionCount || charge.items?.length || 0} sessões` : charge.dueDateLabel}</p>
+                                  </div>
+                                  <div className="text-right"><p className="text-sm font-semibold text-slate-900">{formatCurrency(charge.total)}</p><p className="mt-1 text-[10px] font-medium uppercase text-slate-400">{charge.statusLabel}</p></div>
+                                </div>
+                              </button>
+                            ))}
+                            {!financialDrilldownPayments.length && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">Nenhum recebível material forma este indicador no período selecionado.</p>}
+                          </div>
+                        </section>
+
+                        {selectedFinancialDrilldownPayment && (
+                          <section data-financial-drilldown-payment-composition className="mt-6 rounded-3xl border border-violet-100 bg-violet-50/40 p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div><p className="text-[10px] font-semibold uppercase tracking-widest text-violet-600">Composição do recebível</p><h4 className="mt-1 text-sm font-semibold text-slate-900">{selectedFinancialDrilldownPayment.patientName}</h4></div>
+                              <button type="button" onClick={() => setFinancialDrilldownPaymentId("")} className="rounded-lg p-1.5 text-slate-400 hover:bg-white"><X size={16} /></button>
+                            </div>
+                            <div className="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                              <div><p className="text-slate-400">Origem</p><p className="mt-1 font-medium text-slate-800">{selectedFinancialDrilldownPayment.originLabel || "Particular"}</p></div>
+                              <div><p className="text-slate-400">Competência</p><p className="mt-1 font-medium text-slate-800">{formatFinancialMonthLabel(String(selectedFinancialDrilldownPayment.competenceMonth || financialMonth).slice(0, 7), "long")}</p></div>
+                              <div><p className="text-slate-400">Vencimento</p><p className="mt-1 font-medium text-slate-800">{selectedFinancialDrilldownPayment.dueDateLabel}</p></div>
+                              <div><p className="text-slate-400">Total</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(selectedFinancialDrilldownPayment.total)}</p></div>
+                            </div>
+                            <div className="mt-4 space-y-2">
+                              {(selectedFinancialDrilldownPayment.items || []).map((item: any) => (
+                                <div key={`financial-drilldown-item-${item.id}`} className="rounded-2xl border border-violet-100 bg-white p-3 text-xs">
+                                  <div className="flex items-start justify-between gap-3"><div><p className="font-medium text-slate-800">{item.specialty_snapshot || item.service_type_snapshot || "Sessão"}</p><p className="mt-1 text-slate-500">{formatDisplayDateTime(item.completion_at || item.appointment_scheduled_at, { separator: ", " })} · {item.professional_name_snapshot || "Profissional não informado"}</p></div><p className="font-semibold text-slate-900">{formatCurrency(item.subtotal)}</p></div>
+                                  <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-slate-500"><span>{item.payer_name_snapshot ? `Convênio · ${item.payer_name_snapshot}` : "Particular"}</span><span>Unitário {formatCurrency(item.unit_amount)}</span><span>Plano v{item.patient_financial_plan_version || "-"}</span></div>
+                                </div>
+                              ))}
+                              {!selectedFinancialDrilldownPayment.items?.length && <p className="rounded-2xl border border-dashed border-violet-200 p-3 text-sm text-slate-500">Este recebível não possui sessão específica vinculada no ledger.</p>}
+                            </div>
+                          </section>
+                        )}
+                      </div>
+                    </aside>
+                  </div>
+                )}
+                </div>
               </motion.div>
             )}
             {activeTab === "flow" && (

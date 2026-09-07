@@ -47933,13 +47933,103 @@ async function startServer() {
       const deduped = Array.from(new Map(merged.map((item: any) => [String(item?.id || crypto.randomUUID()), item])).values())
         .sort((a: any, b: any) => new Date(b?.created_at || 0).getTime() - new Date(a?.created_at || 0).getTime())
         .slice(0, limit);
+
+      const clinicId = sanitizeString(currentClinicId((req as any).session?.user), 120);
+      const conventionalNotes = deduped.filter((item: any) => (
+        sanitizeString(item?.source, 80).toLowerCase() === 'conventional_session' &&
+        isUuid(sanitizeString(item?.appointment_id || item?.appointmentId, 120))
+      ));
+      const appointmentIds = Array.from(new Set(
+        conventionalNotes
+          .map((item: any) => sanitizeString(item?.appointment_id || item?.appointmentId, 120))
+          .filter(isUuid),
+      ));
+      const appointmentById = new Map<string, any>();
+      const userNameById = new Map<string, string>();
+
+      if (appointmentIds.length > 0 && isUuid(clinicId)) {
+        const appointmentResult = await supabase
+          .from('appointments')
+          .select('id,organization_id,clinic_id,patient_id,scheduled_at,scheduled_start_at,actual_start_at,actual_end_at,actual_duration_minutes,service_type,therapist_id,therapist_name')
+          .eq('patient_id', patientId)
+          .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+          .in('id', appointmentIds)
+          .limit(Math.min(appointmentIds.length, 50));
+        if (appointmentResult.error) throw appointmentResult.error;
+        (appointmentResult.data || []).forEach((appointment: any) => {
+          appointmentById.set(String(appointment?.id || ''), appointment);
+        });
+
+        const userIds = Array.from(new Set(
+          conventionalNotes.flatMap((item: any) => {
+            const appointment = appointmentById.get(String(item?.appointment_id || item?.appointmentId || ''));
+            return [
+              item?.therapist_id,
+              item?.therapistId,
+              item?.created_by,
+              item?.createdBy,
+              item?.original_author_id,
+              item?.originalAuthorId,
+              appointment?.therapist_id,
+            ];
+          }).map((value: any) => sanitizeString(value, 120)).filter(isUuid),
+        ));
+        if (userIds.length > 0) {
+          const usersResult = await supabase
+            .from('users')
+            .select('id,name')
+            .eq('clinic_id', clinicId)
+            .in('id', userIds)
+            .limit(Math.min(userIds.length, 100));
+          if (usersResult.error) throw usersResult.error;
+          (usersResult.data || []).forEach((userRow: any) => {
+            const id = sanitizeString(userRow?.id, 120);
+            const name = sanitizeString(userRow?.name, 180);
+            if (id && name) userNameById.set(id, name);
+          });
+        }
+      }
+
       const mentionUserIdsByNote = await loadClinicalNoteMentionUserIdsByNote(
         deduped.map((item: any) => sanitizeString(item?.id, 120)).filter(isUuid),
       );
-      const hydrated = deduped.map((item: any) => ({
-        ...item,
-        mention_user_ids: mentionUserIdsByNote.get(String(item?.id || '')) || [],
-      }));
+      const hydrated = deduped.map((item: any) => {
+        const source = sanitizeString(item?.source, 80).toLowerCase();
+        if (source !== 'conventional_session') {
+          return {
+            ...item,
+            mention_user_ids: mentionUserIdsByNote.get(String(item?.id || '')) || [],
+          };
+        }
+        const appointmentId = sanitizeString(item?.appointment_id || item?.appointmentId, 120);
+        const appointment = appointmentById.get(appointmentId) || null;
+        const therapistId = sanitizeString(
+          item?.therapist_id || item?.therapistId || appointment?.therapist_id,
+          120,
+        );
+        const authorId = sanitizeString(
+          item?.created_by || item?.createdBy || item?.original_author_id || item?.originalAuthorId,
+          120,
+        );
+        const actualStartAt = appointment?.actual_start_at ? new Date(appointment.actual_start_at).getTime() : Number.NaN;
+        const actualEndAt = appointment?.actual_end_at ? new Date(appointment.actual_end_at).getTime() : Number.NaN;
+        const derivedDurationMinutes = Number.isFinite(actualStartAt) && Number.isFinite(actualEndAt) && actualEndAt >= actualStartAt
+          ? Math.round((actualEndAt - actualStartAt) / 60000)
+          : null;
+        return {
+          ...item,
+          appointment_id: appointmentId || item?.appointment_id || null,
+          appointment_date_time: appointment?.scheduled_start_at || appointment?.scheduled_at || null,
+          appointment_scheduled_at: appointment?.scheduled_start_at || appointment?.scheduled_at || null,
+          actual_duration_minutes: Number(appointment?.actual_duration_minutes) || derivedDurationMinutes || null,
+          service_type: sanitizeString(appointment?.service_type, 180) || null,
+          therapist_id: therapistId || null,
+          therapist_name: userNameById.get(therapistId) || sanitizeString(appointment?.therapist_name, 180) || null,
+          author_id: authorId || null,
+          author_name: userNameById.get(authorId) || null,
+          mention_user_ids: mentionUserIdsByNote.get(String(item?.id || '')) || [],
+        };
+      });
       res.json({ success: true, data: hydrated });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/notes/:patientId [GET]', error, {
@@ -90612,8 +90702,41 @@ async function startServer() {
         data: { items: [], transactions: [], events: [] },
         error: null
       });
+      const emptyItemsResult = () => Promise.resolve({ data: [], error: null });
+      const readLedgerItemSnapshots = () => supabase
+        .from('payment_appointment_items')
+        .select([
+          'id',
+          'organization_id',
+          'clinic_id',
+          'payment_id',
+          'appointment_id',
+          'patient_id',
+          'professional_id',
+          'patient_name_snapshot',
+          'professional_name_snapshot',
+          'service_type_snapshot',
+          'specialty_snapshot',
+          'appointment_scheduled_at',
+          'quantity',
+          'unit_amount',
+          'subtotal',
+          'active',
+          'created_at',
+          'patient_financial_plan_id',
+          'patient_financial_plan_logical_id',
+          'patient_financial_plan_version',
+          'payer_id_snapshot',
+          'payer_name_snapshot',
+          'competence_month',
+          'completion_at'
+        ].join(','))
+        .eq('organization_id', organizationId)
+        .in('payment_id', visibleChargeIds)
+        .order('appointment_scheduled_at', { ascending: false })
+        .limit(1000);
 
-      const [relatedResult, initialAppointmentsResult, policyResult, snapshotsResult] = await Promise.all([
+      const [relatedResult, itemSnapshotsResult, initialAppointmentsResult, policyResult, snapshotsResult] = await Promise.all([
         visibleChargeIds.length > 0
           ? supabase.rpc('get_patient_finance_ledger_children_v1', {
               p_organization_id: organizationId,
@@ -90621,6 +90744,7 @@ async function startServer() {
               p_limit: 1000
             })
           : emptyRelatedResult(),
+        visibleChargeIds.length > 0 ? readLedgerItemSnapshots() : emptyItemsResult(),
         readLedgerAppointments(PATIENT_FINANCE_APPOINTMENT_SELECT),
         supabase
           .from('clinic_patient_finance_policies')
@@ -90643,8 +90767,10 @@ async function startServer() {
         appointmentQueryCount += 1;
       }
 
-      const primaryError = [relatedResult, appointmentsResult, snapshotsResult]
-        .map((result: any) => result.error)
+      const itemSnapshotsError = itemSnapshotsResult.error;
+      const canFallbackToLedgerRpcItems = Boolean(itemSnapshotsError && hasMissingFinancialSchema(itemSnapshotsError));
+      const primaryError = [relatedResult, appointmentsResult, snapshotsResult, canFallbackToLedgerRpcItems ? null : itemSnapshotsResult]
+        .map((result: any) => result?.error)
         .find(Boolean);
       if (primaryError) {
         const safe = patientFinanceErrorResponse(primaryError);
@@ -90687,7 +90813,10 @@ async function startServer() {
           .map((charge: any) => sanitizeString(charge?.id, 120))
           .filter(Boolean),
       );
-      const visibleLedgerItems = (relatedPayload?.items || []).filter((item: any) => (
+      const ledgerItemRows = canFallbackToLedgerRpcItems
+        ? (relatedPayload?.items || [])
+        : (Array.isArray(itemSnapshotsResult.data) ? itemSnapshotsResult.data : []);
+      const visibleLedgerItems = ledgerItemRows.filter((item: any) => (
         !monthlySessionChargeIds.has(sanitizeString(item?.payment_id, 120)) || item?.active === true
       ));
 
@@ -90717,7 +90846,7 @@ async function startServer() {
             3 +
             appointmentQueryCount +
             (appointmentIds.length > 0 ? 1 : 0) +
-            (visibleChargeIds.length > 0 ? 1 : 0),
+            (visibleChargeIds.length > 0 ? 2 : 0),
           rangeStart: rangeStart.toISOString(),
           rangeEnd: rangeEnd.toISOString()
         }

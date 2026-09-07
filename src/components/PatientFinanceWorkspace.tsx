@@ -63,6 +63,9 @@ type Props = {
   launchRequest?: LaunchRequest;
   onLaunchHandled?: () => void;
   onPaymentsLoaded?: (payments: any[]) => void;
+  preloadedLedger?: any;
+  preloadedLedgerLoading?: boolean;
+  preloadedLedgerError?: string;
   onToast?: (message: string, type?: 'success' | 'error') => void;
 };
 
@@ -228,6 +231,9 @@ export function PatientFinanceWorkspace({
   launchRequest,
   onLaunchHandled,
   onPaymentsLoaded,
+  preloadedLedger,
+  preloadedLedgerLoading,
+  preloadedLedgerError,
   onToast
 }: Props) {
   const [ledger, setLedger] = useState<any>(emptyLedger);
@@ -277,6 +283,19 @@ export function PatientFinanceWorkspace({
         : false;
 
   useEffect(() => {
+    const usesPreloadedLedger = typeof preloadedLedgerLoading === 'boolean';
+    if (usesPreloadedLedger) {
+      const next = { ...emptyLedger, ...(preloadedLedger || {}) };
+      setLedger(next);
+      setPolicy(next.policy || null);
+      setSelectedChargeId('');
+      setSelectedAppointmentIds([]);
+      setLoading(Boolean(preloadedLedgerLoading));
+      setLoadError(String(preloadedLedgerError || ''));
+      if (!preloadedLedgerLoading && !preloadedLedgerError) onPaymentsLoaded?.(next.charges || []);
+      return;
+    }
+
     let cancelled = false;
     setLedger(emptyLedger);
     setPolicy(null);
@@ -300,7 +319,7 @@ export function PatientFinanceWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [month, workspaceScopeKey]);
+  }, [month, workspaceScopeKey, preloadedLedger, preloadedLedgerLoading, preloadedLedgerError]);
 
   const appointmentRows = useMemo(() => buildPatientFinancialAppointmentRows({
     appointments: ledger.appointments,
@@ -766,7 +785,7 @@ export function PatientFinanceWorkspace({
   if (loading) {
     return (
       <div className="flex min-h-48 items-center justify-center rounded-3xl border border-slate-100 bg-white p-8 text-sm text-slate-500">
-        <Loader2 size={18} className="mr-2 animate-spin text-violet-600" /> Carregando financeiro por sessão...
+        <Loader2 size={18} className="mr-2 animate-spin text-violet-600" /> Carregando Financeiro
       </div>
     );
   }
@@ -890,14 +909,16 @@ export function PatientFinanceWorkspace({
             {visibleChargeRows.map((charge: any) => {
               const services = Array.from(new Set(charge.items.map((item: any) => String(item.service_type_snapshot || 'Sessão'))));
               const competenceLabel = formatCompetenceMonth(charge.competenceMonth);
-              const origin = charge.items.length
-                ? `${charge.items.length} sessão${charge.items.length === 1 ? '' : 's'}${competenceLabel ? ` · ${competenceLabel}` : ''}`
-                : charge.competenceMonth
-                  ? `Competência ${competenceLabel || formatDisplayDate(charge.competenceMonth)}`
-                  : 'Lançamento legado';
+              const origin = charge.isMonthlySession
+                ? `${charge.billingModelLabel || 'Mensal por sessões'}${competenceLabel ? ` · ${competenceLabel}` : ''} · ${charge.sessionCount} sessão${charge.sessionCount === 1 ? '' : 's'}`
+                : charge.items.length
+                  ? `${charge.items.length} sessão${charge.items.length === 1 ? '' : 's'}${competenceLabel ? ` · ${competenceLabel}` : ''}`
+                  : charge.competenceMonth
+                    ? `Competência ${competenceLabel || formatDisplayDate(charge.competenceMonth)}`
+                    : 'Lançamento legado';
               return <div key={charge.id} className="grid gap-3 px-4 py-4 text-sm xl:grid-cols-[minmax(180px,1.2fr)_minmax(180px,1.3fr)_minmax(180px,1.2fr)_115px_120px_120px_80px] xl:items-center">
-                <div><p className="font-medium text-slate-900">{charge.patientName}</p><p className="mt-1 text-xs text-slate-500">{origin}</p></div>
-                <div><p className="text-slate-700">{services.join(', ') || 'Sem sessão vinculada'}</p><p className="mt-1 text-xs text-slate-400">{charge.items.length ? charge.items.map((item: any) => formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })).join(' · ') : 'Histórico preservado sem associação inferida'}</p></div>
+                <div><p className="font-medium text-slate-900">{charge.patientName}</p><p className="mt-1 text-xs font-medium text-slate-600">{charge.originLabel}</p><p className="mt-1 text-xs text-slate-400">{origin}</p></div>
+                <div><p className="text-slate-700">{services.join(', ') || charge.serviceName || 'Sem sessão vinculada'}</p><p className="mt-1 text-xs text-slate-400">{charge.items.length ? charge.items.map((item: any) => formatDisplayDateTime(item.completion_at || item.appointment_scheduled_at, { separator: ', ' })).join(' · ') : 'Histórico preservado sem associação inferida'}</p></div>
                 <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-slate-500"><span>Original</span><span className="text-right text-slate-800">{currency(charge.original)}</span><span>Desconto</span><span className="text-right">{currency(charge.discount)}</span><span>Pago</span><span className="text-right text-emerald-700">{currency(charge.paid)}</span></div>
                 <p className="text-slate-600">{charge.dueDateLabel}</p>
                 <div className="flex flex-col items-start gap-1">
@@ -960,8 +981,15 @@ export function PatientFinanceWorkspace({
         const charge: any = chargesById.get(expandedChargeId);
         return <div className="rounded-3xl border border-violet-100 bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-4"><div><h4 className="font-semibold text-slate-900">Composição e histórico</h4><p className="mt-1 text-sm text-slate-500">{charge.patientName} · vencimento {charge.dueDateLabel}</p>{charge.monthlyAdjustmentRequired && <p className="mt-2 inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-700"><AlertCircle size={13} /> Há uma correção de sessão após movimentação financeira. Revise a trilha antes de ajustar valores.</p>}</div><button onClick={() => setExpandedChargeId('')} className="rounded-lg p-2 text-slate-400 hover:bg-slate-50"><X size={18} /></button></div>
-          <div className="mt-4 grid gap-3 sm:grid-cols-5">
-            {[['Original', charge.original], ['Adicional', charge.additional], ['Desconto', charge.discount], ['Pago', charge.paid], ['Saldo', charge.balance]].map(([label, value]) => <div key={String(label)} className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900">{currency(value)}</p></div>)}
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Origem</p><p className="mt-1 font-semibold text-slate-900">{charge.originLabel}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Competência</p><p className="mt-1 font-semibold text-slate-900">{formatCompetenceMonth(charge.competenceMonth) || 'Não informada'}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Especialidade / serviço</p><p className="mt-1 font-semibold text-slate-900">{charge.specialty || charge.serviceName || 'Não informado'}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Modelo</p><p className="mt-1 font-semibold text-slate-900">{charge.billingModelLabel || (charge.items.length ? 'Por atendimento' : 'Lançamento financeiro')}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Sessões</p><p className="mt-1 font-semibold text-slate-900">{charge.sessionCount || 0}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Total</p><p className="mt-1 font-semibold text-slate-900">{currency(charge.total)}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Vencimento</p><p className="mt-1 font-semibold text-slate-900">{charge.dueDateLabel}</p></div>
+            <div className="rounded-xl bg-slate-50 p-3"><p className="text-xs text-slate-500">Método / status</p><p className="mt-1 font-semibold text-slate-900">{methodLabel(charge.method)} · {charge.statusLabel}</p></div>
           </div>
           {charge.snapshot && <div className="mt-4 grid gap-3 rounded-2xl border border-violet-100 bg-violet-50/50 p-4 text-xs text-slate-600 sm:grid-cols-2 lg:grid-cols-4">
             <div><p className="text-slate-400">Origem congelada</p><p className="mt-1 font-medium text-slate-800">{charge.priceSourceLabel || charge.priceSource}</p></div>
@@ -969,7 +997,7 @@ export function PatientFinanceWorkspace({
             <div><p className="text-slate-400">Cancelamento gratuito até</p><p className="mt-1 font-medium text-slate-800">{formatDisplayDateTime(charge.snapshot.cancellation_free_until, { separator: ', ' })}</p></div>
             <div><p className="text-slate-400">Snapshot</p><p className="mt-1 font-medium text-slate-800">versão {charge.snapshot.snapshot_version} · {charge.snapshot.snapshot_event}</p></div>
           </div>}
-          <div className="mt-4 grid gap-4 lg:grid-cols-2"><div><p className="text-xs font-medium text-slate-500">Sessões incluídas</p><div className="mt-2 space-y-2">{charge.items.map((item: any) => <div key={item.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{item.service_type_snapshot || 'Sessão'}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(item.appointment_scheduled_at, { separator: ', ' })} · {currency(item.subtotal)}</p></div>)}{!charge.items.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Cobrança por competência, sem sessão específica vinculada.</p>}</div></div><div><p className="text-xs font-medium text-slate-500">Trilha financeira</p><div className="mt-2 space-y-2">{charge.events.map((event: any) => <div key={event.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{auditEventLabel(event.event_type)}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(event.created_at, { separator: ', ' })} · {auditActorLabel(event.created_by)}{event.notes ? ` · ${event.notes}` : ''}</p></div>)}{!charge.events.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Nenhum evento auditável registrado.</p>}</div></div></div>
+          <div className="mt-4 grid gap-4 lg:grid-cols-2"><div><p className="text-xs font-medium text-slate-500">Sessões incluídas</p><div className="mt-2 space-y-2">{charge.items.map((item: any) => <div key={item.id} className="rounded-xl border border-slate-100 p-3 text-sm"><div className="flex items-start justify-between gap-3"><div><p className="font-medium text-slate-800">{item.specialty_snapshot || item.service_type_snapshot || 'Sessão'}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(item.completion_at || item.appointment_scheduled_at, { separator: ', ' })} · {item.professional_name_snapshot || 'Profissional não informado'}</p></div><p className="font-semibold text-slate-900">{currency(item.subtotal)}</p></div><div className="mt-2 grid gap-1 text-xs text-slate-500 sm:grid-cols-2"><span>Serviço: {item.service_type_snapshot || 'Não informado'}</span><span>Pagador: {item.payer_name_snapshot ? `Convênio · ${item.payer_name_snapshot}` : 'Particular'}</span><span>Unitário: {currency(item.unit_amount)}</span><span>Plano: v{item.patient_financial_plan_version || '-'} · {String(item.patient_financial_plan_logical_id || item.patient_financial_plan_id || '').slice(0, 8) || 'sem referência'}</span></div></div>)}{!charge.items.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Cobrança por competência, sem sessão específica vinculada.</p>}</div></div><div><p className="text-xs font-medium text-slate-500">Trilha financeira</p><div className="mt-2 space-y-2">{charge.events.map((event: any) => <div key={event.id} className="rounded-xl border border-slate-100 p-3 text-sm"><p className="font-medium text-slate-800">{auditEventLabel(event.event_type)}</p><p className="mt-1 text-xs text-slate-500">{formatDisplayDateTime(event.created_at, { separator: ', ' })} · {auditActorLabel(event.created_by)}{event.notes ? ` · ${event.notes}` : ''}</p></div>)}{!charge.events.length && <p className="rounded-xl border border-slate-100 p-3 text-sm text-slate-500">Nenhum evento auditável registrado.</p>}</div></div></div>
         </div>;
       })()}
 
