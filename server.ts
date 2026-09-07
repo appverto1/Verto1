@@ -88652,7 +88652,7 @@ async function startServer() {
   const fetchConventionalSessionNote = async (appointmentId: string, patientId: string) => {
     const { data, error } = await supabase
       .from('notes')
-      .select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at')
+      .select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
       .eq('appointment_id', appointmentId)
       .eq('patient_id', patientId)
       .eq('source', 'conventional_session')
@@ -88735,6 +88735,13 @@ async function startServer() {
     }
     if (/CONVENTIONAL_SESSION_NOTE_TOO_LARGE/i.test(message)) {
       return res.status(413).json({ success: false, code: 'CONVENTIONAL_SESSION_NOTE_TOO_LARGE', error: 'A evolução da sessão excede o limite permitido.' });
+    }
+    if (/CONVENTIONAL_SESSION_THERAPIST_REQUIRED/i.test(message)) {
+      return res.status(409).json({
+        success: false,
+        code: 'CONVENTIONAL_SESSION_THERAPIST_REQUIRED',
+        error: 'O atendimento precisa ter um profissional responsável válido antes de registrar a evolução.'
+      });
     }
     if (/CONVENTIONAL_SESSION_END_TIME_INVALID|CONVENTIONAL_SESSION_END_BEFORE_START|CONVENTIONAL_SESSION_REQUIRED|CONVENTIONAL_SESSION_IDEMPOTENCY_REQUIRED/i.test(message)) {
       return res.status(422).json({ success: false, code: 'CONVENTIONAL_SESSION_VALIDATION_FAILED', error: 'Revise os dados da sessão antes de continuar.' });
@@ -88849,6 +88856,14 @@ async function startServer() {
         if (content.length > 12000) return res.status(413).json({ success: false, code: 'CONVENTIONAL_SESSION_NOTE_TOO_LARGE', error: 'A evolução excede 12.000 caracteres.' });
         const appointment = await fetchConventionalSessionAppointment({ appointmentId, patientId, clinicId, user: req.session.user });
         if (!appointment?.id) return res.status(404).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_FOUND', error: 'Agendamento não encontrado neste prontuário.' });
+        const appointmentTherapistId = sanitizeString(appointment.therapist_id, 120);
+        if (!isUuid(appointmentTherapistId)) {
+          return res.status(409).json({
+            success: false,
+            code: 'CONVENTIONAL_SESSION_THERAPIST_REQUIRED',
+            error: 'O atendimento precisa ter um profissional responsável válido antes de registrar a evolução.'
+          });
+        }
         if (!appointment.actual_start_at || !['in_progress', 'active'].includes(String(appointment.status || '').toLowerCase()) || appointment.actual_end_at) {
           return res.status(409).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_IN_PROGRESS', error: 'A sessão precisa estar em andamento para salvar esta evolução.' });
         }
@@ -88861,7 +88876,7 @@ async function startServer() {
             .eq('id', existing.id)
             .eq('patient_id', patientId)
             .eq('appointment_id', appointmentId)
-            .select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at')
+            .select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
             .maybeSingle();
           if (error) throw error;
           note = data;
@@ -88882,17 +88897,18 @@ async function startServer() {
               is_portable: false,
               shared_with_patient: false,
               shared_with_professionals: true,
+              therapist_id: appointmentTherapistId,
               original_author_id: actorId,
               created_by: actorId,
               is_active: true
             })
-            .select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at')
+            .select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at')
             .single();
           if (error) {
             if (String(error?.code || '') === '23505') {
               const canonical = await fetchConventionalSessionNote(appointmentId, patientId);
               if (canonical?.id) {
-                const retry = await supabase.from('notes').update({ content }).eq('id', canonical.id).select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at').maybeSingle();
+                const retry = await supabase.from('notes').update({ content }).eq('id', canonical.id).select('id,appointment_id,patient_id,therapist_id,content,subject,visibility,source,created_by,original_author_id,created_at,is_active,deleted_at').maybeSingle();
                 if (retry.error) throw retry.error;
                 note = retry.data;
               } else throw error;
