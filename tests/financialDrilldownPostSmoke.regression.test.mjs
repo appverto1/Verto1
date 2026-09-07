@@ -98,37 +98,89 @@ const normalizeOrigin = (value) => {
   return String(value || '').trim();
 };
 const charges = [
-  { id: 'private-pending', status: 'pending', originLabel: 'Particular', specialty: 'Fonoaudiologia', items: [] },
-  { id: 'insurance-pending', status: 'pending', originLabel: 'Convênio · Unimed', specialty: 'Fonoaudiologia', items: [] },
-  { id: 'private-paid', status: 'paid', originLabel: 'Particular', specialty: 'Psicologia', items: [] },
-  { id: 'private-overdue', status: 'overdue', originLabel: 'Particular', specialty: 'Fonoaudiologia', items: [] },
-  { id: 'insurance-canceled', status: 'canceled', originLabel: 'Convênio · Unimed', specialty: 'Fonoaudiologia', items: [] },
+  { id: 'private-pending', status: 'pending', originLabel: 'Particular', specialty: 'Fonoaudiologia', amount: 200, items: [] },
+  { id: 'insurance-pending', status: 'pending', originLabel: 'Convênio · Unimed', specialty: 'Fonoaudiologia', amount: 100, items: [] },
+  { id: 'private-paid', status: 'paid', originLabel: 'Particular', specialty: 'Psicologia', amount: 80, items: [] },
+  { id: 'private-overdue', status: 'overdue', originLabel: 'Particular', specialty: 'Fonoaudiologia', amount: 150, items: [] },
+  { id: 'insurance-canceled', status: 'canceled', originLabel: 'Convênio · Unimed', specialty: 'Fonoaudiologia', amount: 999, items: [] },
 ];
 const idsFor = (drilldown) => charges
   .filter((charge) => matchesFinancialDrilldownCharge(charge, drilldown, normalizeText, normalizeOrigin))
   .map((charge) => charge.id);
 
-assert.deepEqual(idsFor({ kind: 'receivables-status', filter: 'A receber' }), ['private-pending', 'insurance-pending', 'private-overdue']);
+assert.deepEqual(idsFor({ kind: 'receivables-status', filter: 'A receber' }), ['private-pending', 'insurance-pending']);
+assert.deepEqual(idsFor({ kind: 'receivables-status', filter: 'Em atraso' }), ['private-overdue']);
 assert.deepEqual(idsFor({ kind: 'receivables-status', filter: 'Recebido' }), ['private-paid']);
 assert.deepEqual(idsFor({ kind: 'revenue-by-origin', filter: 'Particular', series: 'Receita' }), ['private-pending', 'private-paid', 'private-overdue']);
 assert.deepEqual(idsFor({ kind: 'revenue-by-origin', filter: 'Convênios', series: 'Receita' }), ['insurance-pending']);
 assert.deepEqual(idsFor({ kind: 'revenue-by-specialty', filter: 'Fonoaudiologia', series: 'Receita realizada' }), []);
 assert.deepEqual(idsFor({ kind: 'revenue-by-specialty', filter: 'Psicologia', series: 'Receita realizada' }), ['private-paid']);
 
-// Regression C: origin composition uses both received and open material receivables, never cancellations.
-assert.match(dashboard, /\[\.\.\.paidPayments, \.\.\.pendingPayments\]\.forEach\(\(payment: any\) => \{/);
-assert.match(dashboard, /const originLabel = chargeReadModel\?\.billingOrigin === 'INSURANCE' \? 'Convênios' : 'Particular';/);
-assert.match(dashboard, /addToMap\(revenueOriginMap, originLabel, parseCurrencyValue\(payment\?\.amount\)/);
+// Regression C: origin composition and status slices must use one deterministic payment classification.
+assert.match(dashboard, /const classifyFinancialDashboardPayments = /);
+assert.match(dashboard, /status: resolveStatus\(payment\)/);
+assert.match(dashboard, /\["paid", "pending", "overdue"\]\.includes\(entry\.status\)/);
+assert.match(dashboard, /materialRevenuePayments\.forEach\(\(payment: any\) => \{/);
+assert.match(dashboard, /if \(rawStatus === "overdue"\) return "overdue";/);
+assert.doesNotMatch(dashboard, /const overduePayments = pendingPayments\.filter/);
+assert.match(dashboard, /if \(filter === "A receber"\) return status === "pending";/);
+assert.match(dashboard, /if \(filter === "Em atraso"\) return status === "overdue";/);
+
+// Execute the actual classifier from CoordinatorDashboard, including identity de-duplication.
+const classifierStart = dashboard.indexOf('const classifyFinancialDashboardPayments = ');
+const classifierEndMarker = '\n};\n\nconst matchesFinancialDrilldownCharge';
+const classifierEnd = dashboard.indexOf(classifierEndMarker, classifierStart);
+assert.ok(classifierStart >= 0 && classifierEnd > classifierStart, 'financial payment classifier must be present');
+const executableClassifier = dashboard
+  .slice(classifierStart, classifierEnd + 3)
+  .replace('sourcePayments: any[]', 'sourcePayments')
+  .replace('resolveStatus: (payment: any) => string', 'resolveStatus')
+  .replace('new Map<string, any>()', 'new Map()')
+  .replaceAll('(payment: any, index: number)', '(payment, index)')
+  .replaceAll('(payment: any)', '(payment)')
+  .replaceAll('(entry: any)', '(entry)')
+  .replace('(status: string)', '(status)');
+const classifyFinancialDashboardPayments = new Function(
+  `${executableClassifier}\nreturn classifyFinancialDashboardPayments;`,
+)();
+
+const rawPayments = [
+  { id: 'private-pending', status: 'pending', billingOrigin: 'PRIVATE', amount: 200 },
+  { id: 'insurance-pending', status: 'pending', billingOrigin: 'INSURANCE', amount: 100 },
+  { id: 'private-paid', status: 'paid', billingOrigin: 'PRIVATE', amount: 80 },
+  { id: 'private-overdue', status: 'overdue', financial_status: 'overdue', billingOrigin: 'PRIVATE', amount: 150 },
+  { id: 'insurance-canceled', status: 'canceled', billingOrigin: 'INSURANCE', amount: 999 },
+  // Same payment identity must never be counted twice even if the source array repeats it.
+  { id: 'private-overdue', status: 'pending', billingOrigin: 'PRIVATE', amount: 150 },
+];
+const resolveRawStatus = (payment) => String(payment.financial_status || payment.status || 'pending').toLowerCase();
+const buckets = classifyFinancialDashboardPayments(rawPayments, resolveRawStatus);
+assert.deepEqual(buckets.paidPayments.map((payment) => payment.id), ['private-paid']);
+assert.deepEqual(buckets.pendingPayments.map((payment) => payment.id), ['private-pending', 'insurance-pending']);
+assert.deepEqual(buckets.overduePayments.map((payment) => payment.id), ['private-overdue']);
+assert.deepEqual(buckets.cancelledPayments.map((payment) => payment.id), ['insurance-canceled']);
+assert.equal(buckets.materialRevenuePayments.length, 4, 'paid + pending + overdue are the only active material origin rows');
 
 const originTotals = new Map();
-for (const payment of [
-  { status: 'pending', billingOrigin: 'PRIVATE', amount: 200 },
-  { status: 'pending', billingOrigin: 'INSURANCE', amount: 100 },
-]) {
+for (const payment of buckets.materialRevenuePayments) {
   const label = payment.billingOrigin === 'INSURANCE' ? 'Convênios' : 'Particular';
   originTotals.set(label, (originTotals.get(label) || 0) + payment.amount);
 }
-assert.equal(originTotals.get('Particular'), 200);
+assert.equal(originTotals.get('Particular'), 430, 'Particular must include pending R$200 + paid R$80 + overdue R$150');
 assert.equal(originTotals.get('Convênios'), 100);
+assert.equal(
+  charges
+    .filter((charge) => matchesFinancialDrilldownCharge(charge, { kind: 'revenue-by-origin', filter: 'Particular', series: 'Receita' }, normalizeText, normalizeOrigin))
+    .reduce((sum, charge) => sum + charge.amount, 0),
+  430,
+  'click Particular must expose the same active material payments, including PRIVATE overdue R$150',
+);
+assert.equal(
+  charges
+    .filter((charge) => matchesFinancialDrilldownCharge(charge, { kind: 'receivables-status', filter: 'Em atraso' }, normalizeText, normalizeOrigin))
+    .reduce((sum, charge) => sum + charge.amount, 0),
+  150,
+  'Em atraso must recognize the same PRIVATE overdue R$150 payment',
+);
 
 console.log('financialDrilldownPostSmoke.regression.test.mjs: OK');
