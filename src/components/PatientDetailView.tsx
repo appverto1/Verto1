@@ -425,6 +425,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const abaV2Enabled = isAbaV2Enabled();
   const abaV3UiEnabled = isAbaV3UiEnabled();
   const hasAbaSessionSurface = hasAbaClinicalProfile && (abaV2Enabled || abaV3UiEnabled);
+  const hasConventionalSessionSurface = !hasAbaClinicalProfile && (
+    hasCapability('session.start') ||
+    hasCapability('session.finish') ||
+    hasCapability('session.data.write') ||
+    hasCapability('session.history.view')
+  );
+  const hasAnySessionSurface = hasAbaSessionSurface || hasConventionalSessionSurface;
   const useCanonicalMasteryGrowth = abaV2Enabled && hasAbaClinicalProfile;
   const chartFiltersStorageKey = `verto.patient-chart-filters:${String(patient?.id || 'unknown')}:${isKidsProfile ? 'kids' : 'adult'}`;
   const readPersistedChartFilters = () => {
@@ -537,6 +544,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const peiMaintenancePanelPatientIdRef = React.useRef(String(patient?.id || ''));
   const peiConfirmationTimerRef = React.useRef<number | null>(null);
   const [isSessionModeOpen, setIsSessionModeOpen] = useState(false);
+  const [conventionalSession, setConventionalSession] = useState<any>(null);
+  const [conventionalSessionLoading, setConventionalSessionLoading] = useState(false);
+  const [conventionalSessionError, setConventionalSessionError] = useState('');
+  const [conventionalSessionNote, setConventionalSessionNote] = useState('');
+  const [conventionalSessionNoteSaving, setConventionalSessionNoteSaving] = useState(false);
+  const [conventionalSessionCompleting, setConventionalSessionCompleting] = useState(false);
+  const [conventionalSessionNowMs, setConventionalSessionNowMs] = useState(() => Date.now());
+  const conventionalCompletionAttemptRef = useRef<{ key: string; endedAt: string } | null>(null);
   const [localSessionReportId, setLocalSessionReportId] = useState('');
   const [completedSessionReports, setCompletedSessionReports] = useState<any[]>([]);
   const [completedSessionReportsLoading, setCompletedSessionReportsLoading] = useState(false);
@@ -748,12 +763,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           );
 
     const filteredByProfile = tabsFromProps.filter((tab: string) => {
-      if (tab === 'session' || tab === 'aba-charts') return hasAbaSessionSurface;
+      if (tab === 'session') return hasAnySessionSurface;
+      if (tab === 'aba-charts') return hasAbaSessionSurface;
       return true;
     });
 
     return new Set(filteredByProfile as PatientDetailTab[]);
-  }, [allowedTabs, hasAbaSessionSurface]);
+  }, [allowedTabs, hasAbaSessionSurface, hasAnySessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
   const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
@@ -762,12 +778,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     if (initialTab && canAccessTab(initialTab)) {
-      setActiveTab(initialTab === 'session' ? getSessionFallbackTab() : initialTab);
+      setActiveTab(initialTab === 'session' && hasAbaSessionSurface ? getSessionFallbackTab() : initialTab);
       return;
     }
     const firstAllowed = allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
     setActiveTab(firstAllowed);
-  }, [initialTab, patient?.id, allowedTabsSet]);
+  }, [initialTab, patient?.id, allowedTabsSet, hasAbaSessionSurface]);
 
   useEffect(() => {
     if (openAnamnesisOnLoad) {
@@ -2760,6 +2776,147 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     scheduledSessionForPatient,
     startScheduledSessionKey,
   ]);
+
+  useEffect(() => {
+    if (!hasConventionalSessionSurface || !patient?.id) return;
+    const startKey = String(startScheduledSessionKey || '').trim();
+    if (startKey && scheduledSessionForPatient) return;
+    let cancelled = false;
+    setConventionalSessionLoading(true);
+    setConventionalSessionError('');
+    void dataService.getActiveConventionalSession(String(patient.id))
+      .then((result: any) => {
+        if (cancelled) return;
+        if (!result?.success) {
+          setConventionalSessionError(result?.error || 'Não foi possível restaurar a sessão em andamento.');
+          return;
+        }
+        const active = result?.data || null;
+        setConventionalSession(active);
+        setConventionalSessionNote(String(active?.note || ''));
+      })
+      .catch((error: any) => {
+        if (!cancelled) setConventionalSessionError(error?.message || 'Não foi possível restaurar a sessão em andamento.');
+      })
+      .finally(() => {
+        if (!cancelled) setConventionalSessionLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [hasConventionalSessionSurface, patient?.id, scheduledSessionForPatient, startScheduledSessionKey]);
+
+  useEffect(() => {
+    if (!hasConventionalSessionSurface || !conventionalSession?.startedAt || conventionalSession?.endedAt) return;
+    setConventionalSessionNowMs(Date.now());
+    const timer = window.setInterval(() => setConventionalSessionNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [hasConventionalSessionSurface, conventionalSession?.startedAt, conventionalSession?.endedAt]);
+
+  useEffect(() => {
+    const startKey = String(startScheduledSessionKey || '').trim();
+    if (!startKey || consumedScheduledSessionStartKeyRef.current === startKey) return;
+    if (!hasConventionalSessionSurface || !scheduledSessionForPatient || !patient?.id) return;
+
+    const appointmentId = String(
+      scheduledSessionForPatient?.appointment_id ||
+      scheduledSessionForPatient?.appointmentId ||
+      scheduledSessionForPatient?.id ||
+      ''
+    ).trim();
+    if (!isUuidLike(appointmentId)) {
+      setConventionalSessionError('Este atendimento ainda não possui um agendamento persistido válido.');
+      return;
+    }
+
+    consumedScheduledSessionStartKeyRef.current = startKey;
+    setActiveTab('session');
+    setConventionalSessionLoading(true);
+    setConventionalSessionError('');
+    conventionalCompletionAttemptRef.current = null;
+    void dataService.startConventionalSession(String(patient.id), appointmentId, {
+      idempotencyKey: `conventional-session-start:${appointmentId}`,
+    }).then((result: any) => {
+      if (!result?.success) {
+        const code = String(result?.code || '').trim();
+        setConventionalSessionError(
+          code === 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED'
+            ? 'Este atendimento está marcado como falta. Reabra a falta antes de iniciar a sessão.'
+            : result?.error || 'Não foi possível iniciar esta sessão.'
+        );
+        return;
+      }
+      const session = result?.data || null;
+      setConventionalSession(session);
+      setConventionalSessionNote(String(session?.note || ''));
+    }).catch((error: any) => {
+      setConventionalSessionError(error?.message || 'Não foi possível iniciar esta sessão.');
+    }).finally(() => setConventionalSessionLoading(false));
+  }, [hasConventionalSessionSurface, patient?.id, scheduledSessionForPatient, startScheduledSessionKey]);
+
+  const saveConventionalSessionEvolution = async () => {
+    const appointmentId = String(conventionalSession?.appointmentId || '').trim();
+    if (!hasConventionalSessionSurface || !patient?.id || !isUuidLike(appointmentId) || conventionalSessionNoteSaving) return;
+    setConventionalSessionNoteSaving(true);
+    setConventionalSessionError('');
+    try {
+      const result = await dataService.saveConventionalSessionNote(String(patient.id), appointmentId, conventionalSessionNote);
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível salvar a evolução.');
+      setConventionalSession((current: any) => ({
+        ...(current || {}),
+        noteId: result?.data?.id || current?.noteId || null,
+        note: String(result?.data?.content ?? conventionalSessionNote),
+      }));
+    } catch (error: any) {
+      setConventionalSessionError(error?.message || 'Não foi possível salvar a evolução.');
+    } finally {
+      setConventionalSessionNoteSaving(false);
+    }
+  };
+
+  const finishConventionalSession = async () => {
+    const appointmentId = String(conventionalSession?.appointmentId || '').trim();
+    if (!hasConventionalSessionSurface || !patient?.id || !isUuidLike(appointmentId) || conventionalSessionCompleting) return;
+    const attempt = conventionalCompletionAttemptRef.current || {
+      key: `conventional-session-complete:${appointmentId}:${Date.now()}`,
+      endedAt: new Date().toISOString(),
+    };
+    conventionalCompletionAttemptRef.current = attempt;
+    setConventionalSessionCompleting(true);
+    setConventionalSessionError('');
+    try {
+      const result = await dataService.completeConventionalSession(String(patient.id), appointmentId, {
+        endedAt: attempt.endedAt,
+        note: conventionalSessionNote,
+        idempotencyKey: attempt.key,
+      });
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível finalizar a sessão.');
+      const completed = result?.data || {};
+      setConventionalSession((current: any) => ({
+        ...(current || {}),
+        ...completed,
+        status: 'COMPLETED',
+        note: conventionalSessionNote,
+      }));
+      conventionalCompletionAttemptRef.current = null;
+      if (typeof onRefreshPatientHistory === 'function') {
+        void requestPatientHistoryPage('');
+      }
+    } catch (error: any) {
+      setConventionalSessionError(error?.message || 'Não foi possível finalizar a sessão. A sessão continua em andamento.');
+    } finally {
+      setConventionalSessionCompleting(false);
+    }
+  };
+
+  const formatConventionalSessionElapsed = () => {
+    const startedAt = conventionalSession?.startedAt ? new Date(conventionalSession.startedAt).getTime() : NaN;
+    const endedAt = conventionalSession?.endedAt ? new Date(conventionalSession.endedAt).getTime() : conventionalSessionNowMs;
+    if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) return '00:00:00';
+    const totalSeconds = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':');
+  };
 
   const handleConfirmSessionEnd = (options?: { alreadyPersisted?: boolean; summary?: any }) => {
     if (!options?.alreadyPersisted) return;
@@ -9604,6 +9761,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           therapistId={resolvedClinicContext?.userId || clinicContext?.userId || null}
           therapistName={resolvedClinicContext?.professionalName || resolvedClinicContext?.userName || clinicContext?.professionalName || clinicContext?.userName || patient?.therapistName || patient?.therapist_name || null}
           clinicId={resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || null}
+          capabilities={capabilities}
+          userRole={userRole}
         />
       )}
       {isTutorialActive && ( 
@@ -10663,8 +10822,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {isKidsProfile ? 'Plano' : 'Plano Adulto'}
             </button>
           )}
-          {canAccessTab('session') && hasAbaSessionSurface && (
-            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => requestSessionStart('fullscreen')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
+          {canAccessTab('session') && hasAnySessionSurface && (
+            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => hasAbaSessionSurface ? requestSessionStart('fullscreen') : setActiveTab('session')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
             <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
@@ -12518,6 +12677,80 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
         ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
+        ) : activeTab === 'session' && hasConventionalSessionSurface ? (
+          <div className="space-y-5 animate-fade-in">
+            <section className={`rounded-3xl border p-5 shadow-sm sm:p-6 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Clock size={18} className="text-[#7551FF]" />
+                    <h3 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>
+                      {conventionalSession?.endedAt ? 'Sessão finalizada' : conventionalSession?.startedAt ? 'Sessão em andamento' : 'Sessão clínica'}
+                    </h3>
+                  </div>
+                  {conventionalSession?.startedAt ? (
+                    <p className={`mt-2 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      Iniciada às {new Date(conventionalSession.startedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}. O início está persistido e não depende deste navegador.
+                    </p>
+                  ) : (
+                    <p className={`mt-2 text-sm ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Inicie o atendimento pela Agenda para abrir o prontuário neste contexto de sessão.</p>
+                  )}
+                </div>
+                {conventionalSession?.startedAt && (
+                  <div className={`rounded-2xl border px-4 py-3 text-center ${isPanelDark ? 'border-violet-400/20 bg-violet-500/10' : 'border-violet-100 bg-violet-50'}`}>
+                    <p className={`text-[10px] font-medium uppercase tracking-wider ${isPanelDark ? 'text-violet-300' : 'text-violet-600'}`}>Tempo decorrido</p>
+                    <p className={`mt-1 font-mono text-xl font-semibold tabular-nums ${isPanelDark ? 'text-white' : 'text-slate-900'}`}>{formatConventionalSessionElapsed()}</p>
+                  </div>
+                )}
+              </div>
+
+              {conventionalSessionLoading && (
+                <div className={`mt-5 rounded-2xl border px-4 py-4 text-sm ${isPanelDark ? 'border-slate-700 bg-slate-900/50 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>Carregando estado persistido da sessão...</div>
+              )}
+              {conventionalSessionError && (
+                <div role="alert" className={`mt-5 rounded-2xl border px-4 py-3 text-sm font-medium ${isPanelDark ? 'border-red-400/30 bg-red-500/5 text-red-200' : 'border-red-200 bg-red-50 text-red-700'}`}>{conventionalSessionError}</div>
+              )}
+
+              {conventionalSession?.startedAt && !conventionalSession?.endedAt && (
+                <div className="mt-6 space-y-4">
+                  <label className={`block text-sm font-semibold ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>
+                    Evolução da sessão
+                    <textarea
+                      value={conventionalSessionNote}
+                      onChange={(event) => setConventionalSessionNote(event.target.value.slice(0, 12000))}
+                      maxLength={12000}
+                      rows={7}
+                      placeholder="Registre evolução, intervenções, resposta do paciente e orientações relevantes."
+                      className={`mt-2 w-full resize-y rounded-2xl border px-4 py-3 text-sm font-normal outline-none focus:border-[#7551FF] ${isPanelDark ? 'border-slate-700 bg-slate-900/60 text-slate-100 placeholder:text-slate-500' : 'border-slate-200 bg-slate-50 text-slate-800 placeholder:text-slate-400'}`}
+                    />
+                  </label>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+                    {hasCapability('session.data.write') && (
+                      <button type="button" disabled={conventionalSessionNoteSaving || conventionalSessionCompleting} onClick={() => void saveConventionalSessionEvolution()} className={`min-h-[44px] rounded-2xl border px-4 text-sm font-semibold disabled:opacity-50 ${isPanelDark ? 'border-slate-600 bg-slate-800 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}>
+                        {conventionalSessionNoteSaving ? 'Salvando...' : 'Salvar evolução'}
+                      </button>
+                    )}
+                    {hasCapability('session.finish') && (
+                      <button type="button" disabled={conventionalSessionCompleting || conventionalSessionNoteSaving} onClick={() => void finishConventionalSession()} className="min-h-[44px] rounded-2xl bg-[#7551FF] px-5 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
+                        {conventionalSessionCompleting ? 'Finalizando...' : 'Finalizar sessão'}
+                      </button>
+                    )}
+                  </div>
+                  <p className={`text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>O cronômetro é apenas visual. Início, término e duração são calculados a partir dos timestamps persistidos no atendimento.</p>
+                </div>
+              )}
+
+              {conventionalSession?.endedAt && (
+                <div className={`mt-6 rounded-2xl border px-4 py-4 ${isPanelDark ? 'border-emerald-400/20 bg-emerald-500/5' : 'border-emerald-100 bg-emerald-50'}`}>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 size={18} className="text-emerald-500" />
+                    <p className={`text-sm font-semibold ${isPanelDark ? 'text-emerald-200' : 'text-emerald-800'}`}>Sessão concluída e vinculada ao agendamento.</p>
+                  </div>
+                  <p className={`mt-2 text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-600'}`}>Finalizada às {new Date(conventionalSession.endedAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} · duração {formatConventionalSessionElapsed()}.</p>
+                </div>
+              )}
+            </section>
+          </div>
         ) : activeTab === 'school' ? (
           <PatientSchoolInformation patientId={String(patient.id)} canManage={canManageSchool} isPanelDark={isPanelDark} />
         ) : (

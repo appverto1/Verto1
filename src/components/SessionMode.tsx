@@ -1067,11 +1067,20 @@ export const SessionMode = ({
   therapistId,
   therapistName,
   clinicId,
+  capabilities,
+  userRole,
   reviewSessionId = '',
   openCompletedReport = false
 }: any) => {
   const abaV3UiEnabled = isAbaV3UiEnabled();
   if (!isAbaV2Enabled() && !abaV3UiEnabled) return null;
+  const hasCapability = (capability: string) => {
+    if (capabilities instanceof Set) return capabilities.has(capability);
+    if (Array.isArray(capabilities)) return capabilities.includes(capability);
+    if (capabilities && typeof capabilities.has === 'function') return capabilities.has(capability);
+    return false;
+  };
+  const canReopenNoShow = hasCapability('calendar.no_show.record') && ['owner', 'admin', 'coordinator', 'director'].includes(String(userRole || '').trim().toLowerCase());
 
   const legacySessionGoals = useMemo(() => (
     [...(patient.pei?.filter(isTeachingOperationalGoal) || [])]
@@ -1232,7 +1241,12 @@ export const SessionMode = ({
   const [attendanceStatus, setAttendanceStatus] = useState<SessionAttendanceStatus>('ATTENDED');
   const [endingSession, setEndingSession] = useState(false);
   const [sessionEndError, setSessionEndError] = useState('');
+  const [noShowReopenPromptOpen, setNoShowReopenPromptOpen] = useState(false);
+  const [noShowReopenReason, setNoShowReopenReason] = useState('');
+  const [noShowReopenError, setNoShowReopenError] = useState('');
+  const [reopeningNoShow, setReopeningNoShow] = useState(false);
   const completionIdempotencyKeyRef = useRef('');
+  const noShowReopenIdempotencyKeyRef = useRef('');
   const [sessionCompleted, setSessionCompleted] = useState(Boolean(isCompletedSessionReview));
   const [postClosureSummary, setPostClosureSummary] = useState<SessionSummary | null>(null);
   const [showPostClosureReport, setShowPostClosureReport] = useState(Boolean(isCompletedSessionReview && openCompletedReport));
@@ -5886,6 +5900,15 @@ export const SessionMode = ({
         }
       });
       if (!completionResult?.success) {
+        const completionCode = String(completionResult?.code || completionResult?.error || '').trim();
+        if (completionCode === 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED' && activeAppointmentId) {
+          noShowReopenIdempotencyKeyRef.current = noShowReopenIdempotencyKeyRef.current || createSessionCompletionKey();
+          setNoShowReopenError('');
+          setNoShowReopenPromptOpen(true);
+          setSessionEndError('A falta precisa ser reaberta antes de concluir esta sessão como comparecimento.');
+          setSessionWarning('A sessão continua em andamento e nenhum dado clínico foi descartado.');
+          return;
+        }
         throw new Error(completionResult?.message || completionResult?.error || 'Não foi possível encerrar a sessão.');
       }
 
@@ -5929,6 +5952,42 @@ export const SessionMode = ({
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
     } finally {
       setEndingSession(false);
+    }
+  };
+
+  const handleReopenNoShowAndRetryCompletion = async () => {
+    if (!activeAppointmentId || reopeningNoShow || endingSession) return;
+    const reason = noShowReopenReason.trim();
+    if (reason.length < 5) {
+      setNoShowReopenError('Informe uma justificativa com pelo menos 5 caracteres.');
+      return;
+    }
+    if (!canReopenNoShow) {
+      setNoShowReopenError('Seu perfil não possui permissão para reabrir faltas. Solicite a um coordenador ou diretor e tente concluir novamente.');
+      return;
+    }
+
+    setReopeningNoShow(true);
+    setNoShowReopenError('');
+    try {
+      const result = await dataService.reopenAppointmentNoShow(activeAppointmentId, {
+        patientId,
+        patient_id: patientId,
+        reason,
+        idempotencyKey: noShowReopenIdempotencyKeyRef.current || createSessionCompletionKey(),
+      });
+      if (!result?.success) {
+        throw new Error(result?.error || result?.message || 'Não foi possível reabrir a falta.');
+      }
+      setNoShowReopenPromptOpen(false);
+      setNoShowReopenReason('');
+      setSessionEndError('');
+      setSessionWarning('Falta reaberta com histórico preservado. Tentando concluir a sessão novamente.');
+      await confirmEndSession();
+    } catch (error: any) {
+      setNoShowReopenError(error?.message || 'Não foi possível reabrir a falta agora.');
+    } finally {
+      setReopeningNoShow(false);
     }
   };
 
@@ -11668,6 +11727,46 @@ export const SessionMode = ({
                 {endingSession && <Loader2 size={18} className="animate-spin" />}
                 {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {noShowReopenPromptOpen && (
+        <div className="fixed inset-0 z-[212] flex items-end justify-center bg-slate-950/40 px-3 pb-4 backdrop-blur-[2px] sm:items-center sm:pb-0" data-aba-no-show-reopen>
+          <div className="w-full max-w-lg rounded-[24px] border border-amber-100 bg-white p-5 shadow-2xl shadow-slate-950/20">
+            <div className="flex items-start gap-3">
+              <div className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-50 text-amber-700">
+                <RotateCcw size={18} />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-base font-semibold text-slate-900">Reabrir falta antes de concluir</h3>
+                <p className="mt-1 text-sm text-slate-600">Este agendamento foi classificado como falta. A reabertura preserva o histórico da falta e permite concluir depois como comparecimento.</p>
+              </div>
+            </div>
+            {canReopenNoShow ? (
+              <label className="mt-4 block text-xs font-semibold text-slate-600">
+                Justificativa da reabertura
+                <textarea
+                  value={noShowReopenReason}
+                  onChange={(event) => setNoShowReopenReason(event.target.value.slice(0, 1000))}
+                  maxLength={1000}
+                  disabled={reopeningNoShow}
+                  className="mt-2 min-h-[96px] w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-normal text-slate-800 outline-none focus:border-[#7a32fc]"
+                  placeholder="Ex.: presença confirmada posteriormente e atendimento realizado."
+                />
+              </label>
+            ) : (
+              <p className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">Seu perfil não pode reabrir faltas. Solicite a reabertura a um coordenador ou diretor; depois, retorne a esta sessão e conclua novamente.</p>
+            )}
+            {noShowReopenError && <p role="alert" className="mt-3 text-sm font-semibold text-red-600">{noShowReopenError}</p>}
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" disabled={reopeningNoShow} onClick={() => setNoShowReopenPromptOpen(false)} className="min-h-[44px] rounded-2xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-600 disabled:opacity-50">Manter sessão aberta</button>
+              {canReopenNoShow && (
+                <button type="button" disabled={reopeningNoShow || noShowReopenReason.trim().length < 5} onClick={() => void handleReopenNoShowAndRetryCompletion()} className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-2xl bg-[#7a32fc] px-4 text-sm font-semibold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-50">
+                  {reopeningNoShow && <Loader2 size={16} className="animate-spin" />}
+                  {reopeningNoShow ? 'Reabrindo...' : 'Reabrir falta e concluir'}
+                </button>
+              )}
             </div>
           </div>
         </div>
