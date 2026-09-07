@@ -15391,6 +15391,14 @@ async function syncAppointmentsTableFromClinicState(params: {
   appointments: any[];
   actorId: string;
   specialtySettings?: Record<string, any>;
+  onAppointmentMirrored?: (context: {
+    appointmentId: string;
+    organizationId: string;
+    clinicId: string;
+    patientId: string;
+    scheduledAt: string;
+    actorId: string;
+  }) => Promise<void> | void;
 }) {
   const clinicId = sanitizeString(params.clinicId, 120);
   const actorId = sanitizeString(params.actorId, 120);
@@ -15801,14 +15809,16 @@ async function syncAppointmentsTableFromClinicState(params: {
         appointment
       });
       try {
-        await flagPendingMaintenanceProbesForAppointment({
-          appointmentId,
-          organizationId: row.organization_id,
-          clinicId,
-          patientId,
-          scheduledAt,
-          actorId
-        });
+        if (typeof params.onAppointmentMirrored === 'function') {
+          await params.onAppointmentMirrored({
+            appointmentId,
+            organizationId: row.organization_id,
+            clinicId,
+            patientId,
+            scheduledAt,
+            actorId
+          });
+        }
       } catch (error: any) {
         console.warn('[Appointments] Sugestao de Maintenance Probe ignorada ao criar sessão.', {
           appointmentId,
@@ -34954,7 +34964,8 @@ async function startServer() {
           specialtySettings:
             data.specialty_settings && typeof data.specialty_settings === 'object'
               ? data.specialty_settings
-              : nextSpecialtySettings || {}
+              : nextSpecialtySettings || {},
+          onAppointmentMirrored: (context) => flagPendingMaintenanceProbesForAppointment(context)
         })
           .then((summary) => {
             if (summary.mirrored > 0) {
@@ -36155,7 +36166,8 @@ async function startServer() {
       clinicId,
       appointments: preparedAppointments,
       actorId,
-      specialtySettings: state.specialtySettings
+      specialtySettings: state.specialtySettings,
+      onAppointmentMirrored: (context) => flagPendingMaintenanceProbesForAppointment(context)
     });
     if (mirror.mirrored < appointmentIds.length) {
       return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência do agendamento.' });
@@ -61184,7 +61196,8 @@ async function startServer() {
       specialtySettings:
         stateResult.data?.specialty_settings && typeof stateResult.data.specialty_settings === 'object'
           ? stateResult.data.specialty_settings
-          : {}
+          : {},
+      onAppointmentMirrored: (context) => flagPendingMaintenanceProbesForAppointment(context)
     });
     return {
       legacyFound: candidates.length,
@@ -88616,6 +88629,336 @@ async function startServer() {
       return res.status(500).json({ success: false, error: 'Não foi possível reabrir a falta agora.' });
     }
   });
+
+  const CONVENTIONAL_SESSION_APPOINTMENT_SELECT = [
+    'id',
+    'organization_id',
+    'clinic_id',
+    'patient_id',
+    'therapist_id',
+    'status',
+    'attendance_status',
+    'actual_start_at',
+    'actual_end_at',
+    'actual_duration_minutes',
+    'scheduled_at',
+    'scheduled_start_at',
+    'source_payload',
+    'is_active',
+    'deleted_at',
+    'updated_at'
+  ].join(',');
+
+  const fetchConventionalSessionNote = async (appointmentId: string, patientId: string) => {
+    const { data, error } = await supabase
+      .from('notes')
+      .select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at')
+      .eq('appointment_id', appointmentId)
+      .eq('patient_id', patientId)
+      .eq('source', 'conventional_session')
+      .eq('is_active', true)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  };
+
+  const fetchConventionalSessionAppointment = async (params: {
+    appointmentId: string;
+    patientId: string;
+    clinicId: string;
+    user: any;
+  }) => {
+    const appointmentId = sanitizeString(params.appointmentId, 120);
+    const patientId = sanitizeString(params.patientId, 120);
+    const clinicId = sanitizeString(params.clinicId, 120);
+    if (!isUuid(appointmentId) || !isUuid(patientId) || !isUuid(clinicId)) return null;
+    const { data, error } = await supabase
+      .from('appointments')
+      .select(CONVENTIONAL_SESSION_APPOINTMENT_SELECT)
+      .eq('id', appointmentId)
+      .eq('patient_id', patientId)
+      .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data?.id) return null;
+    if (sanitizeString(params.user?.role, 40).toLowerCase() === 'therapist' && !appointmentBelongsToProfessional(data, sanitizeString(params.user?.id, 120))) {
+      return null;
+    }
+    return data;
+  };
+
+  const conventionalSessionResponse = async (appointment: any) => {
+    const appointmentId = sanitizeString(appointment?.id, 120);
+    const patientId = sanitizeString(appointment?.patient_id, 120);
+    const note = isUuid(appointmentId) && isUuid(patientId)
+      ? await fetchConventionalSessionNote(appointmentId, patientId)
+      : null;
+    return {
+      appointmentId,
+      patientId,
+      status: sanitizeString(appointment?.status, 80).toUpperCase(),
+      attendanceStatus: sanitizeString(appointment?.attendance_status, 80).toUpperCase() || null,
+      startedAt: appointment?.actual_start_at || null,
+      endedAt: appointment?.actual_end_at || null,
+      durationMinutes: Number.isFinite(Number(appointment?.actual_duration_minutes)) ? Number(appointment.actual_duration_minutes) : null,
+      scheduledAt: appointment?.scheduled_start_at || appointment?.scheduled_at || null,
+      noteId: note?.id || null,
+      note: note?.content || '',
+      noteCreatedAt: note?.created_at || null
+    };
+  };
+
+  const sendConventionalSessionError = (res: any, error: any, phase: 'start' | 'note' | 'complete' | 'read') => {
+    const message = String(error?.message || error?.code || '');
+    if (/CONVENTIONAL_SESSION_NO_SHOW_REOPEN_REQUIRED/i.test(message)) {
+      return res.status(409).json({
+        success: false,
+        code: 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED',
+        error: 'O atendimento foi classificado como falta. Reabra a falta antes de concluir como comparecimento.'
+      });
+    }
+    if (/CONVENTIONAL_SESSION_APPOINTMENT_NOT_FOUND/i.test(message)) {
+      return res.status(404).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_FOUND', error: 'Agendamento não encontrado neste prontuário.' });
+    }
+    if (/CONVENTIONAL_SESSION_ACCESS_DENIED|CONVENTIONAL_SESSION_ACTOR_MISMATCH/i.test(message)) {
+      return res.status(403).json({ success: false, code: 'CONVENTIONAL_SESSION_ACCESS_DENIED', error: 'Você não possui permissão para este atendimento.' });
+    }
+    if (/CONVENTIONAL_SESSION_IDEMPOTENCY_CONFLICT/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'CONVENTIONAL_SESSION_IDEMPOTENCY_CONFLICT', error: 'Esta ação já foi enviada com dados diferentes.' });
+    }
+    if (/CONVENTIONAL_SESSION_APPOINTMENT_COMPLETED|CONVENTIONAL_SESSION_APPOINTMENT_CANCELLED|CONVENTIONAL_SESSION_APPOINTMENT_STATUS_INVALID|CONVENTIONAL_SESSION_NOT_STARTED|CONVENTIONAL_SESSION_ABA_ACTIVE/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'CONVENTIONAL_SESSION_STATE_CONFLICT', error: 'O estado atual do agendamento não permite esta ação.' });
+    }
+    if (/CONVENTIONAL_SESSION_NOTE_TOO_LARGE/i.test(message)) {
+      return res.status(413).json({ success: false, code: 'CONVENTIONAL_SESSION_NOTE_TOO_LARGE', error: 'A evolução da sessão excede o limite permitido.' });
+    }
+    if (/CONVENTIONAL_SESSION_END_TIME_INVALID|CONVENTIONAL_SESSION_END_BEFORE_START|CONVENTIONAL_SESSION_REQUIRED|CONVENTIONAL_SESSION_IDEMPOTENCY_REQUIRED/i.test(message)) {
+      return res.status(422).json({ success: false, code: 'CONVENTIONAL_SESSION_VALIDATION_FAILED', error: 'Revise os dados da sessão antes de continuar.' });
+    }
+    if (/start_conventional_appointment_session_v1|complete_conventional_appointment_session_v1|appointment_id|PGRST202|42883|42703|42P01/i.test(message)) {
+      return res.status(503).json({
+        success: false,
+        code: 'CONVENTIONAL_SESSION_MIGRATION_REQUIRED',
+        error: 'A atualização do ciclo de sessões convencionais ainda precisa ser aplicada no banco.'
+      });
+    }
+    console.error(`[Conventional Sessions] ${phase} error:`, sanitizeString(message, 600));
+    return res.status(500).json({ success: false, error: 'Não foi possível atualizar esta sessão agora.' });
+  };
+
+  app.get(
+    '/api/patients/:patientId/conventional-session/active',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('session.start', 'session.finish', 'session.data.write', 'session.history.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) return res.status(400).json({ success: false, error: 'Paciente ou clínica inválidos.' });
+        const { data, error } = await supabase
+          .from('appointments')
+          .select(CONVENTIONAL_SESSION_APPOINTMENT_SELECT)
+          .eq('patient_id', patientId)
+          .or(`organization_id.eq.${clinicId},clinic_id.eq.${clinicId}`)
+          .in('status', ['in_progress', 'active', 'IN_PROGRESS'])
+          .not('actual_start_at', 'is', null)
+          .is('actual_end_at', null)
+          .eq('is_active', true)
+          .is('deleted_at', null)
+          .order('actual_start_at', { ascending: false })
+          .limit(5);
+        if (error) throw error;
+        const rows = Array.isArray(data) ? data : [];
+        const appointment = sanitizeString(req.session.user?.role, 40).toLowerCase() === 'therapist'
+          ? rows.find((row: any) => appointmentBelongsToProfessional(row, sanitizeString(req.session.user?.id, 120)))
+          : rows[0];
+        if (!appointment?.id) return res.json({ success: true, data: null });
+        return res.json({ success: true, data: await conventionalSessionResponse(appointment) });
+      } catch (error: any) {
+        return sendConventionalSessionError(res, error, 'read');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/appointments/:appointmentId/conventional-session/start',
+    portalActionLimiter,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability('session.start'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 16 * 1024, 'Início de sessão convencional')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const appointmentId = sanitizeString(req.params.appointmentId, 120);
+        const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        if (!isUuid(patientId) || !isUuid(appointmentId) || !isUuid(clinicId) || !isUuid(actorId)) {
+          return res.status(400).json({ success: false, error: 'Contexto de sessão inválido.' });
+        }
+        const appointment = await fetchConventionalSessionAppointment({ appointmentId, patientId, clinicId, user: req.session.user });
+        if (!appointment?.id) return res.status(404).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_FOUND', error: 'Agendamento não encontrado neste prontuário.' });
+        const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.get?.('Idempotency-Key') || req.headers?.['idempotency-key'], 180)
+          || `conventional-session-start:${appointmentId}`;
+        const payloadHash = stableHashPayload({ clinicId, patientId, appointmentId, action: 'start' });
+        const result = await supabase.rpc('start_conventional_appointment_session_v1', {
+          p_actor_id: actorId,
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_appointment_id: appointmentId,
+          p_idempotency_key: idempotencyKey,
+          p_payload_hash: payloadHash
+        });
+        if (result.error) throw result.error;
+        let enrichedData = result.data?.data || null;
+        try {
+          const refreshed = await fetchConventionalSessionAppointment({ appointmentId, patientId, clinicId, user: req.session.user });
+          if (refreshed) enrichedData = await conventionalSessionResponse(refreshed);
+        } catch (readError: any) {
+          console.warn('[Conventional Sessions] Início persistido; leitura complementar indisponível.', sanitizeString(readError?.message || String(readError), 240));
+        }
+        return res.json({ success: true, ...(result.data || {}), data: enrichedData });
+      } catch (error: any) {
+        return sendConventionalSessionError(res, error, 'start');
+      }
+    }
+  );
+
+  app.put(
+    '/api/patients/:patientId/appointments/:appointmentId/conventional-session/note',
+    portalActionLimiter,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability('session.data.write'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 24 * 1024, 'Evolução de sessão convencional')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const appointmentId = sanitizeString(req.params.appointmentId, 120);
+        const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const content = String(req.body?.note ?? req.body?.content ?? '').slice(0, 12001);
+        if (content.length > 12000) return res.status(413).json({ success: false, code: 'CONVENTIONAL_SESSION_NOTE_TOO_LARGE', error: 'A evolução excede 12.000 caracteres.' });
+        const appointment = await fetchConventionalSessionAppointment({ appointmentId, patientId, clinicId, user: req.session.user });
+        if (!appointment?.id) return res.status(404).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_FOUND', error: 'Agendamento não encontrado neste prontuário.' });
+        if (!appointment.actual_start_at || !['in_progress', 'active'].includes(String(appointment.status || '').toLowerCase()) || appointment.actual_end_at) {
+          return res.status(409).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_IN_PROGRESS', error: 'A sessão precisa estar em andamento para salvar esta evolução.' });
+        }
+        const existing = await fetchConventionalSessionNote(appointmentId, patientId);
+        let note: any = null;
+        if (existing?.id) {
+          const { data, error } = await supabase
+            .from('notes')
+            .update({ content, visibility: 'shared_clinic', type: 'professional', subject: 'Evolução da sessão', shared_with_professionals: true })
+            .eq('id', existing.id)
+            .eq('patient_id', patientId)
+            .eq('appointment_id', appointmentId)
+            .select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at')
+            .maybeSingle();
+          if (error) throw error;
+          note = data;
+        } else {
+          const noteId = crypto.randomUUID();
+          const { data, error } = await supabase
+            .from('notes')
+            .insert({
+              id: noteId,
+              patient_id: patientId,
+              appointment_id: appointmentId,
+              content,
+              visibility: 'shared_clinic',
+              type: 'professional',
+              subject: 'Evolução da sessão',
+              source: 'conventional_session',
+              portability_scope: 'PROFESSIONALS',
+              is_portable: false,
+              shared_with_patient: false,
+              shared_with_professionals: true,
+              original_author_id: actorId,
+              created_by: actorId,
+              is_active: true
+            })
+            .select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at')
+            .single();
+          if (error) {
+            if (String(error?.code || '') === '23505') {
+              const canonical = await fetchConventionalSessionNote(appointmentId, patientId);
+              if (canonical?.id) {
+                const retry = await supabase.from('notes').update({ content }).eq('id', canonical.id).select('id,appointment_id,patient_id,content,subject,visibility,source,created_by,created_at,is_active,deleted_at').maybeSingle();
+                if (retry.error) throw retry.error;
+                note = retry.data;
+              } else throw error;
+            } else throw error;
+          } else note = data;
+        }
+        return res.json({ success: true, data: note });
+      } catch (error: any) {
+        return sendConventionalSessionError(res, error, 'note');
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/appointments/:appointmentId/conventional-session/complete',
+    portalActionLimiter,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability('session.finish'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 32 * 1024, 'Encerramento de sessão convencional')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const appointmentId = sanitizeString(req.params.appointmentId, 120);
+        const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const rawEndedAt = sanitizeString(req.body?.endedAt || req.body?.ended_at, 80);
+        const parsedEndedAt = rawEndedAt ? new Date(rawEndedAt) : new Date();
+        if (Number.isNaN(parsedEndedAt.getTime())) {
+          return res.status(422).json({ success: false, code: 'CONVENTIONAL_SESSION_END_TIME_INVALID', error: 'Horário de encerramento inválido.' });
+        }
+        const endedAt = parsedEndedAt.toISOString();
+        const sessionNote = String(req.body?.note ?? req.body?.sessionNote ?? req.body?.session_note ?? '').slice(0, 12001);
+        if (sessionNote.length > 12000) return res.status(413).json({ success: false, code: 'CONVENTIONAL_SESSION_NOTE_TOO_LARGE', error: 'A evolução excede 12.000 caracteres.' });
+        const appointment = await fetchConventionalSessionAppointment({ appointmentId, patientId, clinicId, user: req.session.user });
+        if (!appointment?.id) return res.status(404).json({ success: false, code: 'CONVENTIONAL_SESSION_NOT_FOUND', error: 'Agendamento não encontrado neste prontuário.' });
+        const idempotencyKey = sanitizeString(req.body?.idempotencyKey || req.body?.idempotency_key || req.get?.('Idempotency-Key') || req.headers?.['idempotency-key'], 180)
+          || `conventional-session-complete:${appointmentId}`;
+        const payloadHash = stableHashPayload({ clinicId, patientId, appointmentId, endedAt, sessionNote, action: 'complete' });
+        const result = await supabase.rpc('complete_conventional_appointment_session_v1', {
+          p_actor_id: actorId,
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_appointment_id: appointmentId,
+          p_ended_at: endedAt,
+          p_session_note: sessionNote,
+          p_idempotency_key: idempotencyKey,
+          p_payload_hash: payloadHash
+        });
+        if (result.error) throw result.error;
+        void regenerateClosureForAppointments([appointmentId], req.session.user, 'conventional_session_completed')
+          .catch((closureError: any) => console.warn('[Conventional Sessions] Sessão concluída; fechamento complementar pendente.', sanitizeString(closureError?.message || String(closureError), 240)));
+        let enrichedData = result.data?.data || null;
+        try {
+          const refreshed = await fetchConventionalSessionAppointment({ appointmentId, patientId, clinicId, user: req.session.user });
+          if (refreshed) enrichedData = await conventionalSessionResponse(refreshed);
+        } catch (readError: any) {
+          console.warn('[Conventional Sessions] Encerramento persistido; leitura complementar indisponível.', sanitizeString(readError?.message || String(readError), 240));
+        }
+        return res.json({ success: true, ...(result.data || {}), data: enrichedData });
+      } catch (error: any) {
+        return sendConventionalSessionError(res, error, 'complete');
+      }
+    }
+  );
 
   app.get('/api/aba/sessions/:patientId', requireAbaCollectionFeature, checkAuth, requireClinicCapability('session.history.view'), checkPatientAccess, async (req: any, res) => {
     try {

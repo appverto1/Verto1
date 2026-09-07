@@ -2760,6 +2760,86 @@ export const dataService = {
     return response.ok ? result : { success: false, status: response.status, ...result };
   },
 
+  async getActiveConventionalSession(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(safePatientId)}/conventional-session/active`,
+      { method: 'GET', credentials: 'include' },
+      {
+        helperName: 'getActiveConventionalSession',
+        operation: 'read',
+        table: 'appointments,notes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async startConventionalSession(patientId: string, appointmentId: string, payload: any = {}) {
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(String(patientId))}/appointments/${encodeURIComponent(String(appointmentId))}/conventional-session/start`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(payload || {}), patientId, patient_id: patientId })
+      },
+      {
+        helperName: 'startConventionalSession',
+        operation: 'write',
+        table: 'appointments,appointment_attendance_audit_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async saveConventionalSessionNote(patientId: string, appointmentId: string, note: string) {
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(String(patientId))}/appointments/${encodeURIComponent(String(appointmentId))}/conventional-session/note`,
+      {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId, patient_id: patientId, note: String(note || '') })
+      },
+      {
+        helperName: 'saveConventionalSessionNote',
+        operation: 'write',
+        table: 'appointments,notes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async completeConventionalSession(patientId: string, appointmentId: string, payload: any = {}) {
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(String(patientId))}/appointments/${encodeURIComponent(String(appointmentId))}/conventional-session/complete`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(payload || {}), patientId, patient_id: patientId })
+      },
+      {
+        helperName: 'completeConventionalSession',
+        operation: 'write',
+        table: 'appointments,notes,appointment_attendance_audit_events,payments,payment_appointment_items',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
   async saveAbaSessionSummary(summary: any) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse(summary || {});
     const id = String(summary?.id || summary?.summary_id || summary?.summaryId || generateId());
