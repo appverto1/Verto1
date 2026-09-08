@@ -359,6 +359,7 @@ import {
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
 import {
+  getPatientFinancialServiceLabel,
   isPatientFinancialPlanComplete,
   normalizePatientFinancialPlans,
   normalizePatientFinancialServiceType,
@@ -92209,6 +92210,475 @@ async function startServer() {
       return res.status(400).json({ success: false, error: 'Nada para atualizar.' });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+    }
+  });
+
+  const CLINIC_EXPENSE_RULE_SELECT = [
+    'id', 'clinic_id', 'logical_id', 'version', 'name', 'amount', 'recurrence', 'starts_on',
+    'active', 'category', 'due_day', 'ends_on', 'notes', 'specialty', 'replaces_cost_id',
+    'ended_at', 'ended_by', 'created_by', 'updated_by', 'created_at', 'updated_at'
+  ].join(',');
+  const MAX_CLINIC_EXPENSE_ROWS = 500;
+  const normalizeClinicExpenseSpecialty = (value: any): string | null => {
+    const raw = sanitizeString(value, 120);
+    if (!raw) return null;
+    const serviceType = normalizePatientFinancialServiceType(raw);
+    if (!serviceType || serviceType === 'CUSTOM') return null;
+    return getPatientFinancialServiceLabel({ serviceType }) || null;
+  };
+  const clinicExpenseScope = (req: any) => {
+    const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
+    const organizationId = sanitizeString(
+      req.session.user?.activeAccessContext?.clinicId ||
+      req.session.user?.activeWorkspaceId ||
+      req.session.user?.clinicId ||
+      req.session.user?.clinic_id,
+      120,
+    );
+    const actorId = sanitizeString(req.session.user?.id, 120);
+    if (!clinicId || !organizationId || clinicId !== organizationId || !actorId) return null;
+    return { clinicId, organizationId, actorId };
+  };
+  const clinicExpenseSchemaMissing = (error: any) => {
+    const text = sanitizeString(error?.message || error?.details || error?.hint, 1000).toLowerCase();
+    return hasMissingFinancialSchema(error) || [
+      'materialize_clinic_expense_occurrences_v1',
+      'version_clinic_recurring_cost_v1',
+      'end_clinic_recurring_cost_v1',
+      'clinic_recurring_costs',
+      'expected_amount',
+      'competence_month',
+      'recurring_cost_id',
+    ].some((token) => text.includes(token));
+  };
+  const clinicExpenseMonthBounds = (monthInput: any) => {
+    const month = sanitizeString(monthInput, 7) || new Date().toISOString().slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) return null;
+    const [year, monthNumber] = month.split('-').map(Number);
+    if (year < 2000 || year > 2200 || monthNumber < 1 || monthNumber > 12) return null;
+    const monthStart = `${month}-01`;
+    const next = new Date(Date.UTC(year, monthNumber, 1));
+    const nextMonth = next.toISOString().slice(0, 10);
+    const monthEnd = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+    return { month, monthStart, monthEnd, nextMonth };
+  };
+  const clinicExpensePayloadMatches = (existing: any, expected: any, fields: string[]) =>
+    fields.every((field) => String(existing?.[field] ?? '') === String(expected?.[field] ?? ''));
+
+  app.get('/api/financial/expenses', checkAuth, requireClinicCapability('finance.entries.view'), async (req: any, res) => {
+    try {
+      const scope = clinicExpenseScope(req);
+      const bounds = clinicExpenseMonthBounds(req.query?.month);
+      if (!scope) return res.status(403).json({ success: false, error: 'Contexto financeiro da clínica inválido.' });
+      if (!bounds) return res.status(400).json({ success: false, error: 'Competência inválida.' });
+
+      const materialized = await supabase.rpc('materialize_clinic_expense_occurrences_v1', {
+        p_clinic_id: scope.clinicId,
+        p_month: bounds.monthStart,
+        p_actor_id: scope.actorId,
+      });
+      if (materialized.error && clinicExpenseSchemaMissing(materialized.error)) {
+        const legacy = await fetchFinancialEntriesWithSchemaFallback({
+          supabase,
+          clinicId: scope.clinicId,
+          limit: 200,
+          logger: console,
+        });
+        if (legacy.error) throw legacy.error;
+        const rows = (legacy.data || []).filter((entry: any) =>
+          String(entry?.entry_type || 'expense').toLowerCase() === 'expense' &&
+          String(entry?.occurred_on || '').slice(0, 7) === bounds.month,
+        );
+        return res.json({ success: true, schemaReady: false, data: { entries: rows, rules: [] } });
+      }
+      if (materialized.error) throw materialized.error;
+
+      const [competenceResult, cashResult, legacyResult, rulesResult] = await Promise.all([
+        supabase
+          .from('clinic_financial_entries')
+          .select(FINANCIAL_ENTRY_SELECT)
+          .eq('clinic_id', scope.clinicId)
+          .eq('entry_type', 'expense')
+          .gte('competence_month', bounds.monthStart)
+          .lt('competence_month', bounds.nextMonth)
+          .order('due_date', { ascending: true })
+          .limit(MAX_CLINIC_EXPENSE_ROWS),
+        supabase
+          .from('clinic_financial_entries')
+          .select(FINANCIAL_ENTRY_SELECT)
+          .eq('clinic_id', scope.clinicId)
+          .eq('entry_type', 'expense')
+          .eq('status', 'paid')
+          .gte('paid_on', bounds.monthStart)
+          .lt('paid_on', bounds.nextMonth)
+          .order('paid_on', { ascending: true })
+          .limit(MAX_CLINIC_EXPENSE_ROWS),
+        supabase
+          .from('clinic_financial_entries')
+          .select(FINANCIAL_ENTRY_SELECT)
+          .eq('clinic_id', scope.clinicId)
+          .eq('entry_type', 'expense')
+          .is('competence_month', null)
+          .gte('occurred_on', bounds.monthStart)
+          .lt('occurred_on', bounds.nextMonth)
+          .order('occurred_on', { ascending: true })
+          .limit(MAX_CLINIC_EXPENSE_ROWS),
+        supabase
+          .from('clinic_recurring_costs')
+          .select(CLINIC_EXPENSE_RULE_SELECT)
+          .eq('clinic_id', scope.clinicId)
+          .lte('starts_on', bounds.monthEnd)
+          .or('active.eq.true,ends_on.not.is.null')
+          .or(`ends_on.is.null,ends_on.gte.${bounds.monthStart}`)
+          .order('starts_on', { ascending: false })
+          .order('version', { ascending: false })
+          .limit(250),
+      ]);
+      const firstError = [competenceResult, cashResult, legacyResult, rulesResult].find((result: any) => result.error)?.error;
+      if (firstError) throw firstError;
+      const entriesById = new Map<string, any>();
+      [...(competenceResult.data || []), ...(cashResult.data || []), ...(legacyResult.data || [])].forEach((entry: any) => {
+        const id = sanitizeString(entry?.id, 120);
+        if (id) entriesById.set(id, entry);
+      });
+      return res.json({
+        success: true,
+        schemaReady: true,
+        data: {
+          entries: Array.from(entriesById.values()),
+          rules: rulesResult.data || [],
+          materialized: Number(materialized.data || 0),
+        },
+      });
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/expenses [GET]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.post('/api/financial/expenses', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Despesa da clínica')) return;
+      const scope = clinicExpenseScope(req);
+      if (!scope) return res.status(403).json({ success: false, error: 'Contexto financeiro da clínica inválido.' });
+      const id = sanitizeString(req.body?.id, 120);
+      const description = sanitizeString(req.body?.description || req.body?.name, 160);
+      const category = sanitizeString(req.body?.category || 'operacional', 80) || 'operacional';
+      const dueDate = sanitizeDate(req.body?.due_date || req.body?.dueDate);
+      const amount = asSafeNumber(req.body?.amount, 0, 10_000_000);
+      const notes = sanitizeString(req.body?.notes, 1200) || null;
+      const specialty = normalizeClinicExpenseSpecialty(req.body?.specialty);
+      if (!isUuid(id) || !description || !dueDate || amount === null || amount <= 0) {
+        return res.status(400).json({ success: false, error: 'Dados da despesa pontual inválidos.' });
+      }
+      const payload = {
+        id,
+        clinic_id: scope.clinicId,
+        entry_type: 'expense',
+        category,
+        description,
+        amount,
+        expected_amount: amount,
+        occurred_on: dueDate,
+        due_date: dueDate,
+        paid_on: null,
+        competence_month: `${dueDate.slice(0, 7)}-01`,
+        status: 'pending',
+        source: 'clinic_expense_manual',
+        notes,
+        specialty,
+        created_by: scope.actorId,
+        updated_by: scope.actorId,
+        updated_at: new Date().toISOString(),
+      };
+      const inserted = await supabase.from('clinic_financial_entries').insert([payload]).select(FINANCIAL_ENTRY_SELECT).single();
+      if (!inserted.error) return res.status(201).json({ success: true, data: inserted.data });
+      if (sanitizeString(inserted.error?.code, 40) === '23505') {
+        const existing = await supabase
+          .from('clinic_financial_entries')
+          .select(FINANCIAL_ENTRY_SELECT)
+          .eq('clinic_id', scope.clinicId)
+          .eq('id', id)
+          .maybeSingle();
+        if (existing.error) throw existing.error;
+        if (existing.data && clinicExpensePayloadMatches(existing.data, payload, [
+          'clinic_id', 'entry_type', 'category', 'description', 'amount', 'expected_amount', 'occurred_on', 'due_date', 'competence_month', 'status', 'source', 'specialty', 'notes'
+        ])) {
+          return res.json({ success: true, replayed: true, data: existing.data });
+        }
+        return res.status(409).json({ success: false, code: 'CLINIC_EXPENSE_IDEMPOTENCY_CONFLICT', error: 'Esta despesa já foi registrada com outro conteúdo.' });
+      }
+      if (clinicExpenseSchemaMissing(inserted.error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      throw inserted.error;
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/expenses [POST]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.patch('/api/financial/expenses/:expenseId', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Despesa da clínica')) return;
+      const scope = clinicExpenseScope(req);
+      const expenseId = sanitizeString(req.params.expenseId, 120);
+      if (!scope || !isUuid(expenseId)) return res.status(404).json({ success: false, error: 'Despesa não encontrada.' });
+      const current = await supabase
+        .from('clinic_financial_entries')
+        .select(FINANCIAL_ENTRY_SELECT)
+        .eq('clinic_id', scope.clinicId)
+        .eq('id', expenseId)
+        .eq('entry_type', 'expense')
+        .maybeSingle();
+      if (current.error) throw current.error;
+      if (!current.data) return res.status(404).json({ success: false, error: 'Despesa não encontrada.' });
+      const currentStatus = sanitizeString(current.data.status, 40).toLowerCase();
+      if (currentStatus !== 'pending') {
+        return res.status(409).json({ success: false, code: 'CLINIC_EXPENSE_HISTORY_IMMUTABLE', error: 'Despesa paga ou cancelada não pode ser reescrita.' });
+      }
+      const amountProvided = req.body?.amount !== undefined;
+      const amount = amountProvided ? asSafeNumber(req.body?.amount, 0, 10_000_000) : null;
+      if (amountProvided && (amount === null || amount <= 0)) return res.status(400).json({ success: false, error: 'Valor inválido.' });
+      const dueDateProvided = req.body?.due_date !== undefined || req.body?.dueDate !== undefined;
+      const dueDate = dueDateProvided ? sanitizeDate(req.body?.due_date || req.body?.dueDate) : null;
+      if (dueDateProvided && !dueDate) return res.status(400).json({ success: false, error: 'Data de vencimento inválida.' });
+      if (current.data.recurring_cost_id && dueDate && String(current.data.competence_month || '').slice(0, 7) !== dueDate.slice(0, 7)) {
+        return res.status(400).json({ success: false, error: 'A ocorrência recorrente deve permanecer na mesma competência.' });
+      }
+      const patch = cleanObject({
+        description: req.body?.description !== undefined ? sanitizeString(req.body?.description, 160) : undefined,
+        category: req.body?.category !== undefined ? sanitizeString(req.body?.category, 80) : undefined,
+        amount: amountProvided ? amount : undefined,
+        expected_amount: amountProvided && !current.data.recurring_cost_id ? amount : undefined,
+        due_date: dueDateProvided ? dueDate : undefined,
+        occurred_on: dueDateProvided && !current.data.recurring_cost_id ? dueDate : undefined,
+        competence_month: dueDateProvided && !current.data.recurring_cost_id ? `${dueDate!.slice(0, 7)}-01` : undefined,
+        notes: req.body?.notes !== undefined ? (sanitizeString(req.body?.notes, 1200) || null) : undefined,
+        specialty: req.body?.specialty !== undefined ? normalizeClinicExpenseSpecialty(req.body?.specialty) : undefined,
+        updated_by: scope.actorId,
+        updated_at: new Date().toISOString(),
+      });
+      if (patch.description === '') return res.status(400).json({ success: false, error: 'Descrição obrigatória.' });
+      const updated = await supabase
+        .from('clinic_financial_entries')
+        .update(patch)
+        .eq('clinic_id', scope.clinicId)
+        .eq('id', expenseId)
+        .eq('entry_type', 'expense')
+        .eq('status', 'pending')
+        .select(FINANCIAL_ENTRY_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      if (!updated.data) return res.status(409).json({ success: false, error: 'A despesa foi alterada por outra operação. Recarregue e tente novamente.' });
+      return res.json({ success: true, data: updated.data });
+    } catch (error: any) {
+      if (clinicExpenseSchemaMissing(error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      return sendRouteDbError(res, '/api/financial/expenses/:expenseId [PATCH]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.post('/api/financial/expenses/:expenseId/pay', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      const scope = clinicExpenseScope(req);
+      const expenseId = sanitizeString(req.params.expenseId, 120);
+      if (!scope || !isUuid(expenseId)) return res.status(404).json({ success: false, error: 'Despesa não encontrada.' });
+      const current = await supabase
+        .from('clinic_financial_entries')
+        .select(FINANCIAL_ENTRY_SELECT)
+        .eq('clinic_id', scope.clinicId)
+        .eq('id', expenseId)
+        .eq('entry_type', 'expense')
+        .maybeSingle();
+      if (current.error) throw current.error;
+      if (!current.data) return res.status(404).json({ success: false, error: 'Despesa não encontrada.' });
+      if (sanitizeString(current.data.status, 40).toLowerCase() === 'canceled') {
+        return res.status(409).json({ success: false, error: 'Despesa cancelada não pode ser paga.' });
+      }
+      const actualAmount = req.body?.amount === undefined
+        ? asSafeNumber(current.data.amount, 0, 10_000_000)
+        : asSafeNumber(req.body?.amount, 0, 10_000_000);
+      const paidOn = sanitizeDate(req.body?.paid_on || req.body?.paidOn) || new Date().toISOString().slice(0, 10);
+      if (actualAmount === null || actualAmount <= 0) return res.status(400).json({ success: false, error: 'Valor realizado inválido.' });
+      if (sanitizeString(current.data.status, 40).toLowerCase() === 'paid') {
+        if (Number(current.data.amount) === Number(actualAmount) && String(current.data.paid_on || current.data.occurred_on || '').slice(0, 10) === paidOn) {
+          return res.json({ success: true, replayed: true, data: current.data });
+        }
+        return res.status(409).json({ success: false, code: 'CLINIC_EXPENSE_HISTORY_IMMUTABLE', error: 'Pagamento já realizado com outro valor ou data.' });
+      }
+      const updated = await supabase
+        .from('clinic_financial_entries')
+        .update({ amount: actualAmount, paid_on: paidOn, status: 'paid', updated_by: scope.actorId, updated_at: new Date().toISOString() })
+        .eq('clinic_id', scope.clinicId)
+        .eq('id', expenseId)
+        .eq('entry_type', 'expense')
+        .eq('status', 'pending')
+        .select(FINANCIAL_ENTRY_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      if (updated.data) return res.json({ success: true, data: updated.data });
+      const raced = await supabase.from('clinic_financial_entries').select(FINANCIAL_ENTRY_SELECT).eq('clinic_id', scope.clinicId).eq('id', expenseId).maybeSingle();
+      if (raced.error) throw raced.error;
+      if (raced.data && sanitizeString(raced.data.status, 40).toLowerCase() === 'paid' && Number(raced.data.amount) === Number(actualAmount) && String(raced.data.paid_on || '').slice(0, 10) === paidOn) {
+        return res.json({ success: true, replayed: true, data: raced.data });
+      }
+      return res.status(409).json({ success: false, error: 'A despesa foi alterada por outra operação. Recarregue e tente novamente.' });
+    } catch (error: any) {
+      if (clinicExpenseSchemaMissing(error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      return sendRouteDbError(res, '/api/financial/expenses/:expenseId/pay [POST]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.post('/api/financial/expenses/:expenseId/cancel', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      const scope = clinicExpenseScope(req);
+      const expenseId = sanitizeString(req.params.expenseId, 120);
+      if (!scope || !isUuid(expenseId)) return res.status(404).json({ success: false, error: 'Despesa não encontrada.' });
+      const current = await supabase.from('clinic_financial_entries').select(FINANCIAL_ENTRY_SELECT).eq('clinic_id', scope.clinicId).eq('id', expenseId).eq('entry_type', 'expense').maybeSingle();
+      if (current.error) throw current.error;
+      if (!current.data) return res.status(404).json({ success: false, error: 'Despesa não encontrada.' });
+      const status = sanitizeString(current.data.status, 40).toLowerCase();
+      if (status === 'paid') return res.status(409).json({ success: false, code: 'CLINIC_EXPENSE_HISTORY_IMMUTABLE', error: 'Despesa paga não pode ser cancelada destrutivamente.' });
+      if (status === 'canceled') return res.json({ success: true, replayed: true, data: current.data });
+      const updated = await supabase
+        .from('clinic_financial_entries')
+        .update({ status: 'canceled', updated_by: scope.actorId, updated_at: new Date().toISOString() })
+        .eq('clinic_id', scope.clinicId)
+        .eq('id', expenseId)
+        .eq('entry_type', 'expense')
+        .eq('status', 'pending')
+        .select(FINANCIAL_ENTRY_SELECT)
+        .maybeSingle();
+      if (updated.error) throw updated.error;
+      return res.json({ success: true, data: updated.data || current.data });
+    } catch (error: any) {
+      if (clinicExpenseSchemaMissing(error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      return sendRouteDbError(res, '/api/financial/expenses/:expenseId/cancel [POST]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.post('/api/financial/expense-rules', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 32 * 1024, 'Recorrência de despesa')) return;
+      const scope = clinicExpenseScope(req);
+      if (!scope) return res.status(403).json({ success: false, error: 'Contexto financeiro da clínica inválido.' });
+      const id = sanitizeString(req.body?.id, 120);
+      const name = sanitizeString(req.body?.name || req.body?.description, 120);
+      const amount = asSafeNumber(req.body?.amount, 0, 10_000_000);
+      const recurrence = sanitizeString(req.body?.recurrence, 20).toLowerCase();
+      const startsOn = sanitizeDate(req.body?.starts_on || req.body?.startsOn);
+      const category = sanitizeString(req.body?.category || 'operacional', 80) || 'operacional';
+      const notes = sanitizeString(req.body?.notes, 1200) || null;
+      const specialty = normalizeClinicExpenseSpecialty(req.body?.specialty);
+      const dueDay = recurrence === 'monthly'
+        ? Math.trunc(Number(req.body?.due_day || req.body?.dueDay || String(startsOn || '').slice(8, 10)))
+        : null;
+      if (!isUuid(id) || !name || amount === null || amount <= 0 || !startsOn || !['monthly', 'weekly'].includes(recurrence) || (recurrence === 'monthly' && (!dueDay || dueDay < 1 || dueDay > 31))) {
+        return res.status(400).json({ success: false, error: 'Dados da recorrência inválidos.' });
+      }
+      const payload = {
+        id,
+        clinic_id: scope.clinicId,
+        logical_id: id,
+        version: 1,
+        name,
+        amount,
+        recurrence,
+        starts_on: startsOn,
+        active: true,
+        category,
+        due_day: dueDay,
+        ends_on: null,
+        notes,
+        specialty,
+        created_by: scope.actorId,
+        updated_by: scope.actorId,
+        updated_at: new Date().toISOString(),
+      };
+      const inserted = await supabase.from('clinic_recurring_costs').insert([payload]).select(CLINIC_EXPENSE_RULE_SELECT).single();
+      if (!inserted.error) return res.status(201).json({ success: true, data: inserted.data });
+      if (sanitizeString(inserted.error?.code, 40) === '23505') {
+        const existing = await supabase.from('clinic_recurring_costs').select(CLINIC_EXPENSE_RULE_SELECT).eq('clinic_id', scope.clinicId).eq('id', id).maybeSingle();
+        if (existing.error) throw existing.error;
+        if (existing.data && clinicExpensePayloadMatches(existing.data, payload, ['clinic_id', 'logical_id', 'version', 'name', 'amount', 'recurrence', 'starts_on', 'active', 'category', 'due_day', 'specialty', 'notes'])) {
+          return res.json({ success: true, replayed: true, data: existing.data });
+        }
+        return res.status(409).json({ success: false, code: 'CLINIC_EXPENSE_RULE_IDEMPOTENCY_CONFLICT', error: 'Esta recorrência já foi registrada com outro conteúdo.' });
+      }
+      if (clinicExpenseSchemaMissing(inserted.error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      throw inserted.error;
+    } catch (error: any) {
+      return sendRouteDbError(res, '/api/financial/expense-rules [POST]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.patch('/api/financial/expense-rules/:ruleId', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      const scope = clinicExpenseScope(req);
+      const ruleId = sanitizeString(req.params.ruleId, 120);
+      const replacementId = sanitizeString(req.body?.replacement_id || req.body?.replacementId, 120);
+      const effectiveFrom = sanitizeDate(req.body?.effective_from || req.body?.effectiveFrom);
+      if (!scope || !isUuid(ruleId) || !isUuid(replacementId) || !effectiveFrom) return res.status(400).json({ success: false, error: 'Atualização da recorrência inválida.' });
+      const current = await supabase.from('clinic_recurring_costs').select(CLINIC_EXPENSE_RULE_SELECT).eq('clinic_id', scope.clinicId).eq('id', ruleId).maybeSingle();
+      if (current.error) throw current.error;
+      if (!current.data) return res.status(404).json({ success: false, error: 'Recorrência não encontrada.' });
+      const amount = req.body?.amount === undefined ? Number(current.data.amount) : asSafeNumber(req.body?.amount, 0, 10_000_000);
+      const name = req.body?.name === undefined ? current.data.name : sanitizeString(req.body?.name, 120);
+      const category = req.body?.category === undefined ? current.data.category : sanitizeString(req.body?.category, 80);
+      const dueDay = current.data.recurrence === 'monthly'
+        ? Math.trunc(Number(req.body?.due_day ?? req.body?.dueDay ?? current.data.due_day))
+        : null;
+      const notes = req.body?.notes === undefined ? current.data.notes : (sanitizeString(req.body?.notes, 1200) || null);
+      const specialty = req.body?.specialty === undefined ? current.data.specialty : normalizeClinicExpenseSpecialty(req.body?.specialty);
+      if (!name || amount === null || Number(amount) <= 0 || (current.data.recurrence === 'monthly' && (!dueDay || dueDay < 1 || dueDay > 31))) {
+        return res.status(400).json({ success: false, error: 'Dados futuros da recorrência inválidos.' });
+      }
+      const result = await supabase.rpc('version_clinic_recurring_cost_v1', {
+        p_clinic_id: scope.clinicId,
+        p_rule_id: ruleId,
+        p_new_rule_id: replacementId,
+        p_effective_from: effectiveFrom,
+        p_name: name,
+        p_amount: Number(amount),
+        p_category: category || 'operacional',
+        p_due_day: dueDay,
+        p_notes: notes,
+        p_specialty: specialty,
+        p_actor_id: scope.actorId,
+      });
+      if (result.error) throw result.error;
+      const updated = await supabase.from('clinic_recurring_costs').select(CLINIC_EXPENSE_RULE_SELECT).eq('clinic_id', scope.clinicId).eq('id', replacementId).maybeSingle();
+      if (updated.error) throw updated.error;
+      return res.json({ success: true, data: updated.data || { id: result.data } });
+    } catch (error: any) {
+      const text = sanitizeString(error?.message || error?.details, 500);
+      if (text.includes('CLINIC_EXPENSE_RULE_IDEMPOTENCY_CONFLICT')) return res.status(409).json({ success: false, error: 'A chave desta alteração futura já foi usada com outro conteúdo.' });
+      if (text.includes('CLINIC_EXPENSE_RULE_NOT_FOUND')) return res.status(404).json({ success: false, error: 'Recorrência não encontrada.' });
+      if (text.includes('CLINIC_EXPENSE_RULE_')) return res.status(400).json({ success: false, error: 'Atualização futura da recorrência inválida.' });
+      if (clinicExpenseSchemaMissing(error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      return sendRouteDbError(res, '/api/financial/expense-rules/:ruleId [PATCH]', error, { requestId: requestIdForLogs(req) });
+    }
+  });
+
+  app.post('/api/financial/expense-rules/:ruleId/end', checkAuth, requireClinicCapability('finance.entries.manage'), async (req: any, res) => {
+    try {
+      const scope = clinicExpenseScope(req);
+      const ruleId = sanitizeString(req.params.ruleId, 120);
+      const endOn = sanitizeDate(req.body?.end_on || req.body?.endOn) || new Date().toISOString().slice(0, 10);
+      if (!scope || !isUuid(ruleId)) return res.status(404).json({ success: false, error: 'Recorrência não encontrada.' });
+      const result = await supabase.rpc('end_clinic_recurring_cost_v1', {
+        p_clinic_id: scope.clinicId,
+        p_rule_id: ruleId,
+        p_end_on: endOn,
+        p_actor_id: scope.actorId,
+      });
+      if (result.error) throw result.error;
+      const updated = await supabase.from('clinic_recurring_costs').select(CLINIC_EXPENSE_RULE_SELECT).eq('clinic_id', scope.clinicId).eq('id', ruleId).maybeSingle();
+      if (updated.error) throw updated.error;
+      return res.json({ success: true, data: updated.data || { id: result.data } });
+    } catch (error: any) {
+      const text = sanitizeString(error?.message || error?.details, 500);
+      if (text.includes('CLINIC_EXPENSE_RULE_NOT_FOUND')) return res.status(404).json({ success: false, error: 'Recorrência não encontrada.' });
+      if (text.includes('CLINIC_EXPENSE_RULE_END_IDEMPOTENCY_CONFLICT')) return res.status(409).json({ success: false, error: 'Esta recorrência já foi encerrada em outra data.' });
+      if (text.includes('CLINIC_EXPENSE_RULE_END_DATE_INVALID')) return res.status(400).json({ success: false, error: 'Data de encerramento inválida.' });
+      if (clinicExpenseSchemaMissing(error)) return res.status(503).json({ success: false, code: 'CLINIC_EXPENSE_SCHEMA_REQUIRED', error: 'A migration de gestão de despesas ainda não foi aplicada.' });
+      return sendRouteDbError(res, '/api/financial/expense-rules/:ruleId/end [POST]', error, { requestId: requestIdForLogs(req) });
     }
   });
 
