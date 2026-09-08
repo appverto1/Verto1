@@ -67,8 +67,19 @@ import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
+import ClinicExpenseManager from "./ClinicExpenseManager";
 import { buildPatientFinancialChargeRows, resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
 import { formatDisplayDateTime } from "../utils/dateFormatting";
+import { formatDisplayDate } from "../utils/dateFormatting";
+import {
+  buildFinancialSpecialtySeriesRow,
+  clinicExpenseActualAmount,
+  clinicExpenseCashMonthKey,
+  clinicExpenseCompetenceKey,
+  clinicExpenseExpectedAmount,
+  normalizeFinancialSpecialtyLabel,
+  resolveClinicExpenseSemanticStatus,
+} from "../utils/clinicFinanceReadModel";
 import { OperationalClosureCenter } from "./OperationalClosureCenter";
 import { MonthlyConferenceCenter } from "./MonthlyConferenceCenter";
 import { PayerRequirementsPanel } from "./PayerRequirementsPanel";
@@ -521,7 +532,7 @@ const classifyFinancialDashboardPayments = (
   };
 };
 
-const matchesFinancialDrilldownCharge = (charge, drilldown, normalizeText, normalizeOrigin) => {
+const matchesFinancialDrilldownCharge = (charge, drilldown, normalizeText, normalizeOrigin, normalizeSpecialty = (value) => value) => {
   const kind = String(drilldown?.kind || "");
   const filter = String(drilldown?.filter || "").trim();
   const series = String(drilldown?.series || "").trim();
@@ -544,11 +555,13 @@ const matchesFinancialDrilldownCharge = (charge, drilldown, normalizeText, norma
 
   if (["revenue-by-specialty", "profit-by-specialty"].includes(kind)) {
     if (filter) {
-      const expectedSpecialty = normalizeText(filter);
+      const expectedSpecialty = normalizeText(normalizeSpecialty(filter) || filter);
       const chargeSpecialties = [
         charge?.specialty,
         ...(charge?.items || []).map((item) => item?.specialty_snapshot || item?.service_type_snapshot),
-      ];
+      ]
+        .map((value) => normalizeSpecialty(value))
+        .filter(Boolean);
       if (!chargeSpecialties.some((value) => normalizeText(value) === expectedSpecialty)) return false;
     }
     if (kind === "revenue-by-specialty" && series === "Receita projetada") return false;
@@ -847,6 +860,7 @@ export function CoordinatorDashboard({
   const canCancelRecurringAppointments = hasCapability("calendar.appointment.cancel");
   const canDeleteRecurringAppointments = canCancelRecurringAppointments;
   const canAccessClinicFinance = hasCapability("finance.payments.view");
+  const canManageClinicExpenses = hasCapability("finance.entries.manage");
   const canManageSharedPayers = hasCapability("finance.entries.manage") || hasCapability("billing.mapping.manage");
   // Patient treatment pricing remains part of the patient core. Finance and TISS
   // only unlock their respective payer/operational extensions.
@@ -2087,6 +2101,9 @@ export function CoordinatorDashboard({
   const [financialDrilldownPaymentId, setFinancialDrilldownPaymentId] = useState("");
   const [professionalPayments, setProfessionalPayments] = useState<any[]>([]);
   const [financialEntries, setFinancialEntries] = useState<any[]>([]);
+  const [clinicExpenseRules, setClinicExpenseRules] = useState<any[]>([]);
+  const [clinicExpenseSchemaReady, setClinicExpenseSchemaReady] = useState(true);
+  const [clinicExpenseRefreshKey, setClinicExpenseRefreshKey] = useState(0);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isProfessionalPaymentModalOpen, setIsProfessionalPaymentModalOpen] = useState(false);
   const [isPaymentSaving, setIsPaymentSaving] = useState(false);
@@ -3050,7 +3067,7 @@ export function CoordinatorDashboard({
       setPatientFinanceLedgerError("");
       const ledgerPromise = dataService.getPatientFinanceLedger(financialMonth);
       const supportingPromise = canAccessClinicFinance
-        ? Promise.all([dataService.getProfessionalPayments(), dataService.getClinicFinancialEntries()])
+        ? Promise.all([dataService.getProfessionalPayments(), dataService.getClinicExpenses(financialMonth)])
         : Promise.resolve([null, null] as any[]);
       const [ledgerResult, [professionalResult, entriesResult]] = await Promise.all([ledgerPromise, supportingPromise]);
       if (cancelled) return;
@@ -3064,14 +3081,19 @@ export function CoordinatorDashboard({
         setPayments(Array.isArray(nextLedger.charges) ? nextLedger.charges : []);
       }
       if (professionalResult?.success) setProfessionalPayments(professionalResult.data || []);
-      if (entriesResult?.success) setFinancialEntries(entriesResult.data || []);
+      if (entriesResult?.success) {
+        const expensePayload = entriesResult.data || {};
+        setFinancialEntries(Array.isArray(expensePayload) ? expensePayload : (expensePayload.entries || []));
+        setClinicExpenseRules(Array.isArray(expensePayload?.rules) ? expensePayload.rules : []);
+        setClinicExpenseSchemaReady(entriesResult.schemaReady !== false);
+      }
       setPatientFinanceLedgerLoading(false);
     };
     if (activeTab === "financial" && (canAccessClinicFinance || isReceptionist)) {
       void fetchFinancialData();
     }
     return () => { cancelled = true; };
-  }, [activeTab, canAccessClinicFinance, isReceptionist, financialMonth, workspaceScopeKey]);
+  }, [activeTab, canAccessClinicFinance, isReceptionist, financialMonth, workspaceScopeKey, clinicExpenseRefreshKey]);
 
   useEffect(() => {
     if (
@@ -9105,7 +9127,7 @@ export function CoordinatorDashboard({
       .normalize("NFD")
       .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase();
-    return !normalized || ["nao informado", "sem especialidade", "sem alocacao"].includes(normalized);
+    return !normalized || ["nao informado", "nao alocado", "sem especialidade", "sem alocacao"].includes(normalized);
   };
 
   const formatFinancialMonthLabel = (monthKey: string, style: "short" | "long" = "long") => {
@@ -9181,12 +9203,42 @@ export function CoordinatorDashboard({
       const status = normalizeStatus(payment?.status);
       return !["paid", "canceled", "cancelled"].includes(status);
     });
-    const monthFinancialEntries = (financialEntries || []).filter((entry: any) =>
-      isSameFinancialMonth(entry?.occurred_on || entry?.occurredOn || entry?.date, financialMonth),
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const expenseEntries = (financialEntries || []).filter((entry: any) =>
+      String(entry?.entry_type || entry?.type || "expense").toLowerCase() === "expense",
     );
-    const operationalExpenses = monthFinancialEntries
-      .filter((entry: any) => String(entry?.entry_type || entry?.type || "expense").toLowerCase() === "expense")
-      .reduce((sum: number, entry: any) => sum + parseCurrencyValue(entry?.amount), 0);
+    const monthFinancialEntries = expenseEntries.filter((entry: any) =>
+      clinicExpenseCompetenceKey(entry) === financialMonth,
+    );
+    const monthExpenseRows = monthFinancialEntries.map((entry: any) => ({
+      entry,
+      status: resolveClinicExpenseSemanticStatus(entry, todayIso),
+    }));
+    const paidOperationalExpenseEntries = monthExpenseRows
+      .filter((row: any) => row.status === "paid")
+      .map((row: any) => row.entry);
+    const pendingOperationalExpenseEntries = monthExpenseRows
+      .filter((row: any) => row.status === "pending")
+      .map((row: any) => row.entry);
+    const overdueOperationalExpenseEntries = monthExpenseRows
+      .filter((row: any) => row.status === "overdue")
+      .map((row: any) => row.entry);
+    const activeOperationalExpenseEntries = monthExpenseRows
+      .filter((row: any) => row.status !== "canceled")
+      .map((row: any) => row.entry);
+    const operationalExpenses = paidOperationalExpenseEntries
+      .reduce((sum: number, entry: any) => sum + clinicExpenseActualAmount(entry), 0);
+    const projectedOperationalExpenses = activeOperationalExpenseEntries
+      .reduce((sum: number, entry: any) => sum + clinicExpenseExpectedAmount(entry), 0);
+    const pendingOperationalExpenses = pendingOperationalExpenseEntries
+      .reduce((sum: number, entry: any) => sum + clinicExpenseActualAmount(entry), 0);
+    const overdueOperationalExpenses = overdueOperationalExpenseEntries
+      .reduce((sum: number, entry: any) => sum + clinicExpenseActualAmount(entry), 0);
+    const cashOperationalExpenseEntries = expenseEntries.filter((entry: any) =>
+      resolveClinicExpenseSemanticStatus(entry, todayIso) === "paid" && clinicExpenseCashMonthKey(entry) === financialMonth,
+    );
+    const cashOperationalExpenses = cashOperationalExpenseEntries
+      .reduce((sum: number, entry: any) => sum + clinicExpenseActualAmount(entry), 0);
 
     const specialtyMap = new Map<string, any>();
     const payerMap = new Map<string, any>();
@@ -9196,7 +9248,7 @@ export function CoordinatorDashboard({
     const dueRows: any[] = [];
 
     const ensureSpecialtyRow = (label: string) => {
-      const safeLabel = String(label || "Não informado").trim() || "Não informado";
+      const safeLabel = normalizeFinancialSpecialtyLabel(label) || "Não alocado";
       const current = specialtyMap.get(safeLabel) || {
         label: safeLabel,
         amount: 0,
@@ -9236,17 +9288,17 @@ export function CoordinatorDashboard({
 
     const distributePatientAmountBySpecialty = (patient: any, amount: number, explicitSpecialty?: any) => {
       const safeAmount = Number(amount) || 0;
-      const specialty = String(explicitSpecialty || "").trim();
-      if (specialty) {
-        return [{ specialty, amount: safeAmount }];
-      }
-      const plans = getPatientPlans(patient);
-      if (!plans.length) return [{ specialty: "Não informado", amount: safeAmount }];
-      if (plans.length === 1) return [{ specialty: plans[0].specialty, amount: safeAmount }];
+      const specialty = normalizeFinancialSpecialtyLabel(explicitSpecialty);
+      if (specialty) return [{ specialty, amount: safeAmount }];
+      const plans = getPatientPlans(patient)
+        .map((plan: any) => ({ ...plan, financialSpecialty: normalizeFinancialSpecialtyLabel(plan?.specialty) }))
+        .filter((plan: any) => Boolean(plan.financialSpecialty));
+      if (!plans.length) return [{ specialty: "Não alocado", amount: safeAmount }];
+      if (plans.length === 1) return [{ specialty: plans[0].financialSpecialty, amount: safeAmount }];
       const total = plans.reduce((sum: number, plan: any) => sum + (Number(plan.amount) || 0), 0);
-      if (total <= 0) return [{ specialty: plans[0].specialty, amount: safeAmount }];
+      if (total <= 0) return [{ specialty: plans[0].financialSpecialty, amount: safeAmount }];
       return plans.map((plan: any) => ({
-        specialty: plan.specialty,
+        specialty: plan.financialSpecialty,
         amount: safeAmount * ((Number(plan.amount) || 0) / total),
       }));
     };
@@ -9262,11 +9314,11 @@ export function CoordinatorDashboard({
       let itemTotal = 0;
       items.forEach((item: any) => {
         const subtotal = Math.max(0, parseCurrencyValue(item?.subtotal ?? item?.unit_amount));
-        const specialty = String(item?.specialty_snapshot || item?.service_type_snapshot || 'Não informado').trim() || 'Não informado';
+        const specialty = normalizeFinancialSpecialtyLabel(item?.specialty_snapshot || item?.service_type_snapshot) || 'Não alocado';
         grouped.set(specialty, (grouped.get(specialty) || 0) + subtotal);
         itemTotal += subtotal;
       });
-      if (itemTotal <= 0) return [{ specialty: 'Não informado', amount: Number(amount) || 0 }];
+      if (itemTotal <= 0) return [{ specialty: 'Não alocado', amount: Number(amount) || 0 }];
       return Array.from(grouped.entries()).map(([specialty, subtotal]) => ({
         specialty,
         amount: (Number(amount) || 0) * (subtotal / itemTotal),
@@ -9324,7 +9376,7 @@ export function CoordinatorDashboard({
     );
     const outstanding = Math.max(projection - realized, 0);
     const cashIn = realized;
-    const cashOut = professionalPaid + operationalExpenses;
+    const cashOut = professionalPaid + cashOperationalExpenses;
     const cashFlow = cashIn - cashOut;
     const contributionMarginValue = realized - professionalPaid;
     const contributionMarginPct = realized > 0 ? (contributionMarginValue / realized) * 100 : 0;
@@ -9353,18 +9405,33 @@ export function CoordinatorDashboard({
         .forEach((entry: any) => addSpecialtyMetric(entry.specialty, entry.amount, "overdue", patientId));
     });
     paidProfessionalPayments.forEach((payment: any) => {
-      const professionalId = String(payment?.professional_id || payment?.professionalId || "").trim();
-      const professional = therapistMembersById[professionalId] || {};
-      const professionalSpecialties = Array.isArray(professional?.specialties)
-        ? professional.specialties
-        : String(professional?.specialties || professional?.specialty || professional?.professionalSpecialty || "")
-            .split(/[,;|]/);
-      const specialty = String(
-        payment?.specialty ||
-        professionalSpecialties.find((item: any) => String(item || "").trim()) ||
-        "Não informado",
-      ).trim();
+      const specialty = normalizeFinancialSpecialtyLabel(payment?.specialty) || "Não alocado";
       addSpecialtyMetric(specialty, parseCurrencyValue(payment?.amount), "professionalPaid");
+    });
+
+    paidOperationalExpenseEntries.forEach((entry: any) => {
+      const specialty = normalizeFinancialSpecialtyLabel(entry?.specialty) || "Não alocado";
+      const row = ensureSpecialtyRow(specialty);
+      row.allocatedOperationalExpenses += clinicExpenseActualAmount(entry);
+    });
+
+    [...pendingOperationalExpenseEntries, ...overdueOperationalExpenseEntries].forEach((entry: any) => {
+      const dueDate = String(entry?.due_date || entry?.occurred_on || '').slice(0, 10);
+      if (!dueDate || (financialMonth && dueDate.slice(0, 7) !== financialMonth)) return;
+      dueRows.push({
+        source: 'expense',
+        expenseId: String(entry?.id || ''),
+        patientName: entry?.description || 'Despesa operacional',
+        specialty: normalizeFinancialSpecialtyLabel(entry?.specialty) || 'Geral / não alocada',
+        amount: clinicExpenseActualAmount(entry),
+        expectedAmount: clinicExpenseExpectedAmount(entry),
+        dueDay: Number(dueDate.slice(8, 10)) || 0,
+        dueDate,
+        billingMethod: 'Despesa operacional',
+        payerType: resolveClinicExpenseSemanticStatus(entry, todayIso) === 'overdue' ? 'Em atraso' : 'A pagar',
+        insuranceName: '',
+        category: entry?.category || 'operacional',
+      });
     });
 
     (payments || []).forEach((payment: any) => {
@@ -9390,12 +9457,7 @@ export function CoordinatorDashboard({
       });
     });
 
-    const specialtyBasisTotal = realized > 0 ? realized : projection;
     Array.from(specialtyMap.values()).forEach((row: any) => {
-      const basis = realized > 0 ? row.realized : row.projected;
-      row.allocatedOperationalExpenses = specialtyBasisTotal > 0
-        ? operationalExpenses * (basis / specialtyBasisTotal)
-        : 0;
       row.contributionProfit = row.realized - row.professionalPaid;
       row.netProfit = row.realized - row.professionalPaid - row.allocatedOperationalExpenses;
       row.contributionMarginPct = row.realized > 0 ? (row.contributionProfit / row.realized) * 100 : 0;
@@ -9411,8 +9473,8 @@ export function CoordinatorDashboard({
       { label: "Inadimplência", value: -overdueAmount, type: "expense", info: `${overduePayments.length} pagamento(s) vencido(s) sem baixa.` },
       { label: "A receber projetado", value: outstanding, type: "total", info: "Diferença entre projeção mensal e pagamentos pagos." },
       { label: "Pagamentos a profissionais", value: -professionalPaid, type: "expense", info: "Repasses profissionais pagos no mês." },
-      { label: "Despesas operacionais", value: -operationalExpenses, type: "expense", info: "Saídas registradas no fluxo de caixa da clínica." },
-      { label: "Fluxo de caixa líquido", value: cashFlow, type: cashFlow >= 0 ? "profit" : "expense", info: "Entradas pagas menos saídas pagas." },
+      { label: "Despesas operacionais realizadas", value: -operationalExpenses, type: "expense", info: "Despesas da competência efetivamente pagas/realizadas; previsões abertas não viram saída realizada." },
+      { label: "Fluxo de caixa líquido", value: cashFlow, type: cashFlow >= 0 ? "profit" : "expense", info: "Entradas pagas menos repasses e despesas efetivamente pagas no caixa do período." },
       { label: "Lucro líquido", value: netProfit, type: netProfit >= 0 ? "profit" : "expense", info: `Margem líquida ${netMarginPct.toFixed(1)}%.` },
       { label: "Margem de contribuição", value: contributionMarginValue, type: contributionMarginValue >= 0 ? "profit" : "expense", info: `${contributionMarginPct.toFixed(1)}% após repasses profissionais pagos.` },
       { label: "Novas entradas", value: newEntriesValue, type: "income", info: `${newPatients.length} paciente(s) cadastrados no mês.` },
@@ -9440,7 +9502,7 @@ export function CoordinatorDashboard({
         monthFull: formatFinancialMonthLabel(key, "long"),
         projected: key === financialMonth ? projection : 0,
         realized: paid,
-        profit: paid - professional,
+        profit: paid - professional - (key === financialMonth ? cashOperationalExpenses : 0),
       };
     });
 
@@ -9494,6 +9556,14 @@ export function CoordinatorDashboard({
       professionalPaid,
       professionalPending,
       operationalExpenses,
+      projectedOperationalExpenses,
+      pendingOperationalExpenses,
+      overdueOperationalExpenses,
+      cashOperationalExpenses,
+      paidOperationalExpenseEntries,
+      pendingOperationalExpenseEntries,
+      overdueOperationalExpenseEntries,
+      activeOperationalExpenseEntries,
       contributionMarginValue,
       contributionMarginPct,
       netProfit,
@@ -9721,13 +9791,11 @@ export function CoordinatorDashboard({
   [financialDashboard.specialtyRows]);
 
   const financialProfitSpecialtyRows = useMemo(() =>
-    financialDashboard.specialtyRows.map((row: any) => ({
+    financialDashboard.specialtyRows.map((row: any) => buildFinancialSpecialtySeriesRow({
       name: row.label,
-      Receita: row.realized || row.projected,
-      Repasses: row.professionalPaid,
-      "Despesas alocadas": row.allocatedOperationalExpenses,
-      "Lucro estimado": row.netProfit,
-      "Margem %": row.netMarginPct,
+      revenue: row.realized || row.projected,
+      professionalTransfers: row.professionalPaid,
+      allocatedExpenses: row.allocatedOperationalExpenses,
     })),
   [financialDashboard.specialtyRows]);
 
@@ -9787,7 +9855,7 @@ export function CoordinatorDashboard({
         rows.push({
           id: `plan:${patient?.id || "patient"}:${plan?.logicalId || plan?.logical_id || plan?.id || rows.length}`,
           patientName: patient?.name || "Paciente",
-          specialty: plan?.specialty || "Não informado",
+          specialty: normalizeFinancialSpecialtyLabel(plan?.specialty) || "Não alocado",
           originLabel: plan?.billingMode === "INSURANCE"
             ? `Convênio${plan?.insuranceName ? ` · ${plan.insuranceName}` : ""}`
             : "Particular",
@@ -9825,7 +9893,7 @@ export function CoordinatorDashboard({
         ...(charge?.items || []).map((item: any) => item?.competence_month || item?.completion_at || item?.appointment_scheduled_at),
       ];
       if (!referenceValues.some((value) => isSameFinancialMonth(value, referenceMonth))) return false;
-      return matchesFinancialDrilldownCharge(charge, financialDrilldown, normalizeLookupText, normalizeRevenueOriginLabel);
+      return matchesFinancialDrilldownCharge(charge, financialDrilldown, normalizeLookupText, normalizeRevenueOriginLabel, normalizeFinancialSpecialtyLabel);
     });
   }, [financialDrilldown, financialMonth, patientFinanceChargeRows]);
 
@@ -9848,6 +9916,24 @@ export function CoordinatorDashboard({
     const expectedSpecialty = normalizeLookupText(financialDrilldown.filter);
     return financialProfitSpecialtyRows.filter((row: any) => normalizeLookupText(row?.name) === expectedSpecialty);
   }, [financialDrilldown, financialProfitSpecialtyRows]);
+
+  const financialDrilldownProfessionalPayments = useMemo(() => {
+    if (financialDrilldown?.kind !== "profit-by-specialty" || !["Repasses", "Resultado"].includes(String(financialDrilldown.series || ""))) return [];
+    const expectedSpecialty = normalizeFinancialSpecialtyLabel(financialDrilldown.filter);
+    if (!expectedSpecialty) return [];
+    return (financialDashboard.paidProfessionalPayments || []).filter((payment: any) =>
+      normalizeFinancialSpecialtyLabel(payment?.specialty) === expectedSpecialty,
+    );
+  }, [financialDashboard.paidProfessionalPayments, financialDrilldown]);
+
+  const financialDrilldownExpenseEntries = useMemo(() => {
+    if (financialDrilldown?.kind !== "profit-by-specialty" || !["Despesas alocadas", "Resultado"].includes(String(financialDrilldown.series || ""))) return [];
+    const expectedSpecialty = normalizeFinancialSpecialtyLabel(financialDrilldown.filter);
+    if (!expectedSpecialty) return [];
+    return (financialDashboard.paidOperationalExpenseEntries || []).filter((entry: any) =>
+      normalizeFinancialSpecialtyLabel(entry?.specialty) === expectedSpecialty,
+    );
+  }, [financialDashboard.paidOperationalExpenseEntries, financialDrilldown]);
 
   const selectedFinancialDrilldownPayment = useMemo(
     () => patientFinanceChargeRows.find((charge: any) => String(charge?.id || "") === financialDrilldownPaymentId) || null,
@@ -12175,7 +12261,7 @@ export function CoordinatorDashboard({
                         { label: "A receber", value: formatCurrency(financialDashboard.pendingAmount), rawValue: financialDashboard.pendingAmount, hint: "Pendente: cobranças em aberto no mês", semantic: "neutral" as const },
                         { label: "Em atraso", value: formatCurrency(financialDashboard.overdueAmount), rawValue: financialDashboard.overdueAmount, hint: "Pendente vencido no período", semantic: "negative" as const },
                         { label: "Repasses previstos", value: formatCurrency(financialDashboard.professionalPending), rawValue: financialDashboard.professionalPending, hint: "Previsto/a pagar a profissionais", semantic: "negative" as const },
-                        { label: "Despesas", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Realizado: saídas registradas no fluxo de caixa", semantic: "negative" as const },
+                        { label: "Despesas realizadas", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Realizado: despesas pagas da competência", semantic: "negative" as const },
                         { label: "Lucro estimado", value: formatCurrency(financialDashboard.netProfit), rawValue: financialDashboard.netProfit, hint: `Estimado: ${financialDashboard.netMarginPct.toFixed(1)}% de margem líquida`, semantic: "profit" as const },
                         { label: "Ticket médio", value: formatCurrency(financialDashboard.averageTicket), rawValue: financialDashboard.averageTicket, hint: "Projetado por paciente ativo", semantic: "neutral" as const },
                       ].map((metric) => (
@@ -12189,7 +12275,7 @@ export function CoordinatorDashboard({
 
                     <div className="mt-6 rounded-3xl bg-slate-50 px-5 py-4 text-xs text-slate-500">
                       <p>
-                        Projetado: soma dos planos ativos. Realizado: pagamentos confirmados. A receber: cobranças em aberto. Repasses: valores previstos ou pagos a profissionais. Lucro estimado: receita realizada menos repasses pagos e despesas conhecidas.
+                        Projetado: soma dos planos ativos. Realizado: pagamentos confirmados. A receber: cobranças em aberto. Repasses: valores previstos ou pagos a profissionais. Lucro estimado: receita realizada menos repasses pagos e despesas operacionais realizadas da competência.
                       </p>
                     </div>
 
@@ -12287,8 +12373,8 @@ export function CoordinatorDashboard({
                         {renderFinancialChartCard(
                           "profit-by-specialty",
                           "Lucro/margem por especialidade",
-                          "Compara receita, repasses, despesas alocadas e lucro estimado por área clínica.",
-                          hasFinancialChartData(financialProfitSpecialtyRows, ["Receita", "Repasses", "Despesas alocadas", "Lucro estimado"]),
+                          "Receita, Repasses e Despesas alocadas formam o Lucro estimado, exibido como Resultado; positivos ficam acima de zero e custos ficam abaixo.",
+                          hasFinancialChartData(financialProfitSpecialtyRows, ["Receita", "Repasses", "Despesas alocadas", "Resultado"]),
                           <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260}>
                             <BarChart data={financialProfitSpecialtyRows}>
                               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={financialChartGridColor} />
@@ -12310,9 +12396,9 @@ export function CoordinatorDashboard({
                                   <Cell key={`profit-expense-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Despesas alocadas")} />
                                 ))}
                               </Bar>
-                              <Bar name="Lucro estimado" dataKey="Lucro estimado" fill="#22c55e" radius={[6, 6, 0, 0]}>
+                              <Bar name="Resultado" dataKey="Resultado" radius={[6, 6, 0, 0]}>
                                 {financialProfitSpecialtyRows.map((row: any) => (
-                                  <Cell key={`profit-net-cell-${row.name}`} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Lucro estimado")} />
+                                  <Cell key={`profit-net-cell-${row.name}`} fill={Number(row.Resultado) < 0 ? "#ef4444" : "#22c55e"} cursor="pointer" onClick={() => openFinancialDrilldown("profit-by-specialty", "Lucro/margem por especialidade", row.name, "Resultado")} />
                                 ))}
                               </Bar>
                             </BarChart>
@@ -12580,19 +12666,33 @@ export function CoordinatorDashboard({
                 )}
 
                 {isExpenseSection && (
-                  <div data-financial-expenses-view className="grid gap-3 md:grid-cols-4">
-                    {[
-                      { label: "Despesas operacionais", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Saídas registradas no período", semantic: "negative" as const },
-                      { label: "Repasses pagos", value: formatCurrency(financialDashboard.professionalPaid), rawValue: financialDashboard.professionalPaid, hint: "Pagamentos profissionais baixados", semantic: "negative" as const },
-                      { label: "Repasses pendentes", value: formatCurrency(financialDashboard.professionalPending), rawValue: financialDashboard.professionalPending, hint: "Valores ainda a repassar", semantic: "negative" as const },
-                      { label: "Saldo líquido", value: formatCurrency(financialDashboard.cashFlow), rawValue: financialDashboard.cashFlow, hint: "Entradas pagas menos saídas pagas", semantic: "profit" as const },
-                    ].map((metric) => (
-                      <div key={metric.label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
-                        <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{metric.label}</p>
-                        <p className={`mt-2 text-xl font-semibold ${getFinancialSemanticValueClass(metric.semantic, metric.rawValue)}`}>{metric.value}</p>
-                        <p className="mt-1 text-xs text-slate-500">{metric.hint}</p>
-                      </div>
-                    ))}
+                  <div data-financial-expenses-view className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-4">
+                      {[
+                        { label: "Despesas realizadas", value: formatCurrency(financialDashboard.operationalExpenses), rawValue: financialDashboard.operationalExpenses, hint: "Competência paga/realizada", semantic: "negative" as const },
+                        { label: "Despesas previstas", value: formatCurrency(financialDashboard.projectedOperationalExpenses), rawValue: financialDashboard.projectedOperationalExpenses, hint: "Previsto da competência, sem virar caixa", semantic: "neutral" as const },
+                        { label: "A pagar", value: formatCurrency(financialDashboard.pendingOperationalExpenses), rawValue: financialDashboard.pendingOperationalExpenses, hint: "Obrigações abertas ainda no prazo", semantic: "negative" as const },
+                        { label: "Em atraso", value: formatCurrency(financialDashboard.overdueOperationalExpenses), rawValue: financialDashboard.overdueOperationalExpenses, hint: "Despesas abertas com vencimento ultrapassado", semantic: "negative" as const },
+                      ].map((metric) => (
+                        <div key={metric.label} className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm">
+                          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">{metric.label}</p>
+                          <p className={`mt-2 text-xl font-semibold ${getFinancialSemanticValueClass(metric.semantic, metric.rawValue)}`}>{metric.value}</p>
+                          <p className="mt-1 text-xs text-slate-500">{metric.hint}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
+                      <ClinicExpenseManager
+                        month={financialMonth}
+                        entries={financialEntries}
+                        rules={clinicExpenseRules}
+                        schemaReady={clinicExpenseSchemaReady}
+                        canManage={canManageClinicExpenses}
+                        loading={patientFinanceLedgerLoading}
+                        onChanged={() => setClinicExpenseRefreshKey((value) => value + 1)}
+                        onToast={showToast}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -13314,35 +13414,36 @@ export function CoordinatorDashboard({
                         Próximos vencimentos
                       </h4>
                       <div className="space-y-4">
-                        {compensationForecast.map((member, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl"
-                          >
-                            <div>
-                              <p className="text-sm font-medium text-slate-900">
-                                {member.patientName}
-                              </p>
-                              <p className="text-[10px] font-medium uppercase tracking-widest text-slate-400">
-                                {member.specialty}
-                              </p>
-                              <p className="mt-1 text-[10px] text-slate-500">
-                                {member.payerType}{member.insuranceName ? ` • ${member.insuranceName}` : ""}
-                              </p>
+                        {compensationForecast.map((member, i) => {
+                          const isExpenseDue = member?.source === 'expense';
+                          return (
+                            <div
+                              key={member?.expenseId || member?.paymentId || `${member?.patientId || 'due'}-${member?.dueDate || i}`}
+                              data-financial-due-source={isExpenseDue ? 'expense' : 'receivable'}
+                              className="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 p-4"
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {isExpenseDue && <ReceiptText size={14} className="text-rose-500" />}
+                                  <p className="truncate text-sm font-medium text-slate-900">{member.patientName}</p>
+                                </div>
+                                <p className="mt-1 text-[10px] font-medium uppercase tracking-widest text-slate-400">
+                                  {isExpenseDue ? `Despesa operacional · ${member.category || 'operacional'}` : member.specialty}
+                                </p>
+                                <p className="mt-1 text-[10px] text-slate-500">
+                                  {isExpenseDue ? `${member.payerType} · ${member.specialty}` : `${member.payerType}${member.insuranceName ? ` • ${member.insuranceName}` : ""}`}
+                                </p>
+                              </div>
+                              <div className="shrink-0 text-right">
+                                <p className="text-sm font-medium text-slate-900">{formatCurrency(member.amount)}</p>
+                                <p className={`text-[10px] font-medium uppercase tracking-widest ${isExpenseDue && member.payerType === 'Em atraso' ? 'text-rose-500' : 'text-emerald-500'}`}>
+                                  {member.dueDate ? `Vence ${formatDisplayDate(member.dueDate)}` : `Vence dia ${String(member.dueDay).padStart(2, "0")}`}
+                                </p>
+                                <p className="text-[10px] text-slate-400">{member.billingMethod}</p>
+                              </div>
                             </div>
-                            <div className="text-right">
-                              <p className="text-sm font-medium text-slate-900">
-                                {formatCurrency(member.amount)}
-                              </p>
-                              <p className="text-[10px] font-medium uppercase tracking-widest text-emerald-500">
-                                Vence dia {String(member.dueDay).padStart(2, "0")}
-                              </p>
-                              <p className="text-[10px] text-slate-400">
-                                {member.billingMethod}
-                              </p>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                         {!compensationForecast.length && (
                           <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-400">
                             Nenhum vencimento financeiro encontrado no período.
@@ -13353,9 +13454,10 @@ export function CoordinatorDashboard({
 
                     {isExpenseSection && (
                     <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                      <h4 className="mb-6 font-semibold text-slate-900">
-                        Pagamentos de profissionais
+                      <h4 className="mb-1 font-semibold text-slate-900">
+                        Repasses profissionais
                       </h4>
+                      <p className="mb-6 text-xs text-slate-500">Categoria financeira separada das despesas operacionais da clínica.</p>
                       <div className="space-y-4">
                         {financialDashboard.professionalPayments.length ? (
                           financialDashboard.professionalPayments.map((payment: any, index: number) => (
@@ -13441,7 +13543,7 @@ export function CoordinatorDashboard({
                                   <div><p className="text-slate-400">Receita</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row.Receita)}</p></div>
                                   <div><p className="text-slate-400">Repasses</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row.Repasses)}</p></div>
                                   <div><p className="text-slate-400">Despesas alocadas</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row["Despesas alocadas"])}</p></div>
-                                  <div><p className="text-slate-400">Lucro estimado</p><p className="mt-1 font-medium text-slate-800">{formatCurrency(row["Lucro estimado"])}</p></div>
+                                  <div><p className="text-slate-400">Resultado</p><p className={`mt-1 font-medium ${Number(row.Resultado) < 0 ? "text-rose-700" : "text-emerald-700"}`}>{formatCurrency(row.Resultado)}</p></div>
                                 </div>
                               </div>
                             ))}
@@ -13468,6 +13570,45 @@ export function CoordinatorDashboard({
                           </section>
                         )}
 
+                        {financialDrilldownProfessionalPayments.length > 0 && (
+                          <section data-financial-drilldown-professional-transfers className="mb-6">
+                            <div className="mb-3">
+                              <h4 className="text-sm font-semibold text-slate-900">Repasses formadores</h4>
+                              <p className="mt-1 text-xs text-slate-500">Somente repasses pagos com especialidade financeira explicitamente comprovada.</p>
+                            </div>
+                            <div className="space-y-2">
+                              {financialDrilldownProfessionalPayments.map((payment: any) => (
+                                <div key={`profit-transfer-${payment?.id}`} className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div><p className="text-sm font-medium text-slate-900">{formatProfessionalPaymentDisplayName(payment)}</p><p className="mt-1 text-xs text-slate-500">{normalizeFinancialSpecialtyLabel(payment?.specialty) || "Não alocado"} · {formatDisplayDate(payment?.payment_date || payment?.due_date)}</p></div>
+                                    <p className="text-sm font-semibold text-rose-700">{formatCurrency(-parseCurrencyValue(payment?.amount))}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+                        )}
+
+                        {financialDrilldownExpenseEntries.length > 0 && (
+                          <section data-financial-drilldown-operational-expenses className="mb-6">
+                            <div className="mb-3">
+                              <h4 className="text-sm font-semibold text-slate-900">Despesas alocadas formadoras</h4>
+                              <p className="mt-1 text-xs text-slate-500">Apenas despesas realizadas com alocação explícita nesta especialidade; custos gerais não são rateados artificialmente.</p>
+                            </div>
+                            <div className="space-y-2">
+                              {financialDrilldownExpenseEntries.map((entry: any) => (
+                                <div key={`profit-expense-${entry?.id}`} className="rounded-2xl border border-rose-100 bg-rose-50/40 p-4">
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div><p className="text-sm font-medium text-slate-900">{entry?.description || "Despesa operacional"}</p><p className="mt-1 text-xs text-slate-500">{entry?.category || "Operacional"} · {formatDisplayDate(entry?.paid_on || entry?.occurred_on)}</p></div>
+                                    <p className="text-sm font-semibold text-rose-700">{formatCurrency(-clinicExpenseActualAmount(entry))}</p>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </section>
+                        )}
+
+                        {!(financialDrilldown.kind === "profit-by-specialty" && ["Repasses", "Despesas alocadas"].includes(String(financialDrilldown.series || ""))) && (
                         <section data-financial-drilldown-payments>
                           <div className="mb-3">
                             <h4 className="text-sm font-semibold text-slate-900">Recebíveis / pagamentos formadores</h4>
@@ -13495,6 +13636,7 @@ export function CoordinatorDashboard({
                             {!financialDrilldownPayments.length && <p className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">Nenhum recebível material forma este indicador no período selecionado.</p>}
                           </div>
                         </section>
+                        )}
 
                         {selectedFinancialDrilldownPayment && (
                           <section data-financial-drilldown-payment-composition className="mt-6 rounded-3xl border border-violet-100 bg-violet-50/40 p-4">

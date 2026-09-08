@@ -8388,6 +8388,132 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+
+  async getClinicExpenses(month?: string) {
+    try {
+      const endpoint = endpointWithQuery('/api/financial/expenses', { month });
+      const response = await fetchWithAuthRetry(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching clinic expenses:', error);
+      return { success: false, schemaReady: false, data: { entries: [], rules: [] }, error: 'Não foi possível carregar as despesas da clínica agora.' };
+    }
+  },
+
+  async createClinicExpense(payload: any) {
+    try {
+      const requestPayload = { ...(payload || {}), id: String(payload?.id || generateId()) };
+      const response = await fetchWithAuthRetry('/api/financial/expenses', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating clinic expense:', error);
+      return { success: false, error: 'Não foi possível cadastrar a despesa agora.' };
+    }
+  },
+
+  async updateClinicExpense(expenseId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expenses/${encodeURIComponent(String(expenseId))}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating clinic expense:', error);
+      return { success: false, error: 'Não foi possível atualizar a despesa agora.' };
+    }
+  },
+
+  async markClinicExpensePaid(expenseId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expenses/${encodeURIComponent(String(expenseId))}/pay`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error paying clinic expense:', error);
+      return { success: false, error: 'Não foi possível registrar o pagamento da despesa agora.' };
+    }
+  },
+
+  async cancelClinicExpense(expenseId: string) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expenses/${encodeURIComponent(String(expenseId))}/cancel`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error canceling clinic expense:', error);
+      return { success: false, error: 'Não foi possível cancelar a despesa agora.' };
+    }
+  },
+
+  async createClinicExpenseRule(payload: any) {
+    try {
+      const requestPayload = { ...(payload || {}), id: String(payload?.id || generateId()) };
+      const response = await fetchWithAuthRetry('/api/financial/expense-rules', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating clinic expense rule:', error);
+      return { success: false, error: 'Não foi possível cadastrar a recorrência agora.' };
+    }
+  },
+
+  async updateClinicExpenseRule(ruleId: string, payload: any) {
+    try {
+      const requestPayload = {
+        ...(payload || {}),
+        replacement_id: String(payload?.replacement_id || payload?.replacementId || generateId())
+      };
+      const response = await fetchWithAuthRetry(`/api/financial/expense-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating clinic expense rule:', error);
+      return { success: false, error: 'Não foi possível atualizar a recorrência agora.' };
+    }
+  },
+
+  async endClinicExpenseRule(ruleId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expense-rules/${encodeURIComponent(String(ruleId))}/end`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error ending clinic expense rule:', error);
+      return { success: false, error: 'Não foi possível encerrar a recorrência agora.' };
+    }
+  },
+
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
     const endpoint = `/api/profile/${userId}`;

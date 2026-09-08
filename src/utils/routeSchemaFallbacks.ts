@@ -695,11 +695,20 @@ export const FINANCIAL_ENTRY_SELECT_COLUMNS = [
   'category',
   'description',
   'amount',
+  'expected_amount',
   'occurred_on',
+  'due_date',
+  'paid_on',
+  'competence_month',
   'status',
   'source',
   'notes',
+  'recurring_cost_id',
+  'recurring_cost_logical_id',
+  'recurrence_occurrence_key',
+  'specialty',
   'created_by',
+  'updated_by',
   'created_at',
   'updated_at'
 ];
@@ -1096,9 +1105,18 @@ const PROFESSIONAL_PAYMENT_OPTIONAL_COLUMNS = new Set([
 
 const FINANCIAL_ENTRY_OPTIONAL_COLUMNS = new Set([
   'clinic_id',
+  'expected_amount',
+  'due_date',
+  'paid_on',
+  'competence_month',
   'source',
   'notes',
+  'recurring_cost_id',
+  'recurring_cost_logical_id',
+  'recurrence_occurrence_key',
+  'specialty',
   'created_by',
+  'updated_by',
   'updated_at'
 ]);
 

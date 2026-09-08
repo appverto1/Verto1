@@ -28,16 +28,18 @@ assert.deepEqual(
 
 const server = fs.readFileSync(new URL("../server.ts", import.meta.url), "utf8");
 const migration = fs.readFileSync(
-  new URL("../supabase/migrations/20260902133000_clinic_recurring_costs.sql", import.meta.url),
+  new URL("../supabase/migrations/20260908010000_clinic_expense_management.sql", import.meta.url),
   "utf8",
 );
 const dashboard = fs.readFileSync(new URL("../src/components/CoordinatorDashboard.tsx", import.meta.url), "utf8");
 
-assert.match(server, /app\.get\('\/api\/financial\/costs'/, "the bounded cost reader must exist");
-assert.match(server, /app\.post\('\/api\/financial\/costs'/, "the validated cost writer must exist");
-assert.match(server, /\.eq\('clinic_id', clinicId\)/, "cost queries must be scoped to the active clinic");
+assert.match(server, /app\.get\('\/api\/financial\/expenses'/, "the bounded expense reader must exist");
+assert.match(server, /app\.post\('\/api\/financial\/expenses'/, "the validated one-off expense writer must exist");
+assert.match(server, /app\.post\('\/api\/financial\/expense-rules'/, "the recurring rule writer must exist");
+assert.match(server, /\.eq\('clinic_id', scope\.clinicId\)/, "expense queries must be scoped to the active clinic");
 assert.match(migration, /enable row level security/i, "clinic costs must have RLS enabled");
-assert.match(migration, /recurrence in \('weekly', 'monthly'\)/, "recurrence must be constrained in the database");
-assert.match(dashboard, /projectClinicCostForMonth/, "the clinic DRE must project registered recurring costs");
+assert.match(migration, /materialize_clinic_expense_occurrences_v1/, "recurrence must materialize bounded monthly occurrences idempotently");
+assert.match(dashboard, /ClinicExpenseManager/, "Finance must expose operational expense management");
+assert.match(dashboard, /projectedOperationalExpenses/, "the clinic DRE must distinguish projected from realized operating expenses");
 
 console.log("clinicRecurringCosts.test: PASS");
