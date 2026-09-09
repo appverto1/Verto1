@@ -68,6 +68,10 @@ import {
   privateAppointmentFinancialReadinessLabel,
   resolvePatientFinancialStatus
 } from '../utils/patientFinancialLedger';
+import {
+  isMonthlySessionBillingPlan,
+  normalizePatientFinancialPlans,
+} from '../utils/patientFinancialPlan';
 
 const formatPatientFinanceCurrency = (value: any) => new Intl.NumberFormat('pt-BR', {
   style: 'currency',
@@ -3411,6 +3415,25 @@ export const ClinicalAgendaBoard = ({
   const signatures = Array.isArray(detail.signatures) ? detail.signatures : [];
   const billingContext = detail.billingContext || {};
   const patientFinance = detail.patientFinance || null;
+  const patientFinancialEngine = String(detail.patientFinancialEngine || '').trim().toUpperCase();
+  const isMonthlySessionFinance =
+    patientFinancialEngine === 'MONTHLY_SESSION' ||
+    String(patientFinance?.source || '').toUpperCase() === 'MONTHLY_SESSION_AGGREGATE';
+  const monthlySessionPatient = (patients || []).find((patient: any) =>
+    String(patient?.id || '') === String(detailEvent?.patient_id || detailEvent?.patientId || '')
+  );
+  const monthlySessionPlans = normalizePatientFinancialPlans(
+    monthlySessionPatient?.financialPlans || monthlySessionPatient?.financial_plans || [],
+    monthlySessionPatient || {},
+  ).filter(isMonthlySessionBillingPlan);
+  const monthlySessionPlan = monthlySessionPlans.length === 1
+    ? monthlySessionPlans[0]
+    : monthlySessionPlans.find((plan: any) => {
+        const appointmentService = String(detailEvent?.service_type || detailEvent?.type || '').trim().toLowerCase();
+        const planService = String(plan?.serviceType || plan?.customServiceName || plan?.specialty || '').trim().toLowerCase();
+        return Boolean(appointmentService && planService && (appointmentService === planService || appointmentService.includes(planService) || planService.includes(appointmentService)));
+      }) || null;
+  const monthlySessionUnitAmount = Number(patientFinance?.unit_amount ?? monthlySessionPlan?.amountCents / 100 ?? 0) || 0;
   const patientFinanceStatus = resolvePatientFinancialStatus(patientFinance);
   const patientFinanceAmounts = getPatientFinanceAmounts(patientFinance);
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
@@ -3531,11 +3554,15 @@ export const ClinicalAgendaBoard = ({
       warning: Number(detailEvent.closure_warning_count || 0) > 0,
       message: Number(detailEvent.closure_warning_count || 0) > 0 ? 'Ha alertas operacionais. Revise antes do XML.' : 'Sem bloqueios anti-glosa carregados nesta sessão.'
     }
-  ];
+  ].filter((item: any) => !billingDetailIsNonInsuranceContext || item.label === 'Servico');
   const financialBlockingCount = financialValidationItems.filter((item: any) => !item.ok).length;
   const financialWarningCount = financialValidationItems.filter((item: any) => item.ok && item.warning).length;
   const financialValidationStatus = billingDetailIsNonInsuranceContext
-    ? privateAppointmentFinancialReadinessLabel(patientFinance)
+    ? isMonthlySessionFinance
+      ? patientFinance?.payment_id
+        ? 'Incluída no faturamento mensal'
+        : 'Faturamento mensal automático'
+      : privateAppointmentFinancialReadinessLabel(patientFinance)
     : financialBlockingCount > 0
       ? 'Bloqueada para faturamento'
       : financialWarningCount > 0
@@ -4463,9 +4490,11 @@ export const ClinicalAgendaBoard = ({
                         {financialValidationStatus}
                       </h4>
                     </div>
-                    <button type="button" onClick={() => openBillingEditor()} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white">
-                      Corrigir pagador
-                    </button>
+                    {!billingDetailIsNonInsuranceContext && (
+                      <button type="button" onClick={() => openBillingEditor()} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-bold text-white">
+                        Corrigir pagador
+                      </button>
+                    )}
                   </div>
                   <div className="mt-3 grid gap-2">
                     {financialValidationItems.map((item: any) => {
@@ -4492,32 +4521,49 @@ export const ClinicalAgendaBoard = ({
               )}
             </div>
 
-            {billingFinancialContextType === 'PRIVATE' && (
+            {(billingFinancialContextType === 'PRIVATE' || isMonthlySessionFinance) && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`} data-appointment-patient-finance>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
-                    <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">Financeiro da sessão</p>
-                    <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-                      <div><span className="block text-xs text-slate-400">Valor</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(patientFinanceAmounts.total)}</span></div>
-                      <div><span className="block text-xs text-slate-400">Pago</span><span className="mt-1 block font-medium text-emerald-600">{formatPatientFinanceCurrency(patientFinanceAmounts.paid)}</span></div>
-                      <div><span className="block text-xs text-slate-400">Saldo</span><span className={`mt-1 block font-medium ${patientFinanceAmounts.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{formatPatientFinanceCurrency(patientFinanceAmounts.balance)}</span></div>
-                      <div><span className="block text-xs text-slate-400">Vencimento</span><span className="mt-1 block font-medium">{patientFinance?.due_date ? formatDisplayDate(patientFinance.due_date) : 'Não definido'}</span></div>
-                      <div><span className="block text-xs text-slate-400">Forma de pagamento</span><span className="mt-1 block font-medium">{patientFinance?.method || 'Não informada'}</span></div>
-                      <div><span className="block text-xs text-slate-400">Último pagamento</span><span className="mt-1 block font-medium">{patientFinance?.last_payment_at ? formatDisplayDateTime(patientFinance.last_payment_at, { separator: ', ' }) : 'Não registrado'}</span></div>
-                      <div><span className="block text-xs text-slate-400">Origem do preço</span><span className="mt-1 block font-medium">{patientFinance?.private_price_source_label || patientFinance?.private_price_source || 'Histórico legado'}</span></div>
-                      <div><span className="block text-xs text-slate-400">Pagador</span><span className="mt-1 block font-medium">{patientFinance?.payer_name || 'Paciente/responsável'}</span></div>
-                      <div><span className="block text-xs text-slate-400">Cancelamento gratuito até</span><span className="mt-1 block font-medium">{patientFinance?.cancellation_free_until ? formatDisplayDateTime(patientFinance.cancellation_free_until, { separator: ', ' }) : 'Política não congelada'}</span></div>
-                    </div>
+                    <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">{isMonthlySessionFinance ? 'Faturamento mensal automático' : 'Financeiro da sessão'}</p>
+                    {isMonthlySessionFinance ? (
+                      <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+                        <div><span className="block text-xs text-slate-400">Regra</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(monthlySessionUnitAmount)} por sessão realizada</span></div>
+                        <div><span className="block text-xs text-slate-400">Estado</span><span className="mt-1 block font-medium">{patientFinance?.payment_id ? 'Incluída no faturamento mensal' : 'Ainda não incluída na competência'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Competência</span><span className="mt-1 block font-medium">{patientFinance?.appointment_scheduled_at ? formatDisplayMonthYear(patientFinance.appointment_scheduled_at) : 'Será definida pela data da sessão'}</span></div>
+                        {patientFinance?.payment_id && (
+                          <>
+                            <div><span className="block text-xs text-slate-400">Recebível mensal</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(patientFinanceAmounts.total)}</span></div>
+                            <div><span className="block text-xs text-slate-400">Pago</span><span className="mt-1 block font-medium text-emerald-600">{formatPatientFinanceCurrency(patientFinanceAmounts.paid)}</span></div>
+                            <div><span className="block text-xs text-slate-400">Saldo</span><span className={`mt-1 block font-medium ${patientFinanceAmounts.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{formatPatientFinanceCurrency(patientFinanceAmounts.balance)}</span></div>
+                            <div><span className="block text-xs text-slate-400">Vencimento</span><span className="mt-1 block font-medium">{patientFinance?.due_date ? formatDisplayDate(patientFinance.due_date) : 'Não definido'}</span></div>
+                            <div><span className="block text-xs text-slate-400">Pagador</span><span className="mt-1 block font-medium">{patientFinance?.payer_name || (billingFinancialContextType === 'PRIVATE' ? 'Paciente/responsável' : 'Não informado')}</span></div>
+                          </>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+                        <div><span className="block text-xs text-slate-400">Valor</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(patientFinanceAmounts.total)}</span></div>
+                        <div><span className="block text-xs text-slate-400">Pago</span><span className="mt-1 block font-medium text-emerald-600">{formatPatientFinanceCurrency(patientFinanceAmounts.paid)}</span></div>
+                        <div><span className="block text-xs text-slate-400">Saldo</span><span className={`mt-1 block font-medium ${patientFinanceAmounts.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{formatPatientFinanceCurrency(patientFinanceAmounts.balance)}</span></div>
+                        <div><span className="block text-xs text-slate-400">Vencimento</span><span className="mt-1 block font-medium">{patientFinance?.due_date ? formatDisplayDate(patientFinance.due_date) : 'Não definido'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Forma de pagamento</span><span className="mt-1 block font-medium">{patientFinance?.method || 'Não informada'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Último pagamento</span><span className="mt-1 block font-medium">{patientFinance?.last_payment_at ? formatDisplayDateTime(patientFinance.last_payment_at, { separator: ', ' }) : 'Não registrado'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Origem do preço</span><span className="mt-1 block font-medium">{patientFinance?.private_price_source_label || patientFinance?.private_price_source || 'Histórico legado'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Pagador</span><span className="mt-1 block font-medium">{patientFinance?.payer_name || 'Paciente/responsável'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Cancelamento gratuito até</span><span className="mt-1 block font-medium">{patientFinance?.cancellation_free_until ? formatDisplayDateTime(patientFinance.cancellation_free_until, { separator: ', ' }) : 'Política não congelada'}</span></div>
+                      </div>
+                    )}
                   </div>
-                  <span className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-medium ${PATIENT_FINANCIAL_STATUS_CLASSES[patientFinanceStatus]}`}>
-                    {PATIENT_FINANCIAL_STATUS_LABELS[patientFinanceStatus]}
+                  <span className={`inline-flex w-fit rounded-full border px-3 py-1.5 text-xs font-medium ${isMonthlySessionFinance && !patientFinance?.payment_id ? 'border-sky-200 bg-sky-50 text-sky-700' : PATIENT_FINANCIAL_STATUS_CLASSES[patientFinanceStatus]}`}>
+                    {isMonthlySessionFinance && !patientFinance?.payment_id ? 'Mensal automático' : PATIENT_FINANCIAL_STATUS_LABELS[patientFinanceStatus]}
                   </span>
                 </div>
                 {onOpenPatientFinance && (
                   <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
-                    {!patientFinance?.payment_id ? (
+                    {!patientFinance?.payment_id && !isMonthlySessionFinance ? (
                       <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'charge')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-medium text-white">Criar cobrança</button>
-                    ) : patientFinanceAmounts.balance > 0 ? (
+                    ) : patientFinance?.payment_id && patientFinanceAmounts.balance > 0 ? (
                       <>
                         <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'payment')} className="rounded-xl bg-[#7a32fc] px-3 py-2 text-xs font-medium text-white">Registrar pagamento</button>
                         <button type="button" onClick={() => onOpenPatientFinance(detailEvent, 'partial_payment')} className={`rounded-xl border px-3 py-2 text-xs font-medium ${isDark ? 'border-slate-700 text-slate-200' : 'border-slate-200 text-slate-600'}`}>Pagamento parcial</button>
@@ -4794,7 +4840,9 @@ export const ClinicalAgendaBoard = ({
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
-                      {closureOperationalView.phaseSummary.title}
+                      {billingDetailIsNonInsuranceContext && closureOperationalView.phaseSummary.title === 'Faturamento TISS'
+                        ? 'Fechamento da sessão'
+                        : closureOperationalView.phaseSummary.title}
                     </p>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       {(() => {
@@ -4822,11 +4870,13 @@ export const ClinicalAgendaBoard = ({
                       )}
                     </div>
                     <p className={`mt-2 text-sm ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-                      {closureOperationalView.phaseSummary.message}
+                      {billingDetailIsNonInsuranceContext && /TISS|Pré-guia/i.test(String(closureOperationalView.phaseSummary.message || ''))
+                        ? 'Conferências clínicas do atendimento concluídas.'
+                        : closureOperationalView.phaseSummary.message}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {!detailCancellationState.isCancelled && [
+                    {!detailCancellationState.isCancelled && !billingDetailIsNonInsuranceContext && [
                       'completed_pending_closure',
                       'closed_ready_for_prefacturing',
                       'prefacturing_ready',
@@ -4860,7 +4910,9 @@ export const ClinicalAgendaBoard = ({
                 )}
                 {!detailCancellationState.isCancelled && closureChecklistExpanded && Array.isArray(closureDetailState.data?.checklist) && closureDetailState.data.checklist.length > 0 && (
                   <div className="mt-4 space-y-4">
-                    {Object.entries(CLOSURE_SECTION_META).map(([sectionKey, meta]) => {
+                    {Object.entries(CLOSURE_SECTION_META)
+                      .filter(([sectionKey]) => !(billingDetailIsNonInsuranceContext && sectionKey === 'tissBilling'))
+                      .map(([sectionKey, meta]) => {
                       const items = Array.isArray(closureOperationalView.sections?.[sectionKey])
                         ? closureOperationalView.sections[sectionKey]
                         : [];

@@ -2477,13 +2477,13 @@ export const dataService = {
 
   async getClinicalNoteMentions(limit = 12) {
     try {
-      const response = await fetchClinical(endpointWithLimit('/api/clinical-note-mentions', normalizeListLimit(limit, 12, 30)), {
+      const response = await fetchClinical(endpointWithLimit('/api/clinical-notifications', normalizeListLimit(limit, 12, 30)), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       }, {
         helperName: 'getClinicalNoteMentions',
         operation: 'list',
-        table: 'clinical_note_mentions',
+        table: 'clinical_note_mentions,clinical_inbox_notifications',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2494,16 +2494,17 @@ export const dataService = {
     }
   },
 
-  async markClinicalNoteMentionRead(mentionId: string) {
+  async markClinicalNoteMentionRead(mentionId: string, source: 'mention' | 'clinical_inbox' = 'mention') {
     try {
-      const response = await fetchClinical(`/api/clinical-note-mentions/${encodeURIComponent(String(mentionId))}/read`, {
+      const response = await fetchClinical(`/api/clinical-notifications/${encodeURIComponent(String(mentionId))}/read`, {
         method: 'PATCH',
         headers: await getAuthHeaders(),
-        credentials: 'include'
+        credentials: 'include',
+        body: JSON.stringify({ source })
       }, {
         helperName: 'markClinicalNoteMentionRead',
         operation: 'write',
-        table: 'clinical_note_mentions',
+        table: source === 'clinical_inbox' ? 'clinical_inbox_notifications' : 'clinical_note_mentions',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
@@ -2751,6 +2752,86 @@ export const dataService = {
         helperName: 'reopenAppointmentNoShow',
         operation: 'write',
         table: 'appointments,appointment_attendance_audit_events,appointment_closure_checks',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async getActiveConventionalSession(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(safePatientId)}/conventional-session/active`,
+      { method: 'GET', credentials: 'include' },
+      {
+        helperName: 'getActiveConventionalSession',
+        operation: 'read',
+        table: 'appointments,notes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async startConventionalSession(patientId: string, appointmentId: string, payload: any = {}) {
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(String(patientId))}/appointments/${encodeURIComponent(String(appointmentId))}/conventional-session/start`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(payload || {}), patientId, patient_id: patientId })
+      },
+      {
+        helperName: 'startConventionalSession',
+        operation: 'write',
+        table: 'appointments,appointment_attendance_audit_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async saveConventionalSessionNote(patientId: string, appointmentId: string, note: string) {
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(String(patientId))}/appointments/${encodeURIComponent(String(appointmentId))}/conventional-session/note`,
+      {
+        method: 'PUT',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId, patient_id: patientId, note: String(note || '') })
+      },
+      {
+        helperName: 'saveConventionalSessionNote',
+        operation: 'write',
+        table: 'appointments,notes',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: true
+      }
+    );
+    const result = await response.json().catch(() => ({}));
+    return response.ok ? result : { success: false, status: response.status, ...result };
+  },
+
+  async completeConventionalSession(patientId: string, appointmentId: string, payload: any = {}) {
+    const response = await fetchClinical(
+      `/api/patients/${encodeURIComponent(String(patientId))}/appointments/${encodeURIComponent(String(appointmentId))}/conventional-session/complete`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...(payload || {}), patientId, patient_id: patientId })
+      },
+      {
+        helperName: 'completeConventionalSession',
+        operation: 'write',
+        table: 'appointments,notes,appointment_attendance_audit_events,payments,payment_appointment_items',
         hasExplicitColumns: true,
         requiresPatientOrSession: true
       }
@@ -3008,6 +3089,7 @@ export const dataService = {
     clinicName?: string;
     professionalName: string;
     specialty?: string;
+    professionalRegistry?: string;
     phone: string;
     email?: string;
   }) {
@@ -3029,6 +3111,7 @@ export const dataService = {
     clinicName?: string;
     professionalName: string;
     specialty?: string;
+    professionalRegistry?: string;
     phone: string;
     email?: string;
   }) {
@@ -3078,6 +3161,40 @@ export const dataService = {
       console.error('Error fetching patient care network:', error);
       return { success: false, error: 'Não foi possível carregar a rede de cuidado agora.', data: [] };
     }
+  },
+
+
+  async createPatientCareNetworkContact(patientId: string, payload: {
+    clinicName?: string; professionalName: string; specialty?: string; professionalRegistry?: string; phone: string; email?: string; restoreAfterPatientRevocation?: boolean;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      if (!safePatientId) return { success: false, error: 'Paciente inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network`, { method: 'POST', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload) });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível adicionar este profissional.' }; }
+  },
+
+  async updatePatientCareNetworkContact(patientId: string, contactId: string, payload: {
+    clinicName?: string; professionalName: string; specialty?: string; professionalRegistry?: string; phone: string; email?: string; restoreAfterPatientRevocation?: boolean;
+  }) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safePatientId || !safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network/${safeContactId}`, { method: 'PATCH', headers: await getAuthHeaders(), credentials: 'include', body: JSON.stringify(payload) });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível atualizar este profissional.' }; }
+  },
+
+  async archivePatientCareNetworkContact(patientId: string, contactId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeContactId = encodeURIComponent(String(contactId || '').trim());
+      if (!safePatientId || !safeContactId) return { success: false, error: 'Profissional inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/care-network/${safeContactId}`, { method: 'DELETE', headers: await getAuthHeaders(), credentials: 'include' });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível desfazer este vínculo.' }; }
   },
 
 
@@ -3153,7 +3270,8 @@ export const dataService = {
   },
 
   async grantPatientEvolutionTimelineAccess(patientId: string, itemId: string, payload: {
-    recipientEmail: string;
+    careNetworkContactId: string;
+    canComment?: boolean;
     authorizationConfirmed: boolean;
   }) {
     try {
@@ -3208,6 +3326,20 @@ export const dataService = {
       return { success: false, error: 'Não foi possível reenviar o acesso.' };
     }
   },
+
+  async createPatientEvolutionTimelineAccessLink(patientId: string, itemId: string, grantId: string) {
+    try {
+      const safePatientId = encodeURIComponent(String(patientId || '').trim());
+      const safeItemId = encodeURIComponent(String(itemId || '').trim());
+      const safeGrantId = encodeURIComponent(String(grantId || '').trim());
+      if (!safePatientId || !safeItemId || !safeGrantId) return { success: false, error: 'Compartilhamento inválido.' };
+      const response = await fetchWithAuthRetry(`/api/patients/${safePatientId}/evolution-timeline/${safeItemId}/grants/${safeGrantId}/access-link`, {
+        method: 'POST', headers: await getAuthHeaders(), credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch { return { success: false, error: 'Não foi possível gerar um novo acesso.' }; }
+  },
+
 
   async getPortalContext() {
     try {
@@ -8254,6 +8386,132 @@ export const dataService = {
       console.error('Error fetching clinic financial entries:', error);
     }
     return { success: true, data: [] };
+  },
+
+
+  async getClinicExpenses(month?: string) {
+    try {
+      const endpoint = endpointWithQuery('/api/financial/expenses', { month });
+      const response = await fetchWithAuthRetry(endpoint, {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error fetching clinic expenses:', error);
+      return { success: false, schemaReady: false, data: { entries: [], rules: [] }, error: 'Não foi possível carregar as despesas da clínica agora.' };
+    }
+  },
+
+  async createClinicExpense(payload: any) {
+    try {
+      const requestPayload = { ...(payload || {}), id: String(payload?.id || generateId()) };
+      const response = await fetchWithAuthRetry('/api/financial/expenses', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating clinic expense:', error);
+      return { success: false, error: 'Não foi possível cadastrar a despesa agora.' };
+    }
+  },
+
+  async updateClinicExpense(expenseId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expenses/${encodeURIComponent(String(expenseId))}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating clinic expense:', error);
+      return { success: false, error: 'Não foi possível atualizar a despesa agora.' };
+    }
+  },
+
+  async markClinicExpensePaid(expenseId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expenses/${encodeURIComponent(String(expenseId))}/pay`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error paying clinic expense:', error);
+      return { success: false, error: 'Não foi possível registrar o pagamento da despesa agora.' };
+    }
+  },
+
+  async cancelClinicExpense(expenseId: string) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expenses/${encodeURIComponent(String(expenseId))}/cancel`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify({})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error canceling clinic expense:', error);
+      return { success: false, error: 'Não foi possível cancelar a despesa agora.' };
+    }
+  },
+
+  async createClinicExpenseRule(payload: any) {
+    try {
+      const requestPayload = { ...(payload || {}), id: String(payload?.id || generateId()) };
+      const response = await fetchWithAuthRetry('/api/financial/expense-rules', {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error creating clinic expense rule:', error);
+      return { success: false, error: 'Não foi possível cadastrar a recorrência agora.' };
+    }
+  },
+
+  async updateClinicExpenseRule(ruleId: string, payload: any) {
+    try {
+      const requestPayload = {
+        ...(payload || {}),
+        replacement_id: String(payload?.replacement_id || payload?.replacementId || generateId())
+      };
+      const response = await fetchWithAuthRetry(`/api/financial/expense-rules/${encodeURIComponent(String(ruleId))}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(requestPayload)
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error updating clinic expense rule:', error);
+      return { success: false, error: 'Não foi possível atualizar a recorrência agora.' };
+    }
+  },
+
+  async endClinicExpenseRule(ruleId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/financial/expense-rules/${encodeURIComponent(String(ruleId))}/end`, {
+        method: 'POST',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload || {})
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error ending clinic expense rule:', error);
+      return { success: false, error: 'Não foi possível encerrar a recorrência agora.' };
+    }
   },
 
   async saveUserProfile(userId: string, profile: any) {

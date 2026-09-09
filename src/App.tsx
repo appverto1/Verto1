@@ -213,6 +213,12 @@ const PortalRelationshipConfirmation = React.lazy(() =>
 const ExternalEvolutionShare = React.lazy(() =>
   import('./components/ExternalEvolutionShare').then((m) => ({ default: m.ExternalEvolutionShare }))
 );
+const ExternalCareNetworkCentral = React.lazy(() =>
+  import('./components/ExternalCareNetworkCentral').then((m) => ({ default: m.ExternalCareNetworkCentral }))
+);
+const ExternalPatientTimeline = React.lazy(() =>
+  import('./components/ExternalPatientTimeline').then((m) => ({ default: m.ExternalPatientTimeline }))
+);
 const PublicSalesOffer = React.lazy(() =>
   import('./components/PublicSalesOffer').then((m) => ({ default: m.PublicSalesOffer }))
 );
@@ -428,6 +434,21 @@ export default function App() {
       ? window.location.pathname.match(/^\/evolucao-compartilhada\/([^/]+)\/?$/i)
       : null;
   const isExternalEvolutionRoute = Boolean(externalEvolutionRouteMatch);
+  const externalCarePatientRouteMatch =
+    typeof window !== 'undefined'
+      ? window.location.pathname.match(/^\/rede-de-cuidado\/paciente\/([^/]+)\/([^/]+)\/?$/i)
+      : null;
+  const isExternalCarePatientRoute = Boolean(externalCarePatientRouteMatch);
+  const isExternalCareNetworkRoute =
+    typeof window !== 'undefined' && /^\/rede-de-cuidado\/?$/i.test(window.location.pathname);
+  const externalCarePatientClinicId = (() => {
+    if (!externalCarePatientRouteMatch) return '';
+    try { return decodeURIComponent(externalCarePatientRouteMatch[1]); } catch { return ''; }
+  })();
+  const externalCarePatientId = (() => {
+    if (!externalCarePatientRouteMatch) return '';
+    try { return decodeURIComponent(externalCarePatientRouteMatch[2]); } catch { return ''; }
+  })();
   const externalEvolutionPublicId = (() => {
     if (!externalEvolutionRouteMatch) return '';
     try {
@@ -1574,6 +1595,13 @@ export default function App() {
               .then(async () => {
                 try {
             if (event === 'SIGNED_IN' && session) {
+              // External care-network routes own their authenticated context. A Google OAuth
+              // return here must not create/overwrite clinic role or membership; the external
+              // surface exchanges the verified Supabase session for its isolated server session.
+              if (isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) {
+                setLoading(false);
+                return;
+              }
               const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
               localStorage.removeItem('verto_intended_role');
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
@@ -6469,7 +6497,7 @@ export default function App() {
         (patientForSession as any)?.insurancePayerId ||
         '',
     ).trim();
-    if (!effectivePayerId && canonicalPatientPayerId) {
+    if (!financialContextType && !effectivePayerId && canonicalPatientPayerId) {
       effectivePayerId = canonicalPatientPayerId;
       effectivePayerName =
         effectivePayerName ||
@@ -8237,6 +8265,10 @@ export default function App() {
         <Suspense fallback={lazyFallback}>
         {isExternalEvolutionRoute ? (
           <ExternalEvolutionShare publicId={externalEvolutionPublicId} />
+        ) : isExternalCarePatientRoute ? (
+          <ExternalPatientTimeline clinicId={externalCarePatientClinicId} patientId={externalCarePatientId} />
+        ) : isExternalCareNetworkRoute ? (
+          <ExternalCareNetworkCentral />
         ) : isSalesOfferRoute ? (
           <PublicSalesOffer token={salesOfferToken} />
         ) : isSalesActivationRoute && !user ? (
@@ -8555,7 +8587,7 @@ export default function App() {
             therapistNotes={therapistNotes}
             onAddNote={handleAddNote}
             onUpdateProfile={(data: any) => {
-              void (async () => {
+              return (async () => {
                 const baseUser = { ...user, ...data };
                 try {
                   const profileUpload = await uploadProfileAssetIfNeeded(
@@ -8725,7 +8757,7 @@ export default function App() {
                         professionalProfile: nextUser.professionalProfile,
                         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
                       };
-                  await dataService.saveUserProfile(user.id, persistencePayload);
+                  return await dataService.saveUserProfile(user.id, persistencePayload);
                 } catch (error) {
                   console.error('Profile asset upload error:', error);
                   if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
@@ -8753,7 +8785,7 @@ export default function App() {
                         professionalProfile: baseUser.professionalProfile,
                         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
                       };
-                  await dataService.saveUserProfile(user.id, fallbackPersistencePayload);
+                  return await dataService.saveUserProfile(user.id, fallbackPersistencePayload);
                 }
               })();
             }}

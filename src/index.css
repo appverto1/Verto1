@@ -83,6 +83,15 @@
   animation: slide-infinite 2s linear infinite;
 }
 
+.financial-light-typography :where(p, span, label, button, input, select, th, td, div).font-semibold,
+.financial-light-typography :where(p, span, label, button, input, select, th, td, div).font-bold {
+  font-weight: 500;
+}
+
+.financial-light-typography :where(h1, h2, h3, h4, h5, h6) {
+  font-weight: 600;
+}
+
 .landing-hero-media-frame {
   width: min(100%, 760px);
   transform-origin: center;
