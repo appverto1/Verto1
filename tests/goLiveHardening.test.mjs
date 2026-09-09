@@ -33,9 +33,20 @@ for (const route of [
   assert.match(server.slice(at, at + 700), /checkPlatformAdmin/, `rota ${route} precisa do guard de plataforma`);
 }
 
-// Own TISS professional profile follows attendance capability, allowing Supervisor + Atendimento clínico.
-assert.match(server, /app\.get\('\/api\/tiss\/professional-profile\/me'[\s\S]{0,260}requireAnyClinicCapability\('session\.billing_evidence\.generate', 'session\.start'\)/);
-assert.match(server, /app\.patch\('\/api\/tiss\/professional-profile\/me'[\s\S]{0,300}requireAnyClinicCapability\('session\.billing_evidence\.generate', 'session\.start'\)/);
+// Own TISS professional profile is self-scoped and module-gated; editing it must not depend on session capabilities.
+for (const route of [
+  "app.get('/api/tiss/professional-profile/me'",
+  "app.patch('/api/tiss/professional-profile/me'",
+]) {
+  const routeAt = server.indexOf(route);
+  assert.ok(routeAt >= 0, `rota ausente: ${route}`);
+  const routeBoundary = server.slice(routeAt, routeAt + 520);
+  assert.match(routeBoundary, /checkAuth/);
+  assert.match(routeBoundary, /requireClinicModule\('insurance_tiss'\)/);
+  assert.doesNotMatch(routeBoundary, /session\.billing_evidence\.generate|session\.start|requireAnyClinicCapability/);
+  assert.match(routeBoundary, /req\.session\.user\?\.id/);
+}
+
 
 // Schools: capabilities and patient/case scope; no direct role gate.
 assert.doesNotMatch(school, /requireRoles\(/);

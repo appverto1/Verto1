@@ -6,9 +6,11 @@ import {
   Clipboard,
   ExternalLink,
   FileText,
+  History,
   Link2,
   Loader2,
   Mail,
+  MessageCircle,
   Paperclip,
   Plus,
   RefreshCw,
@@ -23,11 +25,39 @@ import { dataService } from '../services/dataService';
 type EvolutionGrant = {
   id: string;
   publicId?: string | null;
+  careNetworkContactId?: string | null;
   recipientEmail: string;
+  recipientName?: string | null;
+  recipientSpecialty?: string | null;
+  canComment?: boolean;
   status: string;
   authorizationDeclaredAt?: string | null;
   lastInvitedAt?: string | null;
+  firstViewedAt?: string | null;
+  lastViewedAt?: string | null;
+  viewCount?: number;
+  commentCount?: number;
+  comments?: Array<{ id: string; body: string; createdAt?: string | null }>;
   shareUrl?: string | null;
+};
+
+type CareNetworkOption = {
+  id: string;
+  professional_name: string;
+  specialty?: string | null;
+  email?: string | null;
+};
+
+type EvolutionAccessActivity = {
+  grantId?: string | null;
+  action: 'VIEWED' | 'FILE_ACCESSED' | string;
+  createdAt?: string | null;
+  recipientEmail?: string | null;
+  recipientName?: string | null;
+  previousAuthorization?: boolean;
+  subject?: string | null;
+  monthKey?: string | null;
+  fileName?: string | null;
 };
 
 type EvolutionTimelineItem = {
@@ -44,6 +74,7 @@ type EvolutionTimelineItem = {
     sizeBytes?: number;
   } | null;
   grants?: EvolutionGrant[];
+  accessActivity?: EvolutionAccessActivity[];
 };
 
 type TimelineEntitlement = {
@@ -98,6 +129,12 @@ const formatBytes = (value: unknown) => {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
+const formatSharedAt = (value: unknown) => {
+  const date = new Date(String(value || ''));
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(date);
+};
+
 const copyText = async (value: string) => {
   const text = String(value || '').trim();
   if (!text) return false;
@@ -139,22 +176,30 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
   const [subject, setSubject] = useState('');
   const [content, setContent] = useState('');
   const [file, setFile] = useState<File | null>(null);
-  const [shareEmailByItem, setShareEmailByItem] = useState<Record<string, string>>({});
+  const [careNetwork, setCareNetwork] = useState<CareNetworkOption[]>([]);
+  const [shareContactByItem, setShareContactByItem] = useState<Record<string, string>>({});
+  const [shareCanCommentByItem, setShareCanCommentByItem] = useState<Record<string, boolean>>({});
   const [shareConfirmedByItem, setShareConfirmedByItem] = useState<Record<string, boolean>>({});
   const [busyItemId, setBusyItemId] = useState('');
   const [copiedKey, setCopiedKey] = useState('');
+  const [actionSuccessKey, setActionSuccessKey] = useState('');
+  const [openActivityByItem, setOpenActivityByItem] = useState<Record<string, boolean>>({});
 
   const load = async () => {
     if (!patientId) return;
     setLoading(true);
     setError('');
-    const result = await dataService.getPatientEvolutionTimeline(patientId);
+    const [result, careResult] = await Promise.all([
+      dataService.getPatientEvolutionTimeline(patientId),
+      canShare ? dataService.getPatientCareNetwork(patientId) : Promise.resolve({ success: true, data: [] }),
+    ]);
     setLoading(false);
     if (!result?.success) {
       setError(result?.error || 'Não foi possível carregar a timeline de evolução.');
       return;
     }
     setItems(Array.isArray(result?.data) ? result.data : []);
+    if (careResult?.success) setCareNetwork((Array.isArray(careResult.data) ? careResult.data : []).filter((contact: any) => String(contact?.email || '').trim()));
     const nextEntitlement = result?.entitlement;
     setEntitlement({
       tier: nextEntitlement?.canUseThreeItems ? 'PLUS3' : 'STANDARD',
@@ -177,6 +222,17 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
     setSuccess('');
     void load();
   }, [patientId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || loading || items.length === 0) return;
+    const focusItemId = String(window.sessionStorage.getItem('verto_focus_evolution_timeline_item') || '').trim();
+    if (!focusItemId) return;
+    const target = items.find((item) => item.id === focusItemId);
+    if (!target) return;
+    setSelectedMonth(normalizeMonth(target.monthKey));
+    window.sessionStorage.removeItem('verto_focus_evolution_timeline_item');
+    window.setTimeout(() => document.getElementById(`evolution-timeline-item-${focusItemId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
+  }, [items, loading]);
 
   const monthKeys = useMemo(() => {
     const keys = new Set<string>();
@@ -323,55 +379,68 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
 
   const grantAccess = async (item: EvolutionTimelineItem) => {
     resetMessages();
-    const email = String(shareEmailByItem[item.id] || '').trim().toLowerCase();
-    if (!email) {
-      setError('Informe o e-mail do profissional externo.');
-      return;
-    }
-    if (!shareConfirmedByItem[item.id]) {
-      setError('Confirme que existe autorização válida do paciente ou responsável para este compartilhamento.');
-      return;
-    }
+    const careNetworkContactId = String(shareContactByItem[item.id] || '').trim();
+    if (!careNetworkContactId) { setError('Selecione um profissional da Rede de cuidado.'); return; }
+    if (!shareConfirmedByItem[item.id]) { setError('Confirme que existe autorização válida do paciente ou responsável para este compartilhamento.'); return; }
     setBusyItemId(item.id);
     const result = await dataService.grantPatientEvolutionTimelineAccess(patientId, item.id, {
-      recipientEmail: email,
+      careNetworkContactId,
+      canComment: shareCanCommentByItem[item.id] === true,
       authorizationConfirmed: true,
     });
     setBusyItemId('');
-    if (!result?.success) {
-      setError(result?.error || 'Não foi possível criar o compartilhamento.');
-      return;
-    }
-    setShareEmailByItem((current) => ({ ...current, [item.id]: '' }));
+    if (!result?.success) { setError(result?.error || 'Não foi possível criar o compartilhamento.'); return; }
+    setShareContactByItem((current) => ({ ...current, [item.id]: '' }));
+    setShareCanCommentByItem((current) => ({ ...current, [item.id]: false }));
     setShareConfirmedByItem((current) => ({ ...current, [item.id]: false }));
-    setSuccess(result?.data?.emailSent ? 'Acesso criado e convite enviado por e-mail.' : 'Acesso criado. O link pode ser copiado manualmente.');
+    setSuccess(result?.data?.emailSent ? 'Acesso criado e convite enviado por e-mail.' : 'Acesso criado. Você pode reenviar ou copiar um novo acesso seguro.');
+    setActionSuccessKey(`${item.id}:share`); window.setTimeout(() => setActionSuccessKey((current) => current === `${item.id}:share` ? '' : current), 1600);
     await load();
   };
 
   const revokeAccess = async (item: EvolutionTimelineItem, grant: EvolutionGrant) => {
-    if (!window.confirm(`Revogar o acesso de ${grant.recipientEmail}?`)) return;
-    resetMessages();
-    setBusyItemId(`${item.id}:${grant.id}`);
+    if (!window.confirm(`Revogar o acesso de ${grant.recipientName || grant.recipientEmail}?`)) return;
+    resetMessages(); setBusyItemId(`${item.id}:${grant.id}`);
     const result = await dataService.revokePatientEvolutionTimelineAccess(patientId, item.id, grant.id);
     setBusyItemId('');
-    if (!result?.success) {
-      setError(result?.error || 'Não foi possível revogar o acesso.');
-      return;
-    }
-    setSuccess('Acesso revogado imediatamente.');
-    await load();
+    if (!result?.success) { setError(result?.error || 'Não foi possível revogar o acesso.'); return; }
+    setSuccess('Acesso revogado imediatamente. O histórico foi preservado.'); await load();
   };
 
   const resendAccess = async (item: EvolutionTimelineItem, grant: EvolutionGrant) => {
-    resetMessages();
-    setBusyItemId(`${item.id}:${grant.id}`);
+    resetMessages(); setBusyItemId(`${item.id}:${grant.id}`);
     const result = await dataService.resendPatientEvolutionTimelineAccess(patientId, item.id, grant.id);
     setBusyItemId('');
-    if (!result?.success) {
-      setError(result?.error || 'Não foi possível reenviar o convite.');
-      return;
-    }
-    setSuccess(result?.data?.emailSent ? 'Convite reenviado.' : 'O acesso segue ativo; copie o link para enviar manualmente.');
+    if (!result?.success) { setError(result?.error || 'Não foi possível reenviar o acesso.'); return; }
+    setSuccess(result?.data?.emailSent ? 'Novo acesso seguro enviado por e-mail.' : 'O compartilhamento segue ativo.');
+    setActionSuccessKey(`${item.id}:${grant.id}:resend`); window.setTimeout(() => setActionSuccessKey((current) => current === `${item.id}:${grant.id}:resend` ? '' : current), 1600);
+    await load();
+  };
+
+  const copyAccess = async (item: EvolutionTimelineItem, grant: EvolutionGrant) => {
+    resetMessages(); setBusyItemId(`${item.id}:${grant.id}:copy`);
+    const result = await dataService.createPatientEvolutionTimelineAccessLink(patientId, item.id, grant.id);
+    setBusyItemId('');
+    const accessUrl = String(result?.data?.accessUrl || '').trim();
+    if (!result?.success || !accessUrl) { setError(result?.error || 'Não foi possível gerar um novo acesso.'); return; }
+    const ok = await copyText(accessUrl);
+    if (!ok) { setError('Não foi possível copiar o acesso automaticamente.'); return; }
+    setCopiedKey(grant.id); window.setTimeout(() => setCopiedKey(''), 1800);
+    setSuccess('Novo acesso seguro copiado. O link anterior de ativação foi invalidado.');
+  };
+
+  const toggleCommentPermission = async (item: EvolutionTimelineItem, grant: EvolutionGrant) => {
+    if (!grant.careNetworkContactId) { setError('Reenvie o compartilhamento usando um profissional da Rede de cuidado antes de alterar comentários.'); return; }
+    resetMessages(); setBusyItemId(`${item.id}:${grant.id}:comment`);
+    const result = await dataService.grantPatientEvolutionTimelineAccess(patientId, item.id, {
+      careNetworkContactId: grant.careNetworkContactId,
+      canComment: !grant.canComment,
+      authorizationConfirmed: true,
+    });
+    setBusyItemId('');
+    if (!result?.success) { setError(result?.error || 'Não foi possível alterar a permissão de comentário.'); return; }
+    setSuccess(!grant.canComment ? 'Comentários habilitados para este profissional.' : 'Comentários desabilitados para este profissional.');
+    setActionSuccessKey(`${item.id}:${grant.id}:comment`); window.setTimeout(() => setActionSuccessKey((current) => current === `${item.id}:${grant.id}:comment` ? '' : current), 1600);
     await load();
   };
 
@@ -406,7 +475,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
             </div>
             <div>
               <h3 className={`text-base font-semibold ${textClass}`}>Timeline de evolução compartilhável</h3>
-              <p className={`mt-0.5 text-xs ${subtleClass}`}>Resumos mensais com destinatários independentes e acesso externo somente leitura.</p>
+              <p className={`mt-0.5 text-xs ${subtleClass}`}>Resumos mensais com compartilhamento individual por profissional da Rede de cuidado.</p>
             </div>
           </div>
         </div>
@@ -528,7 +597,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
         )}
 
         {selectedItems.map((item) => (
-          <article key={item.id} className={`rounded-2xl border p-4 ${dark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-200 bg-white'}`}>
+          <article id={`evolution-timeline-item-${item.id}`} key={item.id} className={`rounded-2xl border p-4 ${dark ? 'border-slate-700 bg-slate-900/45' : 'border-slate-200 bg-white'}`}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -560,58 +629,121 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
             <div className={`mt-4 border-t pt-4 ${dark ? 'border-slate-700' : 'border-slate-100'}`}>
               <div className="flex items-center gap-2">
                 <ShieldCheck size={15} className="text-emerald-500" />
-                <p className={`text-xs font-semibold ${textClass}`}>Acesso externo por e-mail</p>
+                <p className={`text-xs font-semibold ${textClass}`}>Compartilhado com</p>
               </div>
-              <p className={`mt-1 text-[11px] leading-5 ${subtleClass}`}>O link funciona apenas como endereço. O destinatário precisa confirmar exatamente o e-mail autorizado com código enviado por e-mail.</p>
+              <p className={`mt-1 text-[11px] leading-5 ${subtleClass}`}>Cada acesso pertence somente a esta evolução. O profissional externo precisa entrar na própria conta Verto para visualizar o conteúdo.</p>
 
-              {(item.grants || []).length > 0 && (
-                <div className="mt-3 space-y-2">
-                  {(item.grants || []).map((grant) => (
-                    <div key={grant.id} className={`rounded-xl border p-3 ${dark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-100 bg-slate-50'}`}>
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex min-w-0 items-center gap-2">
-                          <UserRound size={14} className="shrink-0 text-[#7a32fc]" />
-                          <div className="min-w-0">
-                            <p className={`truncate text-xs font-medium ${textClass}`}>{grant.recipientEmail}</p>
-                            <p className={`text-[10px] ${subtleClass}`}>Acesso ativo · revogável a qualquer momento</p>
+              {(item.accessActivity || []).length > 0 && (
+                <div className="mt-3">
+                  <button type="button" onClick={() => setOpenActivityByItem((current) => ({ ...current, [item.id]: !current[item.id] }))} aria-expanded={openActivityByItem[item.id] === true} className={`inline-flex min-h-8 items-center gap-1.5 rounded-lg px-2 text-[10px] font-medium transition ${dark ? 'text-violet-200 hover:bg-violet-500/10' : 'text-violet-700 hover:bg-violet-50'}`}>
+                    <History size={12} /> Ver atividade · {(item.accessActivity || []).length}
+                  </button>
+                  {openActivityByItem[item.id] === true && (
+                    <div className={`mt-2 rounded-xl border p-3 ${dark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-100 bg-white'}`}>
+                      <p className={`text-[9px] font-semibold uppercase tracking-[0.14em] ${dark ? 'text-slate-400' : 'text-slate-400'}`}>Atividade de acesso</p>
+                      <div className={`mt-2 divide-y ${dark ? 'divide-slate-700' : 'divide-slate-100'}`}>
+                        {(item.accessActivity || []).map((event, activityIndex) => (
+                          <div key={`${event.grantId || 'audit'}:${event.createdAt || activityIndex}:${event.action}`} className="py-2.5 first:pt-1 last:pb-1">
+                            <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between">
+                              <div className="min-w-0">
+                                <p className={`text-[11px] font-semibold ${textClass}`}>{event.recipientName || event.recipientEmail || 'Profissional externo'}</p>
+                                <p className={`mt-0.5 text-[10px] ${subtleClass}`}>{event.action === 'FILE_ACCESSED' ? `Acessou documento${event.fileName ? ` · ${event.fileName}` : ''}` : `Visualizou · ${event.subject || item.subject}`}</p>
+                                <p className={`mt-0.5 text-[10px] ${subtleClass}`}>{monthLabel(event.monthKey || item.monthKey)}{event.previousAuthorization ? ' · compartilhamento anterior' : ''}</p>
+                              </div>
+                              {event.createdAt && <time className={`shrink-0 text-[10px] ${subtleClass}`}>{formatSharedAt(event.createdAt)}</time>}
+                            </div>
                           </div>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {grant.shareUrl && (
-                            <button type="button" onClick={async () => {
-                              const ok = await copyText(String(grant.shareUrl));
-                              setCopiedKey(ok ? grant.id : '');
-                              if (ok) window.setTimeout(() => setCopiedKey(''), 1800);
-                            }} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                              <Clipboard size={11} /> {copiedKey === grant.id ? 'Copiado' : 'Copiar link'}
-                            </button>
-                          )}
-                          <button type="button" onClick={() => void resendAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                            <Mail size={11} /> Reenviar
-                          </button>
-                          <button type="button" onClick={() => void revokeAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-[10px] font-medium text-rose-600 hover:bg-rose-50">
-                            {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />} Revogar
-                          </button>
-                        </div>
+                        ))}
                       </div>
                     </div>
-                  ))}
+                  )}
                 </div>
+              )}
+
+              {(item.grants || []).length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {(item.grants || []).map((grant) => {
+                    const viewed = Boolean(grant.firstViewedAt);
+                    const comments = Array.isArray(grant.comments) ? grant.comments : [];
+                    return (
+                      <div key={grant.id} className={`rounded-xl border p-3 ${dark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-100 bg-slate-50'}`}>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="flex min-w-0 items-start gap-2">
+                            <UserRound size={14} className="mt-0.5 shrink-0 text-[#7a32fc]" />
+                            <div className="min-w-0">
+                              <p className={`truncate text-xs font-semibold ${textClass}`}>{grant.recipientName || grant.recipientEmail}{grant.recipientSpecialty ? ` · ${grant.recipientSpecialty}` : ''}</p>
+                              {grant.recipientName && <p className={`mt-0.5 truncate text-[10px] ${subtleClass}`}>{grant.recipientEmail}</p>}
+                              <div className={`mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] ${subtleClass}`}>
+                                <span>{viewed ? `✓✓ Visualizado ${formatSharedAt(grant.lastViewedAt || grant.firstViewedAt)}` : grant.lastInvitedAt ? `✓ Enviado ${formatSharedAt(grant.lastInvitedAt)}` : 'Acesso criado'}</span>
+                                {!viewed && <span>Ainda não visualizado</span>}
+                                <span className="inline-flex items-center gap-1"><MessageCircle size={10} /> {Number(grant.commentCount || comments.length || 0)} comentário(s)</span>
+                                <span>{grant.canComment ? 'Pode comentar' : 'Somente visualizar'}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button type="button" onClick={() => void copyAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}:copy`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
+                              {busyItemId === `${item.id}:${grant.id}:copy` ? <Loader2 size={11} className="animate-spin" /> : <Clipboard size={11} />} {copiedKey === grant.id ? 'Copiado' : 'Copiar acesso'}
+                            </button>
+                            <button type="button" onClick={() => void resendAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
+                              {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:resend` ? <CheckCircle2 size={11} /> : <Mail size={11} />} {busyItemId === `${item.id}:${grant.id}` ? 'Reenviando...' : actionSuccessKey === `${item.id}:${grant.id}:resend` ? 'Enviado' : 'Reenviar'}
+                            </button>
+                            <button type="button" onClick={() => void toggleCommentPermission(item, grant)} disabled={!grant.careNetworkContactId || busyItemId === `${item.id}:${grant.id}:comment`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${grant.canComment ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50' : dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
+                              {busyItemId === `${item.id}:${grant.id}:comment` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:comment` ? <CheckCircle2 size={11} /> : <MessageCircle size={11} />} {busyItemId === `${item.id}:${grant.id}:comment` ? 'Atualizando...' : actionSuccessKey === `${item.id}:${grant.id}:comment` ? 'Atualizado' : grant.canComment ? 'Desabilitar comentário' : 'Habilitar comentário'}
+                            </button>
+                            <button type="button" onClick={() => void revokeAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-[10px] font-medium text-rose-600 hover:bg-rose-50">
+                              {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />} Revogar
+                            </button>
+                          </div>
+                        </div>
+                        {comments.length > 0 && (
+                          <div className={`mt-3 space-y-2 border-t pt-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
+                            {comments.map((comment) => (
+                              <div key={comment.id} className={`rounded-lg px-3 py-2 ${dark ? 'bg-slate-900/60' : 'bg-white'}`}>
+                                <p className={`whitespace-pre-wrap text-[11px] leading-5 ${dark ? 'text-slate-300' : 'text-slate-600'}`}>{comment.body}</p>
+                                {comment.createdAt && <p className={`mt-1 text-[9px] ${subtleClass}`}>{formatSharedAt(comment.createdAt)}</p>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className={`mt-3 text-[11px] ${subtleClass}`}>Esta evolução ainda não foi compartilhada.</p>
               )}
 
               {canShare ? (
                 <div className={`mt-3 rounded-xl border p-3 ${dark ? 'border-slate-700 bg-slate-800/35' : 'border-slate-100 bg-slate-50/70'}`}>
-                  <label className={`mb-1 ml-1 block text-[10px] font-medium uppercase tracking-wide ${subtleClass}`}>E-mail do profissional autorizado</label>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <input type="email" value={shareEmailByItem[item.id] || ''} onChange={(event) => setShareEmailByItem((current) => ({ ...current, [item.id]: event.target.value }))} placeholder="profissional@exemplo.com" className={`min-h-11 min-w-0 flex-1 rounded-xl border px-3 text-sm outline-none focus:border-[#7a32fc] ${inputClass}`} />
-                    <button type="button" onClick={() => void grantAccess(item)} disabled={busyItemId === item.id} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-xs font-semibold text-white disabled:opacity-60">
-                      {busyItemId === item.id ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />} Compartilhar
-                    </button>
+                  <p className={`text-xs font-semibold ${textClass}`}>Gerenciar compartilhamento</p>
+                  <label className={`mb-1 ml-1 mt-3 block text-[10px] font-medium uppercase tracking-wide ${subtleClass}`}>Profissional da Rede de cuidado</label>
+                  <select value={shareContactByItem[item.id] || ''} onChange={(event) => setShareContactByItem((current) => ({ ...current, [item.id]: event.target.value }))} className={`min-h-11 w-full rounded-xl border px-3 text-sm outline-none focus:border-[#7a32fc] ${inputClass}`}>
+                    <option value="">Selecione um profissional</option>
+                    {careNetwork.map((contact) => (
+                      <option key={contact.id} value={contact.id}>{contact.professional_name}{contact.specialty ? ` · ${contact.specialty}` : ''} · {contact.email}</option>
+                    ))}
+                  </select>
+                  {careNetwork.length === 0 && <p className={`mt-2 text-[10px] ${subtleClass}`}>Adicione primeiro um profissional com e-mail na Rede de cuidado deste paciente.</p>}
+                  <div className={`mt-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-2 ${dark ? 'border-slate-700 bg-slate-900/30' : 'border-slate-100 bg-white'}`}>
+                    <label className={`flex items-center gap-2 text-[11px] ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      <input type="checkbox" checked={Boolean(shareContactByItem[item.id])} readOnly className="h-4 w-4 rounded border-slate-300 text-[#7a32fc]" />
+                      <span>Visualizar</span>
+                    </label>
+                    <label className={`flex cursor-pointer items-center gap-2 text-[11px] ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
+                      <input type="checkbox" disabled={!shareContactByItem[item.id]} checked={shareCanCommentByItem[item.id] === true} onChange={(event) => setShareCanCommentByItem((current) => ({ ...current, [item.id]: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-[#7a32fc] focus:ring-[#7a32fc]" />
+                      <span>Comentar</span>
+                    </label>
                   </div>
                   <label className={`mt-3 flex cursor-pointer items-start gap-2 text-[11px] leading-5 ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
                     <input type="checkbox" checked={shareConfirmedByItem[item.id] === true} onChange={(event) => setShareConfirmedByItem((current) => ({ ...current, [item.id]: event.target.checked }))} className="mt-1 h-4 w-4 rounded border-slate-300 text-[#7a32fc] focus:ring-[#7a32fc]" />
-                    <span>Declaro que existe autorização válida do paciente ou responsável legal para compartilhar este item com o destinatário informado, para continuidade do cuidado.</span>
+                    <span>Declaro que existe autorização válida do paciente ou responsável legal para compartilhar esta evolução com o profissional selecionado, para continuidade do cuidado.</span>
                   </label>
+                  <div className="mt-3 flex justify-end">
+                    <button type="button" onClick={() => void grantAccess(item)} disabled={busyItemId === item.id || !shareContactByItem[item.id]} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-xs font-semibold text-white disabled:opacity-60">
+                      {busyItemId === item.id ? <Loader2 size={14} className="animate-spin" /> : actionSuccessKey === `${item.id}:share` ? <CheckCircle2 size={14} /> : <Send size={14} />} {busyItemId === item.id ? 'Compartilhando...' : actionSuccessKey === `${item.id}:share` ? 'Compartilhado' : 'Compartilhar'}
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <p className={`mt-3 text-[11px] ${subtleClass}`}>Seu perfil pode visualizar esta timeline, mas não possui permissão para conceder acesso externo.</p>
@@ -623,7 +755,7 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
 
       <div className={`mt-5 flex items-start gap-2 rounded-xl border px-3 py-3 text-[11px] leading-5 ${dark ? 'border-sky-500/20 bg-sky-500/5 text-sky-200' : 'border-sky-100 bg-sky-50 text-sky-800'}`}>
         <Link2 size={14} className="mt-0.5 shrink-0" />
-        <span>Compartilhamentos são independentes por registro. Um mesmo mês pode ter destinatários diferentes por item, e um único registro pode ser liberado para vários e-mails. O profissional externo vê somente os meses e registros concedidos ao e-mail dele.</span>
+        <span>Compartilhamentos são independentes por evolução. Estar na Rede de cuidado não concede acesso automático: somente profissionais selecionados explicitamente podem visualizar, e comentários dependem de permissão própria.</span>
       </div>
     </section>
   );

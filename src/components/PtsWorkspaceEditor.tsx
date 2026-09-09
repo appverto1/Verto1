@@ -156,7 +156,7 @@ export function PtsWorkspaceEditor({
     reviews: true,
   });
 
-  const field = `w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none transition focus:border-violet-500 ${
+  const field = `w-full rounded-xl border px-3.5 py-2.5 text-sm outline-none transition focus:border-violet-500 focus:ring-2 focus:ring-violet-500/15 ${
     isDark
       ? 'border-slate-700 bg-slate-950/50 text-slate-100 placeholder:text-slate-500'
       : 'border-slate-200 bg-white text-slate-900 placeholder:text-slate-400'
@@ -166,7 +166,7 @@ export function PtsWorkspaceEditor({
   const secondaryStrongText = isDark ? 'text-slate-200' : 'text-slate-800';
   const surface = isDark ? 'border-slate-700 bg-slate-900/55' : 'border-slate-200 bg-white';
   const inset = isDark ? 'border-slate-700 bg-slate-950/35' : 'border-slate-100 bg-slate-50';
-  const secondaryButton = `inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border px-4 text-sm ${
+  const secondaryButton = `inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-xl border px-4 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:w-auto ${
     isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 text-slate-700 hover:bg-slate-50'
   }`;
 
@@ -186,7 +186,7 @@ export function PtsWorkspaceEditor({
     return (
       <button
         type="button"
-        className="flex w-full items-start justify-between gap-4 text-left"
+        className="flex min-h-10 w-full items-start justify-between gap-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
         onClick={() => setOpenSections((current) => ({ ...current, [id]: !open }))}
       >
         <span className="flex items-start gap-3">
@@ -204,7 +204,7 @@ export function PtsWorkspaceEditor({
     );
   };
 
-  const sectionClass = (id: string) => `rounded-2xl border p-4 ${sectionErrors[id]?.length ? `${isDark ? 'bg-slate-900/55' : 'bg-white'} border-rose-300 ring-1 ring-rose-100` : surface}`;
+  const sectionClass = (id: string) => `rounded-2xl border p-4 sm:p-5 ${sectionErrors[id]?.length ? `${isDark ? 'bg-slate-900/55' : 'bg-white'} border-rose-300 ring-1 ring-rose-100` : surface}`;
 
   const addNeed = () => setList('needs', [...draft.needs, {
     id: makeId('need'), title: '', domain: '', description: '', priority: 'medium', status: 'pending',
@@ -255,8 +255,8 @@ export function PtsWorkspaceEditor({
   };
 
   return (
-    <div className="space-y-4">
-      <div className={`grid gap-3 rounded-2xl border p-4 sm:grid-cols-2 xl:grid-cols-4 ${inset}`}>
+    <div className="space-y-5">
+      <div className={`grid gap-3 rounded-2xl border p-4 sm:grid-cols-2 sm:p-5 xl:grid-cols-4 ${inset}`}>
         <label className={`text-xs ${subtle}`}>
           Técnico de referência
           <select id="pts-case-manager" aria-invalid={Boolean(sectionErrors.overview?.length)} className={`${field} mt-1.5`} value={draft.caseManagerId} onChange={(event) => setDraft((current) => ({ ...current, caseManagerId: event.target.value }))}>
@@ -349,7 +349,7 @@ export function PtsWorkspaceEditor({
         )}
       </section>
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+      <section className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
         {sectionHeader('evidence', <Activity size={20} />, 'Evidências do cuidado', 'Somente resumos explicitamente compartilhados pelas especialidades aparecem aqui; o PTS não lê o conteúdo privado dos outros planos.')}
         {openSections.evidence !== false && (
           <div className="mt-4 space-y-3">
@@ -374,7 +374,7 @@ export function PtsWorkspaceEditor({
         )}
       </section>
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+      <section className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
         {sectionHeader('responsibilities', <Users size={20} />, 'Responsabilidades pactuadas', 'Defina claramente o que cabe à equipe, ao paciente, à família, à escola e à rede de apoio.')}
         {openSections.responsibilities !== false && (
           <div className="mt-4 space-y-3">
@@ -393,7 +393,7 @@ export function PtsWorkspaceEditor({
         )}
       </section>
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+      <section className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
         {sectionHeader('network', <Network size={20} />, 'Rede de apoio e articulação', 'Registre somente contatos necessários ao cuidado e respeite a autorização de compartilhamento.')}
         {openSections.network !== false && (
           <div className="mt-4 space-y-3">
@@ -412,7 +412,7 @@ export function PtsWorkspaceEditor({
         )}
       </section>
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+      <section className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
         {sectionHeader('risks', <ShieldAlert size={20} />, 'Riscos e plano de proteção', 'Área clínica restrita aos profissionais autorizados do caso. Registre apenas informações necessárias à segurança.')}
         {openSections.risks !== false && (
           <div className="mt-4 space-y-3">
@@ -431,7 +431,7 @@ export function PtsWorkspaceEditor({
         )}
       </section>
 
-      <section className={`rounded-2xl border p-4 ${surface}`}>
+      <section className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
         {sectionHeader('reviews', <CalendarClock size={20} />, 'Reavaliações e decisões da equipe', 'Eventos de acompanhamento ficam fora da definição imutável do plano.')}
         {openSections.reviews !== false && (
           <div className={`mt-4 rounded-xl border border-dashed p-4 ${inset}`}>
@@ -441,11 +441,11 @@ export function PtsWorkspaceEditor({
         )}
       </section>
 
-      <div className={`sticky bottom-3 z-10 flex flex-col gap-3 rounded-2xl border p-4 shadow-lg sm:flex-row sm:items-center sm:justify-between ${surface}`}>
+      <div className={`sticky bottom-3 z-10 flex flex-col gap-3 rounded-2xl border p-4 shadow-lg sm:flex-row sm:items-center sm:justify-between sm:p-5 ${surface}`}>
         <div className="flex items-start gap-2"><CheckCircle2 className="mt-0.5 text-emerald-500" size={18} /><p className={`text-xs leading-5 ${subtle}`}>O rascunho pode ser salvo incompleto. Ao ativar, esta versão se torna imutável e passa a ser a referência apenas para novos contextos clínicos.</p></div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button type="button" disabled={saving} onClick={() => void persist('save')} className={secondaryButton}>{saving ? <><Loader2 size={16} className="animate-spin" /> Salvando...</> : 'Salvar rascunho'}</button>
-          <button type="button" disabled={saving || !draftVersionId} onClick={() => void persist('activate')} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 text-sm text-white hover:bg-violet-700 disabled:opacity-50">{saving ? <><Loader2 size={16} className="animate-spin" /> Processando...</> : `Ativar PTS · v${draftVersionNumber}`}</button>
+          <button type="button" disabled={saving || !draftVersionId} onClick={() => void persist('activate')} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:opacity-50 sm:w-auto">{saving ? <><Loader2 size={16} className="animate-spin" /> Processando...</> : `Ativar PTS · v${draftVersionNumber}`}</button>
         </div>
       </div>
     </div>

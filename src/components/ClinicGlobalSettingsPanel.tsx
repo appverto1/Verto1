@@ -1481,10 +1481,12 @@ export function ClinicGlobalSettingsPanel({
         Área principal de atuação
         <input type="text" value={values.therapistSpecialtyName} onChange={(event) => setters.setTherapistSpecialtyName(event.target.value)} placeholder="Ex.: Linguagem, motricidade oral" className={inputClass} />
       </label>
-      <label className={labelClass}>
-        Código do prestador
-        <input type="text" value={values.therapistProviderCode} onChange={(event) => setters.setTherapistProviderCode(event.target.value)} placeholder="Opcional, conforme operadora" className={inputClass} />
-      </label>
+      {hasInsuranceTissModule && (
+        <label className={labelClass}>
+          Código do prestador
+          <input type="text" value={values.therapistProviderCode} onChange={(event) => setters.setTherapistProviderCode(event.target.value)} placeholder="Opcional, conforme operadora" className={inputClass} />
+        </label>
+      )}
       <div className="md:col-span-2 mt-2 border-t border-slate-100 pt-5">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Endereço profissional</p>
       </div>

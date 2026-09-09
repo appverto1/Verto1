@@ -54,8 +54,8 @@ assert.match(
 );
 assert.match(
   server,
-  /normalizePatientInsuranceTypeForPersistence\(requestedTypeRaw\) !== 'particular'/,
-  'private-pay classification alone must stay outside insurance capability checks',
+  /Generic payer identity \(type\/name\/payer id\) is shared master data/,
+  'private-pay and generic payer classification must stay outside TISS capability checks',
 );
 
 // The clinical patient portal stays on while appointments remain optional.
@@ -82,7 +82,7 @@ assert.match(coordinator, /\{canManagePatientFinancialPlan && activePatientRegis
 assert.match(server, /financial-plans', checkAuth, requireClinicCapability\('patient\.demographics\.edit'\)/);
 assert.match(server, /financial-plans', portalActionLimiter, checkAuth, requireClinicCapability\('patient\.demographics\.edit'\)/);
 assert.match(server, /context\.capabilities\.has\('patient\.demographics\.edit'\)[\s\S]{0,160}financialPlans/);
-assert.match(coordinator, /filter\(\(option\) => hasInsuranceTissModule \|\| option\.value !== "INSURANCE"\)/);
+assert.match(coordinator, /filter\(\(option\) => canAccessClinicFinance \|\| hasInsuranceTissModule \|\| option\.value !== "INSURANCE"\)/);
 
 // New commercial proposals cannot intentionally remove the clinical baseline.
 assert.doesNotMatch(salesBuilder, /Remover módulo clínico|Incluir módulo clínico|Módulo clínico opcional/);
