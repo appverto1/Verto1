@@ -426,7 +426,10 @@ export const getFinancialPlanPrimaryBillingMethod = (plan: any) => {
   return normalized.paymentMethod || '';
 };
 
-export const serializePatientFinancialPlanForPayload = (plan: any) => {
+const serializePatientFinancialPlanPayload = (
+  plan: any,
+  includeInsuranceOperationalFields: boolean,
+) => {
   const normalized = createPatientFinancialPlan(plan);
   const serviceNameSnapshot = getPatientFinancialServiceLabel(normalized);
   return {
@@ -440,13 +443,17 @@ export const serializePatientFinancialPlanForPayload = (plan: any) => {
     aggregationMethod: normalized.aggregationMethod || null,
     payerId: normalized.payerId || null,
     payerNameSnapshot: normalized.payerNameSnapshot || null,
-    insurancePlanName: normalized.insurancePlanName || null,
-    insuranceCardNumber: normalized.insuranceCardNumber || null,
-    insuranceCardHolder: normalized.insuranceCardHolder || null,
-    insuranceCardValidUntil: normalized.insuranceCardValidUntil || null,
-    isPrimaryInsurance: Boolean(normalized.isPrimaryInsurance),
-    authorizationCode: normalized.authorizationCode || null,
-    authorizationValidUntil: normalized.authorizationValidUntil || null,
+    ...(includeInsuranceOperationalFields
+      ? {
+          insurancePlanName: normalized.insurancePlanName || null,
+          insuranceCardNumber: normalized.insuranceCardNumber || null,
+          insuranceCardHolder: normalized.insuranceCardHolder || null,
+          insuranceCardValidUntil: normalized.insuranceCardValidUntil || null,
+          isPrimaryInsurance: Boolean(normalized.isPrimaryInsurance),
+          authorizationCode: normalized.authorizationCode || null,
+          authorizationValidUntil: normalized.authorizationValidUntil || null,
+        }
+      : {}),
     sessionsQuantity: normalized.sessionsQuantity ? Number(normalized.sessionsQuantity) : null,
     quantityPeriod: normalized.quantityPeriod,
     amountCents: normalized.amountCents,
@@ -467,3 +474,9 @@ export const serializePatientFinancialPlanForPayload = (plan: any) => {
       : null,
   };
 };
+
+export const serializePatientFinancialPlanForPayload = (plan: any) =>
+  serializePatientFinancialPlanPayload(plan, true);
+
+export const serializePatientFinancialPlanForGenericFinancialPayload = (plan: any) =>
+  serializePatientFinancialPlanPayload(plan, false);
