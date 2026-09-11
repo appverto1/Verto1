@@ -6775,11 +6775,6 @@ export function CoordinatorDashboard({
     const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
-    const canPersistPatientTissOperationalFields =
-      hasInsuranceTissModule &&
-      (editingPatientId
-        ? hasCapability("patient.insurance.edit")
-        : hasCapability("patient.insurance.create"));
     const patientInsurancePayload = hasInsuranceTissModule
       ? {
           insuranceType: newPatientForm.convenioTipo || "particular",
@@ -6803,23 +6798,19 @@ export function CoordinatorDashboard({
             newPatientForm.convenioTipo === "convenio"
               ? String(selectedPatientInsurancePayer?.name || newPatientForm.convenioNome || "").trim() || null
               : null,
-          ...(canPersistPatientTissOperationalFields
-            ? {
-                cardNumber: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinha || null : null,
-                insuranceCardValidUntil: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
-                insurance_card_valid_until: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
-                insurancePlanCategory: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
-                insurance_plan_category: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
-                insuranceHolderName: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
-                insurance_holder_name: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
-                insuranceHolderCpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
-                insurance_holder_cpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
-                insuranceHolderRelationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
-                insurance_holder_relationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
-                eligibilityNotes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
-                eligibility_notes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
-              }
-            : {}),
+          cardNumber: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinha || null : null,
+          insuranceCardValidUntil: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
+          insurance_card_valid_until: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioCarteirinhaValidade || null : null,
+          insurancePlanCategory: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
+          insurance_plan_category: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioPlanoCategoria || null : null,
+          insuranceHolderName: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
+          insurance_holder_name: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularNome || null : null,
+          insuranceHolderCpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
+          insurance_holder_cpf: newPatientForm.convenioTipo === "convenio" ? normalizeCpfInput(newPatientForm.convenioTitularCpf) || null : null,
+          insuranceHolderRelationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
+          insurance_holder_relationship: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioTitularRelacao || null : null,
+          eligibilityNotes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
+          eligibility_notes: newPatientForm.convenioTipo === "convenio" ? newPatientForm.convenioElegibilidadeObs || null : null,
         }
       : editingPatientId
         ? {}
