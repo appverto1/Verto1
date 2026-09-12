@@ -31,6 +31,7 @@ import {
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
+import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
@@ -20353,6 +20354,8 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabasePublicClientKey = supabasePublishableKey || supabaseAnonKey;
+const vertoDeploymentEnv = requireVertoDeploymentEnvironment(process.env);
+const deploymentEnv = vertoDeploymentEnv;
 
 function getProjectRefFromSupabaseUrl(url: string): string | null {
   try {
@@ -20431,6 +20434,9 @@ try {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false
+      },
+      global: {
+        headers: { 'x-verto-deployment-env': vertoDeploymentEnv }
       }
     });
   }
@@ -36404,6 +36410,7 @@ async function startServer() {
       const renewalToken = crypto.randomBytes(32).toString('base64url');
       const result = await savePatientPushSubscription({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         subscription,
         patientId,
         userId: sanitizeString(user?.id, 120),
@@ -36453,6 +36460,7 @@ async function startServer() {
       });
       const result = await removePatientPushSubscription({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId: patientIds[0] || '',
         endpoint
       });
@@ -36475,6 +36483,7 @@ async function startServer() {
       }
       const result = await renewPatientPushSubscription({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         renewalToken,
         subscription,
         oldEndpoint,
@@ -40406,6 +40415,7 @@ async function startServer() {
 
       const result = await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail,
         appointment: {
@@ -56077,6 +56087,7 @@ async function startServer() {
       let query = supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
+        .eq('deployment_env', deploymentEnv)
         .in('patient_id', patientIds)
         .order('created_at', { ascending: false })
         .limit(Math.min(200, limit * 4 + 1));
@@ -56356,6 +56367,7 @@ async function startServer() {
       const { data: existing, error: existingError } = await supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, recipient_user_id, recipient_email, type, scheduled_for, read_at, acknowledged_at, metadata')
+        .eq('deployment_env', deploymentEnv)
         .eq('id', notificationId)
         .limit(1)
         .maybeSingle();
@@ -56384,6 +56396,7 @@ async function startServer() {
           let siblingQuery = supabase
             .from('portal_notifications')
             .select('id, scheduled_for, metadata')
+            .eq('deployment_env', deploymentEnv)
             .eq('patient_id', existing.patient_id)
             .eq('type', existing.type)
             .is('acknowledged_at', null)
@@ -56425,6 +56438,7 @@ async function startServer() {
           ...(acknowledge ? { acknowledged_at: existing.acknowledged_at || now } : {}),
           updated_at: now
         })
+        .eq('deployment_env', deploymentEnv)
         .in('id', targetNotificationIds)
         .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata');
       if (error) throw error;
@@ -56593,6 +56607,7 @@ async function startServer() {
         acknowledged_at: now,
         updated_at: now
       })
+      .eq('deployment_env', deploymentEnv)
       .eq('appointment_id', appointmentId)
       .eq('patient_id', patientId);
     if (requestedNotificationId) query = query.eq('id', requestedNotificationId);
@@ -56613,6 +56628,7 @@ async function startServer() {
           read_at: now,
           acknowledged_at: now
         })
+        .eq('deployment_env', deploymentEnv)
         .eq('appointment_id', appointmentId)
         .eq('patient_id', patientId);
       if (requestedNotificationId) fallbackQuery = fallbackQuery.eq('id', requestedNotificationId);
@@ -56669,6 +56685,7 @@ async function startServer() {
           acknowledged_at: now,
           ...(includeUpdatedAt ? { updated_at: now } : {})
         })
+        .eq('deployment_env', deploymentEnv)
         .in('appointment_id', appointmentIds)
         .in('patient_id', patientIds)
         .in('type', reminderTypes)
@@ -57733,6 +57750,7 @@ async function startServer() {
       const sentAt = new Date().toISOString();
       if (recipientUserId || recipientEmail) {
         const notificationPayload = cleanObject({
+          deployment_env: deploymentEnv,
           organization_id: isUuid(params.organizationId) ? params.organizationId : clinicBranding.id || clinicId || null,
           clinic_id: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
           recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -57756,13 +57774,14 @@ async function startServer() {
         });
         const { error } = await supabase
           .from('portal_notifications')
-          .upsert(notificationPayload, { onConflict: 'idempotency_key' });
+          .upsert(notificationPayload, { onConflict: 'deployment_env,idempotency_key' });
         if (error && !isMissingRelationError(error)) {
           console.warn('[PortalReschedule] internal notification skipped:', error.message);
         }
       }
       await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -58010,6 +58029,7 @@ async function startServer() {
         const notificationResult = await supabase
           .from('portal_notifications')
           .select('appointment_id')
+          .eq('deployment_env', deploymentEnv)
           .in('patient_id', patientIds)
           .is('acknowledged_at', null)
           .limit(Math.min(200, limit * 4));
@@ -59431,6 +59451,7 @@ async function startServer() {
       const limit = Math.min(50, Math.max(1, Math.round(Number(req.query?.limit || 30) || 30)));
       const { data, error } = await supabase.from('clinic_announcements')
         .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at,updated_at')
+        .eq('deployment_env', deploymentEnv)
         .eq('clinic_id', clinicId).order('created_at', { ascending: false }).limit(limit);
       if (error) { if (isMissingRelationError(error)) return res.status(503).json({ success:false, error:'O módulo de avisos ainda não foi ativado no banco.' }); throw error; }
       return res.json({ success:true, data:data || [] });
@@ -59464,8 +59485,9 @@ async function startServer() {
       const selectedIds=Array.from(new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((v:unknown)=>sanitizeString(v,120)).filter((v:string)=>isUuid(v)))).slice(0,500) as string[];
       if(audienceMode==='SELECTED' && !selectedIds.length) return res.status(400).json({success:false,error:'Selecione ao menos um paciente.'});
       const idempotencyKey=sanitizeString(req.body?.idempotencyKey,120) || crypto.randomUUID();
+      const environmentScopedIdempotencyKey=`${deploymentEnv}:${idempotencyKey.replace(/^(staging|production):/i,'')}`;
       const announcementSelect='id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at';
-      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
+      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('clinic_id',clinicId).eq('idempotency_key',environmentScopedIdempotencyKey).limit(1).maybeSingle();
       if(!existing.error && existing.data) return res.json({success:true,data:existing.data,duplicate:true});
       if(existing.error && !isMissingRelationError(existing.error)) throw existing.error;
       const context = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
@@ -59529,18 +59551,18 @@ async function startServer() {
       const deliveryRow=delivery.data && typeof delivery.data==='object' && !Array.isArray(delivery.data) ? delivery.data : {};
       const announcementId=sanitizeString(deliveryRow?.announcement_id || requestedAnnouncementId,120);
       if(deliveryRow?.created===false){
-        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
+        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
         if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true});
       }
 
       if(normalizedScheduledFor){
-        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
         if(scheduled.error) throw scheduled.error;
         return res.status(201).json({success:true,data:scheduled.data,scheduled:true});
       }
 
       const dispatched=await dispatchClinicAnnouncementNow(announcementId,'api_immediate');
-      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
       if(final.error) throw final.error;
       return res.status(201).json({
         success:true,
@@ -91153,9 +91175,10 @@ async function startServer() {
       const localDay = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
-      const idempotencyKey = `patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
+      const idempotencyKey = `${deploymentEnv}:patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
       const now = new Date().toISOString();
       const notificationPayload = cleanObject({
+        deployment_env: deploymentEnv,
         organization_id: organizationId,
         clinic_id: organizationId,
         recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -91195,6 +91218,7 @@ async function startServer() {
 
       await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -100987,6 +101011,7 @@ async function startServer() {
   // --- STRUCTURED SCHOOL MANAGEMENT ---
   registerSchoolManagementRoutes(app, {
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     noStoreDynamicResponse,
     checkAuth,
     requireClinicCapability,
@@ -101207,6 +101232,7 @@ async function startServer() {
 
   startAppointmentReminderCron({
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,
@@ -101215,6 +101241,7 @@ async function startServer() {
   });
   startClinicAnnouncementCron({
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,
