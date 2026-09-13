@@ -1,0 +1,73 @@
+name: Step 10 Agenda P0 patch
+
+on:
+  push:
+    branches:
+      - fix/agenda-finance-without-tiss-p0-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  apply-validate-and-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/agenda-finance-without-tiss-p0-20260912
+          fetch-depth: 0
+
+      - name: Assemble and apply surgical patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .step10-patch/part1.patch .step10-patch/part2.patch .step10-patch/part3.patch > /tmp/step10-source.patch
+          echo '8d4e9adb0d8bfdd3811d727ddc25ba548bf51388fe4c0890def3a1b03c2c5dd8  /tmp/step10-source.patch' | sha256sum -c -
+          git apply --check /tmp/step10-source.patch
+          git apply /tmp/step10-source.patch
+          git diff --check
+
+      - name: Validate focused regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/appointmentFinanceWithoutTissAgendaP0.regression.test.mjs
+          node tests/appointmentInsuranceProcedureSelection.test.mjs
+          node tests/patientCreatePrivateWithoutInsuranceCapability.test.mjs
+          node tests/patientFinancialPlanTissReadBoundary.regression.test.mjs
+          node tests/professionalProfileTissDecouplingP0.regression.test.mjs
+          if [ -f tests/patientFinancialPlanFinanceWithoutTissPayload.regression.test.mjs ]; then node tests/patientFinancialPlanFinanceWithoutTissPayload.regression.test.mjs; fi
+          if [ -f tests/patientFinancialPlanTissPreservationOnGenericFinancialSave.regression.test.mjs ]; then node tests/patientFinancialPlanTissPreservationOnGenericFinancialSave.regression.test.mjs; fi
+          if [ -f tests/notificationEnvironmentWiring.regression.test.mjs ]; then node tests/notificationEnvironmentWiring.regression.test.mjs; fi
+          node tests/security.regression.test.mjs
+          node tests/goLiveHardening.test.mjs
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Production build
+        run: npm run build
+
+      - name: Commit only validated Step 10 implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .step10-patch
+          rm -f .github/workflows/step10-apply-patch.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -u -- src/App.tsx src/components/CoordinatorDashboard.tsx tests/appointmentInsuranceProcedureSelection.test.mjs .step10-patch .github/workflows/step10-apply-patch.yml
+          printf '%s\n' '--- staged files ---'
+          git diff --cached --name-status
+          git commit -m 'fix(agenda): decouple finance-only insurance from TISS'
+          git push origin HEAD:fix/agenda-finance-without-tiss-p0-20260912
