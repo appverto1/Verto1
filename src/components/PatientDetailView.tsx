@@ -1621,7 +1621,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
 
       const updatedPatient = {
-        ...patient,
+        id: patient.id,
         profilePicture: upload.url,
         profile_picture: upload.url,
         profilePicturePath: upload.path || null,

@@ -6072,6 +6072,20 @@ export default function App() {
       'convenioTitularRelacao',
       'convenioElegibilidadeObs',
     ].some((key) => Object.prototype.hasOwnProperty.call(updatedData || {}, key));
+    const patientPhotoPatchKeys = [
+      'profilePicture',
+      'profile_picture',
+      'profilePicturePath',
+      'profile_picture_path',
+    ] as const;
+    const hasPatientPhotoPatch = patientPhotoPatchKeys.some((key) =>
+      Object.prototype.hasOwnProperty.call(updatedData || {}, key)
+    );
+    const isPatientPhotoOnlyPatch =
+      hasPatientPhotoPatch &&
+      Object.keys(updatedData || {}).every((key) =>
+        key === 'id' || patientPhotoPatchKeys.includes(key as (typeof patientPhotoPatchKeys)[number])
+      );
     const updatedProfileType = normalizePatientProfileType(
       updatedData?.patientProfileType ||
         updatedData?.panelType ||
@@ -6084,7 +6098,9 @@ export default function App() {
     );
     const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
     const syncedAnamnesisData =
-      anamnesisData !== undefined
+      isPatientPhotoOnlyPatch
+        ? undefined
+        : anamnesisData !== undefined
         ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, anamnesisData)
         : currentPatient?.anamnesisData
           ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, currentPatient.anamnesisData)
@@ -6269,7 +6285,23 @@ export default function App() {
           'management',
         );
       } else {
-        const patientUpdatePayload = {
+        const patientPhotoPatch = {
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profilePicture')
+            ? { profilePicture: updatedData.profilePicture }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profile_picture')
+            ? { profile_picture: updatedData.profile_picture }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profilePicturePath')
+            ? { profilePicturePath: updatedData.profilePicturePath }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profile_picture_path')
+            ? { profile_picture_path: updatedData.profile_picture_path }
+            : {}),
+        };
+        const patientUpdatePayload = isPatientPhotoOnlyPatch
+          ? patientPhotoPatch
+          : {
           name: preserveCurrentFullName ? undefined : updatedData.name,
           socialName: updatedData.socialName || updatedData.nomeSocial,
           email: updatedData.email,
@@ -6337,7 +6369,8 @@ export default function App() {
                 ? updatedData.responsibleProfessionalId
                 : (typeof updatedData?.therapist_id !== 'undefined' ? updatedData.therapist_id : updatedData?.professional_id)),
           clinic_id: updatedData.clinic_id,
-          status: updatedData.status
+          status: updatedData.status,
+          ...patientPhotoPatch,
         };
         const updateResult = await dataService.updatePatient(
           String(updatedData.id),
