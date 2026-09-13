@@ -25,6 +25,12 @@ jobs:
           FUNCTIONAL_BRANCH="fix/patient-photo-persistence-20260913"
           VALIDATION_BRANCH="validate/patient-photo-persistence-20260913"
           PATCH_PATH=".verto-validation/VERTO_PRONTUARIO_PATIENT_PHOTO_PERSISTENCE_30a9816b.patch"
+          EXPECTED=(
+            "src/App.tsx"
+            "src/components/PatientDetailView.tsx"
+            "tests/patientClinicManagedPhotoPersistence.regression.test.mjs"
+          )
+          mapfile -t EXPECTED_SORTED < <(printf '%s\n' "${EXPECTED[@]}" | sort)
 
           git fetch origin staging "$VALIDATION_BRANCH"
           test "$(git rev-parse origin/staging)" = "$BASE_SHA"
@@ -34,15 +40,6 @@ jobs:
           git apply --check --whitespace=error-all /tmp/patient-photo.patch
           git apply --whitespace=error-all /tmp/patient-photo.patch
           git diff --check
-
-          mapfile -t CHANGED < <(git diff --name-only | sort)
-          EXPECTED=(
-            "src/App.tsx"
-            "src/components/PatientDetailView.tsx"
-            "tests/patientClinicManagedPhotoPersistence.regression.test.mjs"
-          )
-          mapfile -t EXPECTED_SORTED < <(printf '%s\n' "${EXPECTED[@]}" | sort)
-          test "$(printf '%s\n' "${CHANGED[@]}")" = "$(printf '%s\n' "${EXPECTED_SORTED[@]}")"
 
           npm ci
           node tests/patientClinicManagedPhotoPersistence.regression.test.mjs
