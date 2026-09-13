@@ -19592,6 +19592,35 @@ function patientFinancialPlanIsInsurance(row: any) {
   return normalizeFinancialPlanSemanticEnum(row?.billing_mode ?? row?.billingMode, 40) === 'INSURANCE';
 }
 
+function hydrateOmittedPatientFinancialPlanTissFieldsForPersistence(
+  financialPlans: any[],
+  canonicalRows: any[],
+) {
+  const canonical = Array.isArray(canonicalRows) ? canonicalRows : [];
+  return (Array.isArray(financialPlans) ? financialPlans : []).map((rawPlan: any) => {
+    const plan = rawPlan && typeof rawPlan === 'object' && !Array.isArray(rawPlan) ? rawPlan : {};
+    if (!patientFinancialPlanIsInsurance(plan)) return plan;
+
+    const incomingKeys = new Set(patientFinancialPlanIdentityKeys(plan));
+    if (incomingKeys.size === 0) return plan;
+    const existing = canonical.find((row: any) =>
+      patientFinancialPlanIsInsurance(row) &&
+      patientFinancialPlanIdentityKeys(row).some((key) => incomingKeys.has(key))
+    );
+    if (!existing) return plan;
+
+    const next = { ...plan };
+    const preserveWhenAbsent = (keys: string[], outputKey: string, persistedKey: string) => {
+      if (keys.some((key) => Object.prototype.hasOwnProperty.call(plan, key))) return;
+      next[outputKey] = existing?.[persistedKey] ?? null;
+    };
+    preserveWhenAbsent(['insurancePlanName', 'insurance_plan_name'], 'insurancePlanName', 'insurance_plan_name');
+    preserveWhenAbsent(['authorizationCode', 'authorization_code'], 'authorizationCode', 'authorization_code');
+    preserveWhenAbsent(['authorizationValidUntil', 'authorization_valid_until'], 'authorizationValidUntil', 'authorization_valid_until');
+    return next;
+  });
+}
+
 function areInsuranceFinancialPlanSetsSemanticallyEqual(canonicalRows: any[], incomingRows: any[]) {
   const canonical = (Array.isArray(canonicalRows) ? canonicalRows : []).filter(patientFinancialPlanIsInsurance);
   const incoming = (Array.isArray(incomingRows) ? incomingRows : []).filter(patientFinancialPlanIsInsurance);
@@ -19681,6 +19710,43 @@ async function loadCanonicalActivePatientFinancialPlansForAuthorization(params: 
     result = await supabase
       .from('patient_financial_plans')
       .select(PATIENT_FINANCIAL_PLAN_SELECT)
+      .eq('organization_id', params.clinicId)
+      .eq('patient_id', params.patientId)
+      .eq('status', 'ACTIVE')
+      .order('created_at', { ascending: true });
+  }
+  if (result.error) throw result.error;
+  return Array.isArray(result.data) ? result.data : [];
+}
+
+async function loadCanonicalActivePatientFinancialPlansForTissPreservation(params: { clinicId: string; patientId: string }) {
+  const selectWithVersionIdentity = [
+    'id',
+    'client_plan_key',
+    'logical_plan_id',
+    'billing_mode',
+    'insurance_plan_name',
+    'authorization_code',
+    'authorization_valid_until',
+  ].join(',');
+  const baseSelect = [
+    'id',
+    'billing_mode',
+    'insurance_plan_name',
+    'authorization_code',
+    'authorization_valid_until',
+  ].join(',');
+  let result = await supabase
+    .from('patient_financial_plans')
+    .select(selectWithVersionIdentity)
+    .eq('organization_id', params.clinicId)
+    .eq('patient_id', params.patientId)
+    .eq('status', 'ACTIVE')
+    .order('created_at', { ascending: true });
+  if (result.error && ['client_plan_key', 'logical_plan_id'].includes(extractMissingColumnName(result.error) || '')) {
+    result = await supabase
+      .from('patient_financial_plans')
+      .select(baseSelect)
       .eq('organization_id', params.clinicId)
       .eq('patient_id', params.patientId)
       .eq('status', 'ACTIVE')
@@ -19865,6 +19931,9 @@ function buildPatientIdentityPersistenceFields(body: any) {
   const address = body?.address && typeof body.address === 'object' ? body.address : {};
   const guardian = body?.guardian && typeof body.guardian === 'object' ? body.guardian : {};
   const profileFields = buildPatientProfileTypeFields(body);
+  const hasOwn = (...keys: string[]) => keys.some((key) =>
+    Object.prototype.hasOwnProperty.call(body || {}, key)
+  );
   const responsiblePhoneSource =
     body?.responsiblePhone ||
     body?.responsible_phone ||
@@ -19916,15 +19985,33 @@ function buildPatientIdentityPersistenceFields(body: any) {
       if (!payer.provided) return undefined;
       return payer.value;
     })(),
-    insurance_type: sanitizeString(body?.insuranceType || body?.insurance_type || body?.convenioTipo, 60),
-    insurance_name: sanitizeString(body?.insuranceName || body?.insurance_name || body?.convenioNome, 160),
-    insurance_card_number: sanitizeString(body?.insuranceCardNumber || body?.insurance_card_number || body?.cardNumber || body?.convenioCarteirinha, 120),
-    insurance_card_valid_until: sanitizeIsoDateOnly(body?.insuranceCardValidUntil || body?.insurance_card_valid_until || body?.convenioCarteirinhaValidade),
-    insurance_plan_category: sanitizeString(body?.insurancePlanCategory || body?.insurance_plan_category || body?.convenioPlanoCategoria, 160),
-    insurance_holder_name: sanitizeString(body?.insuranceHolderName || body?.insurance_holder_name || body?.convenioTitularNome, 160),
-    insurance_holder_cpf: normalizeCpf(body?.insuranceHolderCpf || body?.insurance_holder_cpf || body?.convenioTitularCpf) || undefined,
-    insurance_holder_relationship: sanitizeString(body?.insuranceHolderRelationship || body?.insurance_holder_relationship || body?.convenioTitularRelacao, 80),
-    eligibility_notes: sanitizeTextField(body?.insuranceEligibilityNotes || body?.eligibilityNotes || body?.eligibility_notes || body?.convenioElegibilidadeObs, 1000),
+    insurance_type: hasOwn('insuranceType', 'insurance_type', 'convenioTipo')
+      ? sanitizeString(body?.insuranceType || body?.insurance_type || body?.convenioTipo, 60)
+      : undefined,
+    insurance_name: hasOwn('insuranceName', 'insurance_name', 'convenioNome')
+      ? sanitizeString(body?.insuranceName || body?.insurance_name || body?.convenioNome, 160)
+      : undefined,
+    insurance_card_number: hasOwn('insuranceCardNumber', 'insurance_card_number', 'cardNumber', 'convenioCarteirinha')
+      ? sanitizeString(body?.insuranceCardNumber || body?.insurance_card_number || body?.cardNumber || body?.convenioCarteirinha, 120)
+      : undefined,
+    insurance_card_valid_until: hasOwn('insuranceCardValidUntil', 'insurance_card_valid_until', 'convenioCarteirinhaValidade')
+      ? sanitizeIsoDateOnly(body?.insuranceCardValidUntil || body?.insurance_card_valid_until || body?.convenioCarteirinhaValidade)
+      : undefined,
+    insurance_plan_category: hasOwn('insurancePlanCategory', 'insurance_plan_category', 'convenioPlanoCategoria')
+      ? sanitizeString(body?.insurancePlanCategory || body?.insurance_plan_category || body?.convenioPlanoCategoria, 160)
+      : undefined,
+    insurance_holder_name: hasOwn('insuranceHolderName', 'insurance_holder_name', 'convenioTitularNome')
+      ? sanitizeString(body?.insuranceHolderName || body?.insurance_holder_name || body?.convenioTitularNome, 160)
+      : undefined,
+    insurance_holder_cpf: hasOwn('insuranceHolderCpf', 'insurance_holder_cpf', 'convenioTitularCpf')
+      ? (normalizeCpf(body?.insuranceHolderCpf || body?.insurance_holder_cpf || body?.convenioTitularCpf) || null)
+      : undefined,
+    insurance_holder_relationship: hasOwn('insuranceHolderRelationship', 'insurance_holder_relationship', 'convenioTitularRelacao')
+      ? sanitizeString(body?.insuranceHolderRelationship || body?.insurance_holder_relationship || body?.convenioTitularRelacao, 80)
+      : undefined,
+    eligibility_notes: hasOwn('insuranceEligibilityNotes', 'eligibilityNotes', 'eligibility_notes', 'convenioElegibilidadeObs')
+      ? sanitizeTextField(body?.insuranceEligibilityNotes || body?.eligibilityNotes || body?.eligibility_notes || body?.convenioElegibilidadeObs, 1000)
+      : undefined,
     patient_group: sanitizeString(body?.group || body?.patient_group || body?.grupo, 80),
     lead_source: sanitizeString(body?.source || body?.lead_source || body?.comoConheceu, 120),
     notes: sanitizeTextField(body?.notes || body?.outrasInformacoes || body?.otherInformation, 4000),
@@ -20076,11 +20163,24 @@ async function persistPatientFinancialPlans(params: {
   actorId?: string | null;
   financialPlans: any[];
   preserveInsuranceContext?: boolean;
+  preserveOmittedInsuranceOperationalFields?: boolean;
+  redactInsuranceOperationalFieldsFromResult?: boolean;
 }) {
   if (!isUuid(params.patientId) || !isUuid(params.clinicId)) {
     return { success: false, error: 'Paciente ou clínica inválidos.' };
   }
-  let rows = buildPatientFinancialPlanRows(params);
+  let persistencePlans = Array.isArray(params.financialPlans) ? params.financialPlans : [];
+  if (params.preserveOmittedInsuranceOperationalFields === true) {
+    const canonicalRows = await loadCanonicalActivePatientFinancialPlansForTissPreservation({
+      clinicId: params.clinicId,
+      patientId: params.patientId,
+    });
+    persistencePlans = hydrateOmittedPatientFinancialPlanTissFieldsForPersistence(
+      persistencePlans,
+      canonicalRows,
+    );
+  }
+  let rows = buildPatientFinancialPlanRows({ ...params, financialPlans: persistencePlans });
   if (params.preserveInsuranceContext === true) {
     // Authorization boundary: replayed INSURANCE rows were proven equal against
     // the canonical ACTIVE state. Do not send them to reconciliation at all.
@@ -20160,7 +20260,11 @@ async function persistPatientFinancialPlans(params: {
       code: sanitizeString(reconciliation.data?.code, 120) || 'PATIENT_FINANCIAL_PLAN_RECONCILIATION_REJECTED',
     };
   }
-  return { success: true, data: Array.isArray(reconciliation.data?.data) ? reconciliation.data.data : [] };
+  const persistedRows = Array.isArray(reconciliation.data?.data) ? reconciliation.data.data : [];
+  const responseRows = params.redactInsuranceOperationalFieldsFromResult === true
+    ? (redactPatientFinancialPlanTissOperationalFields({ financialPlans: persistedRows })?.financialPlans || [])
+    : persistedRows;
+  return { success: true, data: responseRows };
 }
 
 async function updatePatientStatusIfNeeded(user: any): Promise<'active' | 'inactive' | 'waiting_treatment'> {
@@ -45370,6 +45474,8 @@ async function startServer() {
           actorId: sanitizeString(req.session.user?.id, 120),
           financialPlans: Array.isArray(aggregateRecordPayloadRaw.financialPlans) ? aggregateRecordPayloadRaw.financialPlans : [],
           preserveInsuranceContext: payerMutationBoundary.preserveInsuranceContext,
+          preserveOmittedInsuranceOperationalFields: !context.capabilities.has('patient.insurance.edit'),
+          redactInsuranceOperationalFieldsFromResult: !context.capabilities.has('patient.insurance.view'),
         });
         if (!canonicalFinancialPlanSync.success) {
           return res.status(409).json({
@@ -45530,6 +45636,8 @@ async function startServer() {
         actorId: sanitizeString(req.session.user?.id, 120),
         financialPlans,
         preserveInsuranceContext: payerMutationBoundary.preserveInsuranceContext,
+        preserveOmittedInsuranceOperationalFields: req.authorizationContext?.capabilities?.has('patient.insurance.edit') !== true,
+        redactInsuranceOperationalFieldsFromResult: req.authorizationContext?.capabilities?.has('patient.insurance.view') !== true,
       });
       if (!result.success && result.warning) {
         return res.status(200).json(result);
@@ -45704,6 +45812,8 @@ async function startServer() {
           actorId: sanitizeString(req.session.user?.id, 120),
           financialPlans: Array.isArray(payloadRawBase.financialPlans) ? payloadRawBase.financialPlans : [],
           preserveInsuranceContext: preserveInsuranceContextForFinancialPlans,
+          preserveOmittedInsuranceOperationalFields: capabilityContext?.capabilities?.has('patient.insurance.edit') !== true,
+          redactInsuranceOperationalFieldsFromResult: capabilityContext?.capabilities?.has('patient.insurance.view') !== true,
         });
         if (!financialPlanSync.success && financialPlanSync.warning) {
           financialPlanSyncWarning = sanitizeString(financialPlanSync.warning, 300);
