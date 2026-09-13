@@ -20,6 +20,15 @@ jobs:
           ref: fix/agenda-finance-without-tiss-p0-20260912
           fetch-depth: 0
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
       - name: Assemble and apply surgical patch
         shell: bash
         run: |
@@ -44,15 +53,6 @@ jobs:
           if [ -f tests/notificationEnvironmentWiring.regression.test.mjs ]; then node tests/notificationEnvironmentWiring.regression.test.mjs; fi
           node tests/security.regression.test.mjs
           node tests/goLiveHardening.test.mjs
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci --no-audit --no-fund
 
       - name: Production build
         run: npm run build
