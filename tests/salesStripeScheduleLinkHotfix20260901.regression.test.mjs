@@ -53,7 +53,7 @@ assert.match(ensureBlock, /MODULAR_SCHEDULE_METADATA_CONFLICT/);
 assert.match(ensureBlock, /MODULAR_SUBSCRIPTION_LINKAGE_CONFLICT/);
 assert.match(ensureBlock, /MODULAR_CURRENT_PHASE_RECONCILIATION_FAILED/);
 assert.match(scheduleBlock, /buildStripeScheduleContinuationPhase/);
-assert.match(ensureBlock, /MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END/);
+assert.match(scheduleBlock, /MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END/);
 assert.match(ensureBlock, /MODULAR_SCHEDULE_PHASE_SEQUENCE_INVALID/);
 assert.match(ensureBlock, /proration_behavior: "none"/);
 
