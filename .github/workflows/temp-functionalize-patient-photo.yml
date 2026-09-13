@@ -1,0 +1,60 @@
+name: TEMP functionalize patient photo patch
+
+on:
+  push:
+    branches:
+      - automation/patient-photo-functionalize-20260913
+
+permissions:
+  contents: write
+
+jobs:
+  functionalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout automation branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build clean functional branch from exact staging baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE_SHA="30a9816bfc128e86c022a90bff1b3f0c589d6ef1"
+          FUNCTIONAL_BRANCH="fix/patient-photo-persistence-20260913"
+          VALIDATION_BRANCH="validate/patient-photo-persistence-20260913"
+          PATCH_PATH=".verto-validation/VERTO_PRONTUARIO_PATIENT_PHOTO_PERSISTENCE_30a9816b.patch"
+
+          git fetch origin staging "$VALIDATION_BRANCH"
+          test "$(git rev-parse origin/staging)" = "$BASE_SHA"
+
+          git checkout -B "$FUNCTIONAL_BRANCH" "$BASE_SHA"
+          git show "origin/$VALIDATION_BRANCH:$PATCH_PATH" > /tmp/patient-photo.patch
+          git apply --check --whitespace=error-all /tmp/patient-photo.patch
+          git apply --whitespace=error-all /tmp/patient-photo.patch
+          git diff --check
+
+          mapfile -t CHANGED < <(git diff --name-only | sort)
+          EXPECTED=(
+            "src/App.tsx"
+            "src/components/PatientDetailView.tsx"
+            "tests/patientClinicManagedPhotoPersistence.regression.test.mjs"
+          )
+          mapfile -t EXPECTED_SORTED < <(printf '%s\n' "${EXPECTED[@]}" | sort)
+          test "$(printf '%s\n' "${CHANGED[@]}")" = "$(printf '%s\n' "${EXPECTED_SORTED[@]}")"
+
+          npm ci
+          node tests/patientClinicManagedPhotoPersistence.regression.test.mjs
+          node tests/patientFinancialPlanFinanceWithoutTissPayload.regression.test.mjs
+          node tests/patientFinancialPlanTissPreservationOnGenericFinancialSave.regression.test.mjs
+          node tests/security.regression.test.mjs
+          node tests/goLiveHardening.test.mjs
+          npm run build
+
+          git add src/App.tsx src/components/PatientDetailView.tsx tests/patientClinicManagedPhotoPersistence.regression.test.mjs
+          test "$(git diff --cached --name-only | sort)" = "$(printf '%s\n' "${EXPECTED_SORTED[@]}")"
+          git config user.name "Verto CI"
+          git config user.email "appverto1@gmail.com"
+          git commit -m "fix(patient): persist clinic-managed profile photo safely"
+          git push origin "HEAD:refs/heads/$FUNCTIONAL_BRANCH"
