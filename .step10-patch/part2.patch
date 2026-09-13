@@ -1,0 +1,160 @@
+     sessionFinancialContextType,
+     sessionInsuranceServiceCatalogId,
++    sessionUsesTissOperationalFields,
+   ]);
+ 
+   useEffect(() => {
+     if (
+       !isAddSessionModalOpen ||
+-      sessionFinancialContextType !== "INSURANCE" ||
++      !sessionUsesTissOperationalFields ||
+       !sessionInsuranceServiceCatalogId ||
+       sessionPatientTissAuthorizationId ||
+       sessionUsableTissAuthorizations.length !== 1
+@@ -4838,6 +4842,7 @@ export function CoordinatorDashboard({
+     sessionInsuranceServiceCatalogId,
+     sessionPatientTissAuthorizationId,
+     sessionUsableTissAuthorizations,
++    sessionUsesTissOperationalFields,
+   ]);
+ 
+   useEffect(() => {
+@@ -5311,9 +5316,9 @@ export function CoordinatorDashboard({
+           ? "Informe o motivo da decisão financeira deste reagendamento."
+       : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && !sessionPayerId
+         ? "Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido."
+-        : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && sessionBillingSuggestionState.loading
++        : !isTherapist && sessionNeedsFinancialContext && sessionUsesTissOperationalFields && sessionBillingSuggestionState.loading
+           ? "Aguarde o carregamento dos procedimentos faturáveis do convênio."
+-          : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && sessionBillableServiceOptions.length > 0 && !sessionInsuranceServiceCatalogId
++          : !isTherapist && sessionNeedsFinancialContext && sessionUsesTissOperationalFields && sessionBillableServiceOptions.length > 0 && !sessionInsuranceServiceCatalogId
+             ? "Selecione o procedimento faturável do convênio antes de confirmar."
+         : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && sessionPrivatePricingState.loading
+           ? "Aguarde a confirmação do valor particular."
+@@ -5785,16 +5790,21 @@ export function CoordinatorDashboard({
+         billing_context_type: sessionFinancialContextType,
+         payerType: sessionFinancialContextType,
+         payer_type: sessionFinancialContextType,
++        insuranceTissEnabled: hasInsuranceTissModule,
+         payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+         payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+         payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
+-        insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+-        insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+-        serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+-        service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+-        procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+-        procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
++        ...(hasInsuranceTissModule
++          ? {
++              insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
++              insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
++              serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
++              service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
++              procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
++              procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
++            }
++          : {}),
+         privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
+         private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
+         privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
+@@ -5807,20 +5817,24 @@ export function CoordinatorDashboard({
+         private_pricing_reason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
+         privateRescheduleFinancialDecision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
+         private_reschedule_financial_decision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
+-        insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+-        insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+-        insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+-        insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+-        insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+-        insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+-        insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+-        insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+-        guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
+-        guide_number: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
+-        authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
+-        authorization_code: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
+-        patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+-        patient_tiss_authorization_id: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
++        ...(hasInsuranceTissModule
++          ? {
++              insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
++              insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
++              insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
++              insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
++              insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
++              insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
++              insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
++              insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
++              guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
++              guide_number: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
++              authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
++              authorization_code: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
++              patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
++              patient_tiss_authorization_id: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
++            }
++          : {}),
+         professional: selectedSessionProfessional?.label || sessionProfessional,
+         professionalId: selectedSessionProfessional?.id || sessionProfessionalId,
+         professional_id: selectedSessionProfessional?.id || sessionProfessionalId,
+@@ -5853,29 +5867,31 @@ export function CoordinatorDashboard({
+           : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
+         "management",
+       );
+-      const billingResult = await dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
+-        financialContextType: sessionFinancialContextType,
+-        billingContextType: sessionFinancialContextType,
+-        payerType: sessionFinancialContextType,
+-        payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+-        payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
+-        serviceType: sessionApproach || "Consulta Padrão",
+-        serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+-        procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+-        insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
+-        insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
+-        insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName || null : null,
+-        insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil || null : null,
+-        guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber || null : null,
+-        authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode || null : null,
+-        patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+-        source: "APPOINTMENT_CONTEXT",
+-      });
+-      if (!billingResult?.success) {
+-        hideProcessing();
+-        releaseSessionSubmit();
+-        showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
+-        return;
++      if (hasInsuranceTissModule) {
++        const billingResult = await dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
++          financialContextType: sessionFinancialContextType,
++          billingContextType: sessionFinancialContextType,
++          payerType: sessionFinancialContextType,
++          payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
++          payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
++          serviceType: sessionApproach || "Consulta Padrão",
++          serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
++          procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
++          insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
++          insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
++          insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName || null : null,
++          insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil || null : null,
++          guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber || null : null,
++          authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode || null : null,
++          patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
++          source: "APPOINTMENT_CONTEXT",
++        });
++        if (!billingResult?.success) {
++          hideProcessing();
++          releaseSessionSubmit();
++          showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
++          return;
++        }
+       }
+       if (editingAppointmentActionRequest?.id) {
+         const buildEditedAppointmentIso = (timeValue: string) => {
+@@ -5946,16 +5962,21 @@ export function CoordinatorDashboard({
+       billing_context_type: sessionFinancialContextType,
+       payerType: sessionFinancialContextType,
+       payer_type: sessionFinancialContextType,
++      insuranceTissEnabled: hasInsuranceTissModule,
