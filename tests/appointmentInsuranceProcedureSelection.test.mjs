@@ -26,9 +26,9 @@ assert.match(coordinator, /service_catalog_id: sessionFinancialContextType === "
 assert.match(coordinator, /Selecione o procedimento faturável do convênio antes de confirmar/);
 
 // The selected canonical procedure survives appointment persistence, including recurrence.
-assert.match(app, /const insuranceServiceCatalogId = usesInsuranceContext/);
-assert.match(app, /insurance_service_catalog_id: usesInsuranceContext && occurrenceMatchesBaseSpecialty \? insuranceServiceCatalogId \|\| null : null/);
-assert.match(app, /procedure_code: usesInsuranceContext && occurrenceMatchesBaseSpecialty \? insuranceProcedureCode \|\| null : null/);
+assert.match(app, /const insuranceServiceCatalogId = usesTissOperationalFields/);
+assert.match(app, /insurance_service_catalog_id: usesTissOperationalFields && occurrenceMatchesBaseSpecialty \? insuranceServiceCatalogId \|\| null : null/);
+assert.match(app, /procedure_code: usesTissOperationalFields && occurrenceMatchesBaseSpecialty \? insuranceProcedureCode \|\| null : null/);
 
 // Backend resolves the exact tenant-scoped catalog item and lists payer De\/Para choices in batch.
 assert.match(server, /async function listPayerBillableServiceOptionsForAppointmentTissBilling/);
