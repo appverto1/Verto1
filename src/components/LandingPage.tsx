@@ -856,7 +856,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
               className="hidden whitespace-nowrap rounded-full border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs font-medium text-[#6d2ee8] shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 sm:inline-flex sm:px-4 sm:text-sm"
               title="Acesse conteúdos compartilhados por clínicas que utilizam a Verto"
             >
-              <span className="hidden sm:inline">Sou </span>parceiro
+              Sou parceiro
             </button>
             <button
               onClick={() => {
