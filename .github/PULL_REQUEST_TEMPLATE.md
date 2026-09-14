@@ -5,8 +5,16 @@
 - Classification: 🟢 / 🟡 / 🔴
 - Principal writer:
 - `GLOBAL_WRITE_LOCK`: INACTIVE / ACTIVE
+- `lock_owner_issue`: none / #<n>
+- `lock_owner_writer`: none / 04 / 05 / 06 / 07 / 08 / 09
+- `lock_base_sha`: null / <staging SHA>
+- `lock_scope`: NONE / PRODUCT_STAGING
+- `lock_acquired_at`: null / timestamp
+- `lock_release_gate`: none / STAGING_VERIFIED
 - Locked base SHA:
 - Branch head SHA:
+
+> With `GLOBAL_WRITE_LOCK=ACTIVE`, only the owner Issue may write/merge product against staging. Other product merges are blocked until the owner reaches `STAGING_VERIFIED`. Unexpected staging drift against `lock_base_sha` => `SHA_DRIFT`; do not merge. Exception requires explicit `founder_preempt=true`, formal pause, refreshed lock_base_sha and revalidation.
 
 ## Queue / execution state
 - `priority`: P000 / P00 / P0 / P1 / P2 / P3
@@ -74,6 +82,7 @@ Reviewer compares the actual diff against `SPEC_APPROVED`.
 ## CI — 10
 - Workflow/run:
 - Validated head SHA:
+- `lock_base_sha` vs current staging HEAD when applicable:
 - CI result: `CI_PASS` / blocking state
 
 ## PR Engineer — 11
@@ -86,11 +95,13 @@ Reviewer compares the actual diff against `SPEC_APPROVED`.
 Immediately before merge:
 - [ ] Expected PR head SHA revalidated.
 - [ ] Base drift checked.
+- [ ] If `GLOBAL_WRITE_LOCK=ACTIVE`, this PR belongs to `lock_owner_issue`.
+- [ ] If `GLOBAL_WRITE_LOCK=ACTIVE`, current staging HEAD still matches the expected lock/base contract or drift was formally refreshed and revalidated.
 - [ ] Required CI is passing.
 - [ ] `REVIEW_PASS` is recorded.
 - [ ] Issue is in a merge-eligible state.
 
-If required checks are failing/pending, do not merge even if GitHub technically allows it.
+If required checks are failing/pending, if staging has unexpected `SHA_DRIFT`, or if another Issue owns the active global lock, do not merge even if GitHub technically allows it.
 
 ## Rollout — 13
 After merge to `staging`:
@@ -98,6 +109,7 @@ After merge to `staging`:
 - [ ] Build/runtime/HTTP health checked.
 - [ ] Supabase staging/advisors checked after applicable database changes.
 - [ ] Failures are routed to 14 — Recovery/Incident.
+- [ ] If this Issue owns an active global lock, release it only after `STAGING_VERIFIED`.
 - Result: `STAGING_VERIFIED` / blocking state
 
 ## Lane handoff integrity
