@@ -8,6 +8,26 @@
 - Locked base SHA:
 - Branch head SHA:
 
+## Queue / execution state
+- `priority`: P000 / P00 / P0 / P1 / P2 / P3
+- `priority_rank`: 10 / 50 / 100 / 200 / 300 / 400
+- `queue_mode`: NEW / CONTINUATION / REWORK
+- `flow_status`: QUEUED / ACTIVE / WAITING_EXTERNAL / SMOKE_READY
+- `founder_preempt`: false / true
+- `active_handoff`:
+- `handoff_status`: PENDING / CLAIMED / DONE / FAILED
+- `attempt`:
+
+## Work package / correction block
+- `work_package`: `<DOMAIN>-<YYYYMMDD>-<SEQ>` / `NONE`
+- `scope_group`:
+- `block_mode`: BATCH / SINGLE
+- `block_status`: COLLECTING / READY / ACTIVE / REWORK / WAITING_EXTERNAL / SMOKE_READY
+- `contract_version`:
+- Item results / evidence:
+
+> `COLLECTING` is not executable. If one item fails, the block returns to REWORK and only affected impacts are revalidated; healthy work is preserved unless dependency analysis requires otherwise.
+
 ## Scope contract
 - Authorized scope:
 - Explicitly prohibited scope:
@@ -79,6 +99,13 @@ After merge to `staging`:
 - [ ] Supabase staging/advisors checked after applicable database changes.
 - [ ] Failures are routed to 14 — Recovery/Incident.
 - Result: `STAGING_VERIFIED` / blocking state
+
+## Lane handoff integrity
+- [ ] Every prior handoff is conclusively `DONE` or `FAILED` before another role runs.
+- [ ] Claims use the 55-minute TTL and stale claims record `STALE_CLAIM_RECOVERED` before recovery.
+- [ ] W roles are only 04–09; Q roles are only 03 and 10–14.
+- [ ] Chained W/Q execution re-read the Issue/OS and loaded the new role contract before a new claim.
+- [ ] Queue drain between Issues was sequential; no overlapping writers touched conflicting surfaces.
 
 ## Smoke handoff
 - Highest automatic state: `SMOKE_READY`.
