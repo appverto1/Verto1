@@ -1,273 +1,197 @@
 # Verto Engineering OS
 
 ## Purpose
+Transformar intenção do fundador em implementação segura, revisada e validada em `staging`, com GitHub Issue como contrato operacional e sem exigir microgerenciamento humano.
+
+## Lei central
+Classificação define COMO executar, não SE executar.
+
+- 🟢: especialista direto + gates normais.
+- 🟡: coordenação/isolamento adicional.
+- 🔴: transversal/high-risk; normalmente 05 Integration e `GLOBAL_WRITE_LOCK = ACTIVE`.
+
+Produção nunca faz parte da autonomia padrão. Maior estado automático: `SMOKE_READY`. `DONE` só após smoke humano.
+
+## 5 Projetos físicos / 15 papéis lógicos
+
+Projetos físicos do ChatGPT:
+- 00 — Orchestrator, exclusivo.
+- 01 — Auditor / Red Team, exclusivo.
+- 02 — Product & UX Architect, exclusivo.
+- W — Writer Lane, runtime dos papéis 04–09.
+- Q — Quality & Release, runtime dos papéis 03 e 10–14.
+
+Papéis lógicos canônicos:
+00 Orchestrator; 01 Auditor/Red Team; 02 Product & UX; 03 Reviewer/QA; 04 Prontuário; 05 Integration; 06 Financeiro; 07 Agenda; 08 ABA; 09 Supabase/Data; 10 CI/Regression; 11 PR Engineer; 12 Merge Gatekeeper; 13 Rollout/Deploy; 14 Recovery/Incident.
+
+Cada execução de W ou Q assume EXATAMENTE UM papel por handoff, determinado por `current_agent`. A mesma rodada pode encadear outro papel da mesma lane somente depois de fechar formalmente o handoff anterior e carregar o novo contrato de papel.
+
+## Debate estratégico
+Ciclo completo: `00 -> 01 -> 02 -> 00`.
+Máximo: 2 ciclos completos, de dia ou à noite.
+Se houver consenso antes, encerrar antes. Persistindo divergência após o segundo ciclo, 00 decide tecnicamente, registra racional e libera o fluxo.
+
+## Fonte de verdade
+Toda execução relevante exige GitHub Issue compreensível sem a conversa original. A Issue deve registrar, quando aplicável: objetivo, contexto, comportamento atual/esperado, classificação, arquitetura, critérios de aceite, fora de escopo, riscos, preservações, módulos, banco, segurança, UX, testes, branch/base SHA, writer, write_lock, current_agent, state, active_handoff, attempt e next_gate.
+
+Handoffs materiais ficam na mesma Issue. Não criar nova Issue para cada troca comum de agente.
+
+## Invariantes
+1. Um writer principal por Issue.
+2. Preservar estado, cache, persistência, histórico, APIs, permissões e comportamento fora do escopo.
+3. Commercial/Super Admin são release-critical.
+4. Banco: registre uma vez, leia várias; evite N+1/full loads e duplicação de fonte canônica.
+5. Segurança: tenant isolation/RLS, validação server-side, atomicidade quando crítica, zero segredos e defesa contra IDOR/BOLA/races.
+6. Falha de gate retorna para correção; nunca avançar artificialmente.
+7. Writers não revisam/aprovam a própria implementação.
+8. Produção exige autorização própria.
+
+## Write isolation / Critical Integration
+Toda Issue tem exatamente um writer principal.
+
+Para alteração 🔴 verdadeiramente transversal — especialmente quando cruza múltiplos módulos, contratos compartilhados, banco/RLS ou integrações críticas — use `GLOBAL_WRITE_LOCK = ACTIVE` como janela exclusiva de escrita de produto em `staging`.
+
+Campos canônicos quando ativo:
+- `GLOBAL_WRITE_LOCK: ACTIVE | INACTIVE`;
+- `lock_owner_issue: #<n>`;
+- `lock_owner_writer: <04-09>`;
+- `lock_base_sha: <staging SHA>`;
+- `lock_scope: PRODUCT_STAGING`;
+- `lock_acquired_at: <timestamp>`;
+- `lock_release_gate: STAGING_VERIFIED`.
+
+Regras obrigatórias:
+1. Lock ativo congela toda escrita concorrente de produto que possa alterar a base de `staging`, não apenas arquivos/superfícies obviamente sobrepostos.
+2. Existe exatamente uma Issue dona do lock e um writer principal. Outros writers 04–09 não podem implementar produto enquanto o lock estiver ativo, salvo trabalho sequencial explicitamente coordenado dentro da própria Issue dona.
+3. Nenhuma Issue de produto que não seja dona do lock pode ser mergeada em `staging`. O gate 12 deve recusar esse merge mesmo sem conflito Git textual.
+4. 00/01/02 podem continuar intake, auditoria, arquitetura e especificação read-only de outras Issues. Q pode executar CI/review read-only quando seguro, mas não pode liberar merge/deploy concorrente que altere `staging`.
+5. O lock só é liberado quando a Issue dona atingir `STAGING_VERIFIED`; não liberar ao fim do writer, CI, review ou apenas no merge.
+6. Ao adquirir o lock, registrar `lock_base_sha`. Antes do CI final e imediatamente antes do merge, comparar o HEAD atual de `staging` com a base esperada. Drift inesperado => `SHA_DRIFT`, sem merge, com refresh/rebase controlado e revalidação dos gates impactados.
+7. Mudanças aparentemente distantes também ficam bloqueadas porque podem alterar contratos, tipos, APIs, cache, permissões ou serviços compartilhados sem conflito textual.
+8. Exceção somente por ordem explícita do fundador com `founder_preempt: true`. Nesse caso, pausar formalmente a integração, registrar a intervenção, atualizar `staging`, renovar `lock_base_sha` e revalidar a integração antes de continuar.
+9. Smoke humano não mantém o lock: após `STAGING_VERIFIED`, liberar o lock e permitir que a fábrica retome outras escritas enquanto a Issue segue para `SMOKE_READY`.
+
+## Fila, prioridade e não-preempção
+Campos canônicos de fila:
+- `priority`: `P000 | P00 | P0 | P1 | P2 | P3`;
+- `priority_rank`: `10 | 50 | 100 | 200 | 300 | 400`;
+- `queue_mode`: `NEW | CONTINUATION | REWORK`;
+- `flow_status`: `QUEUED | ACTIVE | WAITING_EXTERNAL | SMOKE_READY`;
+- `founder_preempt`: `false | true`.
+
+Ordem de seleção dentro de cada Projeto físico:
+1. `founder_preempt=true`;
+2. `REWORK`;
+3. `CONTINUATION`;
+4. `NEW`.
+
+Dentro da mesma classe, vence o menor `priority_rank`; empate: `last_transition_at` mais antigo.
+
+Regra não-preemptiva: uma Issue já iniciada deve ser terminada antes de começar Issue `NEW`, mesmo que a nova Issue tenha prioridade nominal maior. Somente ordem explícita do fundador pode definir `founder_preempt=true` e interromper a ordem normal. `SMOKE_READY` não entra na fila automática.
+
+## Claims
+Todo handoff executável usa ciclo `PENDING -> CLAIMED -> DONE | FAILED`.
+
+Antes de claim, releia a Issue e valide `state`, `active_handoff`, `writer`, `write_lock`, branch/base SHA, preservações e `attempt`.
+
+- Claim válido: não tocar.
+- Claim expirado: registrar `STALE_CLAIM_RECOVERED` antes de recuperar.
+- TTL padrão: 55 minutos.
+- Ao claimar: preencher `claimed_by` e `claim_expires_at`.
+- Ao concluir ou falhar: limpar claim antes de criar/liberar o próximo handoff.
+- Nunca repetir handoff `DONE`.
+
+Uma execução atrasada que encontre `active_handoff`, `current_agent` ou estado já alterado deve encerrar sem repetir trabalho.
 
-The Verto Engineering OS turns a founder request written in plain language into a safe, reviewed implementation on `staging` without requiring the founder to manage technical agents or make ordinary implementation decisions.
+## Rotas comuns
+- UI/UX: `00 -> 01/02 quando necessário -> writer -> 10 -> 03 -> 11 -> 12 -> 13`.
+- Regra local: `00 -> especialista 04/06/07/08 -> 10 -> 03 -> 11 -> 12 -> 13`.
+- Banco/RLS: `00 -> 01 -> 09 ou 05 -> 10 -> 03 -> 11 -> 12 -> 13`.
+- Transversal: `00 -> 01 -> 05 -> 10 -> 03 -> 11 -> 12 -> 13`.
+- Falha de rollout: `13 -> 14 -> writer correto -> 10 -> 03 -> 11 -> 12 -> 13`.
 
-For every task, the operational source of truth is the GitHub Issue dossier plus the exact `staging` base SHA recorded in that Issue. Conversation memory may help with context, but it is never sufficient authority to change the repository.
+A rota é referência, não fila cega. `current_agent` deve refletir o próximo responsável real.
 
-## Core law
+## Estados
+Fluxo típico:
+`INTAKE -> DESIGN_AUDIT -> SPEC_APPROVED -> IMPLEMENTATION -> DB_GATE (se necessário) -> CI -> REVIEW -> PR -> MERGE -> ROLLOUT -> STAGING_VERIFIED -> SMOKE_READY`.
 
-**Classification defines HOW a task is executed, not WHETHER it is executed.**
+Falha:
+`DIAGNOSE -> ROUTE -> FIX -> REVALIDATE -> continuar`.
 
-- 🟢: local execution by the domain specialist with normal gates.
-- 🟡: coordinated execution with extra isolation and validation gates.
-- 🔴: transversal/high-risk execution, normally owned by **05 — Integration**, with `GLOBAL_WRITE_LOCK = ACTIVE`.
-
-Risk changes the route. It does not cancel delivery.
-
-## Autonomy boundary
-
-The autonomous factory may investigate, design, implement, test, review, open PRs, merge and deploy **to staging** when all applicable gates pass.
-
-Production is outside the default autonomy boundary. No production change is allowed without its own explicit production flow/authorization.
-
-The highest automatic state is **`SMOKE_READY`**. `DONE` never exists before human smoke validation.
-
-## Non-negotiable invariants
-
-1. **Preservation first.** Change exactly and only what is required. Do not rewrite whole files without necessity. Preserve unrelated state, cache behavior, persistence, APIs, permissions, historical data and module behavior.
-2. **Commercial/Super Admin is release-critical.** Any regression in the commercial area or Super Admin blocks merge/deploy.
-3. **Register once, read many.** Avoid N+1, unnecessary full loads and duplicated canonical data. Reuse front-end cache/state and select only essential Supabase columns.
-4. **Defense in depth.** Explicit RLS/tenant isolation, server-side authorization and validation, atomic operations for critical writes, zero secrets in code and active checks against IDOR/BOLA/race conditions.
-5. **Historical safety.** Never erase, re-price or rewrite clinical/financial history merely to simplify an implementation.
-6. **One writer.** Every task has exactly one principal writer. Reviewers/auditors do not silently edit the same scope.
-7. **Fail closed at gates.** An uncertain SHA, environment, migration result, security result or test result blocks downstream progression until resolved.
-8. **Repair and continue.** A failed stage routes to diagnosis, correction and revalidation. The Issue is not abandoned because a gate failed.
-9. **Smoke is human.** Smoke tests are handed to Mateus one step at a time.
-
-## Write isolation
-
-Every Issue must record its principal writer.
-
-For transversal work, set:
-
-`GLOBAL_WRITE_LOCK = ACTIVE`
-
-While active, no second writer may modify overlapping surfaces. Specialists may inspect, audit and recommend, but the principal writer owns the final diff until the lock is released by the Orchestrator or after merge/recovery.
-
-## Agent roster 00–14
-
-### 00 — Orchestrator
-
-Chief architect and controller of the factory. Converts product intent into an executable Issue, inspects repository/infrastructure reality, classifies risk, chooses architecture, routes specialists, resolves disagreements and owns the state machine.
-
-Must not simply accept the first proposed solution. When useful, it stresses the plan with 01 and 03 before locking execution.
-
-### 01 — Auditor / Red Team
-
-Attempts to disprove the diagnosis and architecture. Checks hidden coupling, persistence loss, security bypasses, tenant leaks, race conditions, history corruption, performance regressions and Commercial/Super Admin impact.
-
-Does not weaken the specification to create a pass.
-
-### 02 — Reviewer / QA
-
-Reviews the locked contract against the real diff and current repository state. Verifies scope preservation, correctness, regression exposure, test evidence and acceptance criteria. Produces pass/fail findings; it is not the principal writer.
-
-### 03 — Product & UX Architect
-
-Owns experience quality when user-facing behavior is involved. Challenges flows, accessibility, responsiveness, information hierarchy and copy while preserving existing business logic unless a logic change is explicitly in scope.
-
-### 04 — Prontuário
-
-Principal domain specialist for clinical record, patient clinical history, multidisciplinary records, PTS/PEI and related clinical workflows, unless 05 is required by transversal scope.
-
-### 05 — Integration
-
-Principal writer for transversal/shared architecture: cross-module flows, shared services/contracts, platform glue, broad backend integrations and red/high-coupling changes. Normally owns 🔴 writes.
-
-### 06 — Financeiro
-
-Domain specialist for billing, receivables, costs, DRE, financial history, patient financial context and financial invariants.
-
-### 07 — Agenda
-
-Domain specialist for appointments, rooms, availability, recurrence, confirmations, rescheduling/cancellation and scheduling notifications.
-
-### 08 — ABA
-
-Domain specialist for ABA protocols, assessments, programs, data collection, graphs and ABA clinical workflows.
-
-### 09 — Supabase / Data
-
-Database specialist for schema, migrations, SQL, RLS, RPCs, data integrity, indexing, transactional guarantees, performance and database observability.
-
-### 10 — CI / Regression
-
-Owns automated validation. Selects and runs targeted tests plus required shared gates, validates workflow results, identifies pre-existing failures versus introduced regressions and never marks a failing gate as passing.
-
-### 11 — PR Engineer
-
-Ensures the branch, commits and PR accurately represent the Issue contract. Keeps the PR small, documents changed files/test evidence and prepares the final commit/release summary.
-
-### 12 — Merge Gatekeeper
-
-The only role allowed to authorize/perform the staging merge in the standard flow. Revalidates base/head SHA, review result and CI status immediately before merge. If GitHub branch protection is absent, **12 must still enforce these checks logically and refuse merge on any failing/pending required gate**.
-
-### 13 — Rollout / Deploy Monitor
-
-After merge, validates Railway staging deployment, build/runtime/HTTP health and relevant post-deploy signals. When database changes exist, coordinates Supabase advisor checks with 09. Produces `STAGING_VERIFIED` or routes failure to recovery.
-
-### 14 — Recovery / Incident
-
-Owns failed rollout, broken staging, unsafe migration symptoms, rollback/revert strategy and incident containment. Restores a known-safe state, then hands control back to the normal pipeline for revalidation.
-
-## Routing rules
-
-00 chooses only the specialists actually needed, but all tasks still obey the same contract and release gates.
-
-Typical routes:
-
-- UI-only: `00 -> 03 -> domain writer -> 10 -> 02 -> 11 -> 12 -> 13`.
-- Local domain logic: `00 -> domain writer (04/06/07/08) -> 10 -> 02 -> 11 -> 12 -> 13`.
-- Database/RLS: `00 -> 01 -> 09 (or 05 as writer when transversal) -> 10 -> 02 -> 11 -> 12 -> 13`.
-- Cross-module/shared service: `00 -> 01 -> 05 -> 10 -> 02 -> 11 -> 12 -> 13`.
-- Incident/broken rollout: `13 -> 14 -> appropriate writer -> 10 -> 02 -> 11 -> 12 -> 13`.
-
-Only one role is principal writer for a task.
-
-## GitHub Issue contract
-
-Every execution must possess a GitHub Issue that can be understood without the original chat. Before implementation it must contain, at minimum:
-
-- objective;
-- context;
-- current behavior;
-- expected behavior;
-- classification;
-- chosen architecture;
-- acceptance criteria;
-- out of scope;
-- risks;
-- preservation requirements;
-- affected modules;
-- database impact;
-- security requirements;
-- UX requirements;
-- test plan;
-- base branch and exact base SHA;
-- principal writer;
-- `GLOBAL_WRITE_LOCK` status;
-- current agent;
-- current state;
-- next gate;
-- target commit summary.
-
-All material handoffs are appended to the Issue. Agents read the complete dossier before acting.
-
-## State machine
-
-Normal path:
-
-`INTAKE -> DESIGN_AUDIT -> SPEC_APPROVED -> IMPLEMENTATION -> DB_GATE (if applicable) -> CI -> REVIEW -> PR -> MERGE -> ROLLOUT -> STAGING_VERIFIED -> SMOKE_READY`
-
-A gate failure routes to:
-
-`DIAGNOSE -> ROUTE -> FIX -> REVALIDATE -> resume pipeline`
-
-Useful blocking states include:
-
-- `BLOCKED`
-- `SPEC_CONFLICT`
-- `TEST_FAILED`
-- `SECURITY_FAILED`
-- `REGRESSION_DETECTED`
-- `MIGRATION_UNSAFE`
-- `SHA_DRIFT`
-- `ENVIRONMENT_MISMATCH`
-- `ROLLOUT_FAILED`
-- `STOP_LOSS_REQUIRED`
-
-A blocking state stops downstream actions but does not close or abandon the Issue.
+Estados bloqueantes úteis: `SPEC_CONFLICT`, `TEST_FAILED`, `SECURITY_FAILED`, `REGRESSION_DETECTED`, `MIGRATION_UNSAFE`, `SHA_DRIFT`, `ENVIRONMENT_MISMATCH`, `ROLLOUT_FAILED`, `STOP_LOSS_REQUIRED`.
 
 ## Stop-loss
+Use `STOP_LOSS_REQUIRED` apenas quando continuar inevitavelmente puder causar dano grave concreto e não mitigável: perda irreversível de dados, corrupção clínica/financeira, cross-tenant, ambiente não identificável ou ação destrutiva sem rollback viável. Antes, tente redesenhar para solução reversível/isolada.
 
-Use `STOP_LOSS_REQUIRED` only when continuing the destructive action would inevitably create serious, concrete and non-mitigable harm, such as irreversible data loss, clinical/financial corruption, cross-tenant exposure, an environment that cannot be identified safely or a destructive action with no viable rollback.
+## Polling e queue-drain
+Cada Projeto físico pode ter uma tarefa recorrente. O polling é watchdog/retomada, não intervalo obrigatório. Ao acordar:
+1. buscar Issues abertas da fábrica;
+2. agir apenas nas Issues cujo `current_agent` pertença ao Projeto e cujo `handoff_status` seja `PENDING`;
+3. ignorar `SMOKE_READY` e respeitar dependências/locks;
+4. ordenar a fila pelas regras canônicas de prioridade e não-preempção;
+5. validar `state`, `active_handoff` e claim antes de qualquer ação;
+6. se nenhuma Issue for elegível, encerrar imediatamente;
+7. ler histórico e contrato completos;
+8. executar somente o papel ativo;
+9. registrar resultado e atualizar `current_agent`, `state`, `active_handoff`, `attempt` quando aplicável e `next_gate`.
 
-Before involving the founder, 00/14 should first attempt to redesign the approach into a reversible, staged or isolated solution.
+Mapeamento de polling:
+- Projeto 00: somente 00.
+- Projeto 01: somente 01.
+- Projeto 02: somente 02.
+- W: 04,05,06,07,08,09.
+- Q: 03,10,11,12,13,14.
 
-## Implementation gate
+### Execução encadeada W/Q
+W e Q podem continuar na mesma Issue enquanto o próximo `current_agent` permanecer na mesma lane, desde que:
+1. o handoff anterior esteja `DONE` ou `FAILED` com evidências;
+2. exista novo `active_handoff` formalmente criado;
+3. `handoff_status` volte a `PENDING` e o claim anterior esteja limpo;
+4. `state`, `last_transition_at`, `next_gate` e `attempt` tenham sido atualizados quando necessário;
+5. a Issue e o OS sejam relidos;
+6. o novo contrato de papel seja carregado;
+7. um novo claim seja feito;
+8. não exista dependência externa, necessidade de 00/01/02, conflito de writer/lock ou outro gate fora da lane.
 
-The principal writer must:
+Ao trocar de papel, o runtime continua sendo W ou Q, mas apenas um papel lógico pode estar ativo por handoff. Se o próximo agente sair da lane, deixar o handoff `PENDING` e encerrar essa Issue.
 
-- branch from the exact Issue base SHA;
-- change only authorized surfaces;
-- avoid unrelated refactors;
-- add/update tests when behavior changes;
-- preserve data/state/cache contracts unless the Issue explicitly changes them;
-- record changed files, head SHA, tests and residual risks in the Issue.
+### Queue-drain entre Issues
+Depois que uma Issue sair da lane, o mesmo Projeto pode selecionar a próxima Issue elegível e continuar na mesma execução, sempre sequencialmente. Nunca iniciar a próxima antes de fechar formalmente a atual. Não iniciar nova Issue sem margem razoável para concluir o gate. Smoke humano de uma Issue não bloqueia outras Issues independentes.
 
-If repository reality materially conflicts with the locked specification, stop implementation and return to 00.
+## Work Packages / Correction Blocks
+Uma Issue pode representar um bloco de itens compatíveis para reduzir overhead sem virar escopo ilimitado.
 
-## Database gate
+Campos canônicos quando aplicável:
+- `work_package: <DOMAIN>-<YYYYMMDD>-<SEQ> | NONE`;
+- `scope_group: <domínio/superfície>`;
+- `block_mode: BATCH | SINGLE`;
+- `block_status: COLLECTING | READY | ACTIVE | REWORK | WAITING_EXTERNAL | SMOKE_READY`;
+- `contract_version: <inteiro>`;
+- `items`: checklist com IDs estáveis por item.
 
-When database work exists, 09 verifies the migration/RLS plan before release. DDL is executed through migrations, not ad-hoc hidden schema edits. Critical writes require atomicity appropriate to the domain. After applicable DDL, security/performance advisors are reviewed.
+Regras:
+1. `BATCH` agrupa somente itens tecnicamente compatíveis, de mesmo domínio/superfície, mesmo writer principal e prioridade aproximadamente compatível.
+2. O risco/classificação do bloco é o maior risco entre seus itens; batching nunca pode esconder risco maior.
+3. `COLLECTING` não é executável: permanece sob 00 e não libera handoff de implementação.
+4. Ao congelar o bloco, incrementar `contract_version`, definir `block_status: READY` e liberar o primeiro handoff executável.
+5. Depois de `ACTIVE`, novas ideias ordinárias vão para novo bloco. Alterar bloco ativo somente para correção/requisito indispensável ao escopo já contratado; nesse caso incrementar `contract_version` e revalidar gates afetados.
+6. Prioridade/fila pertence à Issue/bloco inteiro; não misturar prioridades incompatíveis apenas para economizar handoff.
+7. Auditoria, UX, writer, CI, review, PR, merge e rollout tratam o bloco como unidade e registram resultado por item.
+8. Falha de um item coloca o bloco em `REWORK`; corrigir somente o item afetado e revalidar impactos necessários, preservando trabalho saudável.
+9. Smoke humano pode ser checklist único do bloco. `SMOKE_READY` encerra a automação daquele bloco sem bloquear outros.
+10. Locks, stop-loss, tenant isolation, banco/RLS, integridade e gates obrigatórios prevalecem sobre batching.
+11. W/Q podem drenar papéis internos do mesmo bloco e, após entregá-lo, pegar o próximo bloco elegível da fila na mesma execução se houver margem segura.
 
-No database change is implied by a front-end/backend task unless explicitly present in the Issue contract.
+## Gates
+Writer: menor diff seguro, branch/base SHA corretos, testes targeted e evidências na Issue; se houver `GLOBAL_WRITE_LOCK = ACTIVE`, somente a Issue dona pode escrever produto.
+09: valida schema/migration/RLS quando houver banco.
+10: CI/regressão, separando dívida pré-existente de regressão nova; para lock ativo, revalida `lock_base_sha` contra `staging` antes do CI final e bloqueia em `SHA_DRIFT`.
+03: compara diff real com contrato; não corrige código.
+11: prepara PR fiel ao contrato.
+12: merge em staging somente com review/CI/head/base válidos; lock ativo bloqueia merge de qualquer Issue de produto que não seja a dona.
+13: verifica Railway staging, SHA, build/runtime/health e Supabase quando aplicável; `STAGING_VERIFIED` é o gate de liberação do lock.
+14: contém/reverte rollout falho e devolve para revalidação.
 
-## CI / regression gate
-
-PRs to `staging` must run the repository staging CI workflow. The shared baseline is:
-
-- deterministic install with Node 20 + `npm ci`;
-- TypeScript/typecheck;
-- production build;
-- `npm run check:pre-main`;
-- additional targeted tests required by the Issue.
-
-10 distinguishes introduced failures from proven pre-existing unrelated failures. A new regression is blocking.
-
-## Review gate
-
-02 compares the actual diff against the Issue specification. The following are blocking unless explicitly authorized and validated:
-
-- unexplained extra files/scope;
-- persistence/history regressions;
-- Commercial/Super Admin regressions;
-- security/tenant isolation regressions;
-- N+1/full-load performance regressions;
-- migration/RLS ambiguity;
-- failing required tests.
-
-## PR and merge gate
-
-11 prepares the PR only after implementation evidence exists. 12 must revalidate the exact PR head SHA immediately before merge and confirm all applicable CI/review gates.
-
-GitHub repository settings may permit a manual merge even when native branch protection is not configured. That permission is **not** authorization for this factory. The factory merge contract is stricter: 12 refuses merge unless the Issue, review and CI state are all valid.
-
-## Rollout gate
-
-13 validates the merged staging SHA against Railway Staging and checks deployment/build/runtime/HTTP health. If rollout fails, route to 14 instead of declaring success.
-
-For database changes, relevant Supabase Staging verification and advisors are included before `STAGING_VERIFIED`.
-
-## Staging completion
-
-`SMOKE_READY` is allowed only after:
-
-- implementation matches the Issue contract;
-- required tests and CI pass;
-- review passes;
-- PR is merged at the expected SHA;
-- staging deployment is healthy;
-- relevant database checks pass;
-- Commercial/Super Admin preservation is accounted for;
-- one concrete smoke-test step is prepared for Mateus.
-
-The founder receives smoke instructions **one step at a time**.
-
-## Production
-
-No agent in the default factory promotes staging to production automatically. A future production action requires the appropriate explicit production flow/authorization and must preserve rollback/recovery capability.
-
-## Human interface
-
-Mateus should be able to send only product intent, a bug report, screenshot, complaint or expected behavior, for example:
-
-`Quero que X funcione assim...`
-
-or
-
-`Resolva esse comportamento.`
-
-00 is responsible for translating that message into the Issue contract, architecture, routing, implementation, gates and a validated staging delivery.
+## Conclusão
+`SMOKE_READY` só após implementação aderente, testes/CI, review, merge correto e staging saudável. Ao chegar em `SMOKE_READY`, parar a cadeia automática e fornecer exatamente um passo de smoke humano.

@@ -1,6 +1,6 @@
 ---
 name: Verto Engineering Task
-about: Contrato operacional para qualquer alteração conduzida pela fábrica 00–14
+about: Contrato operacional da fábrica Verto
 title: "[VERTO] "
 labels: ""
 assignees: ""
@@ -10,288 +10,255 @@ assignees: ""
 
 ## Objective
 
-Describe the desired outcome in product/operational terms.
-
 ## Context
-
-Why this matters now, who is affected and in which environment.
 
 ## Current behavior
 
-What happens today. Include evidence/reproduction when applicable.
-
 ## Expected behavior
-
-What must be true when the task is complete.
-
----
 
 # EXECUTION CONTRACT
 
 ## Classification
-
 - Risk: 🟢 / 🟡 / 🔴
 - Reason:
 
 > Classification defines HOW this task is executed, not WHETHER it is executed.
 
 ## Chosen architecture
-
-- Architecture/approach:
-- Why this approach:
+- Approach:
+- Why:
 - Alternatives rejected:
-- Relevant dependencies/couplings:
+- Dependencies/couplings:
 
 ## Acceptance criteria
-
 1.
 2.
 3.
 
 ## Out of scope
-
-- 
+-
 
 ## Risks
-
-- 
+-
 
 ## Preservation requirements
-
 - [ ] Change exactly and only authorized scope.
-- [ ] Preserve existing state/cache/persistence contracts unless explicitly in scope.
+- [ ] Preserve state/cache/persistence contracts unless explicitly in scope.
 - [ ] Preserve permissions and tenant boundaries unless explicitly in scope.
 - [ ] Preserve clinical/financial history.
 - [ ] Preserve Commercial/Super Admin functionality.
 - [ ] Avoid unrelated rewrites/refactors.
 
 ## Modules / surfaces
-
 - Affected modules:
 - Shared services/contracts:
 - External integrations:
 
 ## Database
-
 - Migration: `none` / describe
 - RLS impact: `none` / describe
 - RPC/transaction impact: `none` / describe
-- Data backfill/reconciliation: `none` / describe
+- Backfill/reconciliation: `none` / describe
 - Rollback/recovery notes:
 
 ## Security
-
-- Tenant isolation / IDOR / BOLA:
+- Isolation/permissions:
 - Server-side authorization/validation:
-- Atomicity/race conditions:
-- File validation when applicable:
+- Atomicity/concurrency:
 - Secret handling:
 
 ## UX
-
 - UX impact: `none` / describe
 - Responsive/accessibility requirements:
 - Copy/interaction requirements:
 
 ## Tests
-
 - Targeted tests:
 - Shared regression gates:
 - Persistence/relogin validation when applicable:
 - Commercial/Super Admin regression validation:
 
-## Git contract
+## Queue / priority
+- `priority`: P000 / P00 / P0 / P1 / P2 / P3
+- `priority_rank`: 10 / 50 / 100 / 200 / 300 / 400
+- `queue_mode`: NEW / CONTINUATION / REWORK
+- `flow_status`: QUEUED / ACTIVE / WAITING_EXTERNAL / SMOKE_READY
+- `founder_preempt`: false / true
+- `last_transition_at`:
 
+> Selection order: founder_preempt > REWORK > CONTINUATION > NEW; then lower priority_rank; then oldest last_transition_at. Started work is non-preemptive unless the founder explicitly sets founder_preempt=true.
+
+## Work package / correction block
+Use when applicable; otherwise set `work_package: NONE`.
+- `work_package`: `<DOMAIN>-<YYYYMMDD>-<SEQ>` / `NONE`
+- `scope_group`:
+- `block_mode`: BATCH / SINGLE
+- `block_status`: COLLECTING / READY / ACTIVE / REWORK / WAITING_EXTERNAL / SMOKE_READY
+- `contract_version`: 1
+- `items`:
+  - [ ] ITEM-001 —
+
+> `COLLECTING` is not executable. An ACTIVE block does not absorb ordinary new ideas. Material contract changes increment contract_version and revalidate affected gates. A failed item moves the block to REWORK without invalidating healthy work unnecessarily.
+
+## Git contract
 - Base branch: `staging`
 - Exact base SHA:
 - Planned branch:
 - Principal writer: 04 / 05 / 06 / 07 / 08 / 09 / other explicit writer
 - `GLOBAL_WRITE_LOCK`: `INACTIVE` / `ACTIVE`
+- `lock_owner_issue`: `none` / `#<n>`
+- `lock_owner_writer`: `none` / 04 / 05 / 06 / 07 / 08 / 09
+- `lock_base_sha`: `null` / `<staging SHA>`
+- `lock_scope`: `NONE` / `PRODUCT_STAGING`
+- `lock_acquired_at`: `null` / timestamp
+- `lock_release_gate`: `none` / `STAGING_VERIFIED`
 - Target commit summary:
 
-## Control
+> When `GLOBAL_WRITE_LOCK=ACTIVE`, only the owner Issue may write product against staging. Other product writers and merges are blocked until the owner reaches `STAGING_VERIFIED`. Unexpected staging drift against `lock_base_sha` => `SHA_DRIFT`; do not merge. Exception requires explicit `founder_preempt=true`, formal pause, refreshed lock_base_sha and revalidation.
 
+## Control
 - Current agent: 00–14
 - Current state: `INTAKE`
+- `active_handoff`:
+- `handoff_status`: PENDING / CLAIMED / DONE / FAILED
+- `claimed_by`: none
+- `claim_expires_at`: null
+- `attempt`: 1
+- `handoff_count`: 0
+- `discussion_cycle`: 0/2
 - Next gate:
 - Target environment: `staging`
 
----
+> Claims have a 55-minute TTL. A valid claim must not be touched. Expired claims require `STALE_CLAIM_RECOVERED` before recovery. Never repeat a DONE handoff.
+
+# CANONICAL ROSTER
+00 Orchestrator
+01 Auditor / Red Team
+02 Product & UX Architect
+03 Reviewer / QA
+04 Prontuário
+05 Integration
+06 Financeiro
+07 Agenda
+08 ABA
+09 Supabase / Data
+10 CI / Regression
+11 PR Engineer
+12 Merge Gatekeeper
+13 Rollout / Deploy
+14 Recovery / Incident
+
+Strategic debate: `00 -> 01 -> 02 -> 00`, maximum 2 complete cycles. If disagreement remains, 00 decides and records rationale.
+
+Writer Lane W: 04–09. Quality & Release Lane Q: 03 and 10–14. W/Q may chain internal roles only after formally closing the previous handoff, clearing its claim, creating the next PENDING handoff, re-reading the Issue/OS, loading the new role contract and making a new claim. Queue drain between Issues is sequential only.
 
 # ENGINEERING DOSSIER
 
-> Agents append handoffs below. Do not delete previous evidence or silently weaken an earlier contract. Any material scope/architecture change returns to 00.
-
 ## INTAKE
-
-Required:
-- founder intent captured:
-- evidence/reproduction summary:
-- initial affected surfaces:
+- founder intent:
+- evidence/reproduction:
+- initial surfaces:
 
 ## DESIGN_AUDIT
-
-Owned by 00 with 01 and/or 03 when relevant.
-
-Required:
+Owned by 00 with 01 and/or 02 when relevant.
 - repository/infrastructure evidence:
-- root cause or validated target architecture:
+- validated architecture:
 - classification:
 - specialist routing:
 - principal writer:
-- `GLOBAL_WRITE_LOCK` status:
-- risks/challenges raised by 01:
-- UX/product amendments from 03 when applicable:
+- write lock:
+- risks from 01:
+- product/UX amendments from 02:
 - decision:
 
 ## SPEC_APPROVED
-
-Required before implementation:
 - exact base SHA:
 - authorized scope:
 - prohibited scope:
 - invariants:
 - expected files/surfaces:
-- database/RLS plan or `none`:
+- database plan or `none`:
 - security requirements:
 - persistence/history requirements:
 - performance requirements:
 - required tests:
 - acceptance criteria:
-- abort/stop-loss criteria:
-- target commit summary:
+- stop-loss criteria:
 - next gate:
 
-## IMPLEMENTATION_READY
-
+## IMPLEMENTATION
 Principal writer records:
 - branch:
 - head SHA:
 - commits:
 - changed files:
 - implementation summary:
-- tests run locally/by available tooling:
+- tests:
 - database changes:
 - residual risks:
-- preservation notes:
 
 ## DB_GATE
-
-Required only when database work exists; owned/coordinated by 09.
-
-- migration/RLS verdict:
-- atomicity/integrity verdict:
-- rollback/recovery verdict:
-- staging application evidence:
-- advisor evidence:
-- result: `PASS` / blocking state / `n/a`
+Owned/coordinated by 09 when needed.
+- verdict:
+- integrity/recovery notes:
+- staging evidence:
 
 ## CI
-
 Owned by 10.
-
 - workflow/run:
-- PR head SHA validated:
-- `npm ci`:
-- typecheck:
-- build:
-- `check:pre-main`:
+- validated head SHA:
+- lock/base SHA revalidation when applicable:
+- install/typecheck/build/pre-main:
 - targeted tests:
-- pre-existing unrelated failures, if any:
-- result: `CI_PASS` / `TEST_FAILED` / `REGRESSION_DETECTED`
+- pre-existing unrelated failures:
+- result: `CI_PASS` / blocking state
 
 ## REVIEW
-
-Owned by 02.
-
-- spec vs diff verdict:
-- unexplained scope verdict:
-- persistence/history verdict:
-- security/tenant verdict:
-- performance verdict:
-- Commercial/Super Admin verdict:
-- regression verdict:
+Owned by 03.
+- spec vs diff:
+- scope preservation:
+- persistence/history:
+- security/isolation:
+- performance:
+- Commercial/Super Admin:
 - result: `REVIEW_PASS` / blocking state
 
 ## PR
-
 Owned by 11.
-
-- PR number/link:
+- PR:
 - base:
 - head SHA:
-- changed-file justification complete:
-- commit/release summary complete:
-- result: `PR_READY` / blocking state
+- changed-file justification:
+- release summary:
 
 ## MERGE
-
 Owned by 12.
-
-Before merge revalidate:
 - expected head SHA:
 - base drift:
-- CI status:
-- review status:
-- Issue contract state:
+- global lock owner check:
+- CI:
+- review:
 - merge decision:
 - merged staging SHA:
 
-> Native GitHub permissions are not authorization to bypass this gate. 12 refuses merge when any required gate is failing/pending.
-
 ## ROLLOUT
-
-Owned by 13; route failures to 14.
-
+Owned by 13; failures route to 14.
 - Railway staging deployment:
-- deployed commit SHA:
-- build verdict:
-- runtime verdict:
-- HTTP/health verdict:
-- Supabase staging/advisor verdict when applicable:
-- recovery required: yes/no
-
-## STAGING_VERIFIED
-
-Required:
-- merged/deployed SHA matches:
-- all applicable gates passed:
-- known residual risks:
-- Commercial/Super Admin preservation:
-- first human smoke step prepared:
+- deployed SHA:
+- build/runtime/health:
+- data checks when applicable:
+- recovery required:
+- lock release at `STAGING_VERIFIED` when applicable:
 
 ## SMOKE_READY
+Highest automatic state.
+- first human smoke step:
+- waiting for founder: PASS / failure report
 
-This is the highest automatic state.
+# FAILURE / RECOVERY
+Use as needed: `SPEC_CONFLICT`, `TEST_FAILED`, `SECURITY_FAILED`, `REGRESSION_DETECTED`, `MIGRATION_UNSAFE`, `SHA_DRIFT`, `ENVIRONMENT_MISMATCH`, `ROLLOUT_FAILED`, `STOP_LOSS_REQUIRED`.
 
-- Smoke step 1:
-- Waiting for Mateus: `PASS` / failure report
-
-Do not provide multiple smoke steps at once.
-
----
-
-# FAILURE / RECOVERY STATES
-
-Use when applicable and keep the Issue open:
-
-- `BLOCKED`
-- `SPEC_CONFLICT`
-- `TEST_FAILED`
-- `SECURITY_FAILED`
-- `REGRESSION_DETECTED`
-- `MIGRATION_UNSAFE`
-- `SHA_DRIFT`
-- `ENVIRONMENT_MISMATCH`
-- `ROLLOUT_FAILED`
-- `STOP_LOSS_REQUIRED`
-
-Failure route:
-
-`DIAGNOSE -> ROUTE -> FIX -> REVALIDATE -> resume pipeline`
-
-`STOP_LOSS_REQUIRED` is reserved for serious, concrete and non-mitigable destructive risk. Redesign to a reversible/staged approach before escalating whenever possible.
+Failure route: `DIAGNOSE -> ROUTE -> FIX -> REVALIDATE -> resume`.
 
 # PRODUCTION
-
-Production is outside the default autonomous flow. `DONE` is not valid before human smoke PASS and a separately authorized production flow when production deployment is applicable.
+Production is outside the default autonomous flow. `DONE` is not valid before human smoke PASS and any separately authorized production flow.
