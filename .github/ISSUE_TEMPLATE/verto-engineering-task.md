@@ -1,7 +1,7 @@
 ---
 name: Verto Engineering Task
 about: Contrato operacional da fábrica Verto
- title: "[VERTO] "
+title: "[VERTO] "
 labels: ""
 assignees: ""
 ---
