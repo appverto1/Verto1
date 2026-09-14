@@ -1,0 +1,45 @@
+name: Verto Staging CI
+
+on:
+  pull_request:
+    branches:
+      - staging
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verto-staging-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staging-gate:
+    name: staging-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies deterministically
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verto pre-main regression gate
+        run: npm run check:pre-main
