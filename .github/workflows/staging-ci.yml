@@ -1,0 +1,174 @@
+name: Verto Staging CI
+
+on:
+  pull_request:
+    branches:
+      - staging
+  push:
+    branches:
+      - staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verto-staging-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  staging-gate:
+    name: staging-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies deterministically
+        run: npm ci
+
+      - name: Typecheck ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -uo pipefail
+
+          HEAD_LOG="$RUNNER_TEMP/typecheck-head.log"
+          BASE_LOG="$RUNNER_TEMP/typecheck-base.log"
+          NEW_LOG="$RUNNER_TEMP/typecheck-new.log"
+          BASE_WORKTREE="$RUNNER_TEMP/verto-base"
+
+          set +e
+          npm run typecheck >"$HEAD_LOG" 2>&1
+          HEAD_STATUS=$?
+          set -e
+          cat "$HEAD_LOG"
+
+          if [ "$HEAD_STATUS" -eq 0 ]; then
+            echo "Typecheck clean on candidate commit."
+            exit 0
+          fi
+
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "::error::Typecheck failed and no valid baseline SHA is available."
+            exit "$HEAD_STATUS"
+          fi
+
+          git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if [ ! -f "$BASE_WORKTREE/package.json" ]; then
+            git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"
+          fi
+
+          pushd "$BASE_WORKTREE" >/dev/null
+          if [ ! -d node_modules ]; then
+            npm ci --prefer-offline --no-audit
+          fi
+          set +e
+          npm run typecheck >"$BASE_LOG" 2>&1
+          BASE_STATUS=$?
+          set -e
+          popd >/dev/null
+
+          if [ "$BASE_STATUS" -eq 0 ]; then
+            echo "::error::Baseline typecheck passes but candidate typecheck fails."
+            exit "$HEAD_STATUS"
+          fi
+
+          normalize_diagnostics() {
+            grep -E 'error TS[0-9]+:' "$1" | sed -E 's/^[[:space:]]*//' | sort -u || true
+          }
+
+          comm -23 \
+            <(normalize_diagnostics "$HEAD_LOG") \
+            <(normalize_diagnostics "$BASE_LOG") \
+            > "$NEW_LOG"
+
+          if [ -s "$NEW_LOG" ]; then
+            echo "::error::New TypeScript diagnostics were introduced relative to staging baseline:"
+            cat "$NEW_LOG"
+            exit 1
+          fi
+
+          echo "::warning::Typecheck contains only pre-existing staging diagnostics; no new TypeScript diagnostic was introduced."
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verto pre-main regression ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -uo pipefail
+
+          HEAD_LOG="$RUNNER_TEMP/pre-main-head.log"
+          BASE_LOG="$RUNNER_TEMP/pre-main-base.log"
+          NEW_LOG="$RUNNER_TEMP/pre-main-new.log"
+          BASE_WORKTREE="$RUNNER_TEMP/verto-base"
+
+          set +e
+          npm run check:pre-main >"$HEAD_LOG" 2>&1
+          HEAD_STATUS=$?
+          set -e
+          cat "$HEAD_LOG"
+
+          if [ "$HEAD_STATUS" -eq 0 ]; then
+            echo "Pre-main regression gate clean on candidate commit."
+            exit 0
+          fi
+
+          if [ -z "${BASE_SHA:-}" ] || [ "$BASE_SHA" = "0000000000000000000000000000000000000000" ]; then
+            echo "::error::Pre-main gate failed and no valid baseline SHA is available."
+            exit "$HEAD_STATUS"
+          fi
+
+          git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          if [ ! -f "$BASE_WORKTREE/package.json" ]; then
+            git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"
+          fi
+
+          pushd "$BASE_WORKTREE" >/dev/null
+          if [ ! -d node_modules ]; then
+            npm ci --prefer-offline --no-audit
+          fi
+          set +e
+          npm run check:pre-main >"$BASE_LOG" 2>&1
+          BASE_STATUS=$?
+          set -e
+          popd >/dev/null
+
+          if [ "$BASE_STATUS" -eq 0 ]; then
+            echo "::error::Baseline pre-main gate passes but candidate gate fails."
+            exit "$HEAD_STATUS"
+          fi
+
+          normalize_failures() {
+            grep -E '^[[:space:]]*✗[[:space:]]+' "$1" \
+              | sed -E 's/^[[:space:]]*✗[[:space:]]+//' \
+              | sed -E 's/[[:space:]]+—.*$//' \
+              | sort -u || true
+          }
+
+          comm -23 \
+            <(normalize_failures "$HEAD_LOG") \
+            <(normalize_failures "$BASE_LOG") \
+            > "$NEW_LOG"
+
+          if [ -s "$NEW_LOG" ]; then
+            echo "::error::New pre-main regression failures were introduced relative to staging baseline:"
+            cat "$NEW_LOG"
+            exit 1
+          fi
+
+          echo "::warning::Pre-main gate contains only failures already present on the staging baseline; no new regression failure was introduced."

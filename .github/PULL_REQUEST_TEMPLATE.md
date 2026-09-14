@@ -3,9 +3,11 @@
 ## Task dossier
 
 - Issue/spec:
+- Classification: 🟢 / 🟡 / 🔴
+- Principal writer:
+- `GLOBAL_WRITE_LOCK`: INACTIVE / ACTIVE
 - Locked base SHA:
 - Branch head SHA:
-- Classification: 🟢 / 🟡 / 🔴
 
 ## Scope contract
 
@@ -18,13 +20,17 @@
 - [ ] Every changed file is listed and justified.
 - [ ] No unrelated refactor/rewrite was introduced.
 - [ ] Existing state/cache/persistence contracts remain intact unless explicitly authorized.
+- [ ] Commercial/Super Admin remains intact.
 
 ## Functional validation
 
 - Targeted tests:
-- Build/typecheck/lint:
+- `npm ci`:
+- Typecheck:
+- Build:
+- `npm run check:pre-main`:
 - Relevant regression tests:
-- Pre-existing failures proven unrelated:
+- Proven pre-existing unrelated failures:
 
 ## Persistence / history
 
@@ -44,34 +50,64 @@
 
 ## Security review
 
-- [ ] Tenant isolation / IDOR / BOLA checked.
-- [ ] Server-side authorization checked.
+- [ ] Tenant isolation / IDOR / BOLA checked where applicable.
+- [ ] Server-side authorization checked where applicable.
 - [ ] Server-side input/file validation checked where applicable.
 - [ ] No entitlement/capability bypass or accidental coupling introduced.
-- [ ] No unsafe SECURITY DEFINER/public privileged path introduced.
+- [ ] No unsafe privileged database path introduced.
 
-## Critical preservation
+## Reviewer — 02
 
-- [ ] Commercial/Super Admin remains functional.
-- [ ] Unrelated modules remain unchanged.
-- [ ] Existing permissions/capabilities remain unchanged unless explicitly in scope.
-- [ ] Rollback/recovery path is understood for critical changes.
+Reviewer must compare the actual diff against `SPEC_APPROVED`, not merely judge whether the code looks reasonable.
 
-## Reviewer contract
+- Review result: `REVIEW_PASS` / blocking state
+- Scope preservation:
+- Security verdict:
+- Persistence/history verdict:
+- Performance verdict:
+- Commercial/Super Admin verdict:
 
-Reviewer must compare the actual diff against `SPEC_LOCKED`, not merely judge whether the code looks reasonable. Any unexplained extra scope is blocking.
+## CI — 10
 
-## Release gate
+- Workflow/run:
+- Validated head SHA:
+- CI result: `CI_PASS` / blocking state
 
-- [ ] REVIEW_PASS recorded in the task dossier.
-- [ ] Expected PR head SHA revalidated before merge.
-- [ ] Staging deployment verified after merge.
-- [ ] Railway build/runtime/HTTP logs checked.
-- [ ] Supabase advisors checked after applicable DDL.
-- [ ] Exactly one first smoke-test step prepared for Mateus.
+## PR Engineer — 11
 
-Production deployment is forbidden until Mateus explicitly reports smoke `PASS`.
+- [ ] PR metadata matches the Issue contract.
+- [ ] Changed-file justification is complete.
+- [ ] Commit/release summary is complete.
+- Result: `PR_READY` / blocking state
 
-## Commit summary
+## Merge Gatekeeper — 12
+
+Immediately before merge:
+
+- [ ] Expected PR head SHA revalidated.
+- [ ] Base drift checked.
+- [ ] Required CI is passing.
+- [ ] `REVIEW_PASS` is recorded.
+- [ ] Issue is in a merge-eligible state.
+
+Native GitHub permissions are not authorization to bypass this gate. If required checks are failing/pending, do not merge even if GitHub technically allows it.
+
+## Rollout — 13
+
+After merge to `staging`:
+
+- [ ] Railway deployment matches merged staging SHA.
+- [ ] Build/runtime/HTTP health checked.
+- [ ] Supabase staging/advisors checked after applicable database changes.
+- [ ] Failures are routed to 14 — Recovery/Incident.
+- Result: `STAGING_VERIFIED` / blocking state
+
+## Smoke handoff
+
+- Highest automatic state: `SMOKE_READY`.
+- Exactly one first smoke-test step is prepared for Mateus.
+- Production is forbidden in the default autonomous flow.
+
+## Commit / release summary
 
 Provide the final summary suitable for commit/release history here.
