@@ -24,7 +24,7 @@ Projetos físicos do ChatGPT:
 Papéis lógicos canônicos:
 00 Orchestrator; 01 Auditor/Red Team; 02 Product & UX; 03 Reviewer/QA; 04 Prontuário; 05 Integration; 06 Financeiro; 07 Agenda; 08 ABA; 09 Supabase/Data; 10 CI/Regression; 11 PR Engineer; 12 Merge Gatekeeper; 13 Rollout/Deploy; 14 Recovery/Incident.
 
-Cada execução de W ou Q assume EXATAMENTE UM papel, determinado por `current_agent`. Nunca misturar papéis na mesma rodada.
+Cada execução de W ou Q assume EXATAMENTE UM papel por handoff, determinado por `current_agent`. A mesma rodada pode encadear outro papel da mesma lane somente depois de fechar formalmente o handoff anterior e carregar o novo contrato de papel.
 
 ## Debate estratégico
 Ciclo completo: `00 -> 01 -> 02 -> 00`.
@@ -49,6 +49,38 @@ Handoffs materiais ficam na mesma Issue. Não criar nova Issue para cada troca c
 ## Write isolation
 Toda Issue tem exatamente um writer principal. Em alteração transversal: `GLOBAL_WRITE_LOCK = ACTIVE`. Nenhum segundo writer pode alterar superfície sobreposta enquanto o lock estiver ativo.
 
+## Fila, prioridade e não-preempção
+Campos canônicos de fila:
+- `priority`: `P000 | P00 | P0 | P1 | P2 | P3`;
+- `priority_rank`: `10 | 50 | 100 | 200 | 300 | 400`;
+- `queue_mode`: `NEW | CONTINUATION | REWORK`;
+- `flow_status`: `QUEUED | ACTIVE | WAITING_EXTERNAL | SMOKE_READY`;
+- `founder_preempt`: `false | true`.
+
+Ordem de seleção dentro de cada Projeto físico:
+1. `founder_preempt=true`;
+2. `REWORK`;
+3. `CONTINUATION`;
+4. `NEW`.
+
+Dentro da mesma classe, vence o menor `priority_rank`; empate: `last_transition_at` mais antigo.
+
+Regra não-preemptiva: uma Issue já iniciada deve ser terminada antes de começar Issue `NEW`, mesmo que a nova Issue tenha prioridade nominal maior. Somente ordem explícita do fundador pode definir `founder_preempt=true` e interromper a ordem normal. `SMOKE_READY` não entra na fila automática.
+
+## Claims
+Todo handoff executável usa ciclo `PENDING -> CLAIMED -> DONE | FAILED`.
+
+Antes de claim, releia a Issue e valide `state`, `active_handoff`, `writer`, `write_lock`, branch/base SHA, preservações e `attempt`.
+
+- Claim válido: não tocar.
+- Claim expirado: registrar `STALE_CLAIM_RECOVERED` antes de recuperar.
+- TTL padrão: 55 minutos.
+- Ao claimar: preencher `claimed_by` e `claim_expires_at`.
+- Ao concluir ou falhar: limpar claim antes de criar/liberar o próximo handoff.
+- Nunca repetir handoff `DONE`.
+
+Uma execução atrasada que encontre `active_handoff`, `current_agent` ou estado já alterado deve encerrar sem repetir trabalho.
+
 ## Rotas comuns
 - UI/UX: `00 -> 01/02 quando necessário -> writer -> 10 -> 03 -> 11 -> 12 -> 13`.
 - Regra local: `00 -> especialista 04/06/07/08 -> 10 -> 03 -> 11 -> 12 -> 13`.
@@ -70,16 +102,17 @@ Estados bloqueantes úteis: `SPEC_CONFLICT`, `TEST_FAILED`, `SECURITY_FAILED`, `
 ## Stop-loss
 Use `STOP_LOSS_REQUIRED` apenas quando continuar inevitavelmente puder causar dano grave concreto e não mitigável: perda irreversível de dados, corrupção clínica/financeira, cross-tenant, ambiente não identificável ou ação destrutiva sem rollback viável. Antes, tente redesenhar para solução reversível/isolada.
 
-## Polling
-Cada Projeto físico pode ter uma tarefa recorrente. Ao acordar:
+## Polling e queue-drain
+Cada Projeto físico pode ter uma tarefa recorrente. O polling é watchdog/retomada, não intervalo obrigatório. Ao acordar:
 1. buscar Issues abertas da fábrica;
-2. agir apenas nas Issues cujo `current_agent` pertença ao Projeto;
-3. validar `state` e `active_handoff` antes de qualquer ação;
-4. se nenhuma Issue for elegível, encerrar imediatamente;
-5. se houver mais de uma, priorizar a mais antiga/prioritária sem quebrar locks;
-6. ler histórico e contrato completos;
-7. executar somente o papel ativo;
-8. registrar resultado e atualizar `current_agent`, `state`, `active_handoff`, `attempt` quando aplicável e `next_gate`.
+2. agir apenas nas Issues cujo `current_agent` pertença ao Projeto e cujo `handoff_status` seja `PENDING`;
+3. ignorar `SMOKE_READY` e respeitar dependências/locks;
+4. ordenar a fila pelas regras canônicas de prioridade e não-preempção;
+5. validar `state`, `active_handoff` e claim antes de qualquer ação;
+6. se nenhuma Issue for elegível, encerrar imediatamente;
+7. ler histórico e contrato completos;
+8. executar somente o papel ativo;
+9. registrar resultado e atualizar `current_agent`, `state`, `active_handoff`, `attempt` quando aplicável e `next_gate`.
 
 Mapeamento de polling:
 - Projeto 00: somente 00.
@@ -88,7 +121,45 @@ Mapeamento de polling:
 - W: 04,05,06,07,08,09.
 - Q: 03,10,11,12,13,14.
 
-Uma execução atrasada que encontrar handoff já alterado deve encerrar sem repetir trabalho.
+### Execução encadeada W/Q
+W e Q podem continuar na mesma Issue enquanto o próximo `current_agent` permanecer na mesma lane, desde que:
+1. o handoff anterior esteja `DONE` ou `FAILED` com evidências;
+2. exista novo `active_handoff` formalmente criado;
+3. `handoff_status` volte a `PENDING` e o claim anterior esteja limpo;
+4. `state`, `last_transition_at`, `next_gate` e `attempt` tenham sido atualizados quando necessário;
+5. a Issue e o OS sejam relidos;
+6. o novo contrato de papel seja carregado;
+7. um novo claim seja feito;
+8. não exista dependência externa, necessidade de 00/01/02, conflito de writer/lock ou outro gate fora da lane.
+
+Ao trocar de papel, o runtime continua sendo W ou Q, mas apenas um papel lógico pode estar ativo por handoff. Se o próximo agente sair da lane, deixar o handoff `PENDING` e encerrar essa Issue.
+
+### Queue-drain entre Issues
+Depois que uma Issue sair da lane, o mesmo Projeto pode selecionar a próxima Issue elegível e continuar na mesma execução, sempre sequencialmente. Nunca iniciar a próxima antes de fechar formalmente a atual. Não iniciar nova Issue sem margem razoável para concluir o gate. Smoke humano de uma Issue não bloqueia outras Issues independentes.
+
+## Work Packages / Correction Blocks
+Uma Issue pode representar um bloco de itens compatíveis para reduzir overhead sem virar escopo ilimitado.
+
+Campos canônicos quando aplicável:
+- `work_package: <DOMAIN>-<YYYYMMDD>-<SEQ> | NONE`;
+- `scope_group: <domínio/superfície>`;
+- `block_mode: BATCH | SINGLE`;
+- `block_status: COLLECTING | READY | ACTIVE | REWORK | WAITING_EXTERNAL | SMOKE_READY`;
+- `contract_version: <inteiro>`;
+- `items`: checklist com IDs estáveis por item.
+
+Regras:
+1. `BATCH` agrupa somente itens tecnicamente compatíveis, de mesmo domínio/superfície, mesmo writer principal e prioridade aproximadamente compatível.
+2. O risco/classificação do bloco é o maior risco entre seus itens; batching nunca pode esconder risco maior.
+3. `COLLECTING` não é executável: permanece sob 00 e não libera handoff de implementação.
+4. Ao congelar o bloco, incrementar `contract_version`, definir `block_status: READY` e liberar o primeiro handoff executável.
+5. Depois de `ACTIVE`, novas ideias ordinárias vão para novo bloco. Alterar bloco ativo somente para correção/requisito indispensável ao escopo já contratado; nesse caso incrementar `contract_version` e revalidar gates afetados.
+6. Prioridade/fila pertence à Issue/bloco inteiro; não misturar prioridades incompatíveis apenas para economizar handoff.
+7. Auditoria, UX, writer, CI, review, PR, merge e rollout tratam o bloco como unidade e registram resultado por item.
+8. Falha de um item coloca o bloco em `REWORK`; corrigir somente o item afetado e revalidar impactos necessários, preservando trabalho saudável.
+9. Smoke humano pode ser checklist único do bloco. `SMOKE_READY` encerra a automação daquele bloco sem bloquear outros.
+10. Locks, stop-loss, tenant isolation, banco/RLS, integridade e gates obrigatórios prevalecem sobre batching.
+11. W/Q podem drenar papéis internos do mesmo bloco e, após entregá-lo, pegar o próximo bloco elegível da fila na mesma execução se houver margem segura.
 
 ## Gates
 Writer: menor diff seguro, branch/base SHA corretos, testes targeted e evidências na Issue.
