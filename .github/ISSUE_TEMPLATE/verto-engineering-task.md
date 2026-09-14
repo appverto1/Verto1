@@ -78,6 +78,28 @@ assignees: ""
 - Persistence/relogin validation when applicable:
 - Commercial/Super Admin regression validation:
 
+## Queue / priority
+- `priority`: P000 / P00 / P0 / P1 / P2 / P3
+- `priority_rank`: 10 / 50 / 100 / 200 / 300 / 400
+- `queue_mode`: NEW / CONTINUATION / REWORK
+- `flow_status`: QUEUED / ACTIVE / WAITING_EXTERNAL / SMOKE_READY
+- `founder_preempt`: false / true
+- `last_transition_at`:
+
+> Selection order: founder_preempt > REWORK > CONTINUATION > NEW; then lower priority_rank; then oldest last_transition_at. Started work is non-preemptive unless the founder explicitly sets founder_preempt=true.
+
+## Work package / correction block
+Use when applicable; otherwise set `work_package: NONE`.
+- `work_package`: `<DOMAIN>-<YYYYMMDD>-<SEQ>` / `NONE`
+- `scope_group`:
+- `block_mode`: BATCH / SINGLE
+- `block_status`: COLLECTING / READY / ACTIVE / REWORK / WAITING_EXTERNAL / SMOKE_READY
+- `contract_version`: 1
+- `items`:
+  - [ ] ITEM-001 —
+
+> `COLLECTING` is not executable. An ACTIVE block does not absorb ordinary new ideas. Material contract changes increment contract_version and revalidate affected gates. A failed item moves the block to REWORK without invalidating healthy work unnecessarily.
+
 ## Git contract
 - Base branch: `staging`
 - Exact base SHA:
@@ -90,11 +112,16 @@ assignees: ""
 - Current agent: 00–14
 - Current state: `INTAKE`
 - `active_handoff`:
+- `handoff_status`: PENDING / CLAIMED / DONE / FAILED
+- `claimed_by`: none
+- `claim_expires_at`: null
 - `attempt`: 1
 - `handoff_count`: 0
 - `discussion_cycle`: 0/2
 - Next gate:
 - Target environment: `staging`
+
+> Claims have a 55-minute TTL. A valid claim must not be touched. Expired claims require `STALE_CLAIM_RECOVERED` before recovery. Never repeat a DONE handoff.
 
 # CANONICAL ROSTER
 00 Orchestrator
@@ -114,6 +141,8 @@ assignees: ""
 14 Recovery / Incident
 
 Strategic debate: `00 -> 01 -> 02 -> 00`, maximum 2 complete cycles. If disagreement remains, 00 decides and records rationale.
+
+Writer Lane W: 04–09. Quality & Release Lane Q: 03 and 10–14. W/Q may chain internal roles only after formally closing the previous handoff, clearing its claim, creating the next PENDING handoff, re-reading the Issue/OS, loading the new role contract and making a new claim. Queue drain between Issues is sequential only.
 
 # ENGINEERING DOSSIER
 
