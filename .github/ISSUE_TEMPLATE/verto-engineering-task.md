@@ -106,7 +106,15 @@ Use when applicable; otherwise set `work_package: NONE`.
 - Planned branch:
 - Principal writer: 04 / 05 / 06 / 07 / 08 / 09 / other explicit writer
 - `GLOBAL_WRITE_LOCK`: `INACTIVE` / `ACTIVE`
+- `lock_owner_issue`: `none` / `#<n>`
+- `lock_owner_writer`: `none` / 04 / 05 / 06 / 07 / 08 / 09
+- `lock_base_sha`: `null` / `<staging SHA>`
+- `lock_scope`: `NONE` / `PRODUCT_STAGING`
+- `lock_acquired_at`: `null` / timestamp
+- `lock_release_gate`: `none` / `STAGING_VERIFIED`
 - Target commit summary:
+
+> When `GLOBAL_WRITE_LOCK=ACTIVE`, only the owner Issue may write product against staging. Other product writers and merges are blocked until the owner reaches `STAGING_VERIFIED`. Unexpected staging drift against `lock_base_sha` => `SHA_DRIFT`; do not merge. Exception requires explicit `founder_preempt=true`, formal pause, refreshed lock_base_sha and revalidation.
 
 ## Control
 - Current agent: 00–14
@@ -199,6 +207,7 @@ Owned/coordinated by 09 when needed.
 Owned by 10.
 - workflow/run:
 - validated head SHA:
+- lock/base SHA revalidation when applicable:
 - install/typecheck/build/pre-main:
 - targeted tests:
 - pre-existing unrelated failures:
@@ -226,6 +235,7 @@ Owned by 11.
 Owned by 12.
 - expected head SHA:
 - base drift:
+- global lock owner check:
 - CI:
 - review:
 - merge decision:
@@ -238,6 +248,7 @@ Owned by 13; failures route to 14.
 - build/runtime/health:
 - data checks when applicable:
 - recovery required:
+- lock release at `STAGING_VERIFIED` when applicable:
 
 ## SMOKE_READY
 Highest automatic state.
