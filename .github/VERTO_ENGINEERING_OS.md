@@ -46,8 +46,30 @@ Handoffs materiais ficam na mesma Issue. Não criar nova Issue para cada troca c
 7. Writers não revisam/aprovam a própria implementação.
 8. Produção exige autorização própria.
 
-## Write isolation
-Toda Issue tem exatamente um writer principal. Em alteração transversal: `GLOBAL_WRITE_LOCK = ACTIVE`. Nenhum segundo writer pode alterar superfície sobreposta enquanto o lock estiver ativo.
+## Write isolation / Critical Integration
+Toda Issue tem exatamente um writer principal.
+
+Para alteração 🔴 verdadeiramente transversal — especialmente quando cruza múltiplos módulos, contratos compartilhados, banco/RLS ou integrações críticas — use `GLOBAL_WRITE_LOCK = ACTIVE` como janela exclusiva de escrita de produto em `staging`.
+
+Campos canônicos quando ativo:
+- `GLOBAL_WRITE_LOCK: ACTIVE | INACTIVE`;
+- `lock_owner_issue: #<n>`;
+- `lock_owner_writer: <04-09>`;
+- `lock_base_sha: <staging SHA>`;
+- `lock_scope: PRODUCT_STAGING`;
+- `lock_acquired_at: <timestamp>`;
+- `lock_release_gate: STAGING_VERIFIED`.
+
+Regras obrigatórias:
+1. Lock ativo congela toda escrita concorrente de produto que possa alterar a base de `staging`, não apenas arquivos/superfícies obviamente sobrepostos.
+2. Existe exatamente uma Issue dona do lock e um writer principal. Outros writers 04–09 não podem implementar produto enquanto o lock estiver ativo, salvo trabalho sequencial explicitamente coordenado dentro da própria Issue dona.
+3. Nenhuma Issue de produto que não seja dona do lock pode ser mergeada em `staging`. O gate 12 deve recusar esse merge mesmo sem conflito Git textual.
+4. 00/01/02 podem continuar intake, auditoria, arquitetura e especificação read-only de outras Issues. Q pode executar CI/review read-only quando seguro, mas não pode liberar merge/deploy concorrente que altere `staging`.
+5. O lock só é liberado quando a Issue dona atingir `STAGING_VERIFIED`; não liberar ao fim do writer, CI, review ou apenas no merge.
+6. Ao adquirir o lock, registrar `lock_base_sha`. Antes do CI final e imediatamente antes do merge, comparar o HEAD atual de `staging` com a base esperada. Drift inesperado => `SHA_DRIFT`, sem merge, com refresh/rebase controlado e revalidação dos gates impactados.
+7. Mudanças aparentemente distantes também ficam bloqueadas porque podem alterar contratos, tipos, APIs, cache, permissões ou serviços compartilhados sem conflito textual.
+8. Exceção somente por ordem explícita do fundador com `founder_preempt: true`. Nesse caso, pausar formalmente a integração, registrar a intervenção, atualizar `staging`, renovar `lock_base_sha` e revalidar a integração antes de continuar.
+9. Smoke humano não mantém o lock: após `STAGING_VERIFIED`, liberar o lock e permitir que a fábrica retome outras escritas enquanto a Issue segue para `SMOKE_READY`.
 
 ## Fila, prioridade e não-preempção
 Campos canônicos de fila:
@@ -162,13 +184,13 @@ Regras:
 11. W/Q podem drenar papéis internos do mesmo bloco e, após entregá-lo, pegar o próximo bloco elegível da fila na mesma execução se houver margem segura.
 
 ## Gates
-Writer: menor diff seguro, branch/base SHA corretos, testes targeted e evidências na Issue.
+Writer: menor diff seguro, branch/base SHA corretos, testes targeted e evidências na Issue; se houver `GLOBAL_WRITE_LOCK = ACTIVE`, somente a Issue dona pode escrever produto.
 09: valida schema/migration/RLS quando houver banco.
-10: CI/regressão, separando dívida pré-existente de regressão nova.
+10: CI/regressão, separando dívida pré-existente de regressão nova; para lock ativo, revalida `lock_base_sha` contra `staging` antes do CI final e bloqueia em `SHA_DRIFT`.
 03: compara diff real com contrato; não corrige código.
 11: prepara PR fiel ao contrato.
-12: merge em staging somente com review/CI/head/base válidos.
-13: verifica Railway staging, SHA, build/runtime/health e Supabase quando aplicável.
+12: merge em staging somente com review/CI/head/base válidos; lock ativo bloqueia merge de qualquer Issue de produto que não seja a dona.
+13: verifica Railway staging, SHA, build/runtime/health e Supabase quando aplicável; `STAGING_VERIFIED` é o gate de liberação do lock.
 14: contém/reverte rollout falho e devolve para revalidação.
 
 ## Conclusão
