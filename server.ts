@@ -65210,6 +65210,45 @@ async function startServer() {
     };
   };
 
+  const canonicalizeTissIdempotencyValue = (value: any): any => {
+    if (Array.isArray(value)) return value.map(canonicalizeTissIdempotencyValue);
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((acc: Record<string, any>, key) => {
+        if (value[key] !== undefined) acc[key] = canonicalizeTissIdempotencyValue(value[key]);
+        return acc;
+      }, {});
+    }
+    return value;
+  };
+
+  const buildTissAtomicIdempotencyKey = (params: { organizationId: string; officialDocumentId: string; actorId: string; operation: string; payload?: Record<string, any> | null; }) =>
+    crypto.createHash('sha256').update(JSON.stringify(canonicalizeTissIdempotencyValue({
+      organizationId: params.organizationId,
+      officialDocumentId: params.officialDocumentId,
+      actorId: params.actorId,
+      operation: params.operation,
+      payload: params.payload || {}
+    })), 'utf8').digest('hex');
+
+  const applyTissOfficialTrackingMutation = async (params: {
+    organizationId: string;
+    officialDocumentId: string;
+    actorId: string;
+    operation: 'mark_sent' | 'register_return' | 'guide_settlement' | 'appeal_update';
+    payload: Record<string, any>;
+  }) => {
+    const { data, error } = await supabase.rpc('apply_tiss_official_tracking_mutation_v1', {
+      p_organization_id: params.organizationId,
+      p_official_document_id: params.officialDocumentId,
+      p_actor_id: params.actorId,
+      p_operation: params.operation,
+      p_idempotency_key: buildTissAtomicIdempotencyKey(params),
+      p_payload: params.payload
+    });
+    if (error) throw error;
+    return data && typeof data === 'object' ? data : {};
+  };
+
   const refreshTissOfficialDocumentTrackingTotals = async (params: {
     organizationId: string;
     officialDocumentId: string;
@@ -68597,44 +68636,29 @@ async function startServer() {
       const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
       if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
       const sentAtInput = sanitizeString(req.body?.sentAt || req.body?.sent_at || req.body?.sentDate || req.body?.sent_date, 80);
-      const sentAt = sentAtInput ? new Date(sentAtInput).toISOString() : new Date().toISOString();
       const sentChannel = sanitizeString(req.body?.sentChannel || req.body?.sent_channel || 'portal', 80);
       const operatorProtocol = sanitizeString(req.body?.operatorProtocol || req.body?.operator_protocol || req.body?.protocol, 160);
       const notes = sanitizeTextField(req.body?.notes || req.body?.observations, 1200);
       const expectedReturnDate = sanitizeString(req.body?.expectedReturnDate || req.body?.expected_return_date, 40).slice(0, 10);
-      const previousStatus = sanitizeString(bundle.tracking?.status, 80) || 'generated';
-      const nextStatus = operatorProtocol ? 'protocol_registered' : 'sent_to_operator';
-      const updated = await supabase
-        .from('tiss_official_document_tracking')
-        .update(cleanObject({
-          status: nextStatus,
-          sent_at: sentAt,
-          sent_channel: sentChannel || null,
-          operator_protocol: operatorProtocol || null,
-          sent_registered_by: isUuid(userId) ? userId : null,
-          expected_return_date: expectedReturnDate || null,
-          notes: notes || bundle.tracking?.notes || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', bundle.tracking.id)
-        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      await recordTissOfficialTrackingEvent({
+      const atomicPayload = cleanObject({
+        sent_at: sentAtInput ? new Date(sentAtInput).toISOString() : undefined,
+        sent_channel: sentChannel || 'portal',
+        operator_protocol: operatorProtocol || null,
+        expected_return_date: expectedReturnDate || null,
+        notes: notes || undefined
+      });
+      await applyTissOfficialTrackingMutation({
         organizationId,
         officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        userId,
-        eventType: operatorProtocol ? 'official_xml_protocol_registered' : 'official_xml_marked_sent',
-        previousStatus,
-        newStatus: nextStatus,
-        metadata: { sentAt, sentChannel, operatorProtocol: operatorProtocol || null, notes: notes || null }
+        actorId: userId,
+        operation: 'mark_sent',
+        payload: atomicPayload
       });
       const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...refreshed, tracking: updated.data || bundle.tracking }),
+        data: serializeTissOfficialTrackingBundle(refreshed),
         message: operatorProtocol ? 'Protocolo da operadora registrado.' : 'Envio manual à operadora registrado.'
       });
     } catch (error: any) {
@@ -68685,66 +68709,49 @@ async function startServer() {
           error: 'Valor pago e valor glosado não podem ultrapassar o valor enviado.'
         });
       }
+      if (nextStatus === 'partially_paid' && paidAmount <= 0) {
+        return res.status(422).json({ success: false, code: 'TISS_OFFICIAL_RETURN_AMOUNTS_INVALID', error: 'Retorno parcialmente pago exige valor pago maior que zero.' });
+      }
       const returnedAtInput = sanitizeString(req.body?.returnedAt || req.body?.returned_at || req.body?.returnDate || req.body?.return_date, 80);
-      const returnedAt = returnedAtInput ? new Date(returnedAtInput).toISOString() : new Date().toISOString();
+      const returnedAt = returnedAtInput ? new Date(returnedAtInput).toISOString() : undefined;
       const notes = sanitizeTextField(req.body?.notes || req.body?.observations, 1200);
-      const previousStatus = sanitizeString(bundle.tracking?.status, 80) || 'generated';
-      if (nextStatus === 'paid' || nextStatus === 'glossed' || nextStatus === 'denied_or_rejected') {
-        const guideUpdates = (bundle.guides || []).map((guide: any) => {
-          const sent = normalizeNonNegativeCents(guide?.sent_amount_cents);
-          return {
-            id: guide.id,
-            status: nextStatus === 'paid' ? 'paid' : nextStatus === 'glossed' ? 'glossed' : 'rejected',
-            paid_amount_cents: nextStatus === 'paid' ? sent : 0,
-            glossed_amount_cents: nextStatus === 'paid' ? 0 : sent,
-            pending_amount_cents: 0,
-            return_date: returnedAt.slice(0, 10),
-            payment_date: nextStatus === 'paid' ? returnedAt.slice(0, 10) : null,
-            updated_at: new Date().toISOString()
-          };
-        });
-        for (const guideUpdate of guideUpdates) {
-          await supabase
-            .from('tiss_official_guide_tracking')
-            .update(cleanObject(guideUpdate))
-            .eq('organization_id', organizationId)
-            .eq('id', guideUpdate.id);
+      const guideSettlements: any[] = [];
+      if ((nextStatus === 'partially_paid' || nextStatus === 'under_review') && (paidAmount > 0 || glossedAmount > 0)) {
+        let remainingPaid = paidAmount;
+        let remainingGlossed = glossedAmount;
+        const guides = [...(bundle.guides || [])].sort((left: any, right: any) => sanitizeString(left?.id, 120).localeCompare(sanitizeString(right?.id, 120)));
+        for (const guide of guides) {
+          const sentAmount = normalizeNonNegativeCents(guide?.sent_amount_cents);
+          const guidePaid = Math.min(sentAmount, remainingPaid);
+          remainingPaid -= guidePaid;
+          const guideGlossed = Math.min(Math.max(0, sentAmount - guidePaid), remainingGlossed);
+          remainingGlossed -= guideGlossed;
+          if (guidePaid > 0 || guideGlossed > 0) {
+            guideSettlements.push(cleanObject({
+              guide_id: guide.id,
+              paid_amount_cents: guidePaid,
+              glossed_amount_cents: guideGlossed,
+              return_date: returnedAt ? returnedAt.slice(0, 10) : undefined,
+              payment_date: guidePaid > 0 && returnedAt ? returnedAt.slice(0, 10) : undefined
+            }));
+          }
+        }
+        if (remainingPaid > 0 || remainingGlossed > 0) {
+          return res.status(422).json({ success: false, code: 'TISS_OFFICIAL_RETURN_AMOUNTS_INVALID', error: 'Os valores informados não cabem nas guias deste lote.' });
         }
       }
-      const pendingAmount = Math.max(0, totalSentAmount - paidAmount - glossedAmount);
-      const updated = await supabase
-        .from('tiss_official_document_tracking')
-        .update(cleanObject({
-          status: nextStatus,
-          returned_at: returnedAt,
-          return_status: nextStatus,
-          return_registered_by: isUuid(userId) ? userId : null,
-          total_sent_amount_cents: totalSentAmount,
-          total_paid_amount_cents: paidAmount,
-          total_glossed_amount_cents: glossedAmount,
-          total_pending_amount_cents: pendingAmount,
-          notes: notes || bundle.tracking?.notes || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', bundle.tracking.id)
-        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      await recordTissOfficialTrackingEvent({
+      await applyTissOfficialTrackingMutation({
         organizationId,
         officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        userId,
-        eventType: 'official_xml_return_registered',
-        previousStatus,
-        newStatus: nextStatus,
-        metadata: { returnedAt, paidAmountCents: paidAmount, glossedAmountCents: glossedAmount, pendingAmountCents: pendingAmount, notes: notes || null }
+        actorId: userId,
+        operation: 'register_return',
+        payload: cleanObject({ return_status: nextStatus, returned_at: returnedAt, notes: notes || undefined, guide_settlements: guideSettlements })
       });
       const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...refreshed, tracking: updated.data || bundle.tracking }),
+        data: serializeTissOfficialTrackingBundle(refreshed),
         message: 'Retorno da operadora registrado.'
       });
     } catch (error: any) {
@@ -68775,7 +68782,8 @@ async function startServer() {
         });
       }
       const statusInput = sanitizeString(req.body?.status, 80);
-      let nextStatus = statusInput && OFFICIAL_XML_GUIDE_TRACKING_STATUSES.has(statusInput)
+      const supportedStatus = new Set(['under_review', 'paid', 'partially_paid', 'glossed', 'rejected']);
+      const nextStatus = supportedStatus.has(statusInput)
         ? statusInput
         : glossedAmount > 0
           ? 'glossed'
@@ -68784,60 +68792,30 @@ async function startServer() {
             : paidAmount > 0
               ? 'partially_paid'
               : 'under_review';
-      if (!OFFICIAL_XML_GUIDE_TRACKING_STATUSES.has(nextStatus)) nextStatus = 'under_review';
-      const previousStatus = sanitizeString(guide.status, 80) || 'sent';
-      const pendingAmount = Math.max(0, sentAmount - paidAmount - glossedAmount);
-      const updated = await supabase
-        .from('tiss_official_guide_tracking')
-        .update(cleanObject({
-          status: nextStatus,
+      const mutation = await applyTissOfficialTrackingMutation({
+        organizationId,
+        officialDocumentId: documentId,
+        actorId: userId,
+        operation: 'guide_settlement',
+        payload: cleanObject({
+          guide_id: guide.id,
           paid_amount_cents: paidAmount,
           glossed_amount_cents: glossedAmount,
-          pending_amount_cents: pendingAmount,
+          status: nextStatus,
           denial_reason: sanitizeTextField(req.body?.denialReason || req.body?.denial_reason, 800) || null,
           operator_reason_code: sanitizeString(req.body?.operatorReasonCode || req.body?.operator_reason_code, 120) || null,
           internal_note: sanitizeTextField(req.body?.internalNote || req.body?.internal_note || req.body?.notes, 1200) || null,
           return_date: sanitizeString(req.body?.returnDate || req.body?.return_date, 40).slice(0, 10) || null,
           payment_date: sanitizeString(req.body?.paymentDate || req.body?.payment_date, 40).slice(0, 10) || null,
-          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', guide.id)
-        .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      const eventType = nextStatus === 'glossed'
-        ? 'official_xml_guide_glossed'
-        : nextStatus === 'paid'
-          ? 'official_xml_guide_paid'
-          : nextStatus === 'partially_paid'
-            ? 'official_xml_guide_partially_paid'
-            : nextStatus === 'rejected'
-              ? 'official_xml_guide_rejected'
-              : 'official_xml_return_registered';
-      await recordTissOfficialTrackingEvent({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        guideTrackingId: guide.id,
-        preGuideId: guide.pre_guide_id,
-        userId,
-        eventType,
-        previousStatus,
-        newStatus: nextStatus,
-        metadata: { paidAmountCents: paidAmount, glossedAmountCents: glossedAmount, pendingAmountCents: pendingAmount }
+          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || null
+        })
       });
-      const totals = await refreshTissOfficialDocumentTrackingTotals({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        fallbackSentAmount: bundle.document?.total_amount_cents
-      });
+      const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...bundle, tracking: totals.tracking, guides: totals.guides }),
-        guide: serializeTissOfficialGuideTracking(updated.data),
+        data: serializeTissOfficialTrackingBundle(refreshed),
+        guide: serializeTissOfficialGuideTracking(mutation?.guide),
         message: 'Acompanhamento da guia atualizado.'
       });
     } catch (error: any) {
@@ -68860,71 +68838,92 @@ async function startServer() {
       const appealStatusInput = sanitizeString(req.body?.appealStatus || req.body?.appeal_status || 'appeal_prepared', 80);
       const allowedAppealStatus = new Set(['appeal_pending', 'appeal_prepared', 'appeal_sent', 'appeal_accepted', 'appeal_rejected']);
       const appealStatus = allowedAppealStatus.has(appealStatusInput) ? appealStatusInput : 'appeal_prepared';
-      const nextGuideStatus = appealStatus === 'appeal_sent'
-        ? 'appeal_sent'
-        : appealStatus === 'appeal_accepted'
-          ? 'appeal_accepted'
-          : appealStatus === 'appeal_rejected'
-            ? 'appeal_rejected'
-            : 'appeal_pending';
-      const previousStatus = sanitizeString(guide.status, 80) || 'glossed';
-      const updated = await supabase
-        .from('tiss_official_guide_tracking')
-        .update(cleanObject({
-          status: nextGuideStatus,
+      const appealSentAtInput = sanitizeString(req.body?.appealSentAt || req.body?.appeal_sent_at, 80);
+      const mutation = await applyTissOfficialTrackingMutation({
+        organizationId,
+        officialDocumentId: documentId,
+        actorId: userId,
+        operation: 'appeal_update',
+        payload: cleanObject({
+          guide_id: guide.id,
           appeal_status: appealStatus,
-          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || guide.appeal_deadline || null,
-          appeal_sent_at: appealStatus === 'appeal_sent'
-            ? (sanitizeString(req.body?.appealSentAt || req.body?.appeal_sent_at, 80) ? new Date(req.body?.appealSentAt || req.body?.appeal_sent_at).toISOString() : new Date().toISOString())
-            : guide.appeal_sent_at || null,
+          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || undefined,
+          appeal_sent_at: appealStatus === 'appeal_sent' && appealSentAtInput ? new Date(appealSentAtInput).toISOString() : undefined,
           appeal_result: sanitizeString(req.body?.appealResult || req.body?.appeal_result, 80) || null,
-          appeal_note: sanitizeTextField(req.body?.appealNote || req.body?.appeal_note || req.body?.notes, 1200) || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', guide.id)
-        .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      const eventType = appealStatus === 'appeal_sent'
-        ? 'official_xml_appeal_sent'
-        : appealStatus === 'appeal_accepted' || appealStatus === 'appeal_rejected'
-          ? 'official_xml_appeal_resolved'
-          : 'official_xml_appeal_prepared';
-      await recordTissOfficialTrackingEvent({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        guideTrackingId: guide.id,
-        preGuideId: guide.pre_guide_id,
-        userId,
-        eventType,
-        previousStatus,
-        newStatus: nextGuideStatus,
-        metadata: { appealStatus }
+          appeal_note: sanitizeTextField(req.body?.appealNote || req.body?.appeal_note || req.body?.notes, 1200) || null
+        })
       });
-      const totals = await refreshTissOfficialDocumentTrackingTotals({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        fallbackSentAmount: bundle.document?.total_amount_cents,
-        preferredStatus: appealStatus === 'appeal_sent'
-          ? 'appeal_sent'
-          : appealStatus === 'appeal_accepted'
-            ? 'appeal_accepted'
-            : appealStatus === 'appeal_rejected'
-              ? 'appeal_rejected'
-              : 'appeal_prepared'
-      });
+      const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...bundle, tracking: totals.tracking, guides: totals.guides }),
-        guide: serializeTissOfficialGuideTracking(updated.data),
+        data: serializeTissOfficialTrackingBundle(refreshed),
+        guide: serializeTissOfficialGuideTracking(mutation?.guide),
         message: 'Recurso de glosa registrado.'
       });
     } catch (error: any) {
       console.warn('[TissOfficialTracking] appeal failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível registrar o recurso de glosa agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents/:documentId/reissue', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'reemissão de XML TISS oficial')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const reason = sanitizeTextField(req.body?.reason || req.body?.reissueReason || req.body?.reissue_reason, 1200);
+      if (!isUuid(organizationId) || !isUuid(documentId) || !isUuid(userId)) return res.status(400).json(payerSafeError(400));
+      if (reason.length < 8) return res.status(400).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_REASON_REQUIRED', error: 'Informe uma justificativa com pelo menos 8 caracteres para reemitir o XML.' });
+      const idempotencyKey = buildTissAtomicIdempotencyKey({ organizationId, officialDocumentId: documentId, actorId: userId, operation: 'reissue', payload: { reason } });
+      const replay = await supabase.from('tiss_official_tracking_events').select('metadata').eq('organization_id', organizationId).eq('official_document_id', documentId).eq('event_type', 'official_xml_replaced').eq('idempotency_key', idempotencyKey).limit(1).maybeSingle();
+      if (replay.error && !hasMissingFinancialSchema(replay.error) && !isMissingRelationError(replay.error)) throw replay.error;
+      const replayDocumentId = sanitizeString(replay.data?.metadata?.replacement_document_id, 120);
+      if (isUuid(replayDocumentId)) {
+        const replayDocument = await supabase.from('tiss_official_documents').select(TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT).eq('organization_id', organizationId).eq('id', replayDocumentId).maybeSingle();
+        if (replayDocument.error) throw replayDocument.error;
+        if (replayDocument.data) {
+          const replayBundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId: replayDocumentId, userId });
+          return sendNoStoreJson(res, { success: true, data: { ...serializeTissOfficialDocument(replayDocument.data, true), tracking: replayBundle.ok ? serializeTissOfficialTracking(replayBundle.tracking) : null, guideTracking: replayBundle.ok ? (replayBundle.guides || []).map(serializeTissOfficialGuideTracking).filter(Boolean) : [], reissueOfOfficialDocumentId: documentId }, idempotentReplay: true, message: 'XML TISS oficial reemitido como novo documento. O documento anterior foi preservado.' });
+        }
+      }
+      const original = await supabase.from('tiss_official_documents').select(TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT).eq('organization_id', organizationId).eq('id', documentId).eq('status', 'validated').maybeSingle();
+      if (original.error) throw original.error;
+      if (!original.data) return res.status(404).json(payerSafeError(404));
+      const preGuideIds = Array.isArray(original.data.generated_from_pre_guide_ids) ? original.data.generated_from_pre_guide_ids.map((id: unknown) => sanitizeString(id, 120)).filter((id: string) => isUuid(id)) : [];
+      if (preGuideIds.length === 0) return res.status(409).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_PRE_GUIDES_MISSING', error: 'O documento não possui Pré-guias válidas para reemissão.' });
+      const preGuideLoad = await loadTissPreGuidesSchemaSafe({ organizationId, preGuideIds });
+      if (!preGuideLoad.ok) return res.status(preGuideLoad.status).json({ success: false, code: preGuideLoad.code, error: preGuideLoad.error, diagnostics: preGuideLoad.diagnostics });
+      const preGuideRows = preGuideLoad.data || [];
+      if (preGuideRows.length !== preGuideIds.length) return res.status(409).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_PRE_GUIDE_SCOPE_MISMATCH', error: 'Uma ou mais Pré-guias do documento anterior não estão mais disponíveis nesta clínica.' });
+      const preGuides = preGuideRows.map((row: any) => serializeTissPreGuide(row));
+      const preGuideVersions = Object.fromEntries(preGuideRows.map((row: any) => [String(row.id), row.updated_at]));
+      let batchNumber = deriveOfficialTissBatchNumber(idempotencyKey);
+      if (batchNumber === sanitizeString(original.data.batch_number, 24)) batchNumber = deriveOfficialTissBatchNumber(crypto.createHash('sha256').update(`${idempotencyKey}:replacement`, 'utf8').digest('hex'));
+      const built = await generateAndValidateOfficialTissDocument({
+        preGuides,
+        payerId: sanitizeString(original.data.payer_id, 120),
+        competenceMonth: sanitizeString(original.data.competence_month, 40),
+        timeZone: currentClinicTimeZone(req.session.user),
+        batchNumber,
+        generatedBy: userId,
+        communicationVersion: officialTissStrategy.communicationVersion,
+        contentStructureVersion: officialTissStrategy.contentStructureVersion,
+        tussVersion: officialTissStrategy.tussVersion,
+        generatedAt: new Date().toISOString()
+      });
+      if (!built.ok) return res.status(built.code === 'TISS_OFFICIAL_XSD_VALIDATION_FAILED' ? 422 : 409).json({ success: false, code: built.code, error: built.message, issues: built.issues || [] });
+      const rpc = await supabase.rpc('reissue_tiss_official_document_v1', { p_organization_id: organizationId, p_replaced_document_id: documentId, p_actor_id: userId, p_idempotency_key: idempotencyKey, p_payload: { xml_content: built.generated.xml, xml_hash: built.generated.xmlHash, batch_number: built.generated.batchNumber, pre_guide_versions: preGuideVersions, validation_summary: built.generated.validationSummary, reason } });
+      if (rpc.error) throw rpc.error;
+      const mutation = rpc.data && typeof rpc.data === 'object' ? rpc.data : {};
+      const replacementId = sanitizeString(mutation?.document?.id, 120);
+      if (!isUuid(replacementId)) throw new Error('TISS_OFFICIAL_REISSUE_EMPTY');
+      const replacementBundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId: replacementId, userId });
+      return sendNoStoreJson(res, { success: true, data: { ...serializeTissOfficialDocument(mutation.document, true), tracking: replacementBundle.ok ? serializeTissOfficialTracking(replacementBundle.tracking) : serializeTissOfficialTracking(mutation?.tracking), guideTracking: replacementBundle.ok ? (replacementBundle.guides || []).map(serializeTissOfficialGuideTracking).filter(Boolean) : [], reissueOfOfficialDocumentId: documentId }, idempotentReplay: Boolean(mutation?.idempotentReplay), message: 'XML TISS oficial reemitido como novo documento. O documento anterior foi preservado.' });
+    } catch (error: any) {
+      console.warn('[TissOfficial] reissue failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_FAILED', error: 'Não foi possível reemitir o XML TISS oficial agora.' });
     }
   });
 
@@ -73253,6 +73252,12 @@ async function startServer() {
     const professionalId = sanitizeString(source?.professionalId || source?.professional_id, 120);
     const payerId = sanitizeString(source?.payerId || source?.payer_id, 120);
     const serviceType = sanitizeString(source?.serviceType || source?.service_type, 120);
+    const plan = sanitizeString(source?.plan || source?.insurancePlanName || source?.insurance_plan_name, 160).trim();
+    const financialContextRaw = sanitizeString(source?.financialContextType || source?.financial_context_type || source?.billingMode || source?.billing_mode, 80);
+    const normalizedFinancialContext = normalizeAppointmentFinancialContextType(financialContextRaw) ||
+      (financialContextRaw.trim().toUpperCase() === 'OTHER' ? 'OTHER' : '');
+    const validPlanBillingModes = new Set(['', 'PRIVATE', 'INSURANCE', 'PACKAGE', 'MONTHLY', 'COURTESY', 'OTHER']);
+    const financialContextType = validPlanBillingModes.has(normalizedFinancialContext) ? normalizedFinancialContext : '';
     const readinessStatus = parseClosureStatusFilter(source?.readinessStatus || source?.readiness_status || source?.status);
     const appointmentStatus = sanitizeString(source?.appointmentStatus || source?.appointment_status, 40).toLowerCase();
     const onlyPending = String(source?.onlyPending || source?.only_pending || '').toLowerCase() === 'true';
@@ -73265,14 +73270,17 @@ async function startServer() {
       (professionalId && !isUuid(professionalId)) ||
       (payerId && !isUuid(payerId));
     const validAppointmentStatuses = ['', 'scheduled', 'pending', 'confirmed', 'completed', 'cancelled', 'canceled', 'no_show', 'missed'];
+    const invalidFinancialContext = Boolean(financialContextRaw && !financialContextType);
     return {
-      ok: range.ok && !invalidUuid && validAppointmentStatuses.includes(appointmentStatus),
+      ok: range.ok && !invalidUuid && !invalidFinancialContext && validAppointmentStatuses.includes(appointmentStatus),
       ...range,
       ...pageParams,
       patientId,
       professionalId,
       payerId,
       serviceType,
+      plan,
+      financialContextType,
       readinessStatus,
       appointmentStatus,
       onlyPending,
@@ -73283,6 +73291,36 @@ async function startServer() {
     };
   };
 
+  const resolveConferenceFinancialPlanPatientIds = async (filters: any, clinicId: string) => {
+    const plan = sanitizeString(filters?.plan, 160).trim();
+    const financialContextType = sanitizeString(filters?.financialContextType, 40).trim().toUpperCase();
+    if (!plan && !financialContextType) return null;
+    const patientIds = new Set<string>();
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      let query = supabase
+        .from('patient_financial_plans')
+        .select('patient_id')
+        .eq('organization_id', clinicId)
+        .eq('status', 'ACTIVE')
+        .is('valid_until', null)
+        .order('patient_id', { ascending: true });
+      if (filters.patientId) query = query.eq('patient_id', filters.patientId);
+      if (filters.payerId) query = query.eq('payer_id', filters.payerId);
+      if (financialContextType) query = query.eq('billing_mode', financialContextType);
+      if (plan) query = query.ilike('insurance_plan_name', plan);
+      const { data, error } = await query.range(offset, offset + pageSize - 1);
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      rows.forEach((row: any) => {
+        const patientId = sanitizeString(row?.patient_id, 120);
+        if (isUuid(patientId)) patientIds.add(patientId);
+      });
+      if (rows.length < pageSize) break;
+    }
+    return Array.from(patientIds);
+  };
+
   const applyConferenceFilters = (query: any, filters: any) => {
     let scoped = query;
     if (filters.readinessStatus) scoped = scoped.eq('readiness_status', filters.readinessStatus);
@@ -73290,6 +73328,9 @@ async function startServer() {
     if (filters.onlyReady) scoped = scoped.eq('readiness_status', 'READY');
     if (filters.onlyNotBillable) scoped = scoped.eq('readiness_status', 'NOT_BILLABLE');
     if (filters.patientId) scoped = scoped.eq('patient_id', filters.patientId);
+    if (Array.isArray(filters.financialPlanPatientIds) && filters.financialPlanPatientIds.length > 0) {
+      scoped = scoped.in('patient_id', filters.financialPlanPatientIds);
+    }
     if (filters.professionalId) scoped = scoped.eq('professional_id', filters.professionalId);
     if (filters.payerId) scoped = scoped.eq('payer_id', filters.payerId);
     if (filters.serviceType) scoped = scoped.eq('service_type', filters.serviceType);
@@ -73852,6 +73893,32 @@ async function startServer() {
       const filters = parseConferenceFilters(req.query);
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const financialPlanPatientIds = await resolveConferenceFinancialPlanPatientIds(filters, clinicId);
+      if (financialPlanPatientIds !== null) filters.financialPlanPatientIds = financialPlanPatientIds;
+      if (Array.isArray(financialPlanPatientIds) && financialPlanPatientIds.length === 0) {
+        const emptySummary = buildMonthlyConferenceSummary([]);
+        return sendNoStoreJson(res, {
+          success: true,
+          data: [],
+          rows: [],
+          kpis: emptySummary.kpis,
+          pendingByType: emptySummary.pendingByType,
+          page: filters.page,
+          limit: filters.limit,
+          filters: {
+            from: filters.fromIso,
+            to: filters.toIso,
+            patientId: filters.patientId || null,
+            professionalId: filters.professionalId || null,
+            payerId: filters.payerId || null,
+            serviceType: filters.serviceType || null,
+            plan: filters.plan || null,
+            financialContextType: filters.financialContextType || null,
+            readinessStatus: filters.readinessStatus || null,
+            quickFilter: filters.quickFilter || null
+          }
+        });
+      }
       const queryStartedAt = Date.now();
       const hasQuickFilter = Boolean(filters.quickFilter);
       let pageRows: any[] = [];
@@ -73906,6 +73973,8 @@ async function startServer() {
           professionalId: filters.professionalId || null,
           payerId: filters.payerId || null,
           serviceType: filters.serviceType || null,
+          plan: filters.plan || null,
+          financialContextType: filters.financialContextType || null,
           readinessStatus: filters.readinessStatus || null,
           quickFilter: filters.quickFilter || null
         }
@@ -73923,6 +73992,12 @@ async function startServer() {
       const filters = parseConferenceFilters(req.query);
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const financialPlanPatientIds = await resolveConferenceFinancialPlanPatientIds(filters, clinicId);
+      if (financialPlanPatientIds !== null) filters.financialPlanPatientIds = financialPlanPatientIds;
+      if (Array.isArray(financialPlanPatientIds) && financialPlanPatientIds.length === 0) {
+        const emptySummary = buildMonthlyConferenceSummary([]);
+        return sendNoStoreJson(res, { success: true, data: (emptySummary as any)[summaryKey] || [], kpis: emptySummary.kpis });
+      }
       const queryStartedAt = Date.now();
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
       const queryMs = Date.now() - queryStartedAt;
@@ -74121,6 +74196,8 @@ async function startServer() {
       const filters = parseConferenceFilters(req.body?.filters || req.body || {});
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const financialPlanPatientIds = await resolveConferenceFinancialPlanPatientIds(filters, clinicId);
+      if (financialPlanPatientIds !== null) filters.financialPlanPatientIds = financialPlanPatientIds;
       const requestedFields = Array.isArray(req.body?.fields) ? req.body.fields.map((field: any) => sanitizeString(field, 80)) : [];
       await revalidateClosureChecksForPeriod({
         clinicId,
@@ -74129,7 +74206,9 @@ async function startServer() {
         toIso: filters.toIso,
         source: 'monthly_conference_export'
       });
-      const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
+      const rows = Array.isArray(filters.financialPlanPatientIds) && filters.financialPlanPatientIds.length === 0
+        ? []
+        : await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
       let hydratedRows = filterHydratedRowsByPrefacturingQuickFilter(
         filterHydratedRowsByTussMissingKind(
           await hydrateConferenceRows(rows, clinicId, req.session.user),

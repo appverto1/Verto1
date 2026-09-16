@@ -4416,6 +4416,8 @@ export const dataService = {
       professionalId: options.professionalId,
       payerId: options.payerId,
       serviceType: options.serviceType,
+      plan: options.plan,
+      financialContextType: options.financialContextType,
       readinessStatus: options.readinessStatus,
       appointmentStatus: options.appointmentStatus,
       onlyPending: options.onlyPending ? 'true' : undefined,
@@ -4893,6 +4895,27 @@ export const dataService = {
     }
   },
 
+  async reissueTissOfficialDocument(documentId: string, payload: any = {}) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/reissue`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'reissueTissOfficialDocument',
+        operation: 'write',
+        table: 'tiss_official_documents,tiss_official_document_tracking,tiss_official_guide_tracking,tiss_official_tracking_events,appointment_tiss_pre_guides,tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A reemissão do XML TISS oficial voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível reemitir o XML TISS oficial agora.' };
+    }
+  },
+
   async getTissRevenueCycleEvents(options: any = {}) {
     const endpoint = endpointWithQuery('/api/tiss/revenue-cycle/events', {
       preGuideId: options.preGuideId,
@@ -5294,6 +5317,8 @@ export const dataService = {
       professionalId: options.professionalId,
       payerId: options.payerId,
       serviceType: options.serviceType,
+      plan: options.plan,
+      financialContextType: options.financialContextType,
       readinessStatus: options.readinessStatus,
       appointmentStatus: options.appointmentStatus,
       onlyPending: options.onlyPending ? 'true' : undefined,
