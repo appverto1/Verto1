@@ -22190,6 +22190,32 @@ async function startServer() {
     if (error && !isMissingRelationError(error)) throw error;
   };
 
+  const applyOrganizationBillingAccessFromStripeEvent = async (params: {
+    event: Stripe.Event;
+    subscription: Stripe.Subscription;
+    organizationId?: string | null;
+  }) => {
+    const organizationId = sanitizeString(params.organizationId, 120);
+    const subscriptionId = sanitizeString(params.subscription?.id, 200);
+    if (!isUuid(organizationId) || !subscriptionId) return;
+    const provisionable = ['active', 'trialing'].includes(sanitizeString(params.subscription?.status, 40).toLowerCase());
+    const targetState = params.event.type === 'customer.subscription.deleted'
+      ? 'SUSPENDED_CANCELED'
+      : ((params.event.type === 'invoice.paid' || params.event.type === 'invoice.payment_succeeded') && provisionable ? 'ACTIVE' : null);
+    if (!targetState) return;
+    const { error } = await supabase.rpc('apply_organization_billing_access_event_v1', {
+      p_organization_id: organizationId,
+      p_stripe_subscription_id: subscriptionId,
+      p_source_event_id: params.event.id,
+      p_source_event_created_at: new Date(params.event.created * 1000).toISOString(),
+      p_target_state: targetState,
+      p_trigger_reason: targetState === 'SUSPENDED_CANCELED' ? 'stripe_subscription_deleted' : 'stripe_payment_confirmed',
+      p_grace_started_at: null,
+      p_grace_ends_at: null,
+    });
+    if (error && !isMissingRelationError(error)) throw error;
+  };
+
   const persistPlatformBillingInvoiceLedger = async (params: {
     invoice: Stripe.Invoice;
     subscription?: Stripe.Subscription | null;
@@ -23099,6 +23125,7 @@ async function startServer() {
       invoice,
       paid: event.type === "invoice.paid" || event.type === "invoice.payment_succeeded",
     });
+    await applyOrganizationBillingAccessFromStripeEvent({ event, subscription, organizationId: billingOrganizationId });
 
     if (
       event.type === "invoice.paid" ||
@@ -24093,40 +24120,50 @@ async function startServer() {
     return next();
   };
 
-  const isBillingAccessBlocked = async (user: any): Promise<boolean> => {
+  const resolveBillingAccessBlock = async (user: any): Promise<Record<string, any> | null> => {
     const role = sanitizeString(user?.role, 40).toLowerCase();
-    if (!['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin'].includes(role)) return false;
+    if (!['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin'].includes(role)) return null;
     const userId = sanitizeString(user?.id, 120);
     const clinicId = sanitizeString(currentClinicId(user), 120);
     const now = Date.now();
-
-    const hasExpiredBlock = (row: any) => {
-      const status = sanitizeString(row?.subscription_status, 40).toLowerCase();
-      const blockAt = sanitizeString(row?.stripe_access_block_at, 80);
-      return status === 'delinquent' && blockAt && new Date(blockAt).getTime() <= now;
-    };
-
     try {
-      if (clinicId) {
-        const { data } = await supabase
-          .from('clinics')
-          .select('subscription_status,stripe_access_block_at')
-          .eq('id', clinicId)
+      if (isUuid(clinicId)) {
+        const { data: billingAccess, error: billingAccessError } = await supabase
+          .from('organization_billing_access_state')
+          .select('access_state,trigger_reason,grace_ends_at,stripe_subscription_id')
+          .eq('organization_id', clinicId)
           .maybeSingle();
-        if (hasExpiredBlock(data)) return true;
+        if (billingAccessError && !isMissingRelationError(billingAccessError)) throw billingAccessError;
+        const accessState = sanitizeString(billingAccess?.access_state, 40).toUpperCase();
+        const graceEndsAt = sanitizeString(billingAccess?.grace_ends_at, 80);
+        if (accessState === 'SUSPENDED_CANCELED') {
+          return {
+            error: 'BILLING_ACCESS_SUSPENDED_CANCELED',
+            message: 'A assinatura desta clínica foi encerrada.',
+            detail: 'O acesso operacional está suspenso, mas os dados da clínica permanecem preservados.',
+            billingAccessState: accessState,
+            triggerReason: sanitizeString(billingAccess?.trigger_reason, 120) || 'subscription_canceled',
+          };
+        }
+        if (accessState === 'SUSPENDED_BILLING' || (accessState === 'GRACE_PERIOD' && graceEndsAt && new Date(graceEndsAt).getTime() <= now)) {
+          return { error: 'BILLING_ACCESS_BLOCKED', message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.', billingAccessState: accessState === 'GRACE_PERIOD' ? 'SUSPENDED_BILLING' : accessState };
+        }
+      }
+      const hasExpiredLegacyBlock = (row: any) => {
+        const status = sanitizeString(row?.subscription_status, 40).toLowerCase();
+        const blockAt = sanitizeString(row?.stripe_access_block_at, 80);
+        return status === 'delinquent' && blockAt && new Date(blockAt).getTime() <= now;
+      };
+      if (clinicId) {
+        const { data } = await supabase.from('clinics').select('subscription_status,stripe_access_block_at').eq('id', clinicId).maybeSingle();
+        if (hasExpiredLegacyBlock(data)) return { error: 'BILLING_ACCESS_BLOCKED', message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.' };
       }
       if (userId) {
-        const { data } = await supabase
-          .from('users')
-          .select('subscription_status,stripe_access_block_at')
-          .eq('id', userId)
-          .maybeSingle();
-        if (hasExpiredBlock(data)) return true;
+        const { data } = await supabase.from('users').select('subscription_status,stripe_access_block_at').eq('id', userId).maybeSingle();
+        if (hasExpiredLegacyBlock(data)) return { error: 'BILLING_ACCESS_BLOCKED', message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.' };
       }
-    } catch {
-      return false;
-    }
-    return false;
+    } catch { return null; }
+    return null;
   };
 
   const checkAuth = async (req: any, res: any, next: any) => {
@@ -24236,11 +24273,9 @@ async function startServer() {
       if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
         return res.status(402).json(billingAccessBlockedPayload(req.session.user));
       }
-      if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && await isBillingAccessBlocked(req.session.user)) {
-        return res.status(402).json({
-          error: 'BILLING_ACCESS_BLOCKED',
-          message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
-        });
+      if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
+        const billingAccessBlock = await resolveBillingAccessBlock(req.session.user);
+        if (billingAccessBlock) return res.status(402).json(billingAccessBlock);
       }
       return next();
     }
@@ -24371,11 +24406,9 @@ async function startServer() {
             if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
               return res.status(402).json(billingAccessBlockedPayload(req.session.user));
             }
-            if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && await isBillingAccessBlocked(req.session.user)) {
-              return res.status(402).json({
-                error: 'BILLING_ACCESS_BLOCKED',
-                message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
-              });
+            if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
+              const billingAccessBlock = await resolveBillingAccessBlock(req.session.user);
+              if (billingAccessBlock) return res.status(402).json(billingAccessBlock);
             }
             return next();
           }
