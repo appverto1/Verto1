@@ -81,7 +81,6 @@ begin
     raise exception 'INVALID_CHART_REFERENCE' using errcode = '22023';
   end if;
 
-  -- The PK serializes the canonical selection to exactly one row per tenant+patient.
   insert into public.patient_shared_chart_selections (
     clinic_id,
     patient_id,
@@ -126,7 +125,7 @@ set row_security = off
 as $$
 declare
   v_actor uuid := auth.uid();
-  v_deleted boolean := false;
+  v_deleted_count integer := 0;
 begin
   if v_actor is null then
     raise exception 'AUTH_REQUIRED' using errcode = '42501';
@@ -144,8 +143,8 @@ begin
    where clinic_id = p_clinic_id
      and patient_id = p_patient_id;
 
-  get diagnostics v_deleted = row_count;
-  return v_deleted;
+  get diagnostics v_deleted_count = row_count;
+  return v_deleted_count > 0;
 end;
 $$;
 
