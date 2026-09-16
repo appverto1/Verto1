@@ -56,7 +56,37 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
     setNavigationRevision((current) => current + 1);
   };
 
+  const selectSection = (nextSection: BillerSection) => {
+    setSection(nextSection);
+    setNavigationRevision((current) => current + 1);
+  };
+
   const conferenceMode = section === 'conference' || section === 'preguides' || section === 'xml';
+
+  const renderNavigation = (desktop = false) => (
+    <nav aria-label="Navegação do faturamento" className={desktop ? 'space-y-1.5' : 'flex min-w-max gap-2'}>
+      {(Object.keys(sectionMeta) as BillerSection[]).map((key) => {
+        const item = sectionMeta[key];
+        const Icon = item.icon;
+        const active = section === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            onClick={() => selectSection(key)}
+            aria-current={active ? 'page' : undefined}
+            className={`${desktop ? 'w-full justify-start' : ''} flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+              active
+                ? 'bg-violet-600 text-white shadow-sm'
+                : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            <Icon size={16} aria-hidden="true" /> {item.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -88,55 +118,40 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
       </header>
 
       <main className="mx-auto max-w-[1600px] px-3 py-4 sm:px-6 sm:py-6">
-        <div className="mb-4 overflow-x-auto pb-1">
-          <div className="flex min-w-max gap-2">
-            {(Object.keys(sectionMeta) as BillerSection[]).map((key) => {
-              const item = sectionMeta[key];
-              const Icon = item.icon;
-              const active = section === key;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => {
-                    setSection(key);
-                    setNavigationRevision((current) => current + 1);
-                  }}
-                  className={`flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition ${
-                    active
-                      ? 'bg-violet-600 text-white shadow-sm'
-                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  <Icon size={16} /> {item.label}
-                </button>
-              );
-            })}
-          </div>
+        <div className="mb-4 overflow-x-auto pb-1 lg:hidden">
+          {renderNavigation()}
         </div>
 
-        {conferenceMode ? (
-          <React.Fragment key={`conference:${workspaceScopeKey}`}>
-            <MonthlyConferenceCenter
-              workspaceScopeKey={workspaceScopeKey}
-              canExport={true}
-              initialTab={section === 'conference' ? 'sessions' : 'preGuides'}
-              tissInitialPanel={section === 'xml' ? 'xmlDrafts' : 'preGuides'}
-              initialPayerId={payerId}
-              navigationIntentKey={navigationRevision}
-              onNavigatePayers={() => navigateToPayers(payerId)}
-            />
-          </React.Fragment>
-        ) : (
-          <React.Fragment key={`payers:${workspaceScopeKey}`}>
-            <PayerRequirementsPanel
-              workspaceScopeKey={workspaceScopeKey}
-              initialPayerId={payerId}
-              navigationIntentKey={navigationRevision}
-              onNavigateToPreGuides={(context) => navigateToPreguides(context.payerId)}
-            />
-          </React.Fragment>
-        )}
+        <div className="lg:grid lg:grid-cols-[232px_minmax(0,1fr)] lg:items-start lg:gap-6">
+          <aside className="sticky top-[73px] hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:block">
+            {renderNavigation(true)}
+          </aside>
+
+          <div className="min-w-0">
+            {conferenceMode ? (
+              <React.Fragment key={`conference:${workspaceScopeKey}`}>
+                <MonthlyConferenceCenter
+                  workspaceScopeKey={workspaceScopeKey}
+                  canExport={true}
+                  initialTab={section === 'conference' ? 'sessions' : 'preGuides'}
+                  tissInitialPanel={section === 'xml' ? 'xmlDrafts' : 'preGuides'}
+                  initialPayerId={payerId}
+                  navigationIntentKey={navigationRevision}
+                  onNavigatePayers={() => navigateToPayers(payerId)}
+                />
+              </React.Fragment>
+            ) : (
+              <React.Fragment key={`payers:${workspaceScopeKey}`}>
+                <PayerRequirementsPanel
+                  workspaceScopeKey={workspaceScopeKey}
+                  initialPayerId={payerId}
+                  navigationIntentKey={navigationRevision}
+                  onNavigateToPreGuides={(context) => navigateToPreguides(context.payerId)}
+                />
+              </React.Fragment>
+            )}
+          </div>
+        </div>
 
         <div className="mt-6 flex items-center justify-center gap-2 text-xs text-slate-400">
           <RefreshCw size={13} /> Escopo restrito ao faturamento da unidade ativa.
