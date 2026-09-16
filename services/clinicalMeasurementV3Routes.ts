@@ -209,10 +209,13 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
           p_limit:5000
         });
         if(rpc.error) throw rpc.error;
-        const historyBindings=await supabase.from('aba_session_target_measurement_bindings')
-          .select('session_id,target_id,program_version_id,program_version_snapshot,measurement_type_snapshot,target_status_snapshot')
-          .eq('organization_id',clinicId).eq('patient_id',patientId)
-          .gte('decision_at',dateFrom.toISOString()).lte('decision_at',dateTo.toISOString()).limit(5000);
+        const historyBindings=visibleProgramIds.length
+          ? await supabase.from('aba_session_target_measurement_bindings')
+            .select('session_id,target_id,program_version_id,program_version_snapshot,measurement_type_snapshot,target_status_snapshot')
+            .eq('organization_id',clinicId).eq('patient_id',patientId)
+            .in('program_id',visibleProgramIds)
+            .gte('decision_at',dateFrom.toISOString()).lte('decision_at',dateTo.toISOString()).limit(5000)
+          : {data:[],error:null};
         if(historyBindings.error) throw historyBindings.error;
         const historyBySessionTarget=new Map((historyBindings.data||[]).map((binding:any)=>[`${String(binding.session_id)}::${String(binding.target_id)}`,binding]));
         const rows=(rpc.data||[]).map((row:any)=>{

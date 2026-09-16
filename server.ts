@@ -86385,7 +86385,7 @@ async function startServer() {
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
-      const [planResult, linkResult, supervisionResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult, taskReviewResult, historyBindingResult] = await Promise.all([
+      const [planResult, linkResult, supervisionResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult, taskReviewResult] = await Promise.all([
         supabase
           .from('patient_therapeutic_plans')
           .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
@@ -86478,13 +86478,9 @@ async function startServer() {
           .lte('reviewed_at', dateToIso)
           .order('reviewed_at', { ascending: true })
           .limit(500),
-        isUuid(clinicId) ? supabase.from('aba_session_target_measurement_bindings')
-          .select('session_id,target_id,program_id,measurement_model_version,program_version_id,program_version_snapshot,measurement_type_snapshot,target_status_snapshot,decision_at')
-          .eq('organization_id', clinicId).eq('patient_id', patientId).gte('decision_at', dateFromIso).lte('decision_at', dateToIso).limit(5000)
-          : Promise.resolve({ data: [], error: null })
       ]);
 
-      const criticalError = [planResult.error, linkResult.error, supervisionResult.error, programResult.error, targetResult.error, snapshotResult.error, historyBindingResult.error].find(Boolean);
+      const criticalError = [planResult.error, linkResult.error, supervisionResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
       if (criticalError) throw criticalError;
       const clinicalSchemaResults = [definitionResult, observationResult, contributionResult, phaseResult];
       const clinicalSchemaAvailable = clinicalSchemaResults.every((result: any) => !result.error);
@@ -86520,6 +86516,14 @@ async function startServer() {
       const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], allPlans, accessContext);
       const visibleProgramIds = new Set(visiblePrograms.map((program: any) => String(program.id)));
       const visibleProgramIdList = Array.from(visibleProgramIds).map((programId) => sanitizeString(programId, 180)).filter(Boolean);
+      const historyBindingResult = isUuid(clinicId) && visibleProgramIdList.length > 0
+        ? await supabase.from('aba_session_target_measurement_bindings')
+          .select('session_id,target_id,program_id,measurement_model_version,program_version_id,program_version_snapshot,measurement_type_snapshot,target_status_snapshot,decision_at')
+          .eq('organization_id', clinicId).eq('patient_id', patientId)
+          .in('program_id', visibleProgramIdList)
+          .gte('decision_at', dateFromIso).lte('decision_at', dateToIso).limit(5000)
+        : { data: [], error: null };
+      if (historyBindingResult.error) throw historyBindingResult.error;
       const programById = new Map(visiblePrograms.map((program: any) => [String(program.id), program]));
       const targetById = new Map((targetResult.data || []).filter((target: any) => visibleProgramIds.has(String(target.program_id))).map((target: any) => [String(target.id), target]));
       const definitionById = new Map((definitionResult.error ? [] : definitionResult.data || []).filter((definition: any) => visiblePlanIds.has(String(definition.plan_id))).map((definition: any) => [String(definition.id), definition]));
