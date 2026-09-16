@@ -165,21 +165,24 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
         const requestedPlanId=sanitizeString(req.query?.planId,120);
         if(requestedPlanId&&!isUuid(requestedPlanId)) return res.status(422).json({success:false,error:'CMV3_PLAN_READ_PLAN_INVALID'});
 
-        const [planResult,linkResult,programResult]=await Promise.all([
+        const [planResult,linkResult,supervisionResult,programResult]=await Promise.all([
           supabase.from('patient_therapeutic_plans')
             .select('id,patient_id,organization_id,clinic_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,status')
             .eq('organization_id',clinicId).eq('patient_id',patientId).limit(250),
           supabase.from('patient_professional_links')
             .select('patient_id,professional_id,status,permissions')
             .eq('organization_id',clinicId).eq('patient_id',patientId).eq('status','active').limit(50),
+          supabase.from('clinical_supervision_links')
+            .select('clinic_id,patient_id,supervisor_user_id,supervised_user_id,status')
+            .eq('clinic_id',clinicId).eq('patient_id',patientId).eq('supervisor_user_id',actorId).eq('status','active').limit(100),
           supabase.from('aba_programs')
             .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,responsible_professional_ids,created_by')
             .eq('organization_id',clinicId).eq('patient_id',patientId).not('therapeutic_plan_id','is',null).limit(1000)
         ]);
-        if(planResult.error) throw planResult.error; if(linkResult.error) throw linkResult.error; if(programResult.error) throw programResult.error;
+        if(planResult.error) throw planResult.error; if(linkResult.error) throw linkResult.error; if(supervisionResult.error) throw supervisionResult.error; if(programResult.error) throw programResult.error;
 
         const allPlans=planResult.data||[];
-        const accessContext={actorId,actorRole,professionalLinks:linkResult.data||[]};
+        const accessContext={actorId,actorRole,professionalLinks:linkResult.data||[],supervisionLinks:supervisionResult.data||[]};
         let visiblePlans=filterTherapeuticPlanScopesForActor(allPlans,accessContext);
         if(requestedPlanId) visiblePlans=visiblePlans.filter((plan:any)=>String(plan.id)===requestedPlanId);
         const visiblePlanIds=Array.from(new Set(visiblePlans.map((plan:any)=>sanitizeString(plan?.id,120)).filter(isUuid)));
@@ -206,12 +209,26 @@ export function registerClinicalMeasurementV3Routes(app: Express, deps: Deps) {
           p_limit:5000
         });
         if(rpc.error) throw rpc.error;
+        const historyBindings=visibleProgramIds.length
+          ? await supabase.from('aba_session_target_measurement_bindings')
+            .select('session_id,target_id,program_version_id,program_version_snapshot,measurement_type_snapshot,target_status_snapshot')
+            .eq('organization_id',clinicId).eq('patient_id',patientId)
+            .in('program_id',visibleProgramIds)
+            .gte('decision_at',dateFrom.toISOString()).lte('decision_at',dateTo.toISOString()).limit(5000)
+          : {data:[],error:null};
+        if(historyBindings.error) throw historyBindings.error;
+        const historyBySessionTarget=new Map((historyBindings.data||[]).map((binding:any)=>[`${String(binding.session_id)}::${String(binding.target_id)}`,binding]));
+        const rows=(rpc.data||[]).map((row:any)=>{
+          if(String(row?.source_kind||'').toUpperCase()!=='ABA_TARGET') return row;
+          const binding:any=historyBySessionTarget.get(`${String(row?.session_id||'')}::${String(row?.target_id||'')}`)||null;
+          return {...row,target_status:binding?.target_status_snapshot||'LEGACY_UNVERSIONED',measurement_type:binding?.measurement_type_snapshot||null,program_version_id:binding?.program_version_id||null,program_version:binding?.program_version_snapshot||null,history_version_status:binding?.program_version_id?'VERSION_BOUND':'LEGACY_UNVERSIONED'};
+        });
 
         return res.json({
           success:true,
-          data:{rows:rpc.data||[]},
+          data:{rows},
           meta:{
-            queryCount:4,
+            queryCount:5,
             rpcCount:1,
             batched:true,
             periodDays:requestedDays,

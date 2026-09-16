@@ -264,6 +264,8 @@ const isCollectionVolumeSeries = (series: ClinicalOutcomeSeriesSummary) => {
     || label === 'sessões';
 };
 
+const isLegacyUnversionedSeries = (series: ClinicalOutcomeSeriesSummary) => series.observations.some((row) => clean(row?.metadata?.historyVersionStatus) === 'LEGACY_UNVERSIONED');
+
 const isHistoricalOnlySeries = (series: ClinicalOutcomeSeriesSummary) => {
   const sourceLabel = clinicalOutcomeSourceLabel(series.source).toLocaleLowerCase('pt-BR');
   return sourceLabel.includes('histórico') && !sourceLabel.includes('v3 +');
@@ -1054,6 +1056,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] ${evidenceTone(series, isPanelDark)}`}>
                             {series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}
                           </span>
+                          {isLegacyUnversionedSeries(series) && <span className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500">Histórico sem versão</span>}
                           {group.historicalSeries.length > 0 && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item)) && (
                             <span title="Histórico anterior disponível" className={`inline-flex items-center gap-1 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
                               <History size={11} /> Histórico
