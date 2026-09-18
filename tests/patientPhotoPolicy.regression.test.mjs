@@ -20,6 +20,10 @@ assert.match(server, /profile_picture: patientPhotoPolicy === 'PORTAL' \? profil
 assert.match(server, /patient_photo_policy: clinicPatientPhotoPolicy/);
 assert.match(server, /req\.session\.user\?\.clinicSettings\?\.patientPhotoPolicy/, 'saving another clinic/profile field must not silently reset the existing photo policy');
 assert.match(server, /portalProfilePicturePath/);
+assert.match(server, /function serializePatientMediaForClient\(row: any\)/);
+assert.match(server, /profilePicturePath[\s\S]*?buildPatientPhotoViewUrl\(profilePicturePath\)/);
+assert.match(server, /portalProfilePicturePath[\s\S]*?buildPatientPhotoViewUrl\(portalProfilePicturePath\)/);
+assert.match(server, /app\.get\('\/api\/storage\/patient-photos\/view'[\s\S]*?canAccessPatientInCurrentClinic/);
 
 assert.match(patientAuthorization, /'portal_profile_picture'/);
 assert.match(patientAuthorization, /'portal_profile_picture_path'/);
@@ -31,5 +35,10 @@ assert.match(settings, /Foto gerenciada pela clínica/);
 assert.match(detail, /dataService\.uploadFile\('patient-photos'/);
 assert.match(detail, /\['director', 'coordinator', 'receptionist'\]\.includes\(normalizedPatientPhotoRole\)/);
 assert.match(detail, /file\.size > 2 \* 1024 \* 1024/);
+assert.match(detail, /patientPhotoViewUrl\(patient\?\.profilePicturePath \|\| patient\?\.profile_picture_path\)/);
+assert.match(detail, /patientPhotoViewUrl\(patient\?\.portalProfilePicturePath \|\| patient\?\.portal_profile_picture_path\)/);
+assert.match(detail, /patientPhotoPolicy === 'PORTAL'[\s\S]{0,100}\? portalPatientPhotoSource[\s\S]{0,100}: patientPhotoSource\(patient\)/);
+assert.doesNotMatch(detail, /portalPatientPhotoSource \|\| patientPhotoSource\(patient\)/);
+assert.match(detail, /setPatientPhotoOverride\(patientPhotoViewUrl\(upload\.path\) \|\| String\(upload\.url\)\)/);
 
 console.log('patientPhotoPolicy.regression.test.mjs: ok');
