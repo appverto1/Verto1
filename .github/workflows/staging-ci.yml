@@ -37,6 +37,9 @@ jobs:
       - name: Install dependencies deterministically
         run: npm ci
 
+      - name: Typecheck ratchet regression tests
+        run: node tests/typecheckRatchet.regression.test.mjs
+
       - name: Typecheck ratchet
         shell: bash
         env:
@@ -85,19 +88,18 @@ jobs:
             exit "$HEAD_STATUS"
           fi
 
-          normalize_diagnostics() {
-            grep -E 'error TS[0-9]+:' "$1" | sed -E 's/^[[:space:]]*//' | sort -u || true
-          }
+          set +e
+          node scripts/typecheck-ratchet.mjs \
+            --candidate "$HEAD_LOG" \
+            --baseline "$BASE_LOG" \
+            --output "$NEW_LOG"
+          RATCHET_STATUS=$?
+          set -e
 
-          comm -23 \
-            <(normalize_diagnostics "$HEAD_LOG") \
-            <(normalize_diagnostics "$BASE_LOG") \
-            > "$NEW_LOG"
-
-          if [ -s "$NEW_LOG" ]; then
-            echo "::error::New TypeScript diagnostics were introduced relative to staging baseline:"
+          if [ "$RATCHET_STATUS" -ne 0 ]; then
+            echo "::error::Typecheck ratchet rejected candidate diagnostics relative to staging baseline:"
             cat "$NEW_LOG"
-            exit 1
+            exit "$RATCHET_STATUS"
           fi
 
           echo "::warning::Typecheck contains only pre-existing staging diagnostics; no new TypeScript diagnostic was introduced."
