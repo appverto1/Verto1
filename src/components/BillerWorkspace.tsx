@@ -5,8 +5,10 @@ import {
   FileSpreadsheet,
   FileText,
   LogOut,
+  Menu,
   ReceiptText,
   RefreshCw,
+  X,
 } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { MonthlyConferenceCenter } from './MonthlyConferenceCenter';
@@ -30,6 +32,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
   const [section, setSection] = useState<BillerSection>('preguides');
   const [payerId, setPayerId] = useState('');
   const [navigationRevision, setNavigationRevision] = useState(0);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const workspaceScopeKey = String(user?.activeWorkspaceId || user?.clinicId || user?.activeAccessContext?.clinicId || '').trim();
 
   const clinicName = String(
@@ -64,7 +67,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
   const conferenceMode = section === 'conference' || section === 'preguides' || section === 'xml';
 
   const renderNavigation = (desktop = false) => (
-    <nav aria-label="Navegação do faturamento" className={desktop ? 'space-y-1.5' : 'flex min-w-max gap-2'}>
+    <nav aria-label="Navegação do faturamento" className="space-y-1.5">
       {(Object.keys(sectionMeta) as BillerSection[]).map((key) => {
         const item = sectionMeta[key];
         const Icon = item.icon;
@@ -73,9 +76,12 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
           <button
             key={key}
             type="button"
-            onClick={() => selectSection(key)}
+            onClick={() => {
+              selectSection(key);
+              if (!desktop) setMobileNavOpen(false);
+            }}
             aria-current={active ? 'page' : undefined}
-            className={`${desktop ? 'w-full justify-start' : ''} flex items-center gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
+            className={`flex w-full items-center justify-start gap-2 rounded-xl px-3.5 py-2.5 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${
               active
                 ? 'bg-violet-600 text-white shadow-sm'
                 : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50'
@@ -89,7 +95,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="h-[100dvh] overflow-y-auto bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1600px] items-center gap-4 px-4 py-3 sm:px-6">
           <LogoVerto size={30} showText={true} />
@@ -98,6 +104,16 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
             <p className="truncate text-sm font-semibold text-slate-900">Faturamento e TISS</p>
             <p className="truncate text-xs text-slate-500">{clinicName}</p>
           </div>
+          <button
+            type="button"
+            aria-expanded={mobileNavOpen}
+            aria-controls="biller-mobile-navigation"
+            onClick={() => setMobileNavOpen((current) => !current)}
+            className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 lg:hidden"
+          >
+            {mobileNavOpen ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
+            <span className="sr-only">{mobileNavOpen ? 'Fechar menu do faturamento' : 'Abrir menu do faturamento'}</span>
+          </button>
           {accessContextCount > 1 && (
             <button
               type="button"
@@ -117,13 +133,17 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-[1600px] px-3 py-4 sm:px-6 sm:py-6">
-        <div className="mb-4 overflow-x-auto pb-1 lg:hidden">
-          {renderNavigation()}
+      {mobileNavOpen && (
+        <div id="biller-mobile-navigation" className="sticky top-[69px] z-30 border-b border-slate-200 bg-white/95 shadow-sm backdrop-blur lg:hidden">
+          <div className="mx-auto max-w-[1600px] px-3 py-3 sm:px-6">
+            {renderNavigation()}
+          </div>
         </div>
+      )}
 
+      <main className="mx-auto max-w-[1600px] px-3 py-4 sm:px-6 sm:py-6">
         <div className="lg:grid lg:grid-cols-[232px_minmax(0,1fr)] lg:items-start lg:gap-6">
-          <aside className="sticky top-[73px] hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:block">
+          <aside className="sticky top-[84px] hidden max-h-[calc(100dvh-100px)] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-sm lg:block">
             {renderNavigation(true)}
           </aside>
 
