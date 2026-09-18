@@ -192,8 +192,19 @@ const isUuidLike = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
 
+const patientPhotoViewUrl = (rawPath: unknown) => {
+  const value = String(rawPath || '').trim();
+  if (!value || value.includes('..')) return '';
+  if (value.startsWith('/api/storage/patient-photos/view?')) return value;
+  const path = value.startsWith('patient-photos/')
+    ? value.slice('patient-photos/'.length)
+    : value;
+  return path ? `/api/storage/patient-photos/view?path=${encodeURIComponent(path)}` : '';
+};
+
 const patientPhotoSource = (patient: any) => String(
-  patient?.profilePicture
+  patientPhotoViewUrl(patient?.profilePicturePath || patient?.profile_picture_path)
+  || patient?.profilePicture
   || patient?.profile_picture
   || patient?.profilePictureUrl
   || patient?.profile_picture_url
@@ -1576,6 +1587,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     'PORTAL'
   ).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL';
   const portalPatientPhotoSource = String(
+    patientPhotoViewUrl(patient?.portalProfilePicturePath || patient?.portal_profile_picture_path) ||
     patient?.portalProfilePicture ||
     patient?.portal_profile_picture ||
     patient?.portalProfilePictureUrl ||
@@ -1584,7 +1596,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   ).trim();
   const resolvedPatientPhotoSource = patientPhotoOverride || (
     patientPhotoPolicy === 'PORTAL'
-      ? (portalPatientPhotoSource || patientPhotoSource(patient))
+      ? portalPatientPhotoSource
       : patientPhotoSource(patient)
   );
   const normalizedPatientPhotoRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').trim().toLowerCase();
@@ -1631,7 +1643,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (updateResult?.success === false) {
         throw new Error(updateResult?.error || updateResult?.message || 'Não foi possível salvar a foto do paciente.');
       }
-      setPatientPhotoOverride(String(upload.url));
+      setPatientPhotoOverride(patientPhotoViewUrl(upload.path) || String(upload.url));
     } catch (error: any) {
       setPatientPhotoError(error?.message || 'Não foi possível salvar a foto do paciente.');
     } finally {
