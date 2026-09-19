@@ -3980,7 +3980,18 @@ function buildClinicProtocolFromApprovedRequest(request: any): any | null {
 }
 
 function mergeApprovedProtocolsIntoClinicState(existingProtocols: any[], approvedProtocols: any[]) {
-  const merged = normalizeProtocolArrayForRoute(existingProtocols);
+  const activeIdentityKeys = new Set(
+    approvedProtocols.flatMap((protocol: any) => buildProtocolIdentityKeys(protocol))
+  );
+  const existing = normalizeProtocolArrayForRoute(existingProtocols);
+  const merged = existing.filter((protocol: any) => {
+    const origin = sanitizeString(protocol?.origin, 80).toLowerCase();
+    const source = sanitizeString(protocol?.source, 80).toLowerCase();
+    const isDerivedApprovedProjection = origin === 'verto_approved_import' || source === 'protocol_import_requests';
+    if (!isDerivedApprovedProjection) return true;
+    return buildProtocolIdentityKeys(protocol).some((key) => activeIdentityKeys.has(key));
+  });
+  const removed = existing.length - merged.length;
   const indexByIdentity = new Map<string, number>();
   const registerProtocol = (protocol: any, index: number) => {
     for (const key of buildProtocolIdentityKeys(protocol)) {
@@ -4010,7 +4021,7 @@ function mergeApprovedProtocolsIntoClinicState(existingProtocols: any[], approve
     added += 1;
   }
 
-  return { protocols: merged, added, refreshed };
+  return { protocols: merged, added, refreshed, removed };
 }
 
 function buildProtocolAccessScopeKeys(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string[] {
@@ -24919,7 +24930,7 @@ async function startServer() {
     const currentProtocols = normalizeProtocolArrayForRoute(currentState?.protocols);
     const merged = mergeApprovedProtocolsIntoClinicState(currentProtocols, approvedProtocols);
     const sourceRequestIds = sourceRequests.map((row) => sanitizeString(row?.id, 120)).filter(Boolean);
-    const synced = merged.added + merged.refreshed;
+    const synced = merged.added + merged.refreshed + merged.removed;
 
     if (synced > 0 || !currentState) {
       const nowIso = new Date().toISOString();
@@ -24972,6 +24983,7 @@ async function startServer() {
           sourceRequestIds,
           added: merged.added,
           refreshed: merged.refreshed,
+          removed: merged.removed,
           skipped: Math.max(0, (approvedRows || []).length - approvedProtocols.length),
           performedAt: new Date().toISOString(),
           performedBy: sanitizeString(params.performedBy, 120) || 'system'
@@ -24984,10 +24996,45 @@ async function startServer() {
       synced,
       added: merged.added,
       refreshed: merged.refreshed,
+      removed: merged.removed,
       skipped: Math.max(0, (approvedRows || []).length - approvedProtocols.length),
       sourceRequestIds,
       protocols: merged.protocols
     };
+  };
+
+  const revokeProtocolGrantForRequest = async (params: {
+    clinicId: string;
+    requestId: string;
+    actorId: string;
+    actorName?: string | null;
+    auditAction: string;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const requestId = sanitizeString(params.requestId, 120);
+    const actorId = sanitizeString(params.actorId, 120);
+    if (![clinicId, requestId, actorId].every(isUuid)) {
+      throw new Error('PROTOCOL_GRANT_REVOKE_SCOPE_INVALID');
+    }
+
+    const { data: grant, error } = await supabase.rpc('revoke_clinic_protocol_grant_v1', {
+      p_actor_id: actorId,
+      p_request_id: requestId
+    });
+    if (error) throw error;
+
+    const protocolSync = await syncApprovedProtocolsToClinicState({
+      clinicId,
+      performedBy: actorId,
+      actorName: sanitizeString(params.actorName, 180) || 'Equipe Verto',
+      auditAction: params.auditAction,
+      forceAudit: true
+    });
+    if (protocolSync?.success === false) {
+      throw new Error(protocolSync.error || 'PROTOCOL_GRANT_PROJECTION_SYNC_FAILED');
+    }
+
+    return { grant, protocolSync };
   };
 
   const summarizePayloadForAudit = (input: any): string => {
@@ -94959,6 +95006,15 @@ async function startServer() {
         diagnostics.authorizedScopeKeys = scopeKeys;
         diagnostics.authorizedProtocolKeys = authorizedProtocolKeys.length;
       }
+      const authorizedProtocolKeySet = new Set(authorizedProtocolKeys);
+      requests = requests.filter((request) => {
+        const status = String(request.status || '').toLowerCase();
+        if (status !== 'approved') return true;
+        const canonicalKey = normalizeApprovedProtocolKey(
+          request.canonicalKey || identifyVertoProtocolCandidate(request.canonicalName).canonicalKey
+        );
+        return authorizedProtocolKeySet.has(canonicalKey);
+      });
       const existingAuthorizedKeys = new Set(
         requests
           .filter((request) => String(request.status || '').toLowerCase() === 'approved')
@@ -95036,6 +95092,86 @@ async function startServer() {
     }
   });
 
+  app.post('/api/protocol-import-requests/:requestId/revoke', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('aba.program.edit'), async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      const user = req.session.user;
+      const actorId = sanitizeString(user?.id || user?.user_id, 120);
+      const clinicId = sanitizeString(currentClinicId(user), 120);
+      if (!isUuid(requestId) || !isUuid(actorId) || !isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Escopo de revogacao invalido.' });
+      }
+
+      const { data: requestRow, error: requestError } = await supabase
+        .from('protocol_import_requests')
+        .select('id,clinic_id,status,approved_canonical_key')
+        .eq('id', requestId)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!requestRow?.id) {
+        return res.status(404).json({ success: false, error: 'Solicitacao de protocolo nao encontrada nesta clinica.' });
+      }
+      if (sanitizeString(requestRow.status, 40).toLowerCase() !== 'approved') {
+        return res.status(409).json({ success: false, error: 'Somente uma liberacao aprovada pode ser revogada.' });
+      }
+
+      const canonicalKey = normalizeApprovedProtocolKey(requestRow.approved_canonical_key);
+      if (!VERTO_PROTOCOL_BY_KEY.has(canonicalKey)) {
+        return res.status(409).json({ success: false, error: 'O grant aprovado nao possui uma chave canonica valida.' });
+      }
+
+      const revokeResult = await revokeProtocolGrantForRequest({
+        clinicId,
+        requestId,
+        actorId,
+        actorName: sanitizeString(user?.name || user?.email || 'Equipe', 180),
+        auditAction: 'sync_revoked_protocols_to_clinic_state'
+      });
+      const accessMap = await loadProtocolAccessMap();
+      const scopeKey = 'clinic:' + clinicId;
+      const protocolKeys = accessMap.get(scopeKey) || [];
+
+      await persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName: sanitizeString(user?.name || user?.email || 'Equipe', 180),
+        title: 'Protocolo removido da biblioteca',
+        content: 'Grant ' + canonicalKey + ' revogado para a clinica atual.',
+        type: 'protocol_access_updated',
+        actionType: 'protocol_grant_revoked',
+        payloadDetails: JSON.stringify({ requestId, canonicalKey, enabled: false, updatedAt: new Date().toISOString() })
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          requestId,
+          canonicalKey,
+          protocolKeys,
+          revoked: true,
+          protocolSync: {
+            synced: revokeResult.protocolSync.synced,
+            added: revokeResult.protocolSync.added,
+            refreshed: revokeResult.protocolSync.refreshed,
+            removed: revokeResult.protocolSync.removed
+          }
+        }
+      });
+    } catch (error: any) {
+      const message = extractSupabaseErrorMessage(error);
+      const status = message.includes('required') || message.includes('denied') ? 403
+        : message.includes('not_found') ? 404
+          : 409;
+      logRouteDbError('/api/protocol-import-requests/:requestId/revoke [POST]', error, {
+        requestId: sanitizeString(req.params.requestId, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120)
+      });
+      return res.status(status).json({ success: false, error: 'Nao foi possivel remover o protocolo da biblioteca.' });
+    }
+  });
+
   app.delete('/api/protocol-import-requests/:requestId', checkAuth, async (req: any, res) => {
     try {
       const requestId = sanitizeString(req.params.requestId, 120);
@@ -95046,17 +95182,40 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Informe a solicitacao de protocolo.' });
       }
 
+      let lookup = supabase
+        .from('protocol_import_requests')
+        .select('id,status')
+        .eq('id', requestId);
+      if (isUuid(clinicId)) {
+        lookup = lookup.eq('clinic_id', clinicId);
+      } else if (userId) {
+        lookup = lookup.eq('requester_user_id', userId);
+      } else {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const { data: requestRow, error: lookupError } = await lookup.limit(1).maybeSingle();
+      if (lookupError) throw lookupError;
+      if (!requestRow?.id) {
+        return res.status(404).json({ success: false, error: 'Solicitacao de protocolo nao encontrada.' });
+      }
+      if (sanitizeString(requestRow.status, 40).toLowerCase() === 'approved') {
+        return res.status(409).json({
+          success: false,
+          error: 'A revogacao de protocolo aprovado exige o fluxo canonico de grants.'
+        });
+      }
+
       let query = supabase
         .from('protocol_import_requests')
         .delete()
-        .eq('id', requestId);
+        .eq('id', requestId)
+        .neq('status', 'approved');
 
       if (isUuid(clinicId)) {
         query = query.eq('clinic_id', clinicId);
-      } else if (userId) {
-        query = query.eq('requester_user_id', userId);
       } else {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+        query = query.eq('requester_user_id', userId);
       }
 
       const { error } = await query;
@@ -95065,7 +95224,7 @@ async function startServer() {
       void persistActivityLog({
         type: 'protocol_import_request_deleted',
         title: 'Solicitacao de protocolo excluida',
-        details: `Solicitacao de protocolo ${requestId} excluida pelo solicitante.`,
+        details: 'Solicitacao de protocolo ' + requestId + ' excluida pelo solicitante.',
         userId,
         clinicId,
         payload: { requestId }
@@ -95235,18 +95394,63 @@ async function startServer() {
       if (!scopeKey || !requestId || !VERTO_PROTOCOL_BY_KEY.has(protocolKey)) {
         return res.status(400).json({ success: false, error: 'Informe a clinica, a solicitacao e o protocolo Verto.' });
       }
-      if (!enabled) {
-        return res.status(409).json({ success: false, error: 'A revogacao de protocolo exige o fluxo canonico de grants.' });
-      }
-
       const { data: requestRow, error: requestError } = await supabase
         .from('protocol_import_requests')
-        .select('clinic_id')
+        .select('clinic_id,status,approved_canonical_key')
         .eq('id', requestId)
         .maybeSingle();
       const requestClinicId = sanitizeString((requestRow as any)?.clinic_id, 120);
       if (requestError || !isUuid(requestClinicId) || scopeKey !== `clinic:${requestClinicId}`) {
         return res.status(409).json({ success: false, error: 'A solicitacao nao pertence ao acervo informado.' });
+      }
+
+      if (!enabled) {
+        const requestStatus = sanitizeString((requestRow as any)?.status, 40).toLowerCase();
+        const approvedProtocolKey = normalizeApprovedProtocolKey((requestRow as any)?.approved_canonical_key);
+        if (requestStatus !== 'approved' || !VERTO_PROTOCOL_BY_KEY.has(approvedProtocolKey) || approvedProtocolKey !== protocolKey) {
+          return res.status(409).json({ success: false, error: 'O grant informado nao corresponde a uma liberacao aprovada desta clinica.' });
+        }
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        if (!isUuid(actorId)) {
+          return res.status(401).json({ success: false, error: 'Identidade autenticada obrigatoria para revogar o acervo.' });
+        }
+
+        const revokeResult = await revokeProtocolGrantForRequest({
+          clinicId: requestClinicId,
+          requestId,
+          actorId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+          auditAction: 'sync_revoked_protocols_to_clinic_state'
+        });
+        const accessMap = await loadProtocolAccessMap();
+        const protocolKeys = accessMap.get(scopeKey) || [];
+        const changedProtocol = VERTO_PROTOCOL_BY_KEY.get(approvedProtocolKey);
+
+        await persistActivityLog({
+          userId: actorId,
+          clinicId: requestClinicId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+          title: 'Acervo de protocolos atualizado',
+          content: 'Grant ' + approvedProtocolKey + ' revogado para ' + scopeKey + '.',
+          type: 'protocol_access_updated',
+          actionType: 'protocol_access_updated',
+          payloadDetails: JSON.stringify({ scopeKey, protocolKeys, changedProtocolKey: approvedProtocolKey, requestId, enabled: false, updatedAt: new Date().toISOString() })
+        });
+
+        return res.json({ success: true, data: {
+          scopeKey,
+          protocolKeys,
+          requestStatus: 'approved',
+          canonicalKey: changedProtocol?.key || approvedProtocolKey,
+          canonicalName: changedProtocol?.name || approvedProtocolKey,
+          revoked: true,
+          protocolSync: {
+            synced: revokeResult.protocolSync.synced,
+            added: revokeResult.protocolSync.added,
+            refreshed: revokeResult.protocolSync.refreshed,
+            removed: revokeResult.protocolSync.removed
+          }
+        } });
       }
 
       const authHeader = sanitizeString(req.headers?.authorization, 4096);

@@ -336,6 +336,7 @@ export const ProtocolManagementSystem = ({
   const [selectedScreenshotFile, setSelectedScreenshotFile] = useState<File | null>(null);
   const [importStatusMessage, setImportStatusMessage] = useState("");
   const [importedProtocolStatuses, setImportedProtocolStatuses] = useState<any[]>([]);
+  const [importedProtocolStatusesLoaded, setImportedProtocolStatusesLoaded] = useState(false);
 
   useEffect(() => {
     const syncTheme = () => setIsDarkTheme(document.body.classList.contains('theme-dark'));
@@ -457,9 +458,13 @@ export const ProtocolManagementSystem = ({
         if (!response.ok || !data.success) return;
         if (!cancelled) {
           setImportedProtocolStatuses(Array.isArray(data.data) ? data.data : []);
+          setImportedProtocolStatusesLoaded(true);
         }
       } catch {
-        if (!cancelled) setImportedProtocolStatuses([]);
+        if (!cancelled) {
+          setImportedProtocolStatuses([]);
+          setImportedProtocolStatusesLoaded(true);
+        }
       }
     };
 
@@ -583,52 +588,63 @@ export const ProtocolManagementSystem = ({
     if (!requestId) return;
     const status = String(proto?.requestStatus || 'pending').toLowerCase();
     const message = status === 'approved'
-      ? `Excluir "${proto.title}" dos protocolos liberados? Isso remove esta liberacao da sua lista.`
-      : `Excluir a solicitacao de "${proto.title}"? Ela sera removida da analise e nao aparecera mais na biblioteca.`;
+      ? 'Remover "' + proto.title + '" dos protocolos liberados? O historico sera preservado.'
+      : 'Excluir a solicitacao de "' + proto.title + '"? Ela sera removida da analise e nao aparecera mais na biblioteca.';
     if (!confirm(message)) return;
 
-    setImportedProtocolStatuses((current) => current.filter((item: any) => String(item.id) !== String(requestId)));
-    if (String(requestId).startsWith('local-')) return;
+    if (String(requestId).startsWith('local-')) {
+      setImportedProtocolStatuses((current) => current.filter((item: any) => String(item.id) !== String(requestId)));
+      return;
+    }
 
     try {
-      const response = await fetch(`/api/protocol-import-requests/${encodeURIComponent(requestId)}`, {
-        method: 'DELETE',
+      const isApproved = status === 'approved';
+      const endpoint = isApproved
+        ? '/api/protocol-import-requests/' + encodeURIComponent(requestId) + '/revoke'
+        : '/api/protocol-import-requests/' + encodeURIComponent(requestId);
+      const response = await fetch(endpoint, {
+        method: isApproved ? 'POST' : 'DELETE',
         credentials: 'include'
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Nao foi possivel excluir a solicitacao.');
+        throw new Error(data.error || (isApproved ? 'Nao foi possivel remover o protocolo liberado.' : 'Nao foi possivel excluir a solicitacao.'));
       }
+      setImportedProtocolStatuses((current) => current.filter((item: any) => String(item.id) !== String(requestId)));
     } catch (error: any) {
-      alert(error?.message || 'Nao foi possivel excluir a solicitacao.');
-      setImportedProtocolStatuses((current) => {
-        if (current.some((item: any) => String(item.id) === String(requestId))) return current;
-        return [{
-          id: requestId,
-          protocolName: proto.title,
-          status: proto.requestStatus || 'pending',
-          canonicalName: proto.domain || 'Em validacao',
-          confidence: 0,
-          applicableAgeGroup: proto.ageGroup || 'all',
-          ageMin: proto.ageMin ?? null,
-          ageMax: proto.ageMax ?? null,
-          createdAt: proto.requestCreatedAt || new Date().toISOString(),
-          reviewedAt: proto.requestReviewedAt || null
-        }, ...current];
-      });
+      alert(error?.message || 'Nao foi possivel atualizar a biblioteca de protocolos.');
     }
   };
 
-  const libraryProtocols = protocols.map((protocol: any) => {
-    if (!protocol?.isApprovedImport) return protocol;
-    const { requestStatus, importRequestId, requestCreatedAt, requestReviewedAt, ...libraryProtocol } = protocol;
-    return {
-      ...libraryProtocol,
-      isApprovedImport: false,
-      isManualProtocol: false,
-      origin: protocol.origin || 'verto_approved_import',
-    };
-  });
+  const activeApprovedProtocolKeys = new Set(
+    importedProtocolStatuses
+      .filter((item: any) => String(item.status || '').toLowerCase() === 'approved')
+      .map((item: any) => {
+        const licensed: any = getLicensedCanonicalProtocolForRequest(item);
+        return String(licensed?.canonicalKey || item?.canonicalKey || '').trim();
+      })
+      .filter(Boolean)
+  );
+  const libraryProtocols = protocols
+    .filter((protocol: any) => {
+      if (!importedProtocolStatusesLoaded) return true;
+      const origin = String(protocol?.origin || '').toLowerCase();
+      const source = String(protocol?.source || '').toLowerCase();
+      const isDerivedApprovedProjection = origin === 'verto_approved_import' || source === 'protocol_import_requests';
+      if (!isDerivedApprovedProjection) return true;
+      const canonicalKey = String(protocol?.canonicalKey || protocol?.id || '').trim();
+      return Boolean(canonicalKey && activeApprovedProtocolKeys.has(canonicalKey));
+    })
+    .map((protocol: any) => {
+      if (!protocol?.isApprovedImport) return protocol;
+      const { requestStatus, importRequestId, requestCreatedAt, requestReviewedAt, ...libraryProtocol } = protocol;
+      return {
+        ...libraryProtocol,
+        isApprovedImport: false,
+        isManualProtocol: false,
+        origin: protocol.origin || 'verto_approved_import',
+      };
+    });
 
   const filteredProtocols = libraryProtocols.filter((p: any) => { 
     const matchAge = filterAge ? (p.ageGroup === filterAge || p.ageGroup === 'all') : true; 

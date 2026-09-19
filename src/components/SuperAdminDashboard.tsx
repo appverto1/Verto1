@@ -643,11 +643,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     };
 
     setSavingProtocolAccess(saveKey);
-    setProtocolRequests((current) => current.map((item) => (
-      item.accessScopeKey === scopeKey
-        ? { ...item, authorizedProtocolKeys: nextKeys(item.authorizedProtocolKeys) }
-        : item
-    )));
+    if (enabled) {
+      setProtocolRequests((current) => current.map((item) => (
+        item.accessScopeKey === scopeKey
+          ? { ...item, authorizedProtocolKeys: nextKeys(item.authorizedProtocolKeys) }
+          : item
+      )));
+    }
 
     try {
       const supabase = await getSupabase();
