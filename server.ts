@@ -210,6 +210,10 @@ import {
   normalizePlanningFocusType
 } from './src/utils/abaPlanningEngine';
 import { decodeClinicalTextEntities } from './src/utils/clinicalText';
+import {
+  summarizeClinicalOutcomeSeries,
+  type ClinicalOutcomeObservation,
+} from './src/utils/clinicalOutcomeAnalytics';
 import { sanitizeTherapeuticTemplateContent } from './src/utils/therapeuticTemplatePrivacy';
 import {
   aggregateAbaClinicalLinePoints,
@@ -86345,6 +86349,563 @@ async function startServer() {
       || ((message.includes('read_clinical_outcomes_converged_v3') || message.includes('read_clinical_plan_outcomes_v3'))
         && (message.includes('does not exist') || message.includes('schema cache') || message.includes('could not find')));
   };
+
+
+  type SharedChartDescriptor = {
+    schemaVersion: 1;
+    family: 'PLAN_PTS' | 'ABA_V3';
+    domain: string;
+    metricSignature: string;
+    axis: 'date' | 'session';
+    comparePrevious: boolean;
+    seriesKeys?: string[];
+    seriesRefs?: Array<{
+      targetId: string;
+      measurementModelVersion: string;
+      phaseAssignmentId: string;
+      metricKey: string;
+      seriesKey: string;
+    }>;
+  };
+
+  const normalizeSharedChartDescriptor = (value: any): SharedChartDescriptor | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Number(value.schemaVersion) !== 1) return null;
+    const family = sanitizeString(value.family, 32).toUpperCase();
+    const domain = sanitizeString(value.domain, 40).toLowerCase();
+    const metricSignature = sanitizeString(value.metricSignature, 320);
+    const axis = sanitizeString(value.axis, 20).toLowerCase();
+    if (!metricSignature || (axis !== 'date' && axis !== 'session')) return null;
+
+    if (family === 'PLAN_PTS') {
+      if (!['skills', 'behaviors', 'mastery', 'maintenance'].includes(domain)) return null;
+      const seriesKeys = Array.from(new Set(
+        (Array.isArray(value.seriesKeys) ? value.seriesKeys : [])
+          .map((item: any) => sanitizeString(item, 720))
+          .filter(Boolean)
+      )).slice(0, 4) as string[];
+      if (seriesKeys.length < 1 || seriesKeys.length > 3) return null;
+      const normalized: SharedChartDescriptor = {
+        schemaVersion: 1,
+        family: 'PLAN_PTS',
+        domain,
+        metricSignature,
+        seriesKeys,
+        axis: axis as 'date' | 'session',
+        comparePrevious: value.comparePrevious === true,
+      };
+      return JSON.stringify(normalized).length <= 7800 ? normalized : null;
+    }
+
+    if (family === 'ABA_V3') {
+      if (!['skills', 'behaviors', 'maintenance'].includes(domain)) return null;
+      const refs = (Array.isArray(value.seriesRefs) ? value.seriesRefs : []).map((item: any) => ({
+        targetId: sanitizeString(item?.targetId, 180),
+        measurementModelVersion: sanitizeString(item?.measurementModelVersion, 80),
+        phaseAssignmentId: sanitizeString(item?.phaseAssignmentId, 180),
+        metricKey: sanitizeString(item?.metricKey, 160),
+        seriesKey: sanitizeString(item?.seriesKey, 320),
+      }));
+      if (
+        refs.length < 1
+        || refs.length > 12
+        || refs.some((item: any) => !item.targetId || !item.measurementModelVersion || !item.phaseAssignmentId || !item.metricKey || !item.seriesKey)
+      ) return null;
+      const deduped = Array.from(new Map<string, any>(refs.map((item: any) => [
+        [item.targetId, item.measurementModelVersion, item.phaseAssignmentId, item.metricKey, item.seriesKey].join('::'),
+        item,
+      ])).values()) as any[];
+      if (deduped.length !== refs.length) return null;
+      const normalized: SharedChartDescriptor = {
+        schemaVersion: 1,
+        family: 'ABA_V3',
+        domain,
+        metricSignature,
+        seriesRefs: deduped,
+        axis: axis as 'date' | 'session',
+        comparePrevious: value.comparePrevious === true,
+      };
+      return JSON.stringify(normalized).length <= 7800 ? normalized : null;
+    }
+    return null;
+  };
+
+  const sharedChartKey = (descriptor: SharedChartDescriptor) => (
+    descriptor.family + ':' + crypto.createHash('sha256').update(JSON.stringify(descriptor)).digest('hex').slice(0, 40)
+  );
+
+  const projectSharedClinicalSeries = (series: any) => ({
+    key: sanitizeString(series?.key, 720),
+    metricKey: sanitizeString(series?.metricKey, 160),
+    metricLabel: sanitizeTextField(series?.metricLabel, 220),
+    itemLabel: sanitizeTextField(series?.itemLabel, 220),
+    unit: sanitizeString(series?.unit, 80),
+    direction: sanitizeString(series?.direction, 80),
+    points: (Array.isArray(series?.observations) ? series.observations : []).slice(-180).map((row: any) => ({
+      observedAt: sanitizeString(row?.observedAt, 80),
+      value: row?.value === null || row?.value === undefined || !Number.isFinite(Number(row.value)) ? null : Number(row.value),
+      valueText: sanitizeTextField(row?.valueText, 180) || null,
+      numerator: row?.numerator === null || row?.numerator === undefined || !Number.isFinite(Number(row.numerator)) ? null : Number(row.numerator),
+      denominator: row?.denominator === null || row?.denominator === undefined || !Number.isFinite(Number(row.denominator)) ? null : Number(row.denominator),
+      missingReason: sanitizeString(row?.missingReason, 120) || null,
+    })),
+  });
+
+  const loadSharedPlanChartProjection = async (params: {
+    clinicId: string;
+    patientId: string;
+    descriptor: SharedChartDescriptor;
+    actorId?: string | null;
+    actorRole?: string | null;
+  }) => {
+    const { clinicId, patientId, descriptor } = params;
+    const requestedKeys = Array.isArray(descriptor.seriesKeys) ? descriptor.seriesKeys : [];
+    const requestedPlanIds = Array.from(new Set(
+      requestedKeys.map((key) => sanitizeString(String(key).split('::')[0], 120)).filter(isUuid)
+    ));
+    if (requestedKeys.length < 1 || requestedPlanIds.length < 1 || requestedPlanIds.length > 3) return null;
+
+    const dateTo = new Date();
+    const dateFrom = new Date(dateTo.getTime() - 730 * 86_400_000);
+    const dateFromIso = dateFrom.toISOString();
+    const dateToIso = dateTo.toISOString();
+    const [planResult, linkResult, programResult, definitionResult, observationResult, ptsContextResult] = await Promise.all([
+      supabase
+        .from('patient_therapeutic_plans')
+        .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('id', requestedPlanIds)
+        .limit(3),
+      params.actorId
+        ? supabase
+            .from('patient_professional_links')
+            .select('patient_id,professional_id,status,permissions')
+            .eq('organization_id', clinicId)
+            .eq('patient_id', patientId)
+            .eq('status', 'active')
+            .limit(20)
+        : Promise.resolve({ data: [], error: null }),
+      supabase
+        .from('aba_programs')
+        .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,domain_id,domain_name,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('therapeutic_plan_id', requestedPlanIds)
+        .limit(300),
+      supabase
+        .from('clinical_measure_definitions')
+        .select('id,plan_id,goal_id,program_id,specialty,name,metric_key,metric_type,unit,direction,target_type,target_value,target_min,target_max,instrument_id,instrument_version,definition_version,minimum_data_points,aggregation_method,recency_window_days,active')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('plan_id', requestedPlanIds)
+        .eq('active', true)
+        .limit(500),
+      supabase
+        .from('clinical_observations')
+        .select('id,plan_id,plan_version,goal_id,program_id,session_id,professional_id,specialty,measure_definition_id,metric_key,metric_label,metric_type,unit,direction,value,numerator,denominator,observed_at,context,source,instrument_id,instrument_version,definition_version,missing_reason,metadata')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .in('plan_id', requestedPlanIds)
+        .gte('observed_at', dateFromIso)
+        .lte('observed_at', dateToIso)
+        .order('observed_at', { ascending: true })
+        .limit(2000),
+      supabase
+        .from('patient_pts_collection_contexts_v1')
+        .select('source_session_id,plan_id,specialty_plan_id,version_number,context_opened_at')
+        .eq('organization_id', clinicId)
+        .eq('patient_id', patientId)
+        .gte('context_opened_at', dateFromIso)
+        .lte('context_opened_at', dateToIso)
+        .limit(2000),
+    ]);
+
+    const criticalError = [planResult.error, linkResult.error, programResult.error].find(Boolean);
+    if (criticalError) throw criticalError;
+    if (definitionResult.error && !isMissingRelationError(definitionResult.error) && !hasMissingFinancialSchema(definitionResult.error)) throw definitionResult.error;
+    if (observationResult.error && !isMissingRelationError(observationResult.error) && !hasMissingFinancialSchema(observationResult.error)) throw observationResult.error;
+    if (ptsContextResult.error && !isMissingRelationError(ptsContextResult.error) && !hasMissingFinancialSchema(ptsContextResult.error)) throw ptsContextResult.error;
+
+    const allPlans = planResult.data || [];
+    const allowedPlans = params.actorId
+      ? filterTherapeuticPlanScopesForActor(allPlans, {
+          actorId: sanitizeString(params.actorId, 120),
+          actorRole: sanitizeString(params.actorRole, 40).toLowerCase(),
+          professionalLinks: linkResult.data || [],
+        })
+      : allPlans;
+    const allowedPlanIds = new Set(allowedPlans.map((plan: any) => String(plan.id)));
+    if (requestedPlanIds.some((planId) => !allowedPlanIds.has(planId))) return null;
+
+    const programs = (programResult.data || []).filter((program: any) => allowedPlanIds.has(String(program.therapeutic_plan_id)));
+    const programIds = programs.map((program: any) => sanitizeString(program.id, 180)).filter(Boolean);
+    const targetResult = programIds.length
+      ? await supabase
+          .from('aba_targets')
+          .select('id,program_id,name,description,target_type,measurement_type,phase,clinical_status,mastery_criteria')
+          .eq('organization_id', clinicId)
+          .eq('patient_id', patientId)
+          .in('program_id', programIds)
+          .limit(1000)
+      : { data: [], error: null };
+    if (targetResult.error) throw targetResult.error;
+
+    const planMap = new Map<string, any>(allowedPlans.map((plan: any) => [String(plan.id), plan]));
+    const programById = new Map<string, any>(programs.map((program: any) => [String(program.id), program]));
+    const targetById = new Map<string, any>((targetResult.data || []).map((target: any) => [String(target.id), target]));
+    const objectivePlanMap = new Map<string, Set<string>>();
+    for (const program of programs) {
+      const objectiveId = sanitizeString(program?.therapeutic_objective_id, 120);
+      const planId = sanitizeString(program?.therapeutic_plan_id, 120);
+      if (!isUuid(objectiveId) || !allowedPlanIds.has(planId)) continue;
+      const current = objectivePlanMap.get(objectiveId) || new Set<string>();
+      current.add(planId);
+      objectivePlanMap.set(objectiveId, current);
+    }
+
+    const ptsVersionBySessionPlan = new Map<string, number>();
+    for (const row of ptsContextResult.error ? [] : ptsContextResult.data || []) {
+      const sessionId = sanitizeString((row as any)?.source_session_id, 180);
+      const planId = sanitizeString((row as any)?.plan_id, 120);
+      const specialtyPlanId = sanitizeString((row as any)?.specialty_plan_id, 120);
+      const version = Number((row as any)?.version_number || 0);
+      if (sessionId && version > 0) {
+        if (planId) ptsVersionBySessionPlan.set([sessionId, planId].join('::'), version);
+        if (specialtyPlanId) ptsVersionBySessionPlan.set([sessionId, specialtyPlanId].join('::'), version);
+      }
+    }
+
+    let canonicalRows: any[] = [];
+    const v3Result = await supabase.rpc('read_clinical_outcomes_converged_v3', {
+      p_organization_id: clinicId,
+      p_patient_id: patientId,
+      p_date_from: dateFromIso.slice(0, 10),
+      p_date_to: dateToIso.slice(0, 10),
+      p_plan_ids: requestedPlanIds,
+      p_therapeutic_objective_ids: Array.from(objectivePlanMap.keys()),
+      p_program_ids: programIds,
+      p_limit: 5000,
+    });
+    if (v3Result.error) {
+      if (!isClinicalPlanV3ReaderUnavailable(v3Result.error)) throw v3Result.error;
+    } else {
+      canonicalRows = normalizeClinicalPlanOutcomesV3ForDashboard(
+        v3Result.data || [],
+        planMap,
+        objectivePlanMap,
+        targetById,
+        programById,
+        ptsVersionBySessionPlan
+      );
+    }
+
+    const definitionById = new Map<string, any>((definitionResult.error ? [] : definitionResult.data || [])
+      .filter((definition: any) => allowedPlanIds.has(String(definition.plan_id)))
+      .map((definition: any) => [String(definition.id), definition]));
+    const legacyRows: ClinicalOutcomeObservation[] = (observationResult.error ? [] : observationResult.data || [])
+      .filter((row: any) => allowedPlanIds.has(String(row.plan_id)))
+      .map((row: any) => {
+        const definition: any = definitionById.get(String(row.measure_definition_id || '')) || {};
+        return {
+          id: String(row.id),
+          planId: row.plan_id,
+          planVersion: row.plan_version,
+          goalId: row.goal_id,
+          programId: row.program_id,
+          sessionId: row.session_id,
+          professionalId: row.professional_id,
+          specialty: row.specialty || definition.specialty || null,
+          metricKey: row.metric_key || definition.metric_key,
+          metricLabel: row.metric_label || definition.name || row.metric_key,
+          metricType: row.metric_type || definition.metric_type || 'numeric',
+          unit: row.unit ?? definition.unit ?? '',
+          direction: row.direction || definition.direction || 'higher_is_better',
+          value: row.value === null || row.value === undefined ? null : Number(row.value),
+          numerator: row.numerator === null || row.numerator === undefined ? null : Number(row.numerator),
+          denominator: row.denominator === null || row.denominator === undefined ? null : Number(row.denominator),
+          observedAt: row.observed_at,
+          context: row.context || 'clinic',
+          source: row.source || 'professional_observation',
+          instrumentId: row.instrument_id || definition.instrument_id || null,
+          instrumentVersion: row.instrument_version || definition.instrument_version || null,
+          definitionVersion: Number(row.definition_version || definition.definition_version || 1),
+          missingReason: row.missing_reason || null,
+          metadata: {},
+          minimumDataPoints: Number(definition.minimum_data_points || 4),
+          recencyWindowDays: Number(definition.recency_window_days || 30),
+        } as ClinicalOutcomeObservation;
+      });
+
+    const mergedRows = mergeClinicalOutcomeRowsV3First(canonicalRows, legacyRows).rows;
+    const seriesByKey = new Map<string, any>(
+      summarizeClinicalOutcomeSeries(mergedRows).map((series: any) => [series.key, series])
+    );
+    const selected = requestedKeys.map((key) => seriesByKey.get(key)).filter(Boolean);
+    if (selected.length !== requestedKeys.length) return null;
+    return {
+      family: 'PLAN_PTS',
+      domain: descriptor.domain,
+      metricSignature: descriptor.metricSignature,
+      axis: descriptor.axis,
+      comparePrevious: descriptor.comparePrevious,
+      series: selected.map(projectSharedClinicalSeries),
+    };
+  };
+
+  const loadSharedAbaV3ChartProjection = async (
+    clinicId: string,
+    patientId: string,
+    descriptor: SharedChartDescriptor
+  ) => {
+    const refs = Array.isArray(descriptor.seriesRefs) ? descriptor.seriesRefs : [];
+    const targetIds = Array.from(new Set(refs.map((ref) => ref.targetId).filter(Boolean)));
+    if (targetIds.length < 1 || targetIds.length > 3) return null;
+    const dateTo = new Date();
+    const dateFrom = new Date(dateTo.getTime() - 365 * 86_400_000);
+    const { data, error } = await supabase.rpc('get_aba_chart_series_bundle_v3', {
+      p_organization_id: clinicId,
+      p_patient_id: patientId,
+      p_target_ids: targetIds,
+      p_from: dateFrom.toISOString(),
+      p_to: dateTo.toISOString(),
+      p_limit: 180,
+    });
+    if (error) throw error;
+    const segments = Array.isArray(data?.segments) ? data.segments : [];
+    const segmentByRef = new Map<string, any>(segments.map((segment: any) => [[
+      sanitizeString(segment?.target_id, 180),
+      sanitizeString(segment?.measurement_model_version, 80),
+      sanitizeString(segment?.phase_assignment_id, 180),
+      sanitizeString(segment?.metric_key, 160),
+      sanitizeString(segment?.series_key, 320),
+    ].join('::'), segment]));
+    const selected = refs.map((ref) => segmentByRef.get([
+      ref.targetId,
+      ref.measurementModelVersion,
+      ref.phaseAssignmentId,
+      ref.metricKey,
+      ref.seriesKey,
+    ].join('::'))).filter(Boolean);
+    if (selected.length !== refs.length) return null;
+    return {
+      family: 'ABA_V3',
+      domain: descriptor.domain,
+      metricSignature: descriptor.metricSignature,
+      axis: descriptor.axis,
+      comparePrevious: descriptor.comparePrevious,
+      series: selected.map((segment: any) => ({
+        targetId: sanitizeString(segment?.target_id, 180),
+        targetLabel: sanitizeTextField(segment?.target_name, 220),
+        metricKey: sanitizeString(segment?.metric_key, 160),
+        metricLabel: sanitizeTextField(segment?.metric_label, 220),
+        seriesKey: sanitizeString(segment?.series_key, 320),
+        seriesLabel: sanitizeTextField(segment?.series_label, 220),
+        unit: sanitizeString(segment?.unit, 80),
+        points: (Array.isArray(segment?.points) ? segment.points : []).slice(-180).map((point: any) => ({
+          occurredAt: sanitizeString(point?.occurred_at, 80),
+          value: point?.value === null || point?.value === undefined || !Number.isFinite(Number(point.value)) ? null : Number(point.value),
+          numerator: point?.numerator === null || point?.numerator === undefined || !Number.isFinite(Number(point.numerator)) ? null : Number(point.numerator),
+          denominator: point?.denominator === null || point?.denominator === undefined || !Number.isFinite(Number(point.denominator)) ? null : Number(point.denominator),
+          requiresReview: point?.requires_review === true,
+        })),
+      })),
+    };
+  };
+
+  const resolveSharedChartProjection = async (params: {
+    clinicId: string;
+    patientId: string;
+    descriptor: SharedChartDescriptor;
+    actorId?: string | null;
+    actorRole?: string | null;
+  }) => {
+    if (params.descriptor.family === 'PLAN_PTS') return loadSharedPlanChartProjection(params);
+    if (params.descriptor.family === 'ABA_V3') {
+      return loadSharedAbaV3ChartProjection(params.clinicId, params.patientId, params.descriptor);
+    }
+    return null;
+  };
+
+  const readSharedChartSelection = async (clinicId: string, patientId: string) => {
+    const { data, error } = await supabase
+      .from('patient_shared_chart_selections')
+      .select('chart_family,chart_key,reference_version,chart_reference,updated_at')
+      .eq('clinic_id', clinicId)
+      .eq('patient_id', patientId)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  };
+
+  app.get(
+    '/api/patients/:patientId/shared-chart-selection',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        if (!isUuid(patientId) || !isUuid(clinicId)) {
+          return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
+        }
+        const row = await readSharedChartSelection(clinicId, patientId);
+        const descriptor = normalizeSharedChartDescriptor(row?.chart_reference);
+        return res.json({
+          success: true,
+          data: row && descriptor ? {
+            chartKey: sanitizeString(row.chart_key, 256),
+            referenceVersion: Number(row.reference_version || 1),
+            updatedAt: sanitizeString(row.updated_at, 80) || null,
+            descriptor,
+          } : null,
+        });
+      } catch (error: any) {
+        return sendRouteDbError(res, '/api/patients/:patientId/shared-chart-selection [GET]', error);
+      }
+    }
+  );
+
+  app.put(
+    '/api/patients/:patientId/shared-chart-selection',
+    portalActionLimiter,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 12 * 1024, 'Seleção do gráfico do paciente')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        if (![patientId, clinicId, actorId].every(isUuid)) {
+          return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
+        }
+        const descriptor = normalizeSharedChartDescriptor(req.body?.descriptor);
+        if (!descriptor) return res.status(400).json({ success: false, error: 'SHARED_CHART_DESCRIPTOR_INVALID' });
+
+        const capabilities = req.authorizationContext?.capabilities;
+        if (descriptor.family === 'PLAN_PTS' && !capabilities?.has?.('reports.clinical.indicators')) {
+          return res.status(403).json({ success: false, error: 'SHARED_CHART_SOURCE_ACCESS_DENIED' });
+        }
+        if (descriptor.family === 'ABA_V3' && !capabilities?.has?.('aba.analytics.view')) {
+          return res.status(403).json({ success: false, error: 'SHARED_CHART_SOURCE_ACCESS_DENIED' });
+        }
+
+        const projection = await resolveSharedChartProjection({
+          clinicId,
+          patientId,
+          descriptor,
+          actorId,
+          actorRole: req.effectiveClinicRole,
+        });
+        if (!projection) {
+          return res.status(422).json({ success: false, error: 'SHARED_CHART_REFERENCE_NOT_RESOLVABLE' });
+        }
+
+        const chartKey = sharedChartKey(descriptor);
+        const { data, error } = await supabase.rpc('set_patient_shared_chart_selection_v2', {
+          p_actor_id: actorId,
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+          p_chart_family: descriptor.family,
+          p_chart_key: chartKey,
+          p_reference_version: descriptor.schemaVersion,
+          p_chart_reference: descriptor,
+        });
+        if (error) throw error;
+        return res.json({
+          success: true,
+          data: {
+            chartKey,
+            referenceVersion: Number(data?.reference_version || descriptor.schemaVersion),
+            descriptor,
+          },
+        });
+      } catch (error: any) {
+        return sendRouteDbError(res, '/api/patients/:patientId/shared-chart-selection [PUT]', error);
+      }
+    }
+  );
+
+  app.delete(
+    '/api/patients/:patientId/shared-chart-selection',
+    portalActionLimiter,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        if (![patientId, clinicId, actorId].every(isUuid)) {
+          return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
+        }
+        const { data, error } = await supabase.rpc('clear_patient_shared_chart_selection_v2', {
+          p_actor_id: actorId,
+          p_clinic_id: clinicId,
+          p_patient_id: patientId,
+        });
+        if (error) throw error;
+        return res.json({ success: true, cleared: data === true });
+      } catch (error: any) {
+        return sendRouteDbError(res, '/api/patients/:patientId/shared-chart-selection [DELETE]', error);
+      }
+    }
+  );
+
+  app.get(
+    '/api/portal/patients/:patientId/shared-chart',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireRoles('patient'),
+    requirePatientPortalModule('clinical_core'),
+    async (req: any, res) => {
+      try {
+        const context = req.portalContext || await resolvePatientPortalContext(req.session.user);
+        const requestedPatientId = sanitizeString(req.params.patientId, 120);
+        const allowedPatientIds = new Set(
+          (Array.isArray(context?.patientIds) ? context.patientIds : [])
+            .map((id: any) => sanitizeString(id, 120))
+            .filter(Boolean)
+        );
+        const patientId = allowedPatientIds.has(requestedPatientId)
+          ? requestedPatientId
+          : sanitizeString(context?.resolvedPatientId, 120);
+        const clinicId = sanitizeString(context?.clinicId, 120);
+        if (!isUuid(patientId) || !isUuid(clinicId) || !allowedPatientIds.has(patientId)) {
+          return res.status(403).json({ success: false, error: 'PORTAL_PATIENT_SCOPE_DENIED' });
+        }
+
+        const row = await readSharedChartSelection(clinicId, patientId);
+        if (!row) return res.json({ success: true, data: null });
+        const descriptor = normalizeSharedChartDescriptor(row.chart_reference);
+        if (!descriptor || descriptor.family !== sanitizeString(row.chart_family, 32).toUpperCase()) {
+          return res.json({ success: true, data: null });
+        }
+        const projection = await resolveSharedChartProjection({ clinicId, patientId, descriptor });
+        if (!projection) return res.json({ success: true, data: null });
+        return res.json({
+          success: true,
+          data: {
+            chartKey: sanitizeString(row.chart_key, 256),
+            referenceVersion: Number(row.reference_version || descriptor.schemaVersion),
+            ...projection,
+          },
+        });
+      } catch (error: any) {
+        return sendRouteDbError(res, '/api/portal/patients/:patientId/shared-chart [GET]', error, {
+          requestId: requestIdForLogs(req),
+          patientId: sanitizeString(req.params.patientId, 120),
+        });
+      }
+    }
+  );
 
   app.get('/api/patients/:patientId/clinical-outcomes-dashboard', noStoreDynamicResponse, checkAuth, requireClinicCapability('reports.clinical.indicators'), checkPatientAccess, async (req: any, res) => {
     try {
