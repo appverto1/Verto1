@@ -667,45 +667,79 @@ export const PatientEvolutionTimelinePanel = ({ patientId, dark = false, canCrea
                     const comments = Array.isArray(grant.comments) ? grant.comments : [];
                     return (
                       <div key={grant.id} className={`rounded-xl border p-3 ${dark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-100 bg-slate-50'}`}>
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                          <div className="flex min-w-0 items-start gap-2">
-                            <UserRound size={14} className="mt-0.5 shrink-0 text-[#7a32fc]" />
-                            <div className="min-w-0">
-                              <p className={`truncate text-xs font-semibold ${textClass}`}>{grant.recipientName || grant.recipientEmail}{grant.recipientSpecialty ? ` · ${grant.recipientSpecialty}` : ''}</p>
-                              {grant.recipientName && <p className={`mt-0.5 truncate text-[10px] ${subtleClass}`}>{grant.recipientEmail}</p>}
-                              <div className={`mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] ${subtleClass}`}>
-                                <span>{viewed ? `✓✓ Visualizado ${formatSharedAt(grant.lastViewedAt || grant.firstViewedAt)}` : grant.lastInvitedAt ? `✓ Enviado ${formatSharedAt(grant.lastInvitedAt)}` : 'Acesso criado'}</span>
-                                {!viewed && <span>Ainda não visualizado</span>}
-                                <span className="inline-flex items-center gap-1"><MessageCircle size={10} /> {Number(grant.commentCount || comments.length || 0)} comentário(s)</span>
-                                <span>{grant.canComment ? 'Pode comentar' : 'Somente visualizar'}</span>
-                              </div>
-                            </div>
+                        <div className="flex min-w-0 items-start gap-2">
+                          <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${dark ? 'bg-violet-500/10 text-violet-200' : 'bg-violet-100 text-violet-700'}`}>
+                            <UserRound size={14} aria-hidden="true" />
                           </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            <button type="button" onClick={() => void copyAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}:copy`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                              {busyItemId === `${item.id}:${grant.id}:copy` ? <Loader2 size={11} className="animate-spin" /> : <Clipboard size={11} />} {copiedKey === grant.id ? 'Copiado' : 'Copiar acesso'}
-                            </button>
-                            <button type="button" onClick={() => void resendAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                              {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:resend` ? <CheckCircle2 size={11} /> : <Mail size={11} />} {busyItemId === `${item.id}:${grant.id}` ? 'Reenviando...' : actionSuccessKey === `${item.id}:${grant.id}:resend` ? 'Enviado' : 'Reenviar'}
-                            </button>
-                            <button type="button" onClick={() => void toggleCommentPermission(item, grant)} disabled={!grant.careNetworkContactId || busyItemId === `${item.id}:${grant.id}:comment`} className={`inline-flex min-h-8 items-center gap-1 rounded-lg border px-2 text-[10px] font-medium ${grant.canComment ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50' : dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'}`}>
-                              {busyItemId === `${item.id}:${grant.id}:comment` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:comment` ? <CheckCircle2 size={11} /> : <MessageCircle size={11} />} {busyItemId === `${item.id}:${grant.id}:comment` ? 'Atualizando...' : actionSuccessKey === `${item.id}:${grant.id}:comment` ? 'Atualizado' : grant.canComment ? 'Desabilitar comentário' : 'Habilitar comentário'}
-                            </button>
-                            <button type="button" onClick={() => void revokeAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className="inline-flex min-h-8 items-center gap-1 rounded-lg border border-rose-200 px-2 text-[10px] font-medium text-rose-600 hover:bg-rose-50">
-                              {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />} Revogar
-                            </button>
+                          <div className="min-w-0">
+                            <p className={`break-words text-xs font-semibold ${textClass}`}>{grant.recipientName || grant.recipientEmail}</p>
+                            {(grant.recipientSpecialty || grant.recipientName) && (
+                              <p className={`mt-0.5 break-words text-[10px] leading-4 ${subtleClass}`}>
+                                {grant.recipientSpecialty || null}
+                                {grant.recipientSpecialty && grant.recipientName ? ' · ' : ''}
+                                {grant.recipientName ? grant.recipientEmail : null}
+                              </p>
+                            )}
                           </div>
                         </div>
+
+                        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                          <span className={`inline-flex min-h-7 items-center gap-1 rounded-full px-2 text-[10px] font-medium ${viewed ? dark ? 'bg-emerald-500/10 text-emerald-200' : 'bg-emerald-50 text-emerald-700' : dark ? 'bg-amber-500/10 text-amber-200' : 'bg-amber-50 text-amber-700'}`}>
+                            {viewed ? <CheckCircle2 size={11} aria-hidden="true" /> : <History size={11} aria-hidden="true" />}
+                            {viewed ? 'Visualizado' : 'Ainda não visualizado'}
+                          </span>
+                          <span className={`inline-flex min-h-7 items-center gap-1 rounded-full px-2 text-[10px] font-medium ${comments.length > 0 ? dark ? 'bg-violet-500/15 text-violet-100' : 'bg-violet-100 text-violet-800' : dark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                            <MessageCircle size={11} aria-hidden="true" />
+                            {comments.length > 0 ? `${Number(grant.commentCount || comments.length)} comentário(s)` : 'Sem comentários'}
+                          </span>
+                          <span className={`inline-flex min-h-7 items-center rounded-full px-2 text-[10px] font-medium ${grant.canComment ? dark ? 'bg-sky-500/10 text-sky-200' : 'bg-sky-50 text-sky-700' : dark ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                            {grant.canComment ? 'Pode comentar' : 'Somente visualizar'}
+                          </span>
+                        </div>
+
                         {comments.length > 0 && (
-                          <div className={`mt-3 space-y-2 border-t pt-3 ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
-                            {comments.map((comment) => (
-                              <div key={comment.id} className={`rounded-lg px-3 py-2 ${dark ? 'bg-slate-900/60' : 'bg-white'}`}>
-                                <p className={`whitespace-pre-wrap text-[11px] leading-5 ${dark ? 'text-slate-300' : 'text-slate-600'}`}>{comment.body}</p>
-                                {comment.createdAt && <p className={`mt-1 text-[9px] ${subtleClass}`}>{formatSharedAt(comment.createdAt)}</p>}
-                              </div>
-                            ))}
+                          <div className={`mt-3 overflow-hidden rounded-xl border ${dark ? 'border-violet-500/30 bg-violet-500/10' : 'border-violet-200 bg-violet-50/80'}`}>
+                            <div className={`flex items-center justify-between gap-3 border-b px-3 py-2 ${dark ? 'border-violet-500/20' : 'border-violet-100'}`}>
+                              <p className={`inline-flex items-center gap-1.5 text-[11px] font-semibold ${dark ? 'text-violet-100' : 'text-violet-900'}`}>
+                                <MessageCircle size={13} aria-hidden="true" />
+                                Comentário do parceiro
+                              </p>
+                              <span className={`shrink-0 text-[10px] font-medium ${dark ? 'text-violet-200' : 'text-violet-700'}`}>
+                                {Number(grant.commentCount || comments.length)} comentário(s)
+                              </span>
+                            </div>
+                            <div className={`divide-y ${dark ? 'divide-violet-500/20' : 'divide-violet-100'}`}>
+                              {comments.map((comment) => (
+                                <div key={comment.id} className="px-3 py-2.5">
+                                  <p className={`whitespace-pre-wrap break-words text-[11px] leading-5 ${dark ? 'text-slate-200' : 'text-slate-700'}`}>{comment.body}</p>
+                                  {comment.createdAt && <p className={`mt-1 text-[9px] ${subtleClass}`}>{formatSharedAt(comment.createdAt)}</p>}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
+
+                        <div className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t pt-3 text-[10px] ${dark ? 'border-slate-700 text-slate-400' : 'border-slate-200 text-slate-500'}`}>
+                          <span>{grant.lastInvitedAt ? `Enviado ${formatSharedAt(grant.lastInvitedAt)}` : 'Acesso criado'}</span>
+                          {viewed && <span>Última visualização {formatSharedAt(grant.lastViewedAt || grant.firstViewedAt)}</span>}
+                        </div>
+
+                        <div className={`mt-3 flex flex-col gap-2 border-t pt-3 sm:flex-row sm:items-center sm:justify-between ${dark ? 'border-slate-700' : 'border-slate-200'}`}>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button type="button" onClick={() => void copyAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}:copy`} className={`inline-flex min-h-11 items-center gap-1 rounded-lg border px-2.5 text-[10px] font-medium transition ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500`}>
+                              {busyItemId === `${item.id}:${grant.id}:copy` ? <Loader2 size={11} className="animate-spin" /> : <Clipboard size={11} />} {copiedKey === grant.id ? 'Copiado' : 'Copiar acesso'}
+                            </button>
+                            <button type="button" onClick={() => void resendAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className={`inline-flex min-h-11 items-center gap-1 rounded-lg border px-2.5 text-[10px] font-medium transition ${dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500`}>
+                              {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:resend` ? <CheckCircle2 size={11} /> : <Mail size={11} />} {busyItemId === `${item.id}:${grant.id}` ? 'Reenviando...' : actionSuccessKey === `${item.id}:${grant.id}:resend` ? 'Enviado' : 'Reenviar'}
+                            </button>
+                            <button type="button" onClick={() => void toggleCommentPermission(item, grant)} disabled={!grant.careNetworkContactId || busyItemId === `${item.id}:${grant.id}:comment`} className={`inline-flex min-h-11 items-center gap-1 rounded-lg border px-2.5 text-[10px] font-medium transition ${grant.canComment ? dark ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15' : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50' : dark ? 'border-slate-600 text-slate-300 hover:bg-slate-700' : 'border-slate-200 text-slate-600 hover:bg-white'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500`}>
+                              {busyItemId === `${item.id}:${grant.id}:comment` ? <Loader2 size={11} className="animate-spin" /> : actionSuccessKey === `${item.id}:${grant.id}:comment` ? <CheckCircle2 size={11} /> : <MessageCircle size={11} />} {busyItemId === `${item.id}:${grant.id}:comment` ? 'Atualizando...' : actionSuccessKey === `${item.id}:${grant.id}:comment` ? 'Atualizado' : grant.canComment ? 'Desabilitar comentário' : 'Habilitar comentário'}
+                            </button>
+                          </div>
+                          <button type="button" onClick={() => void revokeAccess(item, grant)} disabled={busyItemId === `${item.id}:${grant.id}`} className={`inline-flex min-h-11 shrink-0 items-center justify-center gap-1 rounded-lg border px-2.5 text-[10px] font-medium transition ${dark ? 'border-rose-500/30 text-rose-300 hover:bg-rose-500/10' : 'border-rose-200 text-rose-600 hover:bg-rose-50'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500`}>
+                            {busyItemId === `${item.id}:${grant.id}` ? <Loader2 size={11} className="animate-spin" /> : <XCircle size={11} />} Revogar
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
