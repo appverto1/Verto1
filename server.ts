@@ -55838,16 +55838,30 @@ async function startServer() {
         })
         .eq('id', primaryPatientId)
         .eq('clinic_id', clinicId)
-        .is('portal_profile_picture_path', null);
+        .is('portal_profile_picture_path', null)
+        .select('portal_profile_picture,portal_profile_picture_path')
+        .maybeSingle();
       if (repairResult.error) {
         console.warn('[PatientPortalContext] legacy portal photo repair skipped:', {
           patientId: primaryPatientId,
           clinicId,
           message: sanitizeString(repairResult.error?.message || String(repairResult.error), 240),
         });
+      } else if (repairResult.data?.portal_profile_picture_path) {
+        row.portal_profile_picture = repairResult.data.portal_profile_picture;
+        row.portal_profile_picture_path = repairResult.data.portal_profile_picture_path;
       } else {
-        row.portal_profile_picture = legacyPortalPhotoRepair.portalProfilePicture;
-        row.portal_profile_picture_path = legacyPortalPhotoRepair.portalProfilePicturePath;
+        const canonicalPortalPhoto = await supabase
+          .from('patients')
+          .select('portal_profile_picture,portal_profile_picture_path')
+          .eq('id', primaryPatientId)
+          .eq('clinic_id', clinicId)
+          .limit(1)
+          .maybeSingle();
+        if (!canonicalPortalPhoto.error && canonicalPortalPhoto.data?.portal_profile_picture_path) {
+          row.portal_profile_picture = canonicalPortalPhoto.data.portal_profile_picture;
+          row.portal_profile_picture_path = canonicalPortalPhoto.data.portal_profile_picture_path;
+        }
       }
     }
 

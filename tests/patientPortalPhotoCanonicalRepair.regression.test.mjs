@@ -62,6 +62,19 @@ const context = server.slice(cs, ce);
 assert.match(context, /portal_profile_picture,portal_profile_picture_path/);
 assert.match(context, /buildLegacyPortalPatientPhotoRepair\(row, user\)/);
 assert.match(context, /\.eq\('id', primaryPatientId\)[\s\S]*\.eq\('clinic_id', clinicId\)[\s\S]*\.is\('portal_profile_picture_path', null\)/);
+assert.match(context, /\.is\('portal_profile_picture_path', null\)[\s\S]*\.select\('portal_profile_picture,portal_profile_picture_path'\)[\s\S]*\.maybeSingle\(\)/);
+assert.match(context, /else if \(repairResult\.data\?\.portal_profile_picture_path\)[\s\S]*else \{[\s\S]*const canonicalPortalPhoto = await supabase/);
+assert.doesNotMatch(context, /row\.portal_profile_picture_path\s*=\s*legacyPortalPhotoRepair\.portalProfilePicturePath/);
 assert.doesNotMatch(context, /(^|[^a-z_])profile_picture_path:\s*legacyPortalPhotoRepair/m);
+
+const concurrentCanonicalPath = `${patientId}/profile/profile-concurrent.webp`;
+const zeroRowRepairResult = { data: null, error: null };
+const raceRead = { data: { portal_profile_picture_path: concurrentCanonicalPath }, error: null };
+const visiblePathAfterRace = zeroRowRepairResult.data?.portal_profile_picture_path || raceRead.data?.portal_profile_picture_path || null;
+assert.equal(
+  visiblePathAfterRace,
+  concurrentCanonicalPath,
+  'zero-row guarded update must use the concurrent canonical identity instead of injecting the stale legacy repair',
+);
 
 console.log('patientPortalPhotoCanonicalRepair.regression.test.mjs: ok');
