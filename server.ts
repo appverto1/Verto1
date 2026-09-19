@@ -1588,7 +1588,6 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
     path.startsWith('/api/profile/') ||
     path.startsWith('/api/stripe/') ||
     path.startsWith('/api/billing/') ||
-    path.startsWith('/api/storage/') ||
     path.startsWith('/api/config')
   );
 }
