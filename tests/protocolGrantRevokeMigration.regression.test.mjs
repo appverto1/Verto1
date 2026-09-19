@@ -6,6 +6,7 @@ const sql = readFileSync(migrationPath, 'utf8');
 
 assert.match(sql, /create or replace function public\.revoke_clinic_protocol_grant_v1\(/, 'canonical revoke RPC must exist');
 assert.match(sql, /security definer/, 'revoke RPC must be atomic and security-definer bounded');
+assert.match(sql, /set search_path = ''/, 'security-definer RPC must pin an empty search path');
 assert.match(sql, /from public\.protocol_import_requests[\s\S]*where id = p_request_id[\s\S]*for update;/, 'request must be resolved and locked server-side');
 assert.match(sql, /v_request\.status <> 'approved'/, 'pending deletion must remain semantically separate');
 assert.match(sql, /public\.is_platform_admin\(p_actor_id\)/, 'platform-admin authority must be explicit');
