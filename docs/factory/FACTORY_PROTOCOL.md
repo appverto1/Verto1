@@ -82,6 +82,24 @@ Estas regras são aditivas e compatíveis com `factory_protocol_version: 1`; nã
 - **Checkpoint/recovery:** persista checkpoints incrementais após unidades seguras de trabalho e antes de operações longas quando aplicável. Kill abrupto é recuperado por claim expirado + Issue + refs/SHAs/artefatos já persistidos; não presuma que um runtime morto conseguiu escrever um checkpoint final.
 - **Conflito de papel:** se um handoff `PENDING` ou `SCHEDULED` contiver texto livre que atribua responsabilidade incompatível com o `current_agent` canônico, não execute o papel contraditório. Registre a divergência e roteie ao 00 para reconciliação.
 
+### ZERO-WAIT DISPATCH CANÔNICO
+
+A GitHub Issue também é a autoridade da entrega do handoff. Todo novo handoff `PENDING` deve registrar, quando aplicável: `dispatch_required`, `dispatch_target_agent`, `dispatch_target_lane`, `dispatch_target_automation_id`, `dispatch_attempted_at` e `dispatch_result` (`PENDING | REQUESTED | DEGRADED`). Esses campos são somente telemetria/continuidade; nunca substituem `current_agent`, `active_handoff`, claim, locks, dependências ou gates.
+
+Mapa físico canônico de dispatch: 00 → lane 00 → `6aa82e50adf88191a4e09ffc91e0169b`; 01 → lane 01 → `6aa82ec555ac8191b28f66ae50edf69c`; 02 → lane 02 → `6aae582d30fc81919d5c4ee28f934bfb`; 03 e 10–14 → lane Q → `6aa8333456c081918e084379ff9d2378`; 04–09 → lane W → `6aae5b6a1530819195fac2824ab0c602`.
+
+`PENDING` significa pronto para claim, não espera por polling. Depois de persistir e revalidar um próximo handoff executável, o executor anterior deve tentar imediatamente o wake autorizado da lane alvo. `REQUESTED` significa apenas wake solicitado; não significa entrega, claim, início, PASS ou conclusão. Não há promessa de exactly-once.
+
+Se o próximo papel estiver na mesma lane física, continuidade imediata não reserva a Issue anterior: antes do novo claim a lane deve reler a fila completa e reaplicar `founder_preempt`, não-preempção, prioridade e fairness. Um trabalho recém-elegível pode vencer conforme as regras canônicas.
+
+A telemetria pós-dispatch é CAS-guarded pela identidade do mesmo `active_handoff` e pelo `current_agent` esperado. Se o alvo já claimou, avançou o handoff ou alterou estado de modo incompatível, o executor anterior não deve fazer whole-body write stale, rebaixar claim nem sobrescrever metadata canônica. Perder telemetria é aceitável; autoridade nunca é revertida. `REQUESTED`/`DEGRADED` só podem avançar monotonicamente para o mesmo handoff ainda vigente.
+
+`HANDOFF_NOT_DISPATCHED` é a inconsistência objetiva em que um handoff executável permanece com dispatch obrigatório e `dispatch_result=PENDING` depois de o executor anterior ter concluído. Qualquer lane/watchdog que a detectar deve tentar o dispatch imediatamente, sem assumir o papel alvo. Para handoffs legados sem metadata de dispatch, trate `PENDING` executável como `dispatch_required=true` implicitamente e derive lane/automation somente do `current_agent` canônico vigente após reread, nunca de texto livre histórico.
+
+Falha da primeira tentativa de dispatch deve marcar `DEGRADED` somente se o mesmo handoff continuar vigente, tentar outro wake autorizado quando disponível e acionar 00 quando possível. O handoff continua `PENDING` e válido; não vira `WAITING_EXTERNAL` sem dependência humana real. Morte após persist e antes do wake resulta em `HANDOFF_NOT_DISPATCHED`; morte após wake e antes da telemetria pode causar wake duplicado no recovery, o que é seguro por reread + claim. Polling permanece watchdog/recovery para wake perdido, duplicado ou silenciosamente descartado.
+
+`FACTORY_RUNTIME_DRIFT` é divergência material entre este contrato versionado e o mapeamento/prompts físicos 00/01/02/W/Q. Deve retornar ao 00 para reconciliação; não autoriza renumerar Issues, pular gates ou usar runtime divergente como segunda autoridade.
+
 ## BLOCKERS PERSISTENTES E LOCK ÓRFÃO
 
 Blocker interno gera trabalho de desbloqueio, não espera passiva. Quando um blocker persistente for necessário, registre no mínimo:
