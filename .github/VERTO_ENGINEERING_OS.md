@@ -24,6 +24,8 @@ Projetos físicos do ChatGPT:
 Papéis lógicos canônicos:
 00 Orchestrator; 01 Auditor/Red Team; 02 Product & UX; 03 Reviewer/QA; 04 Prontuário; 05 Integration; 06 Financeiro; 07 Agenda; 08 ABA; 09 Supabase/Data; 10 CI/Regression; 11 PR Engineer; 12 Merge Gatekeeper; 13 Rollout/Deploy; 14 Recovery/Incident.
 
+Essa tabela é a autoridade única de identidade papel→lane. Runtime cloud, automações e prompts físicos divergentes devem ser reconciliados a ela antes de `FACTORY_RUNTIME_VERIFIED`; divergência de runtime não autoriza renumerar Issues ou contratos versionados.
+
 Cada execução de W ou Q assume EXATAMENTE UM papel por handoff, determinado por `current_agent`. A mesma rodada pode encadear outro papel da mesma lane somente depois de fechar formalmente o handoff anterior e carregar o novo contrato de papel.
 
 ## Debate estratégico
@@ -70,6 +72,7 @@ Regras obrigatórias:
 7. Mudanças aparentemente distantes também ficam bloqueadas porque podem alterar contratos, tipos, APIs, cache, permissões ou serviços compartilhados sem conflito textual.
 8. Exceção somente por ordem explícita do fundador com `founder_preempt: true`. Nesse caso, pausar formalmente a integração, registrar a intervenção, atualizar `staging`, renovar `lock_base_sha` e revalidar a integração antes de continuar.
 9. Smoke humano não mantém o lock: após `STAGING_VERIFIED`, liberar o lock e permitir que a fábrica retome outras escritas enquanto a Issue segue para `SMOKE_READY`.
+10. Lock owner aparentemente órfão nunca é liberado por suposição, por claim expirado ou por falha de wake. O 00 deve revalidar Issue dona, estado, lease/claim, refs/SHAs e gate de liberação e então decidir recuperação ou manutenção do lock.
 
 ## Fila, prioridade e não-preempção
 Campos canônicos de fila:
@@ -89,11 +92,15 @@ Dentro da mesma classe, vence o menor `priority_rank`; empate: `last_transition_
 
 Regra não-preemptiva: uma Issue já iniciada deve ser terminada antes de começar Issue `NEW`, mesmo que a nova Issue tenha prioridade nominal maior. Somente ordem explícita do fundador pode definir `founder_preempt=true` e interromper a ordem normal. `SMOKE_READY` não entra na fila automática.
 
+### Fairness / bounded starvation
+`founder_preempt=true`, claims válidos, locks e dependências continuam soberanos. Fora desses casos, cada Projeto físico mantém um budget de ultrapassagem do `oldest-eligible` não-founder de classe/prioridade inferior. Depois de 4 conclusões consecutivas que selecionaram trabalho à frente desse `oldest-eligible`, a próxima seleção não-founder deve servi-lo. O budget zera quando o `oldest-eligible` é servido, deixa de ser executável ou surge `founder_preempt=true`. A regra não preempta handoff já `CLAIMED` e não torna Issue bloqueada elegível.
+
 ## Claims
 Todo handoff executável usa ciclo `PENDING -> CLAIMED -> DONE | FAILED`.
 
 Antes de claim, releia a Issue e valide `state`, `active_handoff`, `writer`, `write_lock`, branch/base SHA, preservações e `attempt`.
 
+- `PENDING` não expira por idade, polling perdido, duração da fila ou troca de runtime. O que expira é o claim/lease.
 - Claim válido: não tocar.
 - Claim expirado: registrar `STALE_CLAIM_RECOVERED` antes de recuperar.
 - TTL padrão: 55 minutos.
@@ -102,6 +109,31 @@ Antes de claim, releia a Issue e valide `state`, `active_handoff`, `writer`, `wr
 - Nunca repetir handoff `DONE`.
 
 Uma execução atrasada que encontre `active_handoff`, `current_agent` ou estado já alterado deve encerrar sem repetir trabalho.
+
+## Continuidade imediata / dispatch advisory
+A Issue continua sendo a única autoridade operacional. Dispatch/wake é aceleração best-effort, nunca segunda fonte de verdade e nunca requisito para a validade do handoff.
+
+Sequência vinculante ao rotear trabalho:
+1. persistir primeiro na Issue o próximo `active_handoff`, `current_agent`, `handoff_status: PENDING`, claim limpo e demais campos de transição;
+2. reler/revalidar o estado persistido;
+3. somente então emitir wake advisory para o Projeto/lane alvo quando houver mecanismo disponível;
+4. o alvo acordado relê a fila completa, aplica prioridade/fairness/locks/dependências e tenta claim; payload de wake não concede autoridade;
+5. polling permanece ativo como watchdog/retomada para wake perdido, duplicado ou indisponível.
+
+Wake duplicado é seguro por desenho. `dispatch_key`, receipt e status podem existir para deduplicação/telemetria, mas não autorizam execução, não substituem reread+claim e não precisam ser exactly-once.
+
+Antes de concluir um handoff, registrar resultado ou criar o próximo, o executor deve fazer CAS lógico: reler e confirmar que `active_handoff`, `current_agent` e o claim vigente ainda são exatamente os esperados. Drift torna o executor stale; ele encerra sem side effect operacional concorrente.
+
+Gates longos devem persistir checkpoints incrementais ao fim de cada unidade segura e antes de operações demoradas quando possível. Kill abrupto não é tratado como falha funcional: claim expirado + Issue + refs/SHAs/artefatos persistidos permitem recuperação idempotente pelo watchdog. Não existe garantia de que um runtime morto consiga escrever um último checkpoint.
+
+Se o runtime estiver chegando ao limite e o gate lógico ainda não terminou, isso não é `FAILED`: persistir checkpoint e criar continuação PENDING para o mesmo papel quando ainda houver oportunidade de escrita segura. Nunca deixar claim órfão voluntariamente.
+
+## Blockers internos, ciclos e eventual completion
+Blocker interno/engenharia deve ser resolvido ou roteado pela fábrica; não vira espera humana só por limitação de uma ferramenta. Antes de declarar incapacidade interna, avaliar e registrar pelo menos 10 alternativas realmente viáveis e distintas quando esse requisito for aplicável ao blocker; alternativas inseguras, duplicadas ou tecnicamente inaplicáveis não contam e não precisam ser executadas.
+
+Dependências `blocked_on` devem ser verificadas contra ciclos. Ciclo de blockers retorna ao 00 para definir owner único de desbloqueio e ordem de resolução; não criar espera circular. Lock owner órfão também retorna ao 00 para revalidação objetiva, nunca para liberação presumida.
+
+`WAITING_EXTERNAL` só cabe quando a dependência realmente exige ação humana, credencial ou decisão externa que nenhum agente possa executar. `STOP_LOSS_REQUIRED` mantém a definição estrita abaixo.
 
 ## Rotas comuns
 - UI/UX: `00 -> 01/02 quando necessário -> writer -> 10 -> 03 -> 11 -> 12 -> 13`.
@@ -129,12 +161,13 @@ Cada Projeto físico pode ter uma tarefa recorrente. O polling é watchdog/retom
 1. buscar Issues abertas da fábrica;
 2. agir apenas nas Issues cujo `current_agent` pertença ao Projeto e cujo `handoff_status` seja `PENDING`;
 3. ignorar `SMOKE_READY` e respeitar dependências/locks;
-4. ordenar a fila pelas regras canônicas de prioridade e não-preempção;
+4. ordenar a fila pelas regras canônicas de prioridade, não-preempção e fairness;
 5. validar `state`, `active_handoff` e claim antes de qualquer ação;
 6. se nenhuma Issue for elegível, encerrar imediatamente;
 7. ler histórico e contrato completos;
 8. executar somente o papel ativo;
-9. registrar resultado e atualizar `current_agent`, `state`, `active_handoff`, `attempt` quando aplicável e `next_gate`.
+9. registrar resultado e atualizar `current_agent`, `state`, `active_handoff`, `attempt` quando aplicável e `next_gate`;
+10. depois de persistir o próximo handoff, usar dispatch advisory quando disponível e continuar queue-drain sem esperar o próximo polling.
 
 Mapeamento de polling:
 - Projeto 00: somente 00.
@@ -154,10 +187,10 @@ W e Q podem continuar na mesma Issue enquanto o próximo `current_agent` permane
 7. um novo claim seja feito;
 8. não exista dependência externa, necessidade de 00/01/02, conflito de writer/lock ou outro gate fora da lane.
 
-Ao trocar de papel, o runtime continua sendo W ou Q, mas apenas um papel lógico pode estar ativo por handoff. Se o próximo agente sair da lane, deixar o handoff `PENDING` e encerrar essa Issue.
+Ao trocar de papel, o runtime continua sendo W ou Q, mas apenas um papel lógico pode estar ativo por handoff. Se o próximo agente sair da lane, deixar o handoff `PENDING`, emitir wake advisory quando disponível e então drenar outra Issue elegível; não aguardar polling como requisito de continuidade.
 
 ### Queue-drain entre Issues
-Depois que uma Issue sair da lane, o mesmo Projeto pode selecionar a próxima Issue elegível e continuar na mesma execução, sempre sequencialmente. Nunca iniciar a próxima antes de fechar formalmente a atual. Não iniciar nova Issue sem margem razoável para concluir o gate. Smoke humano de uma Issue não bloqueia outras Issues independentes.
+Depois que uma Issue sair da lane, o mesmo Projeto deve selecionar a próxima Issue elegível e continuar na mesma execução, sempre sequencialmente, enquanto houver capacidade de execução segura. Nunca iniciar a próxima antes de fechar formalmente a atual. Se o runtime não comportar concluir o próximo gate, preserve a Issue PENDING; tarefas não expiram e o watchdog retoma. Smoke humano de uma Issue não bloqueia outras Issues independentes.
 
 ## Work Packages / Correction Blocks
 Uma Issue pode representar um bloco de itens compatíveis para reduzir overhead sem virar escopo ilimitado.

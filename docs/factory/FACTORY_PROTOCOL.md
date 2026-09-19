@@ -69,3 +69,31 @@ Se o runtime não conseguir escrever com segurança após esgotar a hierarquia c
 - transporte alternativo recomendado.
 
 Limitação de transporte não é falha funcional e não deve reabrir arquitetura/UX sem evidência funcional nova.
+
+## CONTINUIDADE, CLAIMS E WATCHDOG
+
+Estas regras são aditivas e compatíveis com `factory_protocol_version: 1`; não exigem mass-edit de Issues abertas nem tornam inválido um handoff PENDING pela sua idade.
+
+- **NO TASK EXPIRY:** handoff `PENDING` não expira. Claim/lease pode expirar; a tarefa permanece válida e volta a ser reavaliada quando claim, lock, `not_before`, dependência ou outra condição de execução mudar.
+- **Seleção e fairness:** `founder_preempt=true` permanece absoluto e trabalho com claim válido permanece não-preemptivo. Entre tarefas não-founder, preserve `REWORK -> CONTINUATION -> NEW`, menor `priority_rank` e desempate por `last_transition_at`; porém, após 4 conclusões consecutivas que ultrapassem o `oldest-eligible` executável de classe/prioridade inferior, a próxima seleção não-founder deve servir esse `oldest-eligible`. O budget zera quando ele for servido, deixar de ser executável ou surgir `founder_preempt`.
+- **Persist-first dispatch:** conclua o handoff atual e persista exatamente um próximo handoff `PENDING` antes de qualquer wake. Revalide o estado persistido; só então envie wake advisory. A lane alvo deve reler a fila completa e fazer claim normalmente. Wake, receipt e `dispatch_status` são telemetria, nunca autoridade nem prova de conclusão.
+- **Dispatch idempotente:** quando persistido para observabilidade, `dispatch_key` deve identificar de forma estável `repo + issue + active_handoff`. Duplicidade de wake é tolerada; exclusividade vem de reread + claim, não de entrega exactly-once.
+- **CAS lógico:** imediatamente antes de concluir, falhar ou rotear um handoff, revalide `active_handoff`, `current_agent` e o claim esperado. Executor stale encerra sem produzir side effect ou sobrescrever metadata canônica.
+- **Checkpoint/recovery:** persista checkpoints incrementais após unidades seguras de trabalho e antes de operações longas quando aplicável. Kill abrupto é recuperado por claim expirado + Issue + refs/SHAs/artefatos já persistidos; não presuma que um runtime morto conseguiu escrever um checkpoint final.
+- **Conflito de papel:** se um handoff `PENDING` ou `SCHEDULED` contiver texto livre que atribua responsabilidade incompatível com o `current_agent` canônico, não execute o papel contraditório. Registre a divergência e roteie ao 00 para reconciliação.
+
+## BLOCKERS PERSISTENTES E LOCK ÓRFÃO
+
+Blocker interno gera trabalho de desbloqueio, não espera passiva. Quando um blocker persistente for necessário, registre no mínimo:
+- `blocked_on`: dependência/condição objetiva;
+- `unblock_owner`: único papel/Issue responsável por produzir a liberação;
+- `unblock_action`: ação verificável que satisfaz a condição;
+- `last_unblock_attempt_at`: timestamp da última tentativa real de desbloqueio.
+
+Antes de declarar incapacidade interna sem solução, avalie alternativas distintas, autorizadas e tecnicamente viáveis; quando o contrato exigir 10+, alternativas inaplicáveis, inseguras ou meramente duplicadas não contam. Assim que uma alternativa resolver com segurança, use-a sem completar checklist artificial.
+
+Ciclos em `blocked_on` devem retornar ao 00 para definir um único owner e quebrar o ciclo; nenhuma lane deve manter duas Issues esperando uma pela outra indefinidamente.
+
+Use `ORPHAN_LOCK_SUSPECTED` quando um lock persistido aparentar não ter owner operacional válido, por exemplo: owner Issue inexistente/fechada/terminal incompatível, owner/handoff canônico ausente ou metadata do lock incompatível com o estado persistido. Esse estado é suspeita, não autorização de liberação. Somente o 00 revalida owner, escopo, base SHA e release gate e decide recuperar/reatribuir/liberar o lock. Falha de wake, claim expirado ou silêncio do runtime isoladamente nunca liberam lock.
+
+Pollings existentes permanecem ativos como watchdog/retomada. Polling perdido ou wake indisponível não invalida a tarefa; a próxima reavaliação retoma a fila a partir da Issue como fonte de verdade.
