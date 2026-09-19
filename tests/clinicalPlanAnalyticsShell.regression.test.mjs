@@ -71,4 +71,17 @@ for (const metric of [
   assert.ok(analytics.includes(metric), `rótulo canônico ausente para ${metric}`);
 }
 
+const shareDescriptorType = shell.match(/export type ClinicalPlanShareDescriptor = \{([\s\S]*?)\n\};/)?.[1] || '';
+assert.match(shareDescriptorType, /schemaVersion: 1;/, 'descriptor compartilhável deve ser versionado');
+assert.match(shareDescriptorType, /family: 'PLAN_PTS';/, 'descriptor deve identificar explicitamente a família Planos\/PTS');
+assert.match(shareDescriptorType, /seriesKeys: string\[\];/, 'descriptor deve persistir apenas chaves canônicas das séries selecionadas');
+assert.match(shareDescriptorType, /metricSignature: string;/, 'descriptor deve preservar a assinatura semântica da métrica');
+assert.match(shareDescriptorType, /axis: AnalyticsAxis;/, 'descriptor deve preservar a configuração visual do eixo');
+assert.match(shareDescriptorType, /comparePrevious: boolean;/, 'descriptor deve preservar a comparação visual sem copiar dados clínicos');
+assert.doesNotMatch(shareDescriptorType, /observations|validObservations|points|values/i, 'descriptor não pode copiar pontos ou séries clínicas');
+assert.match(shell, /onShareDescriptorChange\?: \(descriptor: ClinicalPlanShareDescriptor \| null\) => void;/, 'shell deve expor callback técnico opcional ao writer de integração');
+assert.match(shell, /activeDomain === 'overview'[\s\S]*?activeDomain === 'changes'[\s\S]*?return null;/, 'views agregadas sem referência estável não podem produzir descriptor compartilhável');
+assert.match(shell, /seriesKeys: selectedSeries\.map\(\(item\) => item\.key\)/, 'descriptor deve derivar as séries das chaves canônicas já renderizadas');
+assert.match(shell, /onShareDescriptorChange\?\.\(shareDescriptor\)/, 'callback deve receber o descriptor derivado sem introduzir persistência');
+
 console.log('clinicalPlanAnalyticsShell.regression.test.mjs: ok');

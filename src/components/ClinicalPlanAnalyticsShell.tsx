@@ -26,6 +26,16 @@ import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance' | 'changes';
 export type AnalyticsAxis = 'date' | 'session';
 
+export type ClinicalPlanShareDescriptor = {
+  schemaVersion: 1;
+  family: 'PLAN_PTS';
+  domain: 'skills' | 'behaviors' | 'mastery' | 'maintenance';
+  metricSignature: string;
+  seriesKeys: string[];
+  axis: AnalyticsAxis;
+  comparePrevious: boolean;
+};
+
 type ClinicalPlanAnalyticsShellProps = {
   scopeLabel: string;
   series: ClinicalOutcomeSeriesSummary[];
@@ -35,6 +45,7 @@ type ClinicalPlanAnalyticsShellProps = {
   onAxisChange: (axis: AnalyticsAxis) => void;
   isDark?: boolean;
   onOpenSessionReport?: (sessionId: string) => void;
+  onShareDescriptorChange?: (descriptor: ClinicalPlanShareDescriptor | null) => void;
   programs?: any[];
 };
 
@@ -820,7 +831,7 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, programs = [] }: ClinicalPlanAnalyticsShellProps) {
+export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, onShareDescriptorChange, programs = [] }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
@@ -878,6 +889,28 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
   const selectedSeries = useMemo(() => activeMetric
     ? activeMetric.series.filter((item) => selectedSeriesKeys.includes(item.key)).slice(0, 3)
     : [], [activeMetric, selectedSeriesKeys]);
+
+  const shareDescriptor = useMemo<ClinicalPlanShareDescriptor | null>(() => {
+    if (
+      activeDomain === 'overview'
+      || activeDomain === 'changes'
+      || !activeMetric
+      || selectedSeries.length === 0
+    ) return null;
+    return {
+      schemaVersion: 1,
+      family: 'PLAN_PTS',
+      domain: activeDomain,
+      metricSignature: activeMetric.signature,
+      seriesKeys: selectedSeries.map((item) => item.key),
+      axis,
+      comparePrevious: Boolean(comparePrevious),
+    };
+  }, [activeDomain, activeMetric, axis, comparePrevious, selectedSeries]);
+
+  useEffect(() => {
+    onShareDescriptorChange?.(shareDescriptor);
+  }, [onShareDescriptorChange, shareDescriptor]);
 
   const domainForColor = activeDomain === 'changes'
     ? analyticsDomainForSeries(selectedSeries[0] || series[0] || ({ metricKey: '' } as ClinicalOutcomeSeriesSummary))
