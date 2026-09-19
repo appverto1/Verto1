@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Users, 
   UserPlus, 
@@ -287,11 +287,25 @@ export function TeamManagement({
 
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [permissionMember, setPermissionMember] = useState<Member | null>(null);
+  const activeTenantKey = String(
+    user?.activeAccessContext?.clinicId ||
+    user?.activeAccessContext?.clinic_id ||
+    user?.activeWorkspaceId ||
+    user?.clinicId ||
+    ''
+  ).trim();
+  const activeTenantKeyRef = useRef(activeTenantKey);
+  activeTenantKeyRef.current = activeTenantKey;
+  const [membersTenantKey, setMembersTenantKey] = useState('');
+  const [invitationsTenantKey, setInvitationsTenantKey] = useState('');
+  const visibleMembers = membersTenantKey === activeTenantKey ? members : [];
+  const visibleInvitations = invitationsTenantKey === activeTenantKey ? invitations : [];
+  const visibleMembershipHistory = invitationsTenantKey === activeTenantKey ? membershipHistory : [];
 
   void onRequestUpgrade;
   const normalizedActivePatientCount = Math.max(0, Number(activePatientCount) || 0);
   const inviteLimit = Math.max(MIN_TEAM_ACCESS_LIMIT, normalizedActivePatientCount * PROFESSIONALS_PER_ACTIVE_PATIENT);
-  const totalUsed = (members?.length || 0) + (invitations?.filter(i => i.status === 'pending').length || 0);
+  const totalUsed = (visibleMembers?.length || 0) + (visibleInvitations?.filter(i => i.status === 'pending').length || 0);
   const canInvite = totalUsed < inviteLimit;
   const actorRole = String(user?.role || '').trim().toLowerCase();
   const canManageTeamAccess = capabilities?.has('team.permissions.manage') === true;
@@ -308,18 +322,37 @@ export function TeamManagement({
     !(actorRole === 'coordinator' && member.role === 'director');
 
   useEffect(() => {
-    void (async () => {
-      await Promise.allSettled([fetchMembers(), fetchInvitations()]);
-    })();
-  }, []);
+    const expectedTenantKey = activeTenantKey;
+    setMembersTenantKey('');
+    setInvitationsTenantKey('');
+    setMembers([]);
+    setInvitations([]);
+    setMembershipHistory([]);
+    setOpenMenuId(null);
+    setPermissionMember(null);
+    setEditingScheduleMember(null);
+    setError(null);
 
-  const fetchMembers = async () => {
+    if (!expectedTenantKey) {
+      setLoading(false);
+      return;
+    }
+
+    void (async () => {
+      await Promise.allSettled([fetchMembers(expectedTenantKey), fetchInvitations(expectedTenantKey)]);
+    })();
+  }, [activeTenantKey]);
+
+  const fetchMembers = async (expectedTenantKey = activeTenantKey) => {
+    if (!expectedTenantKey || activeTenantKeyRef.current !== expectedTenantKey) return;
     setLoading(true);
     try {
       const timeout = new Promise((resolve) =>
         setTimeout(() => resolve({ success: false, error: 'Tempo limite ao carregar equipe.' }), 12000),
       );
       const result: any = await Promise.race([dataService.getClinicMembers(), timeout]);
+      if (activeTenantKeyRef.current !== expectedTenantKey) return;
+      setMembersTenantKey(expectedTenantKey);
       if (result.success) {
         setMembers(result.data || []);
         setError(null);
@@ -328,20 +361,34 @@ export function TeamManagement({
         setError(result.error || 'Não foi possível carregar membros da equipe.');
       }
     } catch (err) {
-      setError('Erro ao carregar membros da equipe');
+      if (activeTenantKeyRef.current === expectedTenantKey) {
+        setMembersTenantKey(expectedTenantKey);
+        setMembers([]);
+        setError('Erro ao carregar membros da equipe');
+      }
     } finally {
-      setLoading(false);
+      if (activeTenantKeyRef.current === expectedTenantKey) setLoading(false);
     }
   };
 
-  const fetchInvitations = async () => {
+  const fetchInvitations = async (expectedTenantKey = activeTenantKey) => {
+    if (!expectedTenantKey || activeTenantKeyRef.current !== expectedTenantKey) return;
     try {
       const result = await dataService.getInvitations();
+      if (activeTenantKeyRef.current !== expectedTenantKey) return;
+      setInvitationsTenantKey(expectedTenantKey);
       if (result.success) {
         setInvitations(result.data || []);
         setMembershipHistory(result.membershipHistory || []);
+      } else {
+        setInvitations([]);
+        setMembershipHistory([]);
       }
     } catch (err) {
+      if (activeTenantKeyRef.current !== expectedTenantKey) return;
+      setInvitationsTenantKey(expectedTenantKey);
+      setInvitations([]);
+      setMembershipHistory([]);
       console.error('Error fetching invitations:', err);
     }
   };
@@ -744,17 +791,17 @@ export function TeamManagement({
   const getBulkTargetMembers = () => {
     if (!editingScheduleMember) return [];
     if (bulkTargetMode === 'attendance') {
-      return members.filter((member) => member.id !== editingScheduleMember.id && isAttendanceProfessional(member));
+      return visibleMembers.filter((member) => member.id !== editingScheduleMember.id && isAttendanceProfessional(member));
     }
     if (bulkTargetMode === 'sameRole') {
-      return members.filter((member) => member.id !== editingScheduleMember.id && hasSameOperationalRole(member, editingScheduleMember));
+      return visibleMembers.filter((member) => member.id !== editingScheduleMember.id && hasSameOperationalRole(member, editingScheduleMember));
     }
     if (bulkTargetMode === 'sameProfile') {
       const referenceProfile = String(editingScheduleMember.profileRole || '').trim().toLowerCase();
       if (!referenceProfile) return [];
-      return members.filter((member) => member.id !== editingScheduleMember.id && String(member.profileRole || '').trim().toLowerCase() === referenceProfile);
+      return visibleMembers.filter((member) => member.id !== editingScheduleMember.id && String(member.profileRole || '').trim().toLowerCase() === referenceProfile);
     }
-    return members.filter((member) => bulkSelectedMemberIds.includes(member.id));
+    return visibleMembers.filter((member) => bulkSelectedMemberIds.includes(member.id));
   };
 
   const toggleBulkMember = (memberId: string) => {
@@ -826,14 +873,14 @@ export function TeamManagement({
     owner: <Shield className="text-red-500" size={18} />
   };
 
-  const filteredMembers = members.filter(m => 
+  const filteredMembers = visibleMembers.filter(m =>
     m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     m.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
-  const pendingInvitations = invitations.filter((inv) => String(inv?.status || '').toLowerCase() === 'pending');
-  const invitationHistory = invitations.filter((inv) => String(inv?.status || '').toLowerCase() !== 'pending');
+  const pendingInvitations = visibleInvitations.filter((inv) => String(inv?.status || '').toLowerCase() === 'pending');
+  const invitationHistory = visibleInvitations.filter((inv) => String(inv?.status || '').toLowerCase() !== 'pending');
   const bulkManualCandidates = editingScheduleMember
-    ? members.filter((member) => member.id !== editingScheduleMember.id && member.role !== 'patient')
+    ? visibleMembers.filter((member) => member.id !== editingScheduleMember.id && member.role !== 'patient')
     : [];
   const bulkPreviewMembers = getBulkTargetMembers();
 
@@ -1718,7 +1765,7 @@ export function TeamManagement({
         </aside>
       </div>
 
-      {((pendingInvitations.length || 0) > 0 || (invitationHistory.length || 0) > 0 || (membershipHistory.length || 0) > 0) && (
+      {((pendingInvitations.length || 0) > 0 || (invitationHistory.length || 0) > 0 || (visibleMembershipHistory.length || 0) > 0) && (
         <section className="mt-8 border-t border-slate-200 pt-6">
           <div className="mb-4">
             <h2 className="text-base font-semibold text-slate-800">Movimentações da equipe</h2>
@@ -1801,14 +1848,14 @@ export function TeamManagement({
               </div>
             )}
 
-            {(membershipHistory.length || 0) > 0 && (
+            {(visibleMembershipHistory.length || 0) > 0 && (
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
                   <h3 className="text-sm font-semibold text-slate-700">Colaboradores desvinculados</h3>
-                  <span className="text-xs text-slate-400">{membershipHistory.length}</span>
+                  <span className="text-xs text-slate-400">{visibleMembershipHistory.length}</span>
                 </div>
                 <div className="max-h-80 divide-y divide-slate-100 overflow-y-auto">
-                  {membershipHistory.map((entry) => (
+                  {visibleMembershipHistory.map((entry) => (
                     <div key={entry.id} className="flex items-center gap-3 px-5 py-4">
                       <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-500">
                         <Users size={17} />
