@@ -86706,7 +86706,6 @@ async function startServer() {
           value: point?.value === null || point?.value === undefined || !Number.isFinite(Number(point.value)) ? null : Number(point.value),
           numerator: point?.numerator === null || point?.numerator === undefined || !Number.isFinite(Number(point.numerator)) ? null : Number(point.numerator),
           denominator: point?.denominator === null || point?.denominator === undefined || !Number.isFinite(Number(point.denominator)) ? null : Number(point.denominator),
-          requiresReview: point?.requires_review === true,
         })),
       })),
     };
