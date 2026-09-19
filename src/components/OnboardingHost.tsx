@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
 import { onboardingService, type TenantOnboardingPublication } from '../services/onboardingService';
 
@@ -29,6 +29,7 @@ const TenantOnboarding = ({ publication, onClose, onRefresh }: { publication: Te
   const [slotId, setSlotId] = useState(existing?.slot_id || '');
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState('');
+  const submitIntentRef = useRef<{ fingerprint: string; idempotencyKey: string } | null>(null);
   const availableSlots = useMemo(() => publication.onboarding_slots?.filter((slot) => slot.status === 'available' || slot.id === existing?.slot_id) || [], [publication, existing?.slot_id]);
 
   useEffect(() => {
@@ -48,6 +49,11 @@ const TenantOnboarding = ({ publication, onClose, onRefresh }: { publication: Te
   const submit = async () => {
     if (!participants.length) return setFeedback('Adicione pelo menos um participante.');
     if (!slotId) return setFeedback('Escolha um horário disponível.');
+    const fingerprint = JSON.stringify([publication.id, slotId, participants]);
+    if (!submitIntentRef.current || submitIntentRef.current.fingerprint !== fingerprint) {
+      submitIntentRef.current = { fingerprint, idempotencyKey: crypto.randomUUID() };
+    }
+    const idempotencyKey = submitIntentRef.current.idempotencyKey;
     setSubmitting(true);
     setFeedback('');
     try {
@@ -55,16 +61,19 @@ const TenantOnboarding = ({ publication, onClose, onRefresh }: { publication: Te
         publicationId: publication.id,
         slotId,
         participants,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
       });
+      submitIntentRef.current = null;
       setFeedback('Treinamento confirmado. A Equipe Verto recebeu sua resposta.');
       await onRefresh();
     } catch (error: any) {
       if (String(error?.message) === 'SLOT_TAKEN') {
+        submitIntentRef.current = null;
         setSlotId('');
         setFeedback('Esse horário acabou de ser escolhido por outra pessoa. Seus participantes foram mantidos; selecione outro horário.');
         await onRefresh();
       } else if (String(error?.message) === 'ONBOARDING_ALREADY_RESPONDED') {
+        submitIntentRef.current = null;
         setFeedback('Este treinamento já foi respondido. Atualizando a confirmação…');
         await onRefresh();
       } else {
