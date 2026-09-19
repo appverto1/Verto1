@@ -6491,6 +6491,38 @@ async function resolvePatientPhotoUrl(rawUrl: unknown, rawPath?: unknown): Promi
   return sanitizeSessionUrl(rawUrl);
 }
 
+function buildLegacyPortalPatientPhotoRepair(patient: any, user: any) {
+  const patientId = sanitizeString(patient?.id, 120);
+  if (!isUuid(patientId)) return null;
+
+  const explicitPortalPath =
+    extractPatientPhotosStoragePath(patient?.portal_profile_picture_path) ||
+    extractPatientPhotosStoragePath(patient?.portalProfilePicturePath);
+  if (explicitPortalPath) return null;
+
+  const existingPortalUrl = sanitizeSessionUrl(
+    patient?.portal_profile_picture || patient?.portalProfilePicture,
+  );
+  const pathFromExistingPortalUrl = extractPatientPhotosStoragePath(existingPortalUrl);
+  if (existingPortalUrl && !pathFromExistingPortalUrl) return null;
+
+  const legacyPath =
+    pathFromExistingPortalUrl ||
+    extractPatientPhotosStoragePath(user?.profilePicturePath) ||
+    extractPatientPhotosStoragePath(user?.profile_picture_path) ||
+    extractPatientPhotosStoragePath(user?.profilePicture) ||
+    extractPatientPhotosStoragePath(user?.profile_picture);
+  if (!legacyPath) return null;
+
+  const parts = legacyPath.split('/').filter(Boolean);
+  const ownerPatientId = parts[0] === 'demo' ? parts[2] : parts[0];
+  if (sanitizeString(ownerPatientId, 120) !== patientId) return null;
+
+  const portalProfilePicture = buildPatientPhotoViewUrl(legacyPath);
+  if (!portalProfilePicture) return null;
+  return { portalProfilePicture, portalProfilePicturePath: legacyPath };
+}
+
 async function resolveProfessionalProfilePhotoUrl(profile: any, user?: any): Promise<string | null> {
   const metadata = profile?.metadata && typeof profile.metadata === 'object' && !Array.isArray(profile.metadata)
     ? profile.metadata
@@ -55767,7 +55799,7 @@ async function startServer() {
     const primaryPatientId = patientIds[0];
     let patientRead = await supabase
       .from('patients')
-      .select('id,email,clinic_id,name,type,patient_profile_type,panel_type,profile_type,responsible_user_id,responsible_email,metadata')
+      .select('id,email,clinic_id,name,type,patient_profile_type,panel_type,profile_type,responsible_user_id,responsible_email,metadata,portal_profile_picture,portal_profile_picture_path')
       .eq('id', primaryPatientId)
       .limit(1)
       .maybeSingle();
@@ -55791,6 +55823,34 @@ async function startServer() {
     const patient = patientRead.data;
     const row = patient || { id: primaryPatientId };
     const clinicId = sanitizeString(row?.clinic_id || currentClinicId(user), 120);
+
+    // Legacy portal profiles can already own a valid patient-photo object while
+    // the patient row still lacks the canonical PORTAL media fields. Repair the
+    // mismatch once here so later clinic reads remain read-many.
+    const legacyPortalPhotoRepair = buildLegacyPortalPatientPhotoRepair(row, user);
+    if (legacyPortalPhotoRepair && isUuid(clinicId)) {
+      const repairResult = await supabase
+        .from('patients')
+        .update({
+          portal_profile_picture: legacyPortalPhotoRepair.portalProfilePicture,
+          portal_profile_picture_path: legacyPortalPhotoRepair.portalProfilePicturePath,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', primaryPatientId)
+        .eq('clinic_id', clinicId)
+        .is('portal_profile_picture_path', null);
+      if (repairResult.error) {
+        console.warn('[PatientPortalContext] legacy portal photo repair skipped:', {
+          patientId: primaryPatientId,
+          clinicId,
+          message: sanitizeString(repairResult.error?.message || String(repairResult.error), 240),
+        });
+      } else {
+        row.portal_profile_picture = legacyPortalPhotoRepair.portalProfilePicture;
+        row.portal_profile_picture_path = legacyPortalPhotoRepair.portalProfilePicturePath;
+      }
+    }
+
     const clinicBranding = await readClinicBrandingForFamilyView(clinicId);
     const portalDisplayName = resolvePortalPatientDisplayName(row, user?.name);
     return {
