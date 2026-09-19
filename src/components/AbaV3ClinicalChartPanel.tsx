@@ -19,10 +19,30 @@ type Props = {
   patientId: string;
   organizationId?: string | null;
   isPanelDark?: boolean;
+  onShareDescriptorChange?: (descriptor: AbaV3ShareDescriptor | null) => void;
 };
 
 type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance' | 'changes';
 type AnalyticsAxis = 'date' | 'session';
+
+export type AbaV3ShareSeriesRef = {
+  targetId: string;
+  measurementModelVersion: string;
+  phaseAssignmentId: string;
+  metricKey: string;
+  seriesKey: string;
+};
+
+export type AbaV3ShareDescriptor = {
+  schemaVersion: 1;
+  family: 'ABA_V3';
+  domain: 'skills' | 'behaviors' | 'maintenance';
+  metricSignature: string;
+  seriesRefs: AbaV3ShareSeriesRef[];
+  axis: AnalyticsAxis;
+  comparePrevious: boolean;
+};
+
 type PeriodKind = 'current' | 'previous';
 
 type AbaChartPoint = {
@@ -489,7 +509,7 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function AbaV3ClinicalChartPanel({ patientId, organizationId = null, isPanelDark = false }: Props) {
+export function AbaV3ClinicalChartPanel({ patientId, organizationId = null, isPanelDark = false, onShareDescriptorChange }: Props) {
   const anchorNowRef = useRef(Date.now());
   const [selectedTargetIds, setSelectedTargetIds] = useState<string[]>([]);
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
@@ -571,6 +591,43 @@ export function AbaV3ClinicalChartPanel({ patientId, organizationId = null, isPa
   }, [activeDomain]);
 
   const selectedMetricSegments = activeMetric?.segments || [];
+  const shareDescriptor = useMemo<AbaV3ShareDescriptor | null>(() => {
+    if (
+      activeDomain === 'overview'
+      || activeDomain === 'mastery'
+      || activeDomain === 'changes'
+      || !activeMetric
+      || selectedMetricSegments.length === 0
+    ) return null;
+
+    const seriesRefs = selectedMetricSegments.map((segment) => ({
+      targetId: clean(segment.target_id),
+      measurementModelVersion: clean(segment.measurement_model_version),
+      phaseAssignmentId: clean(segment.phase_assignment_id),
+      metricKey: clean(segment.metric_key),
+      seriesKey: clean(segment.series_key),
+    }));
+    if (seriesRefs.some((ref) => !ref.targetId || !ref.measurementModelVersion || !ref.phaseAssignmentId || !ref.metricKey || !ref.seriesKey)) return null;
+
+    seriesRefs.sort((left, right) =>
+      `${left.targetId}:${left.measurementModelVersion}:${left.phaseAssignmentId}:${left.metricKey}:${left.seriesKey}`
+        .localeCompare(`${right.targetId}:${right.measurementModelVersion}:${right.phaseAssignmentId}:${right.metricKey}:${right.seriesKey}`));
+
+    return {
+      schemaVersion: 1,
+      family: 'ABA_V3',
+      domain: activeDomain,
+      metricSignature: activeMetric.signature,
+      seriesRefs,
+      axis,
+      comparePrevious: Boolean(comparePrevious),
+    };
+  }, [activeDomain, activeMetric, axis, comparePrevious, selectedMetricSegments]);
+
+  useEffect(() => {
+    onShareDescriptorChange?.(shareDescriptor);
+  }, [onShareDescriptorChange, shareDescriptor]);
+
   const rows = useMemo(() => activeDomain === 'overview'
     ? buildOverviewRows(segments, axis, comparePrevious, days, sessionCount, anchorNowRef.current)
     : activeDomain === 'mastery'
