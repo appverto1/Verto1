@@ -18,7 +18,7 @@ create or replace function public.revoke_clinic_protocol_grant_v1(
 ) returns public.clinic_protocol_grants
 language plpgsql
 security definer
-set search_path = public
+set search_path = ''
 as $$
 declare
   v_request public.protocol_import_requests%rowtype;
@@ -109,15 +109,6 @@ begin
   where id = v_grant.id
     and revoked_at is null
   returning * into v_grant;
-
-  if not found then
-    select *
-      into v_grant
-    from public.clinic_protocol_grants
-    where id = v_grant.id;
-
-    return v_grant;
-  end if;
 
   v_event_type := case
     when v_is_platform_admin then 'protocol_grant_admin_revoked'
