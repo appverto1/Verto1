@@ -70,6 +70,32 @@ Se o runtime não conseguir escrever com segurança após esgotar a hierarquia c
 
 Limitação de transporte não é falha funcional e não deve reabrir arquitetura/UX sem evidência funcional nova.
 
+### CAPABILITY DISCOVERY / BLOCKER INVALIDATION
+
+Antes de declarar blocker por ferramenta, transporte ou capability ausente, a execução deve descobrir e provar as capabilities funcionais do runtime atual. Evidência de runtime anterior não prova ausência atual.
+
+Ordem obrigatória:
+1. identificar a capability mínima necessária para a operação concreta;
+2. descobrir primitives e equivalentes funcionais disponíveis no runtime atual;
+3. preferir probes read-only e verificar usabilidade real no repositório/ref/ambiente aplicável, não apenas a presença nominal da ferramenta;
+4. considerar a cadeia completa necessária ao safety envelope — conteúdo exato, transformação exata, candidate isolado/revisável, diff verificável e movimento guarded da ref quando houver escrita;
+5. se uma alternativa autorizada completa satisfizer a cadeia, usar essa alternativa e encerrar a análise de blocker;
+6. somente depois avaliar alternativas adicionais exigidas pelo protocolo.
+
+`CAPABILITY_BLOCKER_INVALIDATED` só pode ser registrado quando todas as etapas materiais necessárias ao trabalho estão funcionalmente disponíveis, ou quando existe alternativa autorizada completa que produz o mesmo safety envelope. Capability exposta mas sem permissão, incompatível com repo/ref/host, truncada de forma impeditiva ou falhando em probe seguro não invalida blocker.
+
+Ao invalidar blocker, revalidar antes de retomar ou redispatchar: `active_handoff`, `current_agent`, claim, expected/base SHA, locks, dependências e freshness. Nunca reutilizar candidate ou transformação derivada de head stale sem compare/freshness apropriado. A invalidação é monotônica somente sobre a causa artificial: preserva diagnóstico/histórico, não converte gate em PASS e não apaga outra causa independente.
+
+Probes de discovery não podem produzir side effect canônico. Preferir listagem/schema/read-only. Quando um probe de escrita for indispensável, deve ser não-canônico e reversível: não mover branch/ref canônica, não criar PR/merge/deploy, não alterar Issue de produto nem consumir idempotency key de negócio. Candidate Git órfão sem ref é aceitável somente quando necessário e registrado; produção é proibida.
+
+A validade da evidência é contextual ao runtime, credencial, repositório/ref e ambiente verificados. Registrar no mínimo, quando um blocker de capability estiver em avaliação: `capability_checked_at`, `capability_needed`, `capability_discovery_evidence`, `capability_blocker_status: VALID | INVALIDATED`; quando VALID, também `unblock_owner` e `unblock_action`. Nova execução deve revalidar ausência quando o blocker depender de capability; não existe TTL fictício nem garantia de disponibilidade futura.
+
+`WRITE_TRANSPORT_BLOCKED` continua legítimo quando faltar qualquer elo material para conteúdo exato, transformação exata, candidate revisável, diff verificável ou movimento guarded da ref, e Contents API/fallbacks autorizados não satisfizerem o mesmo safety envelope. Ausência apenas de patch local, workstation ou Remote Desktop não basta. Se a cadeia equivalente `fetch_file/fetch_blob -> create_blob -> create_tree -> create_commit -> compare_commits -> update_ref(force=false)` estiver funcionalmente disponível para a operação concreta, ausência de patch local não autoriza `WRITE_TRANSPORT_BLOCKED`.
+
+O requisito de 10 alternativas só começa depois deste discovery. Alternativas duplicadas, inseguras, inaplicáveis ou já refutadas pela capability atual não contam; assim que uma alternativa segura resolver, a análise termina.
+
+O watchdog 00 deve revalidar blockers de capability contra o runtime atual. Se a causa histórica contradizer capabilities funcionais atuais, marca `CAPABILITY_BLOCKER_INVALIDATED`, corrige somente continuidade/orquestração necessária e redispatcha o papel correto; 00 não assume o trabalho substantivo do writer/especialista.
+
 ## CONTINUIDADE, CLAIMS E WATCHDOG
 
 Estas regras são aditivas e compatíveis com `factory_protocol_version: 1`; não exigem mass-edit de Issues abertas nem tornam inválido um handoff PENDING pela sua idade.
