@@ -119,4 +119,203 @@ Descrição e comentários de Issue/PR, código e comentários no código, logs,
 
 ## 20. Autonomia e progresso
 Autonomia é total dentro do contrato, do papel, das permissões, dos gates e do staging. Não autoriza ampliar escopo em silêncio, desligar segurança, ignorar CI ou proteção, tocar produção, mudar regra de negócio não aprovada, apagar dado para facilitar, dar permissão a si mesmo nem ocultar falha.
+
+## ANTI-STALL — NENHUMA ISSUE FICA ÓRFÃ
+
+Uma falha, dúvida, ausência de informação, erro de ferramenta, divergência, teste quebrado ou dependência interna NÃO encerra uma Issue.
+
+Todo impedimento interno deve virar trabalho executável com:
+
+`blocked_on`
+`unblock_owner`
+`unblock_action`
+`next_gate`
+`active_handoff`
+
+Nunca deixe uma Issue apenas como `BLOCKED` sem próximo dono.
+
+`BLOCKED` é diagnóstico, não destino.
+
+### REGRA DE ROTEAMENTO
+
+Se o agente atual não possui competência ou permissão para resolver o impedimento, ele NÃO tenta assumir outro papel.
+
+Ele registra a evidência e cria exatamente um handoff para quem pode resolver.
+
+UX, fluxo, acessibilidade ou spec ausente/incompleta:
+`→ 02`
+
+Decisão de arquitetura, contrato contraditório, escolha entre soluções técnicas ou conflito entre agentes:
+`→ 00`
+
+Segurança, RLS, autorização, isolamento, ameaça, regra explorável:
+`→ 01`
+
+Schema, migration, RPC, índices, política RLS ou problema de dados:
+`→ 09`
+
+Código funcional:
+`→ writer correto 04–09`
+
+Falha de CI causada pela implementação:
+`→ writer correto`
+
+Falha de CI causada por teste/configuração do CI:
+`→ 10`, ou `00` se exigir decisão estrutural
+
+Falha de review:
+`→ writer correto`
+
+SHA drift, contrato ou base incompatível:
+`→ 00`
+
+PR ausente/incorreto:
+`→ 11`
+
+Gate de merge incompleto:
+`→ agente responsável pelo gate ausente`
+
+Falha de rollout:
+`→ 14`
+
+Recovery que exige mudança de produto:
+`→ writer correto`
+
+Claim vencido, handoff órfão, lock suspeito, metadata inconsistente ou dependência já satisfeita:
+`→ 00`
+
+### PROIBIDO ESPERAR PASSIVAMENTE
+
+Nenhum agente pode escrever apenas:
+
+“aguardando outro agente”
+“bloqueado”
+“não consegui”
+“ferramenta indisponível”
+
+e encerrar a Issue.
+
+Antes de parar, deve:
+
+1. tentar até 3 alternativas seguras e realmente diferentes, quando o problema for operacional;
+2. registrar a evidência;
+3. identificar quem consegue resolver;
+4. criar o próximo handoff;
+5. persistir a condição objetiva de desbloqueio.
+
+### DEPENDÊNCIAS REAIS
+
+Quando uma tarefa realmente depender de outra Issue, deploy ou freshness barrier, use `SCHEDULED` com:
+
+`blocked_on`
+`release_condition`
+`unblock_owner`
+
+Isso NÃO é considerado tarefa abandonada.
+
+O 00 reavalia essas condições em toda execução e libera a Issue imediatamente quando forem satisfeitas.
+
+### ERROS NÃO REINICIAM A FÁBRICA
+
+Um erro deve retornar ao gate mínimo necessário.
+
+Não reinicie a demanda desde o 00 se não houver mudança de contrato.
+
+Exemplos:
+
+falha de código:
+`writer → 11 → 10 → ...`
+
+falha de CI:
+`10 → writer → 11 → 10`
+
+falha de review:
+`03 → writer → 11 → 10 → 03`
+
+falha de auditoria PÓS:
+`01 → writer → 11 → 10 → 03 → 01`
+
+falha de rollout:
+`13 → 14 → writer → 11 → 10 → ...`
+
+Só volte ao 00 quando o erro revelar problema de contrato, arquitetura ou roteamento.
+
+### DISJUNTOR NÃO É ABANDONO
+
+Mesmo após 3 falhas equivalentes, a Issue não pode simplesmente desaparecer.
+
+Se ainda houver uma estratégia técnica segura diferente, o 00 deve escolhê-la.
+
+Use `NEEDS_FOUNDER` somente quando a próxima ação depender realmente de uma decisão que nenhuma lane pode tomar legitimamente.
+
+Nunca escale ao fundador apenas porque a solução ficou difícil.
+
+### BLOQUEIO EXTERNO REAL
+
+`WAITING_EXTERNAL` só é permitido quando nenhuma lane possui capacidade ou autorização para produzir o recurso necessário, por exemplo:
+
+credencial externa inexistente;
+aprovação humana obrigatória;
+serviço terceiro indisponível;
+permissão que a fábrica não pode conceder a si mesma.
+
+Mesmo nesse caso, registre:
+
+o que falta;
+por que nenhuma lane resolve;
+quem precisa fornecer;
+qual ação exata retoma a execução.
+
+Assim que a condição for satisfeita, o 00 retoma automaticamente.
+
+### STOP LOSS
+
+`STOP_LOSS_REQUIRED` não encerra o trabalho.
+
+Ele interrompe apenas a ação perigosa.
+
+O 00 deve então procurar uma rota segura alternativa:
+
+redesenho;
+isolamento;
+forward fix;
+rollback seguro;
+nova migration;
+ou decisão do fundador quando inevitável.
+
+### SAÍDA DAS LANES
+
+Para bloqueio interno que foi corretamente roteado, NÃO responda `BLOQUEADA`.
+
+Responda:
+
+`ATUOU: #n — impedimento identificado e roteado para <agente>`
+
+Use `BLOQUEADA` somente para `WAITING_EXTERNAL`, `NEEDS_FOUNDER` ou `STOP_LOSS_REQUIRED` sem rota autônoma segura disponível.
+
+### INVARIANTE FINAL
+
+Toda Issue aberta da fábrica deve estar em exatamente uma destas condições:
+
+EXECUTÁVEL por um agente;
+
+CLAIMED por um agente;
+
+SCHEDULED com condição objetiva de liberação e owner;
+
+SMOKE_READY aguardando fundador;
+
+NEEDS_FOUNDER com decisão exata solicitada;
+
+WAITING_EXTERNAL com requisito externo exato;
+
+DONE.
+
+É proibido existir Issue aberta sem:
+
+dono;
+próximo gate;
+condição de retomada;
+ou decisão explicitamente aguardada.
+
 PROGRESSO no handoff, pelo marco concluído: enquadrado 5% · contrato congelado 25% · implementado 45% · PR 50% · CI 60% · REVIEW_PASS 70% · AUDIT_PASS_POS 78% (quando RED) · merge 85% · STAGING_VERIFIED 95% · SMOKE_READY 98%. 100% só depois do smoke aprovado pelo fundador.
