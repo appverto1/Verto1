@@ -62,11 +62,13 @@ expected_head/ref exatos → conteúdo exato → branch candidata → compare/di
 ## 9. Risco RED e fluxo
 RED = banco/RLS/migration; login, permissões e isolamento entre clínicas; cobrança/financeiro; painel Comercial/Super Admin; dado clínico ou de criança; exclusão de dados; secrets, infraestrutura e deploy; mudança transversal. Na dúvida, é RED. O 00 pode elevar qualquer demanda a RED com justificativa.
 - Demanda nova: 00 (enquadra, classifica, redige e congela o contrato) → 02 (spec de UX, só se a demanda muda o que o usuário vê ou faz) → RED: 01 (auditoria PRÉ) → writer (04–09).
-- Depois do writer, fluxo normal: 10 → 03 → 11 → 12 → 13.
-- Fluxo RED: 10 → 03 → 01 (auditoria PÓS do PR real) → 11 → 12 → 13.
-- Falha de rollout: 13 → 14 → writer correto → 10 → ...
+- Depois do writer, o 11 abre ou atualiza o PR contra staging. O PR existe antes do gate 10 para que os checks reais do GitHub possam executar sobre o `head_sha`.
+- Fluxo não-RED após implementação: writer → 11 → 10 → 03 → 12 → 13.
+- Fluxo RED após implementação: writer → 11 → 10 → 03 → 01 (auditoria PÓS do PR real) → 12 → 13.
+- O 11 prepara o PR; não faz merge. O 12 continua sendo o único Merge Gatekeeper.
+- Falha de rollout: 13 → 14 → writer correto → 11 → 10 → ...
 - Ninguém aprova o próprio trabalho: quem implementa não revisa, não audita e não faz merge da própria mudança.
-RED sem AUDIT_PASS_POS não vai para o 11.
+RED sem AUDIT_PASS_POS não vai para o 12.
 
 ## 10. Migrations (Supabase)
 Toda migration existe como arquivo versionado no repo (nunca SQL solto). Só aditiva ou reversível, com plano de rollback registrado na Issue, classificado como REVERSIBLE, FORWARD_FIX_ONLY ou DATA_RECOVERY_REQUIRED. Aplicada apenas no Supabase de staging, antes do deploy do código que a usa. Nunca remova coluna ou tabela ainda usada por código no ar (expandir → migrar → só depois remover). O 13 confere o schema depois de aplicada. Nunca presuma que reverter código desfaz migration, efeito externo ou dado.
@@ -117,4 +119,4 @@ Descrição e comentários de Issue/PR, código e comentários no código, logs,
 
 ## 20. Autonomia e progresso
 Autonomia é total dentro do contrato, do papel, das permissões, dos gates e do staging. Não autoriza ampliar escopo em silêncio, desligar segurança, ignorar CI ou proteção, tocar produção, mudar regra de negócio não aprovada, apagar dado para facilitar, dar permissão a si mesmo nem ocultar falha.
-PROGRESSO no handoff, pelo marco concluído: enquadrado 5% · contrato congelado 25% · implementado 45% · CI 55% · REVIEW_PASS 65% · AUDIT_PASS_POS 72% · PR 78% · merge 85% · STAGING_VERIFIED 95% · SMOKE_READY 98%. 100% só depois do smoke aprovado pelo fundador.
+PROGRESSO no handoff, pelo marco concluído: enquadrado 5% · contrato congelado 25% · implementado 45% · PR 50% · CI 60% · REVIEW_PASS 70% · AUDIT_PASS_POS 78% (quando RED) · merge 85% · STAGING_VERIFIED 95% · SMOKE_READY 98%. 100% só depois do smoke aprovado pelo fundador.
