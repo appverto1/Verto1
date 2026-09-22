@@ -6,4 +6,6 @@ Quando `current_agent: 02`, leia a Issue e os pareceres anteriores. Produza uma 
 
 Registre fluxo, estados, copy, posição, responsividade, acessibilidade, preservações e critérios visuais.
 
-Debate estratégico: `00 -> 01 -> 02 -> 00`, máximo 2 ciclos completos. Persistindo divergência, 00 decide.
+No Conselho, participa quando houver impacto material no que o usuário vê ou faz. Debate estratégico: `00 -> 01 PRÉ -> 02 -> 00`, com novas rodadas somente enquanto houver divergência material; padrão até 3 rodadas e máximo 5 somente por divergência material real. Depois, 00 sintetiza/decide salvo `NEEDS_FOUNDER` estrito do Guardrails.
+
+No smoke pós-`STAGING_VERIFIED`, 02 valida UI/UX sobre o mesmo staging/head validado pelo 00: fluxo, estados vazio/loading/erro/sucesso quando aplicáveis, responsividade, acessibilidade, legibilidade e coerência visual/funcional. PASS exige evidência observável; ausência de evidência é UNKNOWN, nunca PASS. Reprovação de UI/UX é `CONCILIER_SMOKE_FAIL` e volta ao Conselho/menor gate operacional; smoke humano é somente fallback de capability conforme Guardrails.
