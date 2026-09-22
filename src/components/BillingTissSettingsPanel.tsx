@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Building2,
@@ -31,6 +31,7 @@ type Member = {
 };
 
 type ProfileMap = Record<string, any>;
+type SaveKind = "payer" | "professional";
 
 const emptyProviderForm = {
   legalName: "",
@@ -249,7 +250,10 @@ export function BillingTissSettingsPanel({
   onNavigateProfessionals?: () => void;
 }) {
   const [loading, setLoading] = useState(false);
-  const [savingKind, setSavingKind] = useState("");
+  const [savingKinds, setSavingKinds] = useState<Record<SaveKind, boolean>>({ payer: false, professional: false });
+  const [savedKinds, setSavedKinds] = useState<Record<SaveKind, boolean>>({ payer: false, professional: false });
+  const savedTimers = useRef<Partial<Record<SaveKind, ReturnType<typeof window.setTimeout>>>>({});
+  const mountedRef = useRef(true);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [providerForm, setProviderForm] = useState<Record<string, any>>(emptyProviderForm);
@@ -272,6 +276,33 @@ export function BillingTissSettingsPanel({
   );
   const selectedPayer = payers.find((payer) => payer.id === selectedPayerId) || null;
   const selectedProfessional = professionals.find((member) => member.id === selectedProfessionalId) || null;
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    Object.values(savedTimers.current).forEach((timer) => {
+      if (timer) window.clearTimeout(timer);
+    });
+  }, []);
+
+  const startSaveFeedback = (kind: SaveKind) => {
+    const existingTimer = savedTimers.current[kind];
+    if (existingTimer) window.clearTimeout(existingTimer);
+    delete savedTimers.current[kind];
+    setSavedKinds((current) => ({ ...current, [kind]: false }));
+    setSavingKinds((current) => ({ ...current, [kind]: true }));
+  };
+
+  const finishSaveFeedback = (kind: SaveKind, succeeded: boolean) => {
+    if (!mountedRef.current) return;
+    setSavingKinds((current) => ({ ...current, [kind]: false }));
+    if (!succeeded) return;
+    setSavedKinds((current) => ({ ...current, [kind]: true }));
+    savedTimers.current[kind] = window.setTimeout(() => {
+      if (!mountedRef.current) return;
+      setSavedKinds((current) => ({ ...current, [kind]: false }));
+      delete savedTimers.current[kind];
+    }, 2000);
+  };
 
   const loadAll = async () => {
     setLoading(true);
@@ -339,8 +370,8 @@ export function BillingTissSettingsPanel({
   const updateProfessional = (key: string, value: any) => setProfessionalForm((current) => ({ ...current, [key]: value }));
 
   const savePayer = async () => {
-    if (!selectedPayerId) return;
-    setSavingKind("payer");
+    if (!selectedPayerId || savingKinds.payer) return;
+    startSaveFeedback("payer");
     setError("");
     setMessage("");
     try {
@@ -348,20 +379,26 @@ export function BillingTissSettingsPanel({
         ...payerForm,
         requireOfficialAttendanceProfile: true,
       });
+      if (!mountedRef.current) return;
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar o perfil TISS global do pagador.");
+        finishSaveFeedback("payer", false);
         return;
       }
       setPayerProfiles((current) => ({ ...current, [selectedPayerId]: result.data || {} }));
       setMessage("Dados do pagador salvos. Pré-guias deste pagador foram atualizadas automaticamente.");
-    } finally {
-      setSavingKind("");
+      finishSaveFeedback("payer", true);
+    } catch {
+      if (mountedRef.current) {
+        setError("Não foi possível salvar o perfil TISS global do pagador.");
+        finishSaveFeedback("payer", false);
+      }
     }
   };
 
   const saveProfessional = async () => {
-    if (!selectedProfessionalId) return;
-    setSavingKind("professional");
+    if (!selectedProfessionalId || savingKinds.professional) return;
+    startSaveFeedback("professional");
     setError("");
     setMessage("");
     try {
@@ -371,14 +408,20 @@ export function BillingTissSettingsPanel({
         cboCode: onlyDigits(professionalForm.cboCode, 12),
         providerCode: String(professionalForm.providerCode || "").trim(),
       });
+      if (!mountedRef.current) return;
       if (!result?.success) {
         setError(result?.error || "Não foi possível salvar o perfil faturável global do profissional.");
+        finishSaveFeedback("professional", false);
         return;
       }
       setProfessionalProfiles((current) => ({ ...current, [selectedProfessionalId]: result.data || {} }));
       setMessage("Perfil do profissional salvo. Pré-guias deste profissional foram atualizadas automaticamente.");
-    } finally {
-      setSavingKind("");
+      finishSaveFeedback("professional", true);
+    } catch {
+      if (mountedRef.current) {
+        setError("Não foi possível salvar o perfil faturável global do profissional.");
+        finishSaveFeedback("professional", false);
+      }
     }
   };
 
@@ -530,9 +573,11 @@ export function BillingTissSettingsPanel({
             <Toggle label="Exige assinatura do responsável" checked={Boolean(payerForm.requiresResponsibleSignature)} onChange={(value) => updatePayer("requiresResponsibleSignature", value)} />
           </div>
           <div className="flex justify-end">
-            <button type="button" onClick={() => void savePayer()} disabled={!selectedPayerId || savingKind === "payer"} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
-              {savingKind === "payer" ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              Salvar pagador global
+            <button type="button" onClick={() => void savePayer()} disabled={!selectedPayerId || savingKinds.payer} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
+              <span className="inline-flex items-center gap-2" aria-live="polite">
+                {savingKinds.payer ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : savedKinds.payer ? <CheckCircle2 size={16} aria-hidden="true" /> : <Save size={16} aria-hidden="true" />}
+                {savingKinds.payer ? "Salvando..." : savedKinds.payer ? "Salvo" : "Salvar pagador global"}
+              </span>
             </button>
           </div>
           {selectedPayer && <div className="text-xs font-medium text-slate-500">Selecionado: {selectedPayer.name}</div>}
@@ -579,9 +624,11 @@ export function BillingTissSettingsPanel({
             <Field label="Código do prestador" value={professionalForm.providerCode} onChange={(value) => updateProfessional("providerCode", value)} maxLength={80} />
           </div>
           <div className="flex justify-end">
-            <button type="button" onClick={() => void saveProfessional()} disabled={!selectedProfessionalId || savingKind === "professional"} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
-              {savingKind === "professional" ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              Salvar profissional global
+            <button type="button" onClick={() => void saveProfessional()} disabled={!selectedProfessionalId || savingKinds.professional} className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-bold text-white disabled:opacity-60">
+              <span className="inline-flex items-center gap-2" aria-live="polite">
+                {savingKinds.professional ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : savedKinds.professional ? <CheckCircle2 size={16} aria-hidden="true" /> : <Save size={16} aria-hidden="true" />}
+                {savingKinds.professional ? "Salvando..." : savedKinds.professional ? "Salvo" : "Salvar profissional global"}
+              </span>
             </button>
           </div>
           <div className="flex flex-wrap gap-1">
