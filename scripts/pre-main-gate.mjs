@@ -154,6 +154,7 @@ const criticalTests = [
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',
+  'tests/clinicSettingsSaveFeedback.regression.test.mjs',
 ];
 
 for (const testFile of criticalTests) {
