@@ -6,7 +6,7 @@ CI_REAL_ATIVO: NÃO
 (mude para SIM somente quando existir workflow de testes no GitHub Actions, verde em um PR real e obrigatório para merge)
 
 CONSELHO_WORK_ATIVO: SIM
-(00 + 01 PRÉ + 02 rodam no Work, sem polling agendado)
+(00 + 01 PRÉ + 02 rodam no Work. Enquanto trigger GitHub event-driven nativo equivalente não estiver comprovadamente disponível, o `Verto Concilier` faz polling horário no minuto 00 como fallback explícito da Issue #238.)
 
 UX_LANE_ATIVA: WORK
 (o papel 02 existe no conselho Work; não depende de tarefa agendada própria)
@@ -64,11 +64,14 @@ expected_head/ref exatos → conteúdo exato → candidate isolado → compare/d
 ## 9. Conselho, risco RED e fluxo
 RED = banco/RLS/migration; login/permissões/isolamento entre clínicas; cobrança/financeiro; Comercial/Super Admin; dado clínico/criança; exclusão; secrets/infra/deploy; mudança transversal. Na dúvida, RED.
 
-### Conselho Work — sem polling
-Papéis lógicos: 00 (orquestra/arquitetura), 01 PRÉ (Red Team) e 02 (Produto/UX). Eles podem alternar dentro do mesmo Work e debater em rodadas. O 00 fecha a decisão e congela o contrato.
+### Conselho Work — Concilier horário como fallback
+Papéis lógicos: 00 (orquestra/arquitetura), 01 PRÉ (Red Team) e 02 (Produto/UX). Eles podem alternar dentro da mesma execução Work e debater em rodadas. O 00 fecha a decisão e congela o contrato.
+- Enquanto o trigger GitHub event-driven nativo equivalente não estiver comprovadamente disponível, `Verto Concilier` consulta o GitHub no minuto 00 de cada hora. Isso é polling do próprio conselho, não wake/dispatch entre lanes.
 - Demanda nova: 00 propõe → 01 PRÉ tenta derrubar → 02 avalia UX/produto quando aplicável → 00 responde e sintetiza. Repita apenas enquanto houver divergência material; padrão até 3 rodadas, máximo 5 salvo necessidade excepcional.
-- O conselho não implementa código, não abre PR, não faz merge/deploy.
-- Saída do conselho: contrato congelado, writer 04–09, RED, ux_required, critérios, preservações, UX_SPEC quando aplicável, riscos e exatamente um handoff operacional para o writer.
+- `ADVISORY_REQUIRED`: o Concilier lê diretamente a mesma Issue na próxima execução, preserva trabalho válido e devolve exatamente um novo handoff ao menor gate correto.
+- `[VERTO_WORK_EVENT]` não é transporte obrigatório neste fallback; a Issue continua sendo a fonte de verdade.
+- O conselho não implementa código, não abre PR operacional, não faz merge/deploy.
+- Saída do conselho: contrato congelado, writer 04–09, RED, ux_required, critérios, preservações, UX_SPEC quando aplicável, riscos e exatamente um handoff operacional para o writer ou para o menor gate afetado.
 
 ### Tarefas operacionais agendadas
 - BUILD_PR: papéis 04–09 e 11. Implementa e, quando terminar, pode assumir 11 na mesma execução para abrir/atualizar PR.
@@ -145,8 +148,8 @@ PROGRESSO: conselho/contrato 25% · implementado 45% · PR 50% · CI 60% · REVI
 ## 21. Anti-stall / retorno ao conselho Work
 Nenhuma Issue aberta pode ficar órfã. Ela deve estar em exatamente uma condição: EXECUTÁVEL, CLAIMED, SCHEDULED com condição objetiva, ADVISORY_REQUIRED para Work, SMOKE_READY, NEEDS_FOUNDER, WAITING_EXTERNAL ou DONE.
 
-Quando uma lane operacional descobrir que o contrato deixou de ser suficiente, não improvise nem espere polling de conselho. Registre na Issue e, se já houver PR, também em comentário do PR:
+Quando uma lane operacional descobrir que o contrato deixou de ser suficiente, não improvise. Registre na Issue:
 `[ADVISORY_REQUIRED] issue=#<n> contract_version=<v> head_sha=<sha|none> motivo=<curto> decisão=<pergunta objetiva>`
-Inclua evidência sem PII. Defina `state: ADVISORY_REQUIRED`, `current_agent: 00`, `next_gate: WORK_COUNCIL`, limpe claim e preserve branch/head/PR. O Work retoma a partir daí e, ao fechar nova decisão, cria nova contract_version se material e devolve exatamente um handoff ao papel operacional correto.
+Inclua evidência sem PII. Defina `state: ADVISORY_REQUIRED`, `current_agent: 00`, `next_gate: WORK_COUNCIL`, limpe claim e preserve branch/head/PR. Não é necessário emitir `[VERTO_WORK_EVENT]` nem usar PR de transporte durante o fallback horário. O `Verto Concilier` encontra a Issue na próxima execução, fecha nova decisão, cria nova `contract_version` se material e devolve exatamente um handoff ao papel operacional correto.
 
 Erro operacional normal NÃO volta ao Work: CI/review/auditoria PÓS/PR/deploy retornam ao papel operacional responsável. Só contrato, arquitetura, UX ou segurança conceitual insuficientes retornam ao conselho.
