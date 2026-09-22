@@ -7,9 +7,9 @@ Enquanto a superfície Work disponível não expuser um trigger GitHub event-dri
 Quando um trigger event-driven equivalente estiver comprovadamente disponível e validado, o polling poderá ser removido por nova decisão de governança.
 
 ## Papéis
-- 00 — Orquestrador/Arquiteto: enquadra, propõe, resolve divergências e congela o contrato.
-- 01 PRÉ — Red Team: tenta derrubar contrato/arquitetura/segurança antes da implementação.
-- 02 — Produto/UX: avalia fluxo, estados, acessibilidade, responsividade e coerência com o produto real.
+- 00 — Orquestrador/Arquiteto: enquadra, propõe, resolve divergências, congela o contrato e participa do smoke pós-verificação.
+- 01 PRÉ — Red Team: tenta derrubar contrato/arquitetura/segurança antes da implementação ou após uma reprovação de smoke que exija nova decisão conceitual.
+- 02 — Produto/UX: avalia fluxo, estados, acessibilidade, responsividade, coerência com o produto real e executa a validação UI/UX do smoke pós-verificação.
 
 Os papéis são lógicos e alternam dentro da mesma execução Work. Não é necessário abrir uma conversa ou tarefa por papel.
 
@@ -17,6 +17,7 @@ Os papéis são lógicos e alternam dentro da mesma execução Work. Não é nec
 A cada execução horária, o Concilier consulta o GitHub e considera apenas trabalho elegível para o conselho:
 - demanda nova do fundador (`demanda` sem estado de fábrica);
 - Issue em `ADVISORY_REQUIRED` com `current_agent: 00` e `next_gate: WORK_COUNCIL`;
+- Issue pós-`STAGING_VERIFIED` marcada com `advisory_kind: CONCILIER_SMOKE`;
 - decisão `DECISÃO:` do fundador que exija reconciliação pelo 00;
 - claim/lock/metadata cuja correção realmente exija autoridade do 00.
 
@@ -66,7 +67,7 @@ O conselho deve deixar a Issue executável com:
 - exatamente um handoff PENDING para implementação.
 
 ## Retorno do operacional
-Quando uma Issue estiver `ADVISORY_REQUIRED`, leia `advisory_reason`, evidências, contract_version, branch, head_sha e PR sem descartar trabalho válido já feito.
+Quando uma Issue estiver `ADVISORY_REQUIRED`, leia `advisory_reason`, `advisory_kind`, evidências, contract_version, branch, head_sha e PR sem descartar trabalho válido já feito.
 
 Se a decisão mudar comportamento, UX, persistência, dados, segurança, integração ou escopo, crie nova `contract_version` e invalide somente os gates afetados.
 
@@ -74,10 +75,36 @@ Se o problema for apenas operacional e o contrato continuar suficiente, não red
 
 Ao concluir, remova `ADVISORY_REQUIRED`, registre a decisão, limpe claim e crie exatamente um próximo handoff PENDING para o menor gate afetado. O Concilier não executa esse handoff; a lane operacional o encontra na própria recorrência.
 
+## Smoke pós-verificação — 00 + 02
+Depois de `STAGING_VERIFIED`, o Verify/13 não envia a Issue diretamente para smoke humano. Ele persiste um retorno ao Concilier com `state: ADVISORY_REQUIRED`, `current_agent: 00`, `next_gate: WORK_COUNCIL` e `advisory_kind: CONCILIER_SMOKE`, preservando merge/head/deploy e evidências de staging.
+
+O smoke padrão é executado pelo próprio Concilier:
+1. 00 valida, com evidência observável disponível, o fluxo funcional crítico, integração aparente, estados essenciais e aderência ao contrato vigente.
+2. 02 valida UI/UX: fluxo do usuário, estados vazio/loading/erro/sucesso quando aplicáveis, responsividade, acessibilidade, legibilidade, coerência visual e comportamento esperado.
+3. PASS exige aprovação independente de 00 e 02 sobre o mesmo staging/head verificado. Ausência de evidência não é PASS.
+
+Se 00 e 02 aprovarem:
+- registre `CONCILIER_SMOKE_PASS` com evidências;
+- `state: DONE`;
+- `current_agent: none`;
+- nenhum handoff ativo;
+- `progresso: 100%`.
+
+Se 00 ou 02 reprovar comportamento, UI ou UX:
+- isso é `CONCILIER_SMOKE_FAIL`, não fallback humano;
+- registre achados objetivos sem PII;
+- faça nova rodada do Conselho: 00 → 01 PRÉ → 02 quando material → 00 síntese;
+- atualize `contract_version` somente se a correção mudar materialmente o contrato;
+- preserve gates independentes ainda válidos;
+- crie exatamente um handoff PENDING ao menor papel/gate operacional capaz de corrigir;
+- depois da correção, o ciclo operacional volta a passar por verify e por novo smoke do Concilier.
+
+Smoke humano é somente fallback de capability. Use `HUMAN_SMOKE_REQUIRED` apenas quando o Concilier não conseguir executar ou observar o smoke com evidência suficiente por limitação real de ferramenta, ambiente ou autorização. Registre `blocked_on`, evidência da limitação e o que o humano precisa verificar. Reprovação funcional/UX detectada pelo Concilier nunca é convertida em fallback humano.
+
 ## Limites
 O conselho não implementa/corrige código, não abre PR operacional, não faz CI/review, não mergeia, não faz deploy/recovery, não altera banco/migration/RLS/RPC e não toca produção.
 
-`WORK_SMOKE_ENABLED` permanece `false`; smoke continua humano até decisão explícita posterior.
+`WORK_SMOKE_ENABLED` é `true` somente para o smoke lógico 00+02 descrito acima. Smoke humano é fallback de capability, não gate padrão.
 
 ## Regra de economia de Work
 Use a mesma execução para alternar os papéis 00/01/02. Não crie subagentes ou trabalhos paralelos por padrão. Faça novas rodadas apenas quando houver objeção material ainda não resolvida.
