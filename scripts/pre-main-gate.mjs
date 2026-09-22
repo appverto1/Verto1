@@ -154,6 +154,11 @@ const criticalTests = [
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',
+  'tests/modulePurchaseEligibility.test.ts',
+  'tests/moduleSubscriptionUpgrade.test.ts',
+  'tests/moduleSubscriptionUpgradeExecution.test.ts',
+  'tests/moduleUpgradeV5S1Finalization.regression.test.mjs',
+  'tests/moduleUpgradeV5S1Http.test.ts',
 ];
 
 for (const testFile of criticalTests) {
@@ -161,12 +166,18 @@ for (const testFile of criticalTests) {
     fail(`teste: ${testFile}`, 'arquivo não encontrado');
     continue;
   }
-  const result = spawnSync(process.execPath, [testFile], {
+  const command = testFile.endsWith('.mjs') ? process.execPath : 'tsx';
+  const commandLabel = testFile.endsWith('.mjs') ? 'node' : 'tsx';
+  console.log(`\n[critical-test] run: ${commandLabel} ${testFile}`);
+  const result = spawnSync(command, [testFile], {
     cwd: root,
     encoding: 'utf8',
     timeout: 20_000,
     env: { ...process.env, NODE_ENV: 'test' },
   });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  console.log(`[critical-test] exit_code=${result.status ?? 1} test=${testFile}`);
   if (result.status === 0) {
     pass(`teste: ${testFile}`);
   } else {
