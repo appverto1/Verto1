@@ -7,7 +7,7 @@ const wiring = fs.readFileSync('services/modulePurchaseEligibilityRoutes.ts', 'u
 const migration = fs.readFileSync('supabase/migrations/20260919110400_module_subscription_upgrade_intents_v1.sql', 'utf8');
 
 assert.match(execution, /subscriptions\.retrieve\(subscriptionId/);
-assert.match(execution, /subscriptions\.update\(subscriptionId/);
+assert.match(execution, /subscriptions\.update\(subscription\.id/);
 assert.match(execution, /proration_behavior: 'always_invoice'/);
 assert.match(execution, /payment_behavior: 'pending_if_incomplete'/);
 assert.match(execution, /advance_module_subscription_upgrade_intent_v1/);
