@@ -6,6 +6,7 @@ import {
   type OrganizationModuleKey,
 } from '../src/constants/organizationModules';
 import { resolveModulePurchaseEligibility } from '../src/utils/modulePurchaseEligibility';
+import { registerModuleSubscriptionUpgradeRoutes } from './moduleSubscriptionUpgradeRoutes';
 
 type ModulePurchaseEligibilityRouteDeps = {
   supabase: any;
@@ -75,5 +76,14 @@ export function registerModulePurchaseEligibilityRoutes(app: Express, deps: Modu
       console.warn('[ModulePurchase] eligibility failed', { code: sanitizeString(error?.code, 80), message });
       return res.status(schemaUnavailable ? 503 : 500).json({ success: false, error: schemaUnavailable ? 'MODULE_PURCHASE_SCHEMA_UNAVAILABLE' : 'MODULE_PURCHASE_ELIGIBILITY_FAILED', retryable: !schemaUnavailable });
     }
+  });
+
+  registerModuleSubscriptionUpgradeRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    sanitizeString,
+    currentClinicId,
   });
 }
