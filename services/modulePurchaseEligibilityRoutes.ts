@@ -7,6 +7,7 @@ import {
 } from '../src/constants/organizationModules';
 import { resolveModulePurchaseEligibility } from '../src/utils/modulePurchaseEligibility';
 import { registerModuleSubscriptionUpgradeRoutes } from './moduleSubscriptionUpgradeRoutes';
+import { registerModuleSubscriptionUpgradeExecutionRoutes } from './moduleSubscriptionUpgradeExecutionRoutes';
 
 type ModulePurchaseEligibilityRouteDeps = {
   supabase: any;
@@ -79,6 +80,14 @@ export function registerModulePurchaseEligibilityRoutes(app: Express, deps: Modu
   });
 
   registerModuleSubscriptionUpgradeRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    sanitizeString,
+    currentClinicId,
+  });
+  registerModuleSubscriptionUpgradeExecutionRoutes(app, {
     supabase,
     noStoreDynamicResponse,
     checkAuth,
