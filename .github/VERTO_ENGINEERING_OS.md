@@ -128,6 +128,30 @@ Gates longos devem persistir checkpoints incrementais ao fim de cada unidade seg
 
 Se o runtime estiver chegando ao limite e o gate lógico ainda não terminou, isso não é `FAILED`: persistir checkpoint e criar continuação PENDING para o mesmo papel quando ainda houver oportunidade de escrita segura. Nunca deixar claim órfão voluntariamente.
 
+## Capability discovery / blocker invalidation
+Antes de declarar blocker por ferramenta ou capability ausente, a execução deve descobrir as capabilities realmente disponíveis no runtime atual. Evidência de runtime anterior não prova ausência atual, e nome de primitive exposta não prova usabilidade funcional.
+
+Ordem obrigatória:
+1. identificar a capability mínima necessária para a operação concreta e o safety envelope exigido;
+2. consultar primitives atuais e equivalentes funcionais no mesmo repo/ref/ambiente/credencial relevante;
+3. preferir probe seguro/read-only suficiente para provar disponibilidade funcional;
+4. considerar a capability disponível somente quando todos os elos materiais necessários funcionarem — conteúdo exato, transformação exata, candidate revisável, diff verificável e movimento guarded da ref quando a operação exigir escrita — ou quando uma alternativa autorizada completa preservar o mesmo safety envelope;
+5. se uma alternativa segura completa resolver, usá-la e encerrar a análise de blocker; somente depois avaliar alternativas adicionais.
+
+`CAPABILITY_BLOCKER_INVALIDATED` aplica-se somente à causa artificial comprovadamente superada. A invalidation não apaga diagnóstico/histórico, não converte gate em PASS e não remove outra causa independente. Antes de retomar ou redispatchar, revalidar `active_handoff`, `current_agent`, claim, expected/base SHA, locks, dependências e freshness; candidate ou transformação derivada de head antigo não pode ser reutilizada sem compare/freshness apropriado.
+
+Capability exposta mas sem permissão, incompatível com repo/ref/host, truncada de modo impeditivo ou falhando no probe seguro permanece indisponível para aquela operação. A validade da descoberta é contextual ao runtime, escopo, credencial e ambiente observados; nova execução revalida blockers baseados em ausência de capability e não presume disponibilidade futura.
+
+Probes de escrita não podem produzir side effect canônico. Quando forem estritamente necessários, devem ser não-canônicos/reversíveis: não mover branch/ref canônica, não criar PR/merge/deploy, não alterar Issue de produto e não consumir idempotency key de negócio. Candidate Git órfão sem ref é aceitável somente quando necessário e registrado; produção é proibida.
+
+`WRITE_TRANSPORT_BLOCKED` continua legítimo quando faltar qualquer elo material para conteúdo exato, transformação exata, candidate revisável, diff verificável ou movimento guarded da ref e nenhum transporte/fallback autorizado satisfizer o mesmo safety envelope. Ausência isolada de patch local, notebook ou Remote Desktop nunca basta.
+
+Metadata mínima de blocker de capability: `capability_checked_at`, capability mínima necessária, primitives/probes e resultados funcionais, repo/ref/ambiente relevante, `capability_blocker_status: VALID | INVALIDATED` e, quando VALID, `unblock_owner` + `unblock_action`.
+
+A regra das 10 alternativas começa somente após capability discovery atual. Alternativas duplicadas, inseguras, inaplicáveis ou já refutadas não contam; a primeira alternativa autorizada que resolver com segurança encerra a análise.
+
+O 00, como watchdog, deve revalidar blockers de capability contra o runtime atual. Se a causa antiga contradizer capabilities atuais, pode marcar `CAPABILITY_BLOCKER_INVALIDATED`, corrigir somente continuidade/orquestração e redispatchar ao papel correto; 00 não assume o trabalho substantivo do writer/especialista.
+
 ## Blockers internos, ciclos e eventual completion
 Blocker interno/engenharia deve ser resolvido ou roteado pela fábrica; não vira espera humana só por limitação de uma ferramenta. Antes de declarar incapacidade interna, avaliar e registrar pelo menos 10 alternativas realmente viáveis e distintas quando esse requisito for aplicável ao blocker; alternativas inseguras, duplicadas ou tecnicamente inaplicáveis não contam e não precisam ser executadas.
 
