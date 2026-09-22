@@ -2,8 +2,8 @@
 
 Prevalece sobre FACTORY_PROTOCOL.md, VERTO_ENGINEERING_OS.md, .github/agents/*.md e os prompts das lanes em caso de conflito. O formato dos campos de estado continua definido no FACTORY_PROTOCOL.md. Este arquivo só muda por Issue explícita do fundador.
 
-CI_REAL_ATIVO: NÃO
-(mude para SIM somente quando existir workflow de testes no GitHub Actions, verde em um PR real e obrigatório para merge)
+CI_REAL_ATIVO: SIM
+(o workflow `Verto Staging CI` em `.github/workflows/staging-ci.yml` é CI real da fábrica. O check `staging-gate` verde no `head_sha` exato é obrigatório para o Merge Gate 12. Enquanto branch protection/ruleset não puder impor tecnicamente o required check, a própria fábrica o trata como gate inegociável.)
 
 CONSELHO_WORK_ATIVO: SIM
 (00 + 01 PRÉ + 02 rodam no Work. Enquanto trigger GitHub event-driven nativo equivalente não estiver comprovadamente disponível, o `Verto Concilier` faz polling horário no minuto 00 como fallback explícito da Issue #238.)
@@ -134,10 +134,11 @@ Toda migration existe como arquivo versionado no repo. Só aditiva ou reversíve
 
 ## 11. CI
 Estados: CI_PASS | CI_FAIL | CI_UNAVAILABLE. Ler código com IA não é CI.
-- CI_PASS só existe com checks reais GitHub verdes no head_sha exato. Check vermelho = CI_FAIL.
-- CI_REAL_ATIVO = NÃO: 10 emite CI_UNAVAILABLE e lista o que NÃO foi verificado. Nunca é PASS e nunca libera RED; 12 só aceita em não-RED.
-- CI_REAL_ATIVO = SIM: CI_UNAVAILABLE não libera merge.
-- Distinga baseline antigo de regressão nova.
+- O CI real canônico é o workflow `Verto Staging CI`, job/check `staging-gate`, executado para PRs destinados a `staging`.
+- CI_PASS só existe quando `staging-gate` conclui verde no `head_sha` exato do PR. Check vermelho = CI_FAIL. Check ausente, pendente, cancelado ou impossível de observar = CI_UNAVAILABLE.
+- `CI_REAL_ATIVO = SIM`: CI_UNAVAILABLE não libera merge, RED ou não-RED.
+- O papel 12 deve tratar `staging-gate` verde no `head_sha` exato como required gate da fábrica. Na ausência de branch protection/ruleset que o imponha tecnicamente, esta regra continua obrigatória por governança; nunca mergeie por disponibilidade do botão do GitHub.
+- Distinga baseline antigo de regressão nova. O ratchet pode aceitar apenas falhas preexistentes conforme o workflow, mas qualquer regressão nova reprova o CI.
 
 ## 12. Dados pessoais (LGPD)
 Dado de saúde e de criança são sensíveis. Nunca copie nome, CPF, contato, laudo ou texto clínico para Issue, PR, comentário ou log; use IDs e contagens. Não grave dado pessoal em logs. Quando contrato tocar dado de paciente, a auditoria confere consentimento, trilha de acesso, minimização e retenção/exclusão.
