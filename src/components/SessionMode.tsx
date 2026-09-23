@@ -29,6 +29,8 @@ import {
 } from 'lucide-react';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
+import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
+import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
   normalizeAbaPromptTypeConfig,
   resolveTrialPromptInfo,
@@ -1117,6 +1119,7 @@ export const SessionMode = ({
   const sessionStateKey = `verto.aba_session_state:${patientId}:${sessionId}`;
 
   const [trialCount, setTrialCount] = useState(0);
+  const [reinforcerClosureSyncing, setReinforcerClosureSyncing] = useState(false);
   const [activeCriteria, setActiveCriteria] = useState<string | null>(null);
   const [collectionType, setCollectionType] = useState('dtt');
   const [lastRegularTrialType, setLastRegularTrialType] = useState('dtt');
@@ -5816,6 +5819,15 @@ export const SessionMode = ({
 
   const confirmEndSession = async () => {
     if (endingSession) return;
+    setReinforcerClosureSyncing(true);
+    setSessionWarning('Sincronizando registros antes de encerrar…');
+    const reinforcerFlush = await flushReinforcerDeliveries(sessionId);
+    setReinforcerClosureSyncing(false);
+    if (!reinforcerFlush.ok) {
+      setSessionEndError(reinforcerFlush.terminal > 0 ? 'Este registro não pôde ser sincronizado.' : 'Há registros de reforçadores ainda não sincronizados. Conecte-se e tente novamente para encerrar sem perder registros.');
+      setSessionWarning('A sessão continua aberta e os registros locais foram preservados.');
+      return;
+    }
     const closureIssues = buildSessionClosureIssues();
     if (closureIssues.blockers.length > 0) {
       setSessionWarning('Resolva os bloqueios antes de encerrar a sessão.');
@@ -8971,7 +8983,7 @@ export const SessionMode = ({
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-4 sm:px-4" data-aba-quick-register-body>
 
-        <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
+        <AbaReinforcerSessionPanel patientId={patientId} sessionId={sessionId} readOnly={sessionCompleted || isCompletedSessionReview} />\n\n        <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
           <div className="space-y-4">
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-location-chips>
               <div className="flex items-center justify-between gap-2">
@@ -11725,7 +11737,7 @@ export const SessionMode = ({
                 className={`flex-1 inline-flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold shadow-lg transition-all ${hasClosureBlockers || endingSession ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
               >
                 {endingSession && <Loader2 size={18} className="animate-spin" />}
-                {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
+                {reinforcerClosureSyncing ? 'Sincronizando registros antes de encerrar…' : endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
               </button>
             </div>
           </div>
