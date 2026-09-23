@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SecureImage } from './SecureMedia';
+import { ModuleDiscoveryInterstitial } from './ModuleDiscoveryInterstitial';
 
 interface SettingsMenuProps {
   user: any;
@@ -41,6 +42,7 @@ export function SettingsMenu({
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState('');
   const [profileImageFailed, setProfileImageFailed] = useState(false);
+  const [moduleDiscoveryOpen, setModuleDiscoveryOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const firstActionRef = useRef<HTMLButtonElement>(null);
@@ -159,6 +161,7 @@ export function SettingsMenu({
   };
 
   return (
+    <>
     <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
       <button
         ref={triggerRef}
@@ -300,15 +303,15 @@ export function SettingsMenu({
                 role="menuitem"
                 onClick={() => {
                   setIsOpen(false);
-                  onOpenMarketplace?.();
+                  setModuleDiscoveryOpen(true);
                 }}
                 className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
               >
                 <div className="flex items-center gap-3">
                   <ShoppingBag size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">Marketplace</span>
+                  <span className="text-sm font-medium">Módulos e recursos</span>
                   <span className="text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full font-bold">
-                    EM BREVE
+                    CONHEÇA
                   </span>
                 </div>
                 <ChevronRight size={14} className="text-slate-300" />
@@ -336,6 +339,8 @@ export function SettingsMenu({
         )}
       </AnimatePresence>
     </div>
+    <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />
+    </>
   );
 }
 
