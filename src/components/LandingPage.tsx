@@ -1352,6 +1352,9 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
               <p className="mt-6 max-w-3xl text-lg font-normal leading-8 text-slate-500">
                 Inclua profissionais e instituições externas que participam do cuidado do paciente e mantenha o compartilhamento sob controle. Cada parceiro acessa somente conteúdos e recursos disponibilizados à Rede, conforme o vínculo e as autorizações vigentes.
               </p>
+              <p className="mt-6 text-sm font-semibold text-[#7a32fc]">
+                Ver como funciona →
+              </p>
 
               <div className="mt-8 grid gap-4 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
                 <div className="rounded-[28px] border border-purple-100 bg-white p-5 shadow-sm">
