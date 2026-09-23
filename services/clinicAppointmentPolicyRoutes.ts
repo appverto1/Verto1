@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { Express } from 'express';
+import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
 
 type ClinicAppointmentPolicyRouteDeps = {
   supabase: any;
@@ -217,4 +218,13 @@ export function registerClinicAppointmentPolicyRoutes(
       }
     }
   );
+
+  registerModulePurchaseEligibilityRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    sanitizeString,
+    currentClinicId
+  });
 }
