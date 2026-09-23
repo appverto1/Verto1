@@ -77,6 +77,17 @@ Comece SEMPRE consultando a fila da sua lane. Sem Issue elegível, encerre com I
 ## 7. Escrita segura (SAFE_WRITE)
 expected_head/ref exatos → conteúdo exato → candidate isolado → compare/diff → fast-forward com force=false → releia. Contents API só para arquivo pequeno com substituição integral verificável. Nunca substitua arquivo inteiro às cegas; nunca force push. Menor diff seguro; sem refactor oportunista.
 
+### 7.1 Transporte cloud-first e compatibilidade com contratos históricos
+O mecanismo de transporte é governado por este §7. A Issue continua sendo fonte de verdade para estado, escopo, comportamento, segurança, dados, UX, critérios de aceite e gates; porém uma prescrição histórica de mecanismo de escrita não pode rebaixar nem bloquear um safety envelope equivalente ou superior autorizado pelo Guardrails vigente.
+
+- `fetch_file` integral truncado, ausência de `git clone`, workspace Git local, patch local ou Remote Desktop NÃO são blockers suficientes por si só.
+- Para arquivo grande/compartilhado, fixe `expected_head` e a revisão exata; leia a mesma revisão em segmentos até reconstruir o conteúdo integral de forma verificável; aplique somente a transformação contratada; construa candidate isolado por Git objects (`create_blob -> create_tree -> create_commit(parent=expected_head)`); compare `expected_head -> candidate`; valide arquivos, hunks, escopo e preservações; somente após `diff_validation: PASS` mova a feature ref por fast-forward com `force=false` e releia branch/diff.
+- Candidate órfão/revisável é preferível a criar ou mover branch vazia antes da validação. Branch vazia ou checkpoint sem transformação não conta como tentativa material de desbloqueio.
+- Se a cadeia cloud equivalente estiver funcional, é proibido declarar `WRITE_TRANSPORT_BLOCKED` somente porque um contrato antigo diz “workspace Git materializado”, “patch local obrigatório”, “não usar object-only” ou formulação equivalente. Interprete essas cláusulas como exigência do resultado de segurança: conteúdo exato, transformação determinística, candidate isolado, diff revisável, atualização guarded e preservação do escopo.
+- Essa equivalência é `ROUTING_ONLY`/operacional e não exige nova `contract_version`, nova rodada de produto, UX ou arquitetura quando não muda comportamento, segurança, dados ou critérios de aceite.
+- Em especial, continuações históricas como #191, #188 e #171 não podem ser puladas, devolvidas ao Work ou classificadas como não executáveis apenas pela ausência de workspace local se o runtime atual comprovar a cadeia cloud segura completa.
+- `WRITE_TRANSPORT_BLOCKED` só é válido quando faltar um elo material para conteúdo exato, transformação exata, candidate revisável, diff verificável ou movimento guarded da ref. Registre a primitive ausente/falha objetiva e preserve `expected_head`.
+
 ## 8. Regras de engenharia
 1. Preservação: altere só o pedido; o resto fica intacto e funcional. Estado, cache, persistência e histórico nunca quebram. O painel Comercial/Super Admin é release-critical.
 2. Ordem de qualidade: integridade → persistência → segurança → histórico → UX → performance → velocidade.
