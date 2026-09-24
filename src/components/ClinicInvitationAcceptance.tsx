@@ -15,13 +15,20 @@ const isInvitationId = (value: string) =>
 const invitationErrorMessage = (result: any) => {
   const code = String(result?.error || '').trim();
   const message = String(result?.message || '').trim();
-  if (message) return message;
-  if (code === 'CLINIC_INVITATION_EMAIL_MISMATCH') {
+  if (code === 'CLINIC_INVITATION_EMAIL_MISMATCH' || code === 'CLINIC_INVITATION_IDENTITY_EMAIL_MISMATCH') {
     return 'Este convite foi enviado para outro e-mail. Entre com a conta convidada para continuar.';
   }
-  if (code === 'CLINIC_INVITATION_NOT_AVAILABLE' || code === 'CLINIC_INVITATION_ALREADY_USED') {
+  if (code === 'CLINIC_INVITATION_EXPIRED') {
+    return 'Este convite expirou. Solicite um novo convite à clínica.';
+  }
+  if (
+    code === 'CLINIC_INVITATION_NOT_AVAILABLE' ||
+    code === 'CLINIC_INVITATION_ALREADY_USED' ||
+    code === 'CLINIC_INVITATION_NOT_FOUND'
+  ) {
     return 'Este convite não está mais disponível. Solicite um novo convite à clínica.';
   }
+  if (message) return message;
   return 'Não foi possível validar este convite agora. Tente novamente ou solicite um novo convite à clínica.';
 };
 
