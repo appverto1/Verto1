@@ -44,7 +44,7 @@ begin
 end
 $test$;
 
--- SECURITY DEFINER and fixed search_path are mandatory on the browser RPC surface.
+-- SECURITY DEFINER and fixed empty search_path are mandatory on the browser RPC surface.
 do $test$
 declare
   v_bad integer;
@@ -65,7 +65,10 @@ begin
       'list_clinic_communication_notifications_v1',
       'get_clinic_communication_unread_count_v1'
     )
-    and (not p.prosecdef or not (coalesce(p.proconfig,array[]::text[]) @> array['search_path=']::text[]));
+    and (
+      not p.prosecdef
+      or not ('search_path=""' = any(coalesce(p.proconfig,array[]::text[])))
+    );
   if v_bad <> 0 then raise exception 'TEST_FAIL RPC security definer/search_path'; end if;
 end
 $test$;
