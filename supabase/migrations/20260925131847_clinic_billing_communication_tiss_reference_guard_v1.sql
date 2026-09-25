@@ -54,6 +54,46 @@ $function$;
 revoke all on function private.clinic_billing_tiss_reference_access_v1(uuid,uuid)
   from public, anon, authenticated, service_role;
 
+create or replace function private.guard_clinic_communication_tiss_reference_v1()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+set row_security = off
+as $function$
+declare
+  v_actor uuid := auth.uid();
+begin
+  if new.reference_type is null then
+    return new;
+  end if;
+
+  if new.reference_type <> 'TISS_OFFICIAL_LOT'
+     or new.reference_id is null
+     or v_actor is null
+     or not private.clinic_billing_tiss_reference_access_v1(v_actor,new.clinic_id)
+     or not exists (
+       select 1 from public.tiss_official_documents d
+       where d.id=new.reference_id and d.clinic_id=new.clinic_id
+     ) then
+    raise exception using errcode='42501', message='COMMUNICATION_REFERENCE_UNAVAILABLE';
+  end if;
+
+  return new;
+end;
+$function$;
+
+revoke all on function private.guard_clinic_communication_tiss_reference_v1()
+  from public, anon, authenticated, service_role;
+
+drop trigger if exists clinic_communication_threads_tiss_reference_guard_v1
+  on public.clinic_communication_threads;
+create trigger clinic_communication_threads_tiss_reference_guard_v1
+before insert or update of reference_type, reference_id, clinic_id
+on public.clinic_communication_threads
+for each row
+execute function private.guard_clinic_communication_tiss_reference_v1();
+
 create or replace function public.list_clinic_communication_threads_v1(
   p_clinic_id uuid,
   p_limit integer default 30,
