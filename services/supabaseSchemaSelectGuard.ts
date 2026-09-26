@@ -3,7 +3,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const GUARDED_SCHEMA_TABLES = new Set(['users', 'clinics', 'appointments']);
 const guardedClientPrototypes = new WeakSet<object>();
 
-export type RouteSchemaCatalog = Record<string, { columns?: Record<string, boolean> } | undefined>;
+export type RouteSchemaCatalog = {
+  schemaVersion?: number;
+  [key: string]: unknown;
+};
 
 type LoggerLike = Pick<Console, 'log' | 'warn'>;
 
@@ -25,7 +28,9 @@ type StartupInstallParams = {
 const normalizeUrl = (value: unknown) => String(value ?? '').trim().replace(/\/+$/, '');
 
 function availableColumnsForTable(catalog: RouteSchemaCatalog, table: string): Set<string> | null {
-  const columns = catalog?.[table]?.columns;
+  const tableEntry = catalog?.[table];
+  if (!tableEntry || typeof tableEntry !== 'object' || Array.isArray(tableEntry)) return null;
+  const columns = (tableEntry as any).columns;
   if (!columns || typeof columns !== 'object' || Array.isArray(columns)) return null;
   return new Set(
     Object.entries(columns)
