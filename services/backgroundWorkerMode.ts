@@ -3,6 +3,7 @@ import {
   normalizeVertoDeploymentEnvironment,
   type VertoDeploymentEnvironment,
 } from './deploymentEnvironment';
+import { installStagingSupabaseSchemaSelectGuard } from './supabaseSchemaSelectGuard';
 
 export type VertoBackgroundWorkerMode = 'active' | 'economy';
 
@@ -136,6 +137,11 @@ export function installVertoBackgroundWorkerWarmupGuard(params: {
 
 const startupDeploymentEnv = normalizeVertoDeploymentEnvironment(process.env.VERTO_DEPLOYMENT_ENV);
 if (startupDeploymentEnv) {
+  await installStagingSupabaseSchemaSelectGuard({
+    deploymentEnv: startupDeploymentEnv,
+    env: process.env,
+    logger: console,
+  });
   installVertoBackgroundWorkerCronGuard({
     deploymentEnv: startupDeploymentEnv,
     logger: console,
