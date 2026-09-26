@@ -1718,6 +1718,7 @@ export function CoordinatorDashboard({
     settings: "Configurações da Clínica",
     logs: "Log de Atividades",
     billing: "Assinatura e Cobrança",
+    billingUpdates: "Atualizações do faturamento",
   };
   const professionalDailyMessages = [
     "Cada marco registrado hoje é um capítulo na história de superação de alguém.",
