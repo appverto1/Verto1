@@ -56,6 +56,8 @@ import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
+import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
+import { BillingCommunicationNotifications } from "./BillingCommunicationNotifications";
 import { ClinicAnnouncementsPanel } from "./ClinicAnnouncementsPanel";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
@@ -186,6 +188,7 @@ type DashboardTab =
   | "settings"
   | "logs"
   | "billing"
+  | "billingUpdates"
   | "flow"
   | "birthdays";
 
@@ -924,6 +927,7 @@ export function CoordinatorDashboard({
     settings: null,
     logs: "clinic-settings",
     billing: "billing-management",
+    billingUpdates: null,
     flow: "engagement-widgets",
     birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
@@ -960,6 +964,7 @@ export function CoordinatorDashboard({
     if (tabId === "professionalProfile") return isClinicBaseRole(normalizedRole);
     if (tabId === "settings") return hasCapability("clinic.settings.view");
     if (tabId === "billing") return hasCapability("clinic.settings.view");
+    if (tabId === "billingUpdates") return hasCapability("communication.billing_updates.view");
     if (tabId === "financial") return canAccessClinicFinance;
     if (tabId === "closure" || tabId === "conference") return hasCapability("billing.preguide.view");
     const capability = capabilityForTab(tabId);
@@ -987,6 +992,7 @@ export function CoordinatorDashboard({
     | "settings"
     | "logs"
     | "billing"
+    | "billingUpdates"
     | "flow"
     | "birthdays"
   >("dashboard");
@@ -10815,6 +10821,12 @@ export function CoordinatorDashboard({
         badge: "BETA",
         children: [
           {
+            id: "billing-updates",
+            label: "Atualizações do faturamento",
+            icon: MessageCircle,
+            tab: "billingUpdates",
+          },
+          {
             id: "finance-dashboard",
             label: "Dashboard financeiro",
             icon: LayoutDashboard,
@@ -11106,6 +11118,20 @@ export function CoordinatorDashboard({
     return alerts;
   })();
 
+  const openBillingCommunicationThread = (threadId: string) => {
+    const cleanThreadId = String(threadId || "").trim();
+    if (!cleanThreadId || !hasCapability("communication.billing_updates.view")) return;
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("billingThread", cleanThreadId);
+      window.history.replaceState(window.history.state, "", nextUrl.toString());
+    } catch {
+      // The panel remains reachable even when URL state is unavailable.
+    }
+    navigateToTab("billingUpdates");
+    setView("home");
+  };
+
   const openClinicalMentionNotification = (notification: any) => {
     const patientId = String(notification?.patientId || '').trim();
     const timelineItemId = String(notification?.timelineItemId || '').trim();
@@ -11257,6 +11283,13 @@ export function CoordinatorDashboard({
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
               <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+              {hasCapability("communication.billing_updates.view") && (
+                <BillingCommunicationNotifications
+                  clinicId={workspaceScopeKey}
+                  themeMode={theme}
+                  onOpenThread={openBillingCommunicationThread}
+                />
+              )}
               <SettingsMenu
                 user={user}
                 onLogout={onLogout}
@@ -11585,6 +11618,13 @@ export function CoordinatorDashboard({
             </button>
 
             <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+            {hasCapability("communication.billing_updates.view") && (
+              <BillingCommunicationNotifications
+                clinicId={workspaceScopeKey}
+                themeMode={theme}
+                onOpenThread={openBillingCommunicationThread}
+              />
+            )}
             <SettingsMenu
               user={user}
               onLogout={onLogout}
@@ -12253,6 +12293,20 @@ export function CoordinatorDashboard({
                       [member.name]: duration,
                     }))
                   }
+                />
+              </motion.div>
+            )}
+            {hasCapability("communication.billing_updates.view") && activeTab === "billingUpdates" && (
+              <motion.div
+                key={`billing-updates:${workspaceScopeKey}`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <BillingCommunicationPanel
+                  clinicId={workspaceScopeKey}
+                  clinicName={String(user?.activeWorkspaceName || user?.clinicName || user?.clinic?.name || "Clínica atual")}
+                  canManage={hasCapability("communication.billing_updates.manage")}
                 />
               </motion.div>
             )}
