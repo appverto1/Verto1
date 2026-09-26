@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { resolveVertoBackgroundWorkerMode } from './backgroundWorkerMode';
 
 type SupabaseLike = {
   from: (table: string) => any;
@@ -11,6 +12,12 @@ type RateLimitStoreOptions = {
   windowMs: number;
 };
 
+const ECONOMY_SUPPRESSED_AUTOMATIC_JOB_LEASES = new Set([
+  'active-patient-startup-reconciliation',
+  'active-patient-retry-drain',
+  'active-patient-daily-reconciliation',
+]);
+
 const sha256 = (value: unknown) =>
   crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex');
 
@@ -18,6 +25,15 @@ const asDate = (value: unknown, fallbackMs: number) => {
   const parsed = new Date(String(value || ''));
   return Number.isFinite(parsed.getTime()) ? parsed : new Date(Date.now() + fallbackMs);
 };
+
+export function shouldSuppressDistributedJobLeaseForEconomy(
+  jobKey: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const normalizedJobKey = String(jobKey || '').trim().slice(0, 160);
+  if (!ECONOMY_SUPPRESSED_AUTOMATIC_JOB_LEASES.has(normalizedJobKey)) return false;
+  return resolveVertoBackgroundWorkerMode({ env }) === 'economy';
+}
 
 export class SupabaseRateLimitStore {
   readonly prefix: string;
@@ -161,9 +177,13 @@ export async function tryAcquireDistributedJobLease(params: {
   jobKey: string;
   ownerId: string;
   leaseSeconds: number;
+  env?: NodeJS.ProcessEnv;
 }) {
+  const jobKey = String(params.jobKey || '').trim().slice(0, 160);
+  if (shouldSuppressDistributedJobLeaseForEconomy(jobKey, params.env || process.env)) return false;
+
   const { data, error } = await params.supabase.rpc('runtime_try_acquire_job_lease_v1', {
-    p_job_key: String(params.jobKey || '').trim().slice(0, 160),
+    p_job_key: jobKey,
     p_owner_id: String(params.ownerId || '').trim().slice(0, 200),
     p_lease_seconds: Math.max(5, Math.min(3_600, Math.floor(Number(params.leaseSeconds) || 60)))
   });
