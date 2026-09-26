@@ -161,13 +161,13 @@ export function BillingCommunicationPanel({ clinicId, clinicName = 'Clínica atu
     try {
       const [threadResult, notificationResult, unreadCount] = await Promise.all([
         billingCommunicationService.listThreads(scope),
-        billingCommunicationService.listNotifications(),
+        billingCommunicationService.listNotifications(scope),
         billingCommunicationService.getUnreadCount(scope),
       ]);
       if (revision !== scopeRevision.current) return;
       setThreads(threadResult.items);
       setCursor(threadResult.nextCursor);
-      setNotifications(notificationResult.items.filter((item) => item.clinicId === scope));
+      setNotifications(notificationResult.items);
       setUnread(unreadCount);
       const deep = new URLSearchParams(window.location.search).get('billingThread');
       if (deep) {

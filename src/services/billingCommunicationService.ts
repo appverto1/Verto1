@@ -111,10 +111,14 @@ export const billingCommunicationService = {
     return Array.isArray(payload?.items) ? payload!.items! : [];
   },
 
-  async listNotifications(cursor?: BillingCommunicationNotificationCursor | null) {
+  async listNotifications(
+    clinicId: string,
+    cursor?: BillingCommunicationNotificationCursor | null,
+  ) {
     const payload = await rpc<RpcResult<{ items?: BillingCommunicationNotification[]; nextCursor?: BillingCommunicationNotificationCursor | null }>>(
       'list_clinic_communication_notifications_v1',
       {
+        p_clinic_id: clinicId,
         p_limit: 30,
         p_before_created_at: cursor?.createdAt || null,
         p_before_id: cursor?.id || null,

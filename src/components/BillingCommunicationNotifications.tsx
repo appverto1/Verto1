@@ -42,9 +42,9 @@ export function BillingCommunicationNotifications({
     setLoading(true);
     setError('');
     try {
-      const result = await billingCommunicationService.listNotifications();
+      const result = await billingCommunicationService.listNotifications(scope);
       if (revision !== revisionRef.current) return;
-      setItems(result.items.filter((item) => item.clinicId === scope).slice(0, 20));
+      setItems(result.items.slice(0, 20));
     } catch {
       if (revision === revisionRef.current) {
         setItems([]);
