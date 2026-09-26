@@ -100,9 +100,13 @@ assert.equal((realStoppedTask as any).getStatus?.(), 'stopped');
 (realStoppedTask as any).destroy?.();
 
 // Startup warmups are also automatic work; economy suppresses only the three inventoried warmup callbacks.
-const notificationWarmup = () => { void 'notification_jobs_startup'; };
-const clinicWarmup = () => { void 'startup_warmup'; };
-const unrelatedTimeout = () => { void 'unrelated'; };
+// Keep the probe callbacks structurally equivalent to the runtime callbacks: the reason is an argument
+// to a function call, so tsx cannot erase the marker as dead `void 'literal'` code before Function#toString.
+const observedWarmupReasons: string[] = [];
+const recordWarmupReason = (reason: string) => { observedWarmupReasons.push(reason); };
+const notificationWarmup = () => { void recordWarmupReason('notification_jobs_startup'); };
+const clinicWarmup = () => { void recordWarmupReason('startup_warmup'); };
+const unrelatedTimeout = () => { void recordWarmupReason('unrelated'); };
 assert.equal(shouldSuppressVertoEconomyWarmup(notificationWarmup, 5_000), true);
 assert.equal(shouldSuppressVertoEconomyWarmup(clinicWarmup, 8_000), true);
 assert.equal(shouldSuppressVertoEconomyWarmup(clinicWarmup, 30_000), true);
