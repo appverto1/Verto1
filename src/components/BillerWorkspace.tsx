@@ -154,12 +154,13 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
 
           <div className="min-w-0">
             {section === 'updates' ? (
-              <BillingCommunicationPanel
-                key={`updates:${workspaceScopeKey}`}
-                clinicId={workspaceScopeKey}
-                clinicName={clinicName}
-                canManage={canManageUpdates}
-              />
+              <React.Fragment key={`updates:${workspaceScopeKey}`}>
+                <BillingCommunicationPanel
+                  clinicId={workspaceScopeKey}
+                  clinicName={clinicName}
+                  canManage={canManageUpdates}
+                />
+              </React.Fragment>
             ) : conferenceMode ? (
               <React.Fragment key={`conference:${workspaceScopeKey}`}>
                 <MonthlyConferenceCenter
