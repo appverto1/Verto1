@@ -137,6 +137,8 @@ const criticalTests = [
   'tests/goLiveHardening.test.mjs',
   'tests/distributedSessionSafety.regression.test.mjs',
   'tests/productionSessionPersistence.regression.test.mjs',
+  'tests/backgroundWorkerEconomyMode.test.ts',
+  'tests/supabaseSchemaSelectGuard.test.ts',
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',
   'tests/therapeuticPlanSessionContext.regression.test.mjs',
   'tests/patientCaseTeamCoordinatorAuthority.regression.test.mjs',
