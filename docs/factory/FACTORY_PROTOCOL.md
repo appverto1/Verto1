@@ -126,3 +126,13 @@ Ciclos em blocked_on devem retornar ao 00 para definir um único owner e quebrar
 Use ORPHAN_LOCK_SUSPECTED quando um lock persistido aparentar não ter owner operacional válido, por exemplo: owner Issue inexistente/fechada/terminal incompatível, owner/handoff canônico ausente ou metadata do lock incompatível com o estado persistido. Esse estado é suspeita, não autorização de liberação. Somente o 00 revalida owner, escopo, base SHA e release gate e decide recuperar/reatribuir/liberar o lock. Claim expirado ou silêncio do runtime isoladamente nunca liberam lock.
 
 As execuções agendadas (polling) são o mecanismo de retomada e o watchdog. Uma execução perdida não invalida a tarefa; a próxima reavaliação retoma a fila a partir da Issue como fonte de verdade.
+
+
+CANDIDATE WRITER VALIDATION / CAPABILITY ESCALATION
+Quando um writer 04–09 comprovar ausência de checkout/shell capaz de executar seu gate, deve registrar na Issue: capability_needed, required_head_sha, required_evidence, return_agent, capability_blocker_status, unblock_owner e unblock_action. É proibido reenviar ao mesmo runtime incapaz sem mudança factual.
+
+O executor físico padrão é o workflow read-only `.github/workflows/candidate-writer-validation.yml` em runner GitHub-hosted. Ele valida branches `factory/**` no candidate SHA exato, usa baseline `staging` (ou SHA explícito verificável), Node 20 + `npm ci`, typecheck ratchet, build e pre-main ratchet. Testes focais só podem ser suites enumeradas no próprio workflow; texto de Issue/comentário/input nunca vira shell arbitrário.
+
+A evidência desse executor é somente `WRITER_VALIDATION_PASS|FAIL`. Ela não é `CI_PASS`, `PR_READY`, review, merge, deploy ou `STAGING_VERIFIED`. O writer continua dono do gate e de qualquer correção. Falha retorna ao writer. Se o runner cloud estiver indisponível ou incapaz, o 00 atua como broker de capability e roteia executor autorizado, preservando autoria e gates. O papel 10 continua reservado ao CI/regressão posterior.
+
+GLOBAL_WRITE_LOCK de Issue bloqueada por capability recebe prioridade de liveness, mas nunca é liberado por inferência. O `Verto Staging CI / staging-gate` posterior permanece obrigatório e independente. Este mecanismo não autoriza produção, secrets, deploy, `pull_request_target`, escrita pelo workflow, mudança de scheduler/RRULE/enablement/prompt ou criação prematura de PR apenas para obter runner.
