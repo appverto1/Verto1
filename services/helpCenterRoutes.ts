@@ -45,6 +45,7 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     const { data, error } = await supabase.storage.from(HELP_MEDIA_BUCKET).createSignedUrl(media.objectKey, 60);
     if (error || !data?.signedUrl) return res.status(404).json({ error: 'HELP_MEDIA_UNAVAILABLE' });
     res.setHeader('Cache-Control', 'private, no-store');
+    if (media.mimeType.startsWith('video/')) res.setHeader('Accept-Ranges', 'bytes');
     if (media.mimeType.startsWith('video/') && req.headers?.range) {
       res.setHeader('Location', data.signedUrl);
       return res.status(307).end();
