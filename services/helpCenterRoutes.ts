@@ -11,6 +11,16 @@ type Deps = {
 
 export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   const { supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, currentClinicId } = deps;
+  app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
+    const clinicId = currentClinicId(req.session?.user);
+    if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
+    const context = req.authorizationContext;
+    const audience = String(context?.role || req.session?.user?.role || '').trim().toLowerCase();
+    const capabilities = context?.capabilities instanceof Set ? Array.from(context.capabilities) : [];
+    const articles = publishedHelpProjection(audience, capabilities as string[]);
+    return res.json({ clinicId, articles });
+  });
+
   app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
     const clinicId = currentClinicId(req.session?.user);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
