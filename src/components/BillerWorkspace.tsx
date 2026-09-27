@@ -6,6 +6,7 @@ import {
   FileText,
   LogOut,
   Menu,
+  MessageCircle,
   ReceiptText,
   RefreshCw,
   X,
@@ -13,19 +14,21 @@ import {
 import { LogoVerto } from './Common';
 import { MonthlyConferenceCenter } from './MonthlyConferenceCenter';
 import { PayerRequirementsPanel } from './PayerRequirementsPanel';
+import { BillingCommunicationPanel } from './BillingCommunicationPanel';
 
 type BillerWorkspaceProps = {
   user: any;
   onLogout: () => void;
 };
 
-type BillerSection = 'preguides' | 'conference' | 'xml' | 'payers';
+type BillerSection = 'preguides' | 'conference' | 'xml' | 'payers' | 'updates';
 
 const sectionMeta: Record<BillerSection, { label: string; icon: React.ComponentType<any> }> = {
   preguides: { label: 'Pré-guias TISS', icon: FileCheck2 },
   conference: { label: 'Conferência', icon: FileSpreadsheet },
   xml: { label: 'Lotes XML', icon: FileText },
   payers: { label: 'Convênios e De/Para', icon: ReceiptText },
+  updates: { label: 'Atualizações', icon: MessageCircle },
 };
 
 export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
@@ -46,6 +49,8 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
     if (Array.isArray(user?.workspaces)) return user.workspaces.length;
     return 0;
   }, [user?.accessContexts, user?.workspaces]);
+  const activeRole = String(user?.activeAccessContext?.role || user?.role || '').trim().toLowerCase();
+  const canManageUpdates = activeRole === 'director' || activeRole === 'coordinator';
 
   const navigateToPayers = (nextPayerId = '') => {
     if (nextPayerId) setPayerId(nextPayerId);
@@ -148,7 +153,15 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
           </aside>
 
           <div className="min-w-0">
-            {conferenceMode ? (
+            {section === 'updates' ? (
+              <React.Fragment key={`updates:${workspaceScopeKey}`}>
+                <BillingCommunicationPanel
+                  clinicId={workspaceScopeKey}
+                  clinicName={clinicName}
+                  canManage={canManageUpdates}
+                />
+              </React.Fragment>
+            ) : conferenceMode ? (
               <React.Fragment key={`conference:${workspaceScopeKey}`}>
                 <MonthlyConferenceCenter
                   workspaceScopeKey={workspaceScopeKey}

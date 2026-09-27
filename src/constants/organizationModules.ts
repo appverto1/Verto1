@@ -30,6 +30,12 @@ const CAPABILITY_PREFIX_MODULES: readonly [string, OrganizationModuleKey][] = [
   ['school.', 'school_management'],
 ];
 
+const MODULE_AGNOSTIC_CAPABILITIES = new Set<CapabilityKey>([
+  'communication.billing_updates.view',
+  'communication.billing_updates.write',
+  'communication.billing_updates.manage',
+]);
+
 const CAPABILITY_MODULE_OVERRIDES: Partial<Record<CapabilityKey, OrganizationModuleKey>> = {
   'clinic.rooms.manage': 'appointments_communication',
   'session.start': 'clinical_core',
@@ -78,6 +84,7 @@ export function isOrganizationModuleKey(value: unknown): value is OrganizationMo
 }
 
 export function requiredModuleForCapability(capability: CapabilityKey): OrganizationModuleKey | null {
+  if (MODULE_AGNOSTIC_CAPABILITIES.has(capability)) return null;
   const exact = CAPABILITY_MODULE_OVERRIDES[capability];
   if (exact) return exact;
   const value = String(capability || '');
