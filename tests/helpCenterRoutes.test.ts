@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const route = fs.readFileSync('services/helpCenterRoutes.ts', 'utf8');
+const server = fs.readFileSync('server.ts', 'utf8');
+assert.match(route, /checkAuth/);
+assert.match(route, /requireClinicCapability\('clinic\.view'\)/);
+assert.match(route, /currentClinicId/);
+assert.match(route, /createSignedUrl\(media\.objectKey, 60\)/);
+assert.match(route, /private, no-store/);
+assert.doesNotMatch(route, /req\.(query|body).*objectKey/);
+assert.doesNotMatch(route, /service_role/i);
+assert.match(server, /registerHelpCenterRoutes\(app,\s*\{[\s\S]{0,400}checkAuth,[\s\S]{0,200}requireClinicCapability,[\s\S]{0,200}currentClinicId/);
+console.log('helpCenterRoutes.test: PASS');
