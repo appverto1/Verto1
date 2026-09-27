@@ -12,6 +12,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { SecureImage } from './SecureMedia';
 import { ModuleDiscoveryInterstitial } from './ModuleDiscoveryInterstitial';
+import { HelpButton } from './HelpButton';
 
 interface SettingsMenuProps {
   user: any;
@@ -162,6 +163,7 @@ export function SettingsMenu({
 
   return (
     <>
+    <HelpButton />
     <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
       <button
         ref={triggerRef}
