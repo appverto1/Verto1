@@ -91,8 +91,10 @@ assert.match(
 );
 const platformPanelIndex = app.indexOf("user?.isPlatformAdmin === true ? (");
 const workspacePickerIndex = app.indexOf('showWorkspacePicker && (accessContextOptions.length > 0 || pendingClinicInvitations.length > 0) ? (');
+const helpRouteIndex = app.indexOf("isHelpRoute && isProfessionalClinicRole(user.role) ? (");
 assert.ok(platformPanelIndex >= 0, 'frontend precisa rotear platform admin pelo flag canônico');
 assert.ok(workspacePickerIndex > platformPanelIndex, 'painel da plataforma deve ter prioridade sobre workspaces clínicos');
+assert.ok(helpRouteIndex > platformPanelIndex, 'painel da plataforma deve ter prioridade sobre /ajuda');
 assert.match(
   app.slice(platformPanelIndex, platformPanelIndex + 220),
   /<SuperAdminDashboard onLogout=\{handleLogout\} \/>/,
