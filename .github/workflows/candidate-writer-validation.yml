@@ -1,0 +1,168 @@
+name: Verto Candidate Writer Validation
+
+on:
+  push:
+    branches:
+      - 'factory/**'
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Explicit baseline commit SHA; defaults to origin/staging'
+        required: false
+        type: string
+      focused_suite:
+        description: 'Allowlisted focused test suite'
+        required: false
+        default: none
+        type: choice
+        options:
+          - none
+          - help-center
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verto-candidate-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  writer-validation:
+    name: writer-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove candidate and baseline
+        id: refs
+        shell: bash
+        env:
+          INPUT_BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA="$(git rev-parse HEAD)"
+          test "$CANDIDATE_SHA" = "$GITHUB_SHA"
+          git fetch --no-tags origin staging
+          BASE_SHA="${INPUT_BASE_SHA:-}"
+          if [ -z "$BASE_SHA" ]; then BASE_SHA="$(git rev-parse origin/staging)"; fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Verto writer validation"
+            echo "- result namespace: WRITER_VALIDATION"
+            echo "- candidate SHA: `$CANDIDATE_SHA`"
+            echo "- baseline SHA: `$BASE_SHA`"
+            echo "- ref: `$GITHUB_REF`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies deterministically
+        run: npm ci
+
+      - name: Focused tests (allowlisted)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.focused_suite != 'none' }}
+        shell: bash
+        env:
+          FOCUSED_SUITE: ${{ inputs.focused_suite }}
+        run: |
+          set -euo pipefail
+          case "$FOCUSED_SUITE" in
+            help-center)
+              npx tsx tests/helpCenterManifest.test.ts
+              npx tsx tests/helpCenterRoutes.test.ts
+              ;;
+            *)
+              echo "::error::Focused suite is not allowlisted."
+              exit 2
+              ;;
+          esac
+
+      - name: Typecheck ratchet regression tests
+        run: node tests/typecheckRatchet.regression.test.mjs
+
+      - name: Typecheck ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+        run: |
+          set -uo pipefail
+          HEAD_LOG="$RUNNER_TEMP/typecheck-head.log"
+          BASE_LOG="$RUNNER_TEMP/typecheck-base.log"
+          NEW_LOG="$RUNNER_TEMP/typecheck-new.log"
+          BASE_WORKTREE="$RUNNER_TEMP/verto-base"
+          set +e
+          npm run typecheck >"$HEAD_LOG" 2>&1
+          HEAD_STATUS=$?
+          set -e
+          cat "$HEAD_LOG"
+          if [ "$HEAD_STATUS" -eq 0 ]; then exit 0; fi
+          git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"
+          pushd "$BASE_WORKTREE" >/dev/null
+          npm ci --prefer-offline --no-audit
+          set +e
+          npm run typecheck >"$BASE_LOG" 2>&1
+          BASE_STATUS=$?
+          set -e
+          popd >/dev/null
+          if [ "$BASE_STATUS" -eq 0 ]; then
+            echo "::error::Baseline typecheck passes but candidate fails."
+            exit "$HEAD_STATUS"
+          fi
+          node scripts/typecheck-ratchet.mjs --candidate "$HEAD_LOG" --baseline "$BASE_LOG" --output "$NEW_LOG"
+
+      - name: Production build
+        run: npm run build
+
+      - name: Pre-main ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+        run: |
+          set -uo pipefail
+          HEAD_LOG="$RUNNER_TEMP/pre-main-head.log"
+          BASE_LOG="$RUNNER_TEMP/pre-main-base.log"
+          NEW_LOG="$RUNNER_TEMP/pre-main-new.log"
+          BASE_WORKTREE="$RUNNER_TEMP/verto-base"
+          set +e
+          npm run check:pre-main >"$HEAD_LOG" 2>&1
+          HEAD_STATUS=$?
+          set -e
+          cat "$HEAD_LOG"
+          if [ "$HEAD_STATUS" -eq 0 ]; then exit 0; fi
+          if [ ! -d "$BASE_WORKTREE" ]; then git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"; fi
+          pushd "$BASE_WORKTREE" >/dev/null
+          if [ ! -d node_modules ]; then npm ci --prefer-offline --no-audit; fi
+          set +e
+          npm run check:pre-main >"$BASE_LOG" 2>&1
+          BASE_STATUS=$?
+          set -e
+          popd >/dev/null
+          if [ "$BASE_STATUS" -eq 0 ]; then
+            echo "::error::Baseline pre-main passes but candidate fails."
+            exit "$HEAD_STATUS"
+          fi
+          normalize_failures() {
+            grep -E '^[[:space:]]*✗[[:space:]]+' "$1" | sed -E 's/^[[:space:]]*✗[[:space:]]+//' | sed -E 's/[[:space:]]+—.*$//' | sort -u || true
+          }
+          comm -23 <(normalize_failures "$HEAD_LOG") <(normalize_failures "$BASE_LOG") > "$NEW_LOG"
+          if [ -s "$NEW_LOG" ]; then
+            echo "::error::New pre-main regressions relative to baseline:"
+            cat "$NEW_LOG"
+            exit 1
+          fi
+
+      - name: Record writer validation result
+        if: ${{ success() }}
+        run: |
+          echo "### WRITER_VALIDATION_PASS" >> "$GITHUB_STEP_SUMMARY"
+          echo "This is writer validation evidence only; it is not CI_PASS, PR_READY, review, merge, deploy, or staging verification." >> "$GITHUB_STEP_SUMMARY"
