@@ -85,14 +85,18 @@ jobs:
         shell: bash
         env:
           DISPATCH_SUITE: ${{ inputs.focused_suite }}
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
         run: |
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             SUITE="${DISPATCH_SUITE:-none}"
-          elif [ -f tests/helpCenterManifest.test.ts ] && [ -f tests/helpCenterRoutes.test.ts ]; then
-            SUITE="help-center"
           else
-            SUITE="none"
+            CHANGED_FILES="$(git diff --name-only "$BASE_SHA"...HEAD)"
+            if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(services/helpCenterRoutes\.ts|src/components/Help(Button|Center)\.tsx|src/help/|tests/helpCenter[^/]*\.test\.ts|supabase/migrations/[0-9_]*help_center_)'; then
+              SUITE="help-center"
+            else
+              SUITE="none"
+            fi
           fi
           case "$SUITE" in
             none|help-center) ;;
@@ -111,6 +115,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           case "$FOCUSED_SUITE" in
             help-center)
+              test -f tests/helpCenterManifest.test.ts
+              test -f tests/helpCenterRoutes.test.ts
               npx tsx tests/helpCenterManifest.test.ts
               npx tsx tests/helpCenterRoutes.test.ts
               ;;
