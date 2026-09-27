@@ -50,6 +50,17 @@ jobs:
           BASE_SHA="${INPUT_BASE_SHA:-}"
           if [ -z "$BASE_SHA" ]; then BASE_SHA="$(git rev-parse origin/staging)"; fi
           git cat-file -e "${BASE_SHA}^{commit}"
+          STAGING_SHA="$(git rev-parse origin/staging)"
+          if [ -n "${INPUT_BASE_SHA:-}" ]; then
+            git merge-base --is-ancestor "$BASE_SHA" "$CANDIDATE_SHA" || {
+              echo "::error::Explicit baseline must be an ancestor of the candidate."
+              exit 3
+            }
+            git merge-base --is-ancestor "$BASE_SHA" "$STAGING_SHA" || {
+              echo "::error::Explicit baseline must belong to the authorized staging lineage."
+              exit 3
+            }
+          fi
           echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
           echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
           {
@@ -69,11 +80,34 @@ jobs:
       - name: Install dependencies deterministically
         run: npm ci
 
-      - name: Focused tests (allowlisted)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.focused_suite != 'none' }}
+      - name: Resolve focused suite (allowlisted)
+        id: focused
         shell: bash
         env:
-          FOCUSED_SUITE: ${{ inputs.focused_suite }}
+          DISPATCH_SUITE: ${{ inputs.focused_suite }}
+        run: |
+          set -euo pipefail
+          SUITE="none"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            SUITE="${DISPATCH_SUITE:-none}"
+          else
+            case "$GITHUB_REF_NAME" in
+              factory/260-*|factory/266-*) SUITE="help-center" ;;
+              *) SUITE="none" ;;
+            esac
+          fi
+          case "$SUITE" in
+            none|help-center) ;;
+            *) echo "::error::Focused suite is not allowlisted."; exit 2 ;;
+          esac
+          echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
+          echo "- focused suite: `$SUITE`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Focused tests (allowlisted)
+        if: ${{ steps.focused.outputs.suite != 'none' }}
+        shell: bash
+        env:
+          FOCUSED_SUITE: ${{ steps.focused.outputs.suite }}
         run: |
           set -euo pipefail
           case "$FOCUSED_SUITE" in
