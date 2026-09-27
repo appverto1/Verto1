@@ -87,14 +87,12 @@ jobs:
           DISPATCH_SUITE: ${{ inputs.focused_suite }}
         run: |
           set -euo pipefail
-          SUITE="none"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             SUITE="${DISPATCH_SUITE:-none}"
           else
-            case "$GITHUB_REF_NAME" in
-              factory/260-*|factory/266-*) SUITE="help-center" ;;
-              *) SUITE="none" ;;
-            esac
+            # Push validation is self-contained: every allowlisted focused suite
+            # selected here runs against this exact candidate checkout (GITHUB_SHA).
+            SUITE="help-center"
           fi
           case "$SUITE" in
             none|help-center) ;;
@@ -108,24 +106,13 @@ jobs:
         shell: bash
         env:
           FOCUSED_SUITE: ${{ steps.focused.outputs.suite }}
-          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           case "$FOCUSED_SUITE" in
             help-center)
-              HELP_CENTER_SHA="ef1f1a15a3a516bda20beab632f4a7e474fff9f1"
-              git cat-file -e "${HELP_CENTER_SHA}^{commit}"
-              git merge-base --is-ancestor "$BASE_SHA" "$HELP_CENTER_SHA" || {
-                echo "::error::Help-center candidate is not based on the authorized baseline."
-                exit 3
-              }
-              HELP_WORKTREE="$RUNNER_TEMP/help-center-candidate"
-              git worktree add --detach "$HELP_WORKTREE" "$HELP_CENTER_SHA"
-              pushd "$HELP_WORKTREE" >/dev/null
-              npm ci --prefer-offline --no-audit
               npx tsx tests/helpCenterManifest.test.ts
               npx tsx tests/helpCenterRoutes.test.ts
-              popd >/dev/null
               ;;
             *)
               echo "::error::Focused suite is not allowlisted."
