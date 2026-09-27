@@ -1,5 +1,5 @@
 import type { Express } from 'express';
-import { HELP_MEDIA_BUCKET, resolveHelpMedia } from '../src/help/helpManifest';
+import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 
 type Deps = {
   supabase: any;
