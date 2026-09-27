@@ -23,14 +23,15 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     const audience = String(context?.role || req.session?.user?.role || '').trim().toLowerCase();
     const capabilities = setValues(context?.capabilities);
     const modules = setValues(context?.modules);
-    return { clinicId, audience, capabilities, modules };
+    const clinicName = String(context?.clinicName || req.session?.user?.activeAccessContext?.clinicName || req.session?.user?.clinicName || 'Clínica atual');
+    return { clinicId, clinicName, audience, capabilities, modules };
   };
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
-    const { clinicId, audience, capabilities, modules } = helpContext(req);
+    const { clinicId, clinicName, audience, capabilities, modules } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const articles = projectArticles(audience, capabilities, modules);
-    return res.json({ clinicId, articles });
+    return res.json({ clinicId, clinicName, articles });
   });
 
   app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
@@ -44,6 +45,10 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     const { data, error } = await supabase.storage.from(HELP_MEDIA_BUCKET).createSignedUrl(media.objectKey, 60);
     if (error || !data?.signedUrl) return res.status(404).json({ error: 'HELP_MEDIA_UNAVAILABLE' });
     res.setHeader('Cache-Control', 'private, no-store');
+    if (media.mimeType.startsWith('video/') && req.headers?.range) {
+      res.setHeader('Location', data.signedUrl);
+      return res.status(307).end();
+    }
     return res.json({ mediaId: media.mediaId, mimeType: media.mimeType, url: data.signedUrl, expiresIn: 60, supportsRange: media.mimeType.startsWith('video/') });
   });
 }

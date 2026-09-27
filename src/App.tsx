@@ -8353,13 +8353,13 @@ export default function App() {
               accessOnly={isAccessGatewayRoute || isRunningStandalone()}
             />
           )
+        ) : user?.isPlatformAdmin === true ? (
+          <SuperAdminDashboard onLogout={handleLogout} />
         ) : isHelpRoute && isProfessionalClinicRole(user.role) ? (
           <HelpCenter
             clinicName={String(user?.activeAccessContext?.clinicName || user?.clinicName || user?.workspaceName || 'Clínica atual')}
             onClose={() => window.location.assign('/')}
           />
-        ) : user?.isPlatformAdmin === true ? (
-          <SuperAdminDashboard onLogout={handleLogout} />
         ) : showWorkspacePicker && (accessContextOptions.length > 0 || pendingClinicInvitations.length > 0) ? (
           <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 sm:px-6">
             <section

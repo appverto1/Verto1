@@ -1,11 +1,12 @@
 export type HelpMediaClassification = 'public_synthetic' | 'authenticated_professional' | 'restricted_operational';
 export type HelpPublicationStatus = 'draft' | 'published' | 'archived';
-export type HelpMedia = { mediaId:string; status:HelpPublicationStatus; classification:HelpMediaClassification; objectKey:string; mimeType:'image/png'|'image/jpeg'|'image/webp'|'video/mp4'|'video/webm'; bytes:number; durationSeconds?:number };
+export type HelpMediaKind = 'screenshot' | 'poster' | 'video';
+export type HelpMedia = { mediaId:string; status:HelpPublicationStatus; classification:HelpMediaClassification; kind:HelpMediaKind; objectKey:string; mimeType:'image/png'|'image/jpeg'|'image/webp'|'video/mp4'|'video/webm'; bytes:number; width:number; height:number; durationSeconds?:number; codec?:'h264'|'vp9'|'av1' };
 export type HelpArticle = { articleId:string; slug:string; status:HelpPublicationStatus; title:string; theme:string; summary:string; keywords:string[]; synonyms?:string[]; steps:string[]; audiences:string[]; requiredCapabilities:string[]; requiredModules?:string[]; mediaIds:string[] };
 export const HELP_MEDIA_BUCKET='help-center-media-private';
 export const HELP_MEDIA: readonly HelpMedia[]=[];
 export const HELP_ARTICLES: readonly HelpArticle[]=[
- {articleId:'billing-start-v1',slug:'faturamento/comece-aqui',status:'published',title:'Comece no faturamento da clínica',theme:'Convênios e faturamento',summary:'Localize as áreas principais do faturamento sem sair do contexto da clínica ativa.',keywords:['tiss','faturamento','guia','xml','convenio'],synonyms:['convenio','convenios','faturista'],steps:['Confirme a clínica ativa no topo da tela.','Escolha a tarefa de faturamento no menu lateral.','Antes de alterar dados, confira o contexto e o convênio selecionados.'],audiences:['biller','coordinator','director'],requiredCapabilities:[],requiredModules:[],mediaIds:[]}
+ {articleId:'billing-start-v1',slug:'faturamento/comece-aqui',status:'published',title:'Comece no faturamento da clínica',theme:'Convênios e faturamento',summary:'Localize as áreas principais do faturamento sem sair do contexto da clínica ativa.',keywords:['tiss','faturamento','guia','xml','convenio'],synonyms:['convenio','convenios','faturista'],steps:['Confirme a clínica ativa no topo da tela.','Escolha a tarefa de faturamento no menu lateral.','Antes de alterar dados, confira o contexto e o convênio selecionados.'],audiences:['biller','coordinator','director'],requiredCapabilities:['reports.billing.view'],requiredModules:['insurance_tiss'],mediaIds:[]}
 ];
 export function projectHelpArticles(articles:readonly HelpArticle[],media:readonly HelpMedia[],audience:string,capabilities:readonly string[],modules:readonly string[]=[]){
  const allowed=new Set(capabilities); const enabledModules=new Set(modules);
@@ -19,13 +20,20 @@ export function resolveHelpMedia(mediaId:string){
  const media=HELP_MEDIA.find(m=>m.mediaId===mediaId&&m.status==='published');
  return media||null;
 }
-export function validateHelpMediaPublication(input:{filename:string;declaredMime:string;magicMime:string;bytes:number;durationSeconds?:number}){
+export function validateHelpMediaPublication(input:{kind:'screenshot'|'poster'|'video';filename:string;declaredMime:string;magicMime:string;bytes:number;width:number;height:number;durationSeconds?:number;codec?:string}){
  const allowed=new Set(['image/png','image/jpeg','image/webp','video/mp4','video/webm']);
  const ext=String(input.filename||'').toLowerCase().split('.').pop()||'';
  const extMime:Record<string,string>={png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',mp4:'video/mp4',webm:'video/webm'};
  if(ext==='svg'||input.declaredMime==='image/svg+xml'||input.magicMime==='image/svg+xml') return false;
  if(!allowed.has(input.declaredMime)||input.declaredMime!==input.magicMime||extMime[ext]!==input.declaredMime) return false;
- if(!Number.isFinite(input.bytes)||input.bytes<=0||input.bytes>3145728) return false;
- if(input.declaredMime.startsWith('video/')&&(!Number.isFinite(input.durationSeconds)||Number(input.durationSeconds)>25||Number(input.durationSeconds)<=0)) return false;
+ if(!Number.isFinite(input.bytes)||input.bytes<=0) return false;
+ if(!Number.isFinite(input.width)||!Number.isFinite(input.height)||input.width<=0||input.height<=0||input.width>1920||input.height>1080) return false;
+ if(input.kind==='screenshot'&&(input.declaredMime.startsWith('video/')||input.bytes>409600)) return false;
+ if(input.kind==='poster'&&(input.declaredMime.startsWith('video/')||input.bytes>204800)) return false;
+ if(input.kind==='video'){
+  if(!input.declaredMime.startsWith('video/')||input.bytes>3145728||!Number.isFinite(input.durationSeconds)||Number(input.durationSeconds)>25||Number(input.durationSeconds)<=0) return false;
+  if(input.declaredMime==='video/mp4'&&input.codec!=='h264') return false;
+  if(input.declaredMime==='video/webm'&&!['vp9','av1'].includes(String(input.codec||''))) return false;
+ }
  return true;
 }

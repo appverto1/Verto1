@@ -6,7 +6,7 @@ const normalize=(v:string)=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').to
 const tokens=(v:string)=>normalize(v).split(/\s+/).filter(Boolean);
 const scoreTopic=(topic:Topic,query:string)=>{
  const qs=tokens(query); if(!qs.length)return 1;
- const title=normalize(topic.title), theme=normalize(topic.theme), summary=normalize(topic.summary);
+ const title=normalize(topic.title), theme=normalize(topic.theme), summary=normalize(topic.summary), body=normalize((topic.steps||[]).join(' '));
  const curated=normalize([...(topic.keywords||[]),...(topic.synonyms||[])].join(' '));
  return qs.reduce((score,q)=>{
    if(title===q) return score+100;
@@ -14,6 +14,7 @@ const scoreTopic=(topic:Topic,query:string)=>{
    if(curated.split(/\s+/).some(k=>k===q)) return score+25;
    if(theme.includes(q)) return score+12;
    if(summary.includes(q)) return score+6;
+   if(body.includes(q)) return score+4;
    if(q.length>=4 && [title,curated].some(v=>v.split(/\s+/).some(word=>word.startsWith(q)||q.startsWith(word)))) return score+3;
    return score;
  },0);
@@ -21,9 +22,9 @@ const scoreTopic=(topic:Topic,query:string)=>{
 
 export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()=>void}) {
  const [query,setQuery]=useState(''); const [selected,setSelected]=useState(''); const [drawer,setDrawer]=useState(false);
- const [topics,setTopics]=React.useState<Topic[]>([]); const [loading,setLoading]=React.useState(true); const [error,setError]=React.useState('');
+ const [topics,setTopics]=React.useState<Topic[]>([]); const [loading,setLoading]=React.useState(true); const [error,setError]=React.useState(''); const [contextLabel,setContextLabel]=React.useState(clinicName);
  const requestRef=useRef(0); const drawerButtonRef=useRef<HTMLButtonElement>(null); const drawerRef=useRef<HTMLElement>(null);
- const loadCatalog=React.useCallback(async()=>{const request=++requestRef.current;setLoading(true);setError('');try{const response=await fetch('/api/help/catalog',{credentials:'include',cache:'no-store'});if(!response.ok)throw new Error('catalog');const payload=await response.json();if(request!==requestRef.current)return;setTopics(Array.isArray(payload?.articles)?payload.articles:[]);setSelected('');}catch{if(request!==requestRef.current)return;setTopics([]);setSelected('');setError('Não foi possível carregar a ajuda agora.');}finally{if(request===requestRef.current)setLoading(false);}},[]);
+ const loadCatalog=React.useCallback(async()=>{const request=++requestRef.current;setLoading(true);setError('');setTopics([]);setSelected('');try{const response=await fetch('/api/help/catalog',{credentials:'include',cache:'no-store'});if(!response.ok)throw new Error('catalog');const payload=await response.json();if(request!==requestRef.current)return;setContextLabel(String(payload?.clinicName||'Clínica atual'));setTopics(Array.isArray(payload?.articles)?payload.articles:[]);setSelected('');}catch{if(request!==requestRef.current)return;setTopics([]);setSelected('');setError('Não foi possível carregar a ajuda agora.');}finally{if(request===requestRef.current)setLoading(false);}},[]);
  React.useEffect(()=>{void loadCatalog(); const refresh=()=>{if(document.visibilityState==='visible')void loadCatalog();}; window.addEventListener('focus',refresh);document.addEventListener('visibilitychange',refresh);return()=>{requestRef.current++;window.removeEventListener('focus',refresh);document.removeEventListener('visibilitychange',refresh);};},[loadCatalog]);
  React.useEffect(()=>{if(!drawer)return; const previous=document.activeElement as HTMLElement|null; const close=()=>{setDrawer(false);requestAnimationFrame(()=>drawerButtonRef.current?.focus());}; const onKey=(event:KeyboardEvent)=>{if(event.key==='Escape'){event.preventDefault();close();}}; document.addEventListener('keydown',onKey);requestAnimationFrame(()=>drawerRef.current?.querySelector<HTMLElement>('button')?.focus());return()=>{document.removeEventListener('keydown',onKey);if(previous&&previous!==document.body)previous.focus();};},[drawer]);
  const filtered=useMemo(()=>topics.map(topic=>({topic,score:scoreTopic(topic,query)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.topic.title.localeCompare(b.topic.title,'pt-BR')).map(x=>x.topic),[query,topics]);
@@ -31,7 +32,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
  return <div className="min-h-[100dvh] bg-slate-50 text-slate-900">
   <header className="sticky top-0 z-40 border-b border-slate-200 bg-white"><div className="mx-auto flex max-w-[1500px] items-center gap-3 px-4 py-3">
    <button type="button" onClick={onClose} className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200" aria-label="Voltar à Verto"><ArrowLeft size={18}/></button>
-   <BookOpen size={22} className="text-violet-600"/><div className="min-w-0 flex-1"><h1 className="font-semibold">Ajuda e tutoriais</h1><p className="truncate text-xs text-slate-500">Contexto: {clinicName}</p></div>
+   <BookOpen size={22} className="text-violet-600"/><div className="min-w-0 flex-1"><h1 className="font-semibold">Ajuda e tutoriais</h1><p className="truncate text-xs text-slate-500">Contexto: {contextLabel}</p></div>
    <button ref={drawerButtonRef} type="button" onClick={()=>setDrawer(v=>!v)} className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 lg:hidden" aria-label={drawer?'Fechar temas':'Abrir temas'} aria-expanded={drawer}>{drawer?<X size={18}/>:<Menu size={18}/>}</button>
   </div></header>
   <main className="mx-auto max-w-[1500px] px-4 py-5"><div className="mb-5 relative"><Search className="absolute left-3 top-3.5 text-slate-400" size={18}/><label className="sr-only" htmlFor="help-search">Buscar ajuda</label><input id="help-search" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Busque uma tarefa, por exemplo: trocar clínica" className="min-h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 outline-none focus:ring-2 focus:ring-violet-500"/></div>
