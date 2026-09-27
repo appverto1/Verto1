@@ -7,9 +7,12 @@ export const HELP_MEDIA: readonly HelpMedia[]=[];
 export const HELP_ARTICLES: readonly HelpArticle[]=[
  {articleId:'billing-start-v1',slug:'faturamento/comece-aqui',status:'published',title:'Comece no faturamento da clínica',theme:'Convênios e faturamento',summary:'Localize as áreas principais do faturamento sem sair do contexto da clínica ativa.',keywords:['tiss','faturamento','guia','xml','convenio'],synonyms:['convenio','convenios','faturista'],steps:['Confirme a clínica ativa no topo da tela.','Escolha a tarefa de faturamento no menu lateral.','Antes de alterar dados, confira o contexto e o convênio selecionados.'],audiences:['biller','coordinator','director'],requiredCapabilities:[],requiredModules:[],mediaIds:[]}
 ];
-export function publishedHelpProjection(audience:string,capabilities:readonly string[],modules:readonly string[]=[]){
+export function projectHelpArticles(articles:readonly HelpArticle[],media:readonly HelpMedia[],audience:string,capabilities:readonly string[],modules:readonly string[]=[]){
  const allowed=new Set(capabilities); const enabledModules=new Set(modules);
- return HELP_ARTICLES.filter(a=>a.status==='published'&&a.audiences.includes(audience)&&a.requiredCapabilities.every(c=>allowed.has(c))&&(a.requiredModules||[]).every(m=>enabledModules.has(m))).map(a=>({...a,mediaIds:a.mediaIds.filter(id=>HELP_MEDIA.some(m=>m.mediaId===id&&m.status==='published'))}));
+ return articles.filter(a=>a.status==='published'&&a.audiences.includes(audience)&&a.requiredCapabilities.every(c=>allowed.has(c))&&(a.requiredModules||[]).every(m=>enabledModules.has(m))).map(a=>({...a,mediaIds:a.mediaIds.filter(id=>media.some(m=>m.mediaId===id&&m.status==='published'))}));
+}
+export function publishedHelpProjection(audience:string,capabilities:readonly string[],modules:readonly string[]=[]){
+ return projectHelpArticles(HELP_ARTICLES,HELP_MEDIA,audience,capabilities,modules);
 }
 export function resolveHelpMedia(mediaId:string){
  if(!/^[a-z0-9][a-z0-9._-]{0,119}$/i.test(mediaId)) return null;
