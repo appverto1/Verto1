@@ -66,9 +66,9 @@ jobs:
           {
             echo "## Verto writer validation"
             echo "- result namespace: WRITER_VALIDATION"
-            echo "- candidate SHA: `$CANDIDATE_SHA`"
-            echo "- baseline SHA: `$BASE_SHA`"
-            echo "- ref: `$GITHUB_REF`"
+            printf -- '- candidate SHA: `%s`\n' "$CANDIDATE_SHA"
+            printf -- '- baseline SHA: `%s`\n' "$BASE_SHA"
+            printf -- '- ref: `%s`\n' "$GITHUB_REF"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Use Node 20
@@ -101,7 +101,7 @@ jobs:
             *) echo "::error::Focused suite is not allowlisted."; exit 2 ;;
           esac
           echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
-          echo "- focused suite: `$SUITE`" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- focused suite: `%s`\n' "$SUITE" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Focused tests (allowlisted)
         if: ${{ steps.focused.outputs.suite != 'none' }}
@@ -112,8 +112,19 @@ jobs:
           set -euo pipefail
           case "$FOCUSED_SUITE" in
             help-center)
+              HELP_CENTER_SHA="ef1f1a15a3a516bda20beab632f4a7e474fff9f1"
+              git cat-file -e "${HELP_CENTER_SHA}^{commit}"
+              git merge-base --is-ancestor "$BASE_SHA" "$HELP_CENTER_SHA" || {
+                echo "::error::Help-center candidate is not based on the authorized baseline."
+                exit 3
+              }
+              HELP_WORKTREE="$RUNNER_TEMP/help-center-candidate"
+              git worktree add --detach "$HELP_WORKTREE" "$HELP_CENTER_SHA"
+              pushd "$HELP_WORKTREE" >/dev/null
+              npm ci --prefer-offline --no-audit
               npx tsx tests/helpCenterManifest.test.ts
               npx tsx tests/helpCenterRoutes.test.ts
+              popd >/dev/null
               ;;
             *)
               echo "::error::Focused suite is not allowlisted."
