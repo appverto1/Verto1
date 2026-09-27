@@ -12,25 +12,32 @@ type Deps = {
 };
 
 const setValues = (value:any): string[] => value instanceof Set ? Array.from(value).map(String) : Array.isArray(value) ? value.map(String) : [];
+const currentClinicName = (user:any, clinicId:string) => {
+  const active=user?.activeAccessContext;
+  const activeId=String(active?.clinicId||active?.clinic_id||user?.clinicId||'').trim();
+  if(activeId!==clinicId) return '';
+  return String(active?.clinicName||active?.clinic_name||user?.clinicName||user?.workspaceName||'').trim();
+};
 
 export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   const { supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, currentClinicId } = deps;
   const projectArticles = deps.projectArticles || publishedHelpProjection;
   const resolveMedia = deps.resolveMedia || resolveHelpMedia;
   const helpContext = (req:any) => {
-    const clinicId = currentClinicId(req.session?.user);
+    const user=req.session?.user;
+    const clinicId = currentClinicId(user);
     const context = req.authorizationContext;
-    const audience = String(context?.role || req.session?.user?.role || '').trim().toLowerCase();
+    const audience = String(context?.role || user?.role || '').trim().toLowerCase();
     const capabilities = setValues(context?.capabilities);
     const modules = setValues(context?.modules);
-    return { clinicId, audience, capabilities, modules };
+    return { clinicId, clinicName: clinicId?currentClinicName(user,clinicId):'', audience, capabilities, modules };
   };
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
-    const { clinicId, audience, capabilities, modules } = helpContext(req);
+    const { clinicId, clinicName, audience, capabilities, modules } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const articles = projectArticles(audience, capabilities, modules);
-    return res.json({ clinicId, articles });
+    return res.json({ clinicId, clinicName: clinicName||null, articles });
   });
 
   app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
