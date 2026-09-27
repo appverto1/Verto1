@@ -101,7 +101,7 @@ export function BillingCommunicationNotifications({
           setOpen(nextOpen);
           if (nextOpen) void load();
         }}
-        className={`relative rounded-xl p-2.5 transition-all ${dark ? 'text-slate-300 hover:bg-slate-800 hover:text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+        className={`relative inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl p-2.5 transition-all ${dark ? 'text-slate-300 hover:bg-slate-800 hover:text-white' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
         aria-label={unreadCount > 0 ? `${unreadCount} menção${unreadCount === 1 ? '' : 'ões'} em atualizações do faturamento` : 'Atualizações do faturamento'}
         aria-expanded={open}
         title="Atualizações do faturamento"
@@ -129,7 +129,7 @@ export function BillingCommunicationNotifications({
               type="button"
               onClick={() => void load()}
               disabled={loading}
-              className={`rounded-lg p-2 ${dark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-50'}`}
+              className={`inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg p-2 ${dark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-slate-50'}`}
               aria-label="Atualizar menções do faturamento"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
