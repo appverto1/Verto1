@@ -108,6 +108,7 @@ jobs:
         shell: bash
         env:
           FOCUSED_SUITE: ${{ steps.focused.outputs.suite }}
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
         run: |
           set -euo pipefail
           case "$FOCUSED_SUITE" in
