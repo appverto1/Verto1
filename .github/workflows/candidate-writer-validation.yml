@@ -47,11 +47,21 @@ jobs:
           CANDIDATE_SHA="$(git rev-parse HEAD)"
           test "$CANDIDATE_SHA" = "$GITHUB_SHA"
           git fetch --no-tags origin staging
-          BASE_SHA="${INPUT_BASE_SHA:-}"
-          if [ -z "$BASE_SHA" ]; then BASE_SHA="$(git rev-parse origin/staging)"; fi
-          git cat-file -e "${BASE_SHA}^{commit}"
+          RAW_BASE_SHA="${INPUT_BASE_SHA:-}"
+          if [ -z "$RAW_BASE_SHA" ]; then
+            BASE_SHA="$(git rev-parse origin/staging)"
+          else
+            if ! [[ "$RAW_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::Explicit baseline must be a full 40-character commit SHA."
+              exit 3
+            fi
+            BASE_SHA="$(git rev-parse --verify "${RAW_BASE_SHA}^{commit}")" || {
+              echo "::error::Explicit baseline commit does not exist."
+              exit 3
+            }
+          fi
           STAGING_SHA="$(git rev-parse origin/staging)"
-          if [ -n "${INPUT_BASE_SHA:-}" ]; then
+          if [ -n "$RAW_BASE_SHA" ]; then
             git merge-base --is-ancestor "$BASE_SHA" "$CANDIDATE_SHA" || {
               echo "::error::Explicit baseline must be an ancestor of the candidate."
               exit 3
