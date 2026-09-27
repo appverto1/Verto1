@@ -1,0 +1,2 @@
+import React from 'react'; import { CircleHelp } from 'lucide-react';
+export function HelpButton({onOpen}:{onOpen:()=>void}){return <button type="button" onClick={onOpen} className="flex min-h-11 min-w-11 items-center justify-center rounded-xl border border-slate-200 text-slate-600 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2" aria-label="Ajuda e tutoriais — abre a Central de Ajuda"><CircleHelp size={19} aria-hidden="true"/></button>}

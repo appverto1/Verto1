@@ -15,6 +15,8 @@ import { LogoVerto } from './Common';
 import { MonthlyConferenceCenter } from './MonthlyConferenceCenter';
 import { PayerRequirementsPanel } from './PayerRequirementsPanel';
 import { BillingCommunicationPanel } from './BillingCommunicationPanel';
+import { HelpButton } from './HelpButton';
+import { HelpCenter } from './HelpCenter';
 
 type BillerWorkspaceProps = {
   user: any;
@@ -36,6 +38,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
   const [payerId, setPayerId] = useState('');
   const [navigationRevision, setNavigationRevision] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const workspaceScopeKey = String(user?.activeWorkspaceId || user?.clinicId || user?.activeAccessContext?.clinicId || '').trim();
 
   const clinicName = String(
@@ -99,6 +102,8 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
     </nav>
   );
 
+  if (helpOpen) return <HelpCenter clinicName={clinicName} onClose={() => setHelpOpen(false)} />;
+
   return (
     <div className="h-[100dvh] overflow-y-auto bg-slate-50 text-slate-900">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
@@ -119,6 +124,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
             {mobileNavOpen ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
             <span className="sr-only">{mobileNavOpen ? 'Fechar menu do faturamento' : 'Abrir menu do faturamento'}</span>
           </button>
+          <HelpButton onOpen={() => setHelpOpen(true)} />
           {accessContextCount > 1 && (
             <button
               type="button"
