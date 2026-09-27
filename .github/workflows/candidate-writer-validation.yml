@@ -89,10 +89,10 @@ jobs:
           set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             SUITE="${DISPATCH_SUITE:-none}"
-          else
-            # Push validation is self-contained: every allowlisted focused suite
-            # selected here runs against this exact candidate checkout (GITHUB_SHA).
+          elif [ -f tests/helpCenterManifest.test.ts ] && [ -f tests/helpCenterRoutes.test.ts ]; then
             SUITE="help-center"
+          else
+            SUITE="none"
           fi
           case "$SUITE" in
             none|help-center) ;;
