@@ -150,6 +150,9 @@ if (secretHits.length === 0) pass('nenhum secret óbvio versionado');
 else fail('nenhum secret óbvio versionado', secretHits.join('; '));
 
 const criticalTests = [
+  'tests/factoryRecoveryControls.regression.test.mjs',
+  'tests/factoryAuthorizedTarget.regression.test.mjs',
+  'tests/factoryPostMergeConsistency.regression.test.mjs',
   'tests/security.regression.test.mjs',
   'tests/goLiveHardening.test.mjs',
   'tests/distributedSessionSafety.regression.test.mjs',
