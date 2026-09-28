@@ -210,3 +210,15 @@ Quando uma lane operacional descobrir que o contrato deixou de ser suficiente, n
 Inclua evidência sem PII. Defina `state: ADVISORY_REQUIRED`, `current_agent: 00`, `next_gate: WORK_COUNCIL`, limpe claim e preserve branch/head/PR. Não é necessário emitir `[VERTO_WORK_EVENT]` nem usar PR de transporte durante o fallback horário. O `Verto Concilier` encontra a Issue na próxima execução, fecha nova decisão, cria nova `contract_version` se material e devolve exatamente um handoff ao papel operacional correto.
 
 Erro operacional normal NÃO volta ao Work: CI/review/auditoria PÓS/PR/deploy retornam ao papel operacional responsável. Só contrato, arquitetura, UX, segurança conceitual insuficientes ou o gate especial `CONCILIER_SMOKE` retornam ao conselho.
+
+
+## 22. Preflight canônico obrigatório — consistency verifier
+Esta seção é a autoridade única de adoção operacional do consistency verifier entregue pela Issue #267. Checks manuais/ad hoc não substituem este preflight.
+
+**Antes do primeiro side effect de qualquer papel 00–14**, inclusive claim, escrita de Issue/PR/ref, gate, merge, deploy ou outra mutação, o executor deve: (1) construir snapshot factual atual com FACTORY_STATE, handoff, último PENDING/CLAIM e lease vencedor, labels como índice, branch/ref/head, staging/base/freshness, locks, dependências e evidence envelope/run/check quando aplicável; (2) executar o verifier canônico `scripts/factory-recovery-controls.mjs`; (3) registrar evidência reproduzível com identidade do snapshot/evidence, resultado, operação/gate protegido, timestamp e SHA/ref aplicáveis.
+
+**Somente `CONSISTENT` autoriza prosseguir.** `DRIFT`, `AMBIGUOUS`, `STALE_CLAIM_SUSPECTED` e `ORPHAN_LOCK_SUSPECTED` falham fechado antes do side effect e usam o structured routing da #267, com owner único, `unblock_action` e condição objetiva de retry. Nenhum check parcial pode normalizar esses resultados.
+
+**Imediatamente antes do CAS/transição final** que persista resultado, PASS, handoff ou mudança de estado, reconstrua o snapshot, execute novamente o mesmo verifier e registre nova evidência. Mudança factual invalida a autorização anterior.
+
+O verifier é único: não crie engine ou runner paralelo. O preflight não substitui Writer Validation #266, CI, review, auditoria, merge, verify ou smoke; cada gate mantém sua evidência exact-SHA.

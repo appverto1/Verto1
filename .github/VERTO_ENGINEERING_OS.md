@@ -252,3 +252,6 @@ Writer: menor diff seguro, branch/base SHA corretos, testes targeted e evidênci
 
 ## Conclusão
 `SMOKE_READY` só após implementação aderente, testes/CI, review, merge correto e staging saudável. Ao chegar em `SMOKE_READY`, parar a cadeia automática e fornecer exatamente um passo de smoke humano.
+
+## Mandatory consistency preflight
+Todos os projetos físicos e papéis 00–14 obedecem a `docs/factory/GUARDRAILS.md §22`: snapshot factual + `scripts/factory-recovery-controls.mjs` antes do primeiro side effect e repetição imediatamente antes do CAS/transição final. Só `CONSISTENT` prossegue; `DRIFT`, `AMBIGUOUS`, `STALE_CLAIM_SUSPECTED` e `ORPHAN_LOCK_SUSPECTED` falham fechado via structured routing. Registre evidência dos dois boundaries; checks ad hoc não substituem o verifier.

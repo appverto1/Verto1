@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {createStructuredFactoryError,detectRecoveryLoop,evaluateClaimRenewal,routeConsistencyResult,routeStructuredFactoryError,validateEvidenceEnvelope,validateWriterValidationPreflight,verifyFactoryConsistency} from '../scripts/factory-recovery-controls.mjs';
 const B='1111111111111111111111111111111111111111',H='2222222222222222222222222222222222222222',O='3333333333333333333333333333333333333333',NOW='2026-09-28T03:00:00Z';
 const EXP='2026-09-28T03:55:00Z';
@@ -126,4 +127,14 @@ assert.equal(validateEvidenceEnvelope(env(),{expectedHeadSha:H,requireRunCheck:t
  const rows=[1,2,3].map(()=>({gate:'WRITER_VALIDATION',reason_code:'RUNTIME_CAPABILITY_MISSING',fact_fingerprint:'same-facts'}));const r=detectRecoveryLoop(rows);assert(r.detected);assert.equal(r.count,3);assert.equal(r.route.owner,'00');
  const changed=[...rows.slice(0,2),{gate:'WRITER_VALIDATION',reason_code:'RUNTIME_CAPABILITY_MISSING',fact_fingerprint:'changed'}];assert.equal(detectRecoveryLoop(changed).detected,false);
 }
+
+{
+ const guard=readFileSync(new URL('../docs/factory/GUARDRAILS.md',import.meta.url),'utf8');
+ for(const token of ['## 22. Preflight canônico obrigatório','Antes do primeiro side effect','Somente \`CONSISTENT\` autoriza prosseguir','DRIFT','AMBIGUOUS','STALE_CLAIM_SUSPECTED','ORPHAN_LOCK_SUSPECTED','Imediatamente antes do CAS/transição final']) assert(guard.includes(token),`mandatory preflight guardrail missing: ${token}`);
+ for(const path of ['../docs/factory/FACTORY_PROTOCOL.md','../.github/VERTO_ENGINEERING_OS.md']){const doc=readFileSync(new URL(path,import.meta.url),'utf8');assert(doc.includes('GUARDRAILS.md §22'));assert(doc.includes('CONSISTENT'));assert(doc.includes('CAS/transição final'));}
+ for(const name of ['00-orchestrator.md','01-auditor.md','02-product-ux.md','03-reviewer.md','04-prontuario.md','05-integration.md','06-financeiro.md','07-agenda.md','08-aba.md','09-data.md','10-ci.md','11-pr.md','12-merge.md','13-rollout.md','14-recovery.md']){const doc=readFileSync(new URL('../.github/agents/'+name,import.meta.url),'utf8');assert(doc.includes('GUARDRAILS.md §22'),`agent missing canonical preflight: ${name}`);assert(doc.includes('Somente \`CONSISTENT\`'),`agent weakens CONSISTENT boundary: ${name}`);}
+ for(const status of ['DRIFT','AMBIGUOUS','STALE_CLAIM_SUSPECTED','ORPHAN_LOCK_SUSPECTED']){const s=snap();if(status==='DRIFT')s.refs.branch_sha=O;if(status==='AMBIGUOUS')delete s.refs.branch;if(status==='STALE_CLAIM_SUSPECTED'){s.winning_claim.claim_expires_at='2026-09-28T02:59:59Z';s.issue.claim_expires_at='2026-09-28T02:59:59Z';}if(status==='ORPHAN_LOCK_SUSPECTED')s.lock={status:'ACTIVE',owner_issue:null,owner_writer:null};const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,status);const route=routeConsistencyResult(r,{current_agent:'05',writer:'05',gate:'PREFLIGHT'});assert(route.owner);assert(route.unblock_action);assert(route.retry_condition);}
+ assert.equal(verifyFactoryConsistency(snap(),{now:NOW}).status,'CONSISTENT');
+}
+
 console.log('factoryRecoveryControls.regression.test.mjs: PASS');

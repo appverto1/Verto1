@@ -3,6 +3,8 @@ import { pathToFileURL } from 'node:url';
 
 const SHA = /^[0-9a-f]{40}$/i;
 const EXPECTED_WRITER_VALIDATION_WORKFLOW = 'Verto Candidate Writer Validation';
+const AUTHORIZED_TARGET_SCHEMA = 'FACTORY_AUTHORIZED_TARGET_V1';
+const AUTHORIZED_TARGET_AUTHORITIES = new Set(['FOUNDER_EXPLICIT']);
 const ERRORS = new Set([
   'HEAD_DRIFT','CHECK_NOT_GREEN','REQUIRED_SUITE_MISSING','REQUIRED_SUITE_SKIPPED','STALE_CLAIM',
   'RUNTIME_CAPABILITY_MISSING','RECOVERY_LOOP','LOCK_INCONSISTENT','STATE_AMBIGUOUS','DEPENDENCY_UNSATISFIED',
@@ -14,6 +16,7 @@ const STATUS_LABEL = {
 const arr = (v) => Array.isArray(v) ? v : [];
 const nonempty = (v) => typeof v === 'string' && v.trim() !== '';
 const stringArray = (v) => Array.isArray(v) && v.every(nonempty);
+const nonemptyStringArray = (v) => stringArray(v) && v.length > 0;
 const issueRef = (v) => String(v ?? '').replace(/^#/,'');
 const p = (code, detail, severity='DRIFT') => ({code,detail,severity});
 const statusOf = (ps) => ps.some(x=>x.severity==='AMBIGUOUS') ? 'AMBIGUOUS'
@@ -70,6 +73,56 @@ export function validateWriterValidationPreflight(input={}) {
   return {schema_version:'FACTORY_WRITER_VALIDATION_PREFLIGHT_V1',valid:true,error:null,detail:'preflight consistent'};
 }
 
+function validateReferenceAndTargetSemantics(s,i,refs,ps) {
+  const referenceBranch=nonempty(i.reference_branch)?i.reference_branch:'staging';
+  const targetBranch=nonempty(i.target_branch)?i.target_branch:referenceBranch;
+  const exceptionalTarget=targetBranch!==referenceBranch;
+  const explicitBypassKeys=new Set(['skip_staging_check','bypass_staging_check','allow_arbitrary_target']);
+  const bypassLike=/^(?:skip|bypass|ignore|override|allow).*(?:staging|target|base|ancestry|scope)/i;
+  const bypassKeys=new Set([...Object.keys(s??{}),...Object.keys(i??{})].filter(key=>explicitBypassKeys.has(key)||bypassLike.test(key)));
+  for (const key of bypassKeys) ps.push(p('GENERIC_BYPASS_REJECTED',`${key} is not an authorized target mechanism`,'AMBIGUOUS'));
+  if (referenceBranch!=='staging') ps.push(p('REFERENCE_BRANCH_DRIFT','reference_branch must remain staging'));
+  const freshnessSha=exceptionalTarget?i.staging_freshness_sha:(i.staging_freshness_sha??i.base_sha);
+  if (!SHA.test(String(freshnessSha??'')) || !SHA.test(String(refs.staging_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full staging freshness/ref SHAs required','AMBIGUOUS'));
+  else if (freshnessSha!==refs.staging_sha) ps.push(p('STAGING_FRESHNESS_DRIFT','staging freshness differs from current staging'));
+  if (!exceptionalTarget) {
+    if (!SHA.test(String(i.base_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full base/staging SHAs required','AMBIGUOUS'));
+    else if (i.base_sha!==refs.staging_sha) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging'));
+    if (s?.authorized_target) ps.push(p('UNEXPECTED_TARGET_AUTHORIZATION','authorized_target is only valid for an exceptional target','AMBIGUOUS'));
+    return;
+  }
+  const requiredIssueFields=['reference_branch','staging_freshness_sha','target_branch','base_sha','target_base_sha'];
+  for (const f of requiredIssueFields) if (!nonempty(i[f])) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING',`issue.${f} required for exceptional target`,'AMBIGUOUS'));
+  if (!SHA.test(String(i.base_sha??''))) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING','issue.base_sha must be a full SHA for exceptional target','AMBIGUOUS'));
+  if (!SHA.test(String(i.target_base_sha??''))) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING','issue.target_base_sha must be a full SHA','AMBIGUOUS'));
+  else if (SHA.test(String(i.base_sha??'')) && i.base_sha!==i.target_base_sha) ps.push(p('TARGET_BASE_DRIFT','canonical issue.base_sha differs from issue.target_base_sha'));
+  if (!nonempty(refs.target_branch)) ps.push(p('AUTHORIZED_TARGET_REF_MISSING','refs.target_branch required','AMBIGUOUS'));
+  else if (refs.target_branch!==targetBranch) ps.push(p('TARGET_BRANCH_DRIFT','target branch differs from factual target ref'));
+  if (!SHA.test(String(refs.target_branch_sha??''))) ps.push(p('AUTHORIZED_TARGET_REF_MISSING','refs.target_branch_sha must be a full SHA','AMBIGUOUS'));
+  else if (SHA.test(String(i.target_base_sha??'')) && refs.target_branch_sha!==i.target_base_sha) ps.push(p('TARGET_BASE_DRIFT','target base differs from factual target branch SHA'));
+  const ancestry=refs.target_ancestry;
+  if (!ancestry || typeof ancestry!=='object' || Array.isArray(ancestry)) ps.push(p('TARGET_ANCESTRY_MISSING','trusted target ancestry proof is required','AMBIGUOUS'));
+  else {
+    if (ancestry.base_sha!==i.target_base_sha || ancestry.candidate_sha!==i.head_sha) ps.push(p('TARGET_ANCESTRY_DRIFT','ancestry proof does not match target base/current candidate'));
+    if (ancestry.is_ancestor!==true) ps.push(p('TARGET_ANCESTRY_INVALID','candidate is not a descendant of target base'));
+  }
+  const auth=s?.authorized_target;
+  if (!auth || typeof auth!=='object' || Array.isArray(auth)) ps.push(p('AUTHORIZED_TARGET_EVIDENCE_MISSING','structured exceptional target authorization is required','AMBIGUOUS'));
+  else {
+    if (auth.schema_version!==AUTHORIZED_TARGET_SCHEMA) ps.push(p('AUTHORIZED_TARGET_SCHEMA_INVALID','authorized target schema is invalid','AMBIGUOUS'));
+    if (!AUTHORIZED_TARGET_AUTHORITIES.has(auth.authority)) ps.push(p('AUTHORIZED_TARGET_AUTHORITY_INVALID','exceptional target authority is not allowlisted','AMBIGUOUS'));
+    if (!nonempty(auth.evidence_ref)) ps.push(p('AUTHORIZED_TARGET_EVIDENCE_MISSING','authorization evidence_ref is required','AMBIGUOUS'));
+    if (!nonempty(auth.target_branch)) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING','authorization target_branch is required','AMBIGUOUS'));
+    else if (auth.target_branch!==targetBranch) ps.push(p('AUTHORIZED_TARGET_BRANCH_MISMATCH','authorization does not cover requested target branch'));
+    if (!nonemptyStringArray(auth.allowed_scope)) ps.push(p('AUTHORIZED_TARGET_SCOPE_INVALID','authorization allowed_scope must be a non-empty explicit string array','AMBIGUOUS'));
+  }
+  if (!nonemptyStringArray(s?.operation_scope)) ps.push(p('OPERATION_SCOPE_MISSING','operation_scope must be a non-empty explicit string array','AMBIGUOUS'));
+  else if (auth && nonemptyStringArray(auth.allowed_scope)) {
+    const allowed=new Set(auth.allowed_scope);
+    for (const item of s.operation_scope) if (!allowed.has(item)) ps.push(p('AUTHORIZED_SCOPE_EXCEEDED',`operation scope exceeds authorization: ${item}`));
+  }
+}
+
 export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   const at=new Date(now); if (Number.isNaN(at.getTime())) throw new TypeError('invalid now');
   const ps=[], i=s?.issue;
@@ -114,8 +167,7 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
     else if (!nonempty(refs.branch_sha)) ps.push(p('BRANCH_REF_MISSING','branch ref required','AMBIGUOUS'));
     else if (refs.branch_sha!==i.head_sha) ps.push(p('HEAD_DRIFT','branch ref differs from issue.head_sha'));
   }
-  if (!SHA.test(String(i.base_sha??'')) || !SHA.test(String(refs.staging_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full base/staging SHAs required','AMBIGUOUS'));
-  else if (i.base_sha!==refs.staging_sha) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging'));
+  validateReferenceAndTargetSemantics(s,i,refs,ps);
 
   if (!Array.isArray(s.dependencies)) ps.push(p('DEPENDENCIES_SNAPSHOT_MISSING','dependencies must be an explicit array, including [] when none exist','AMBIGUOUS'));
   else for (const d of s.dependencies) if (d?.required!==false && d?.status!=='SATISFIED') ps.push(p('DEPENDENCY_UNSATISFIED',`dependency ${d?.name??'unknown'} is not SATISFIED`));
@@ -182,7 +234,7 @@ export function routeConsistencyResult(result, context={}) {
   let code='STATE_AMBIGUOUS';
   if (result.status==='STALE_CLAIM_SUSPECTED'||codes.has('STALE_CLAIM')) code='STALE_CLAIM';
   else if (result.status==='ORPHAN_LOCK_SUSPECTED'||codes.has('GLOBAL_WRITE_LOCK_HELD_BY_OTHER_ISSUE')) code='LOCK_INCONSISTENT';
-  else if (codes.has('HEAD_DRIFT')||codes.has('BASE_STAGING_DRIFT')) code='HEAD_DRIFT';
+  else if (['HEAD_DRIFT','BASE_STAGING_DRIFT','STAGING_FRESHNESS_DRIFT','TARGET_BRANCH_DRIFT','TARGET_BASE_DRIFT','TARGET_ANCESTRY_DRIFT','TARGET_ANCESTRY_INVALID'].some(x=>codes.has(x))) code='HEAD_DRIFT';
   else if (codes.has('CHECK_NOT_GREEN')) code='CHECK_NOT_GREEN';
   else if (codes.has('REQUIRED_SUITE_MISSING')) code='REQUIRED_SUITE_MISSING';
   else if (codes.has('REQUIRED_SUITE_SKIPPED')) code='REQUIRED_SUITE_SKIPPED';

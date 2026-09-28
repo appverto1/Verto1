@@ -136,3 +136,7 @@ O executor físico padrão é o workflow read-only `.github/workflows/candidate-
 A evidência desse executor é somente `WRITER_VALIDATION_PASS|FAIL`. Ela não é `CI_PASS`, `PR_READY`, review, merge, deploy ou `STAGING_VERIFIED`. O writer continua dono do gate e de qualquer correção. Falha retorna ao writer. Se o runner cloud estiver indisponível ou incapaz, o 00 atua como broker de capability e roteia executor autorizado, preservando autoria e gates. O papel 10 continua reservado ao CI/regressão posterior.
 
 GLOBAL_WRITE_LOCK de Issue bloqueada por capability recebe prioridade de liveness, mas nunca é liberado por inferência. O `Verto Staging CI / staging-gate` posterior permanece obrigatório e independente. Este mecanismo não autoriza produção, secrets, deploy, `pull_request_target`, escrita pelo workflow, mudança de scheduler/RRULE/enablement/prompt ou criação prematura de PR apenas para obter runner.
+
+
+PREFLIGHT CANÔNICO OBRIGATÓRIO
+Antes do primeiro side effect e imediatamente antes do CAS/transição final, todo papel 00–14 deve cumprir integralmente `docs/factory/GUARDRAILS.md §22`. Somente `CONSISTENT` autoriza continuidade; `DRIFT | AMBIGUOUS | STALE_CLAIM_SUSPECTED | ORPHAN_LOCK_SUSPECTED` falham fechado via structured routing. Registre evidência de cada preflight; check manual parcial não substitui o verifier e nenhum engine/runner paralelo é autorizado.

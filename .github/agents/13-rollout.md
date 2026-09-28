@@ -21,3 +21,7 @@ Sucesso produz `STAGING_VERIFIED` e retorna a mesma Issue ao Concilier para o sm
 Smoke humano não é o próximo gate padrão e só pode aparecer como fallback de capability quando o próprio Concilier registrar que não consegue executar ou observar o smoke com evidência suficiente, conforme Guardrails. Falha funcional/UI/UX detectada pelo Concilier volta ao Conselho e ao menor gate operacional correto.
 
 Falha de rollout deve ser registrada e roteada para 14. Produção permanece fora de escopo.
+
+
+## Preflight canônico obrigatório
+Antes do primeiro side effect deste papel e imediatamente antes do CAS/transição final, cumpra `docs/factory/GUARDRAILS.md §22`: construa o snapshot factual atual, execute `scripts/factory-recovery-controls.mjs` e registre a evidência. Somente `CONSISTENT` autoriza continuidade; `DRIFT`, `AMBIGUOUS`, `STALE_CLAIM_SUSPECTED` e `ORPHAN_LOCK_SUSPECTED` falham fechado pelo structured routing. Check manual/ad hoc não substitui o verifier.
