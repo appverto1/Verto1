@@ -19,6 +19,23 @@ const requireFile = (path) => {
   return readFileSync(absolute, 'utf8');
 };
 
+const dockerRuntimeCheck = spawnSync(process.execPath, ['scripts/check-docker-runtime-imports.mjs'], {
+  cwd: root,
+  encoding: 'utf8',
+  timeout: 20_000,
+  env: { ...process.env, NODE_ENV: 'test' },
+});
+if (dockerRuntimeCheck.stdout) process.stdout.write(dockerRuntimeCheck.stdout);
+if (dockerRuntimeCheck.stderr) process.stderr.write(dockerRuntimeCheck.stderr);
+if (dockerRuntimeCheck.status === 0) {
+  pass('Docker runner contém toda a árvore de imports server-side');
+} else {
+  fail(
+    'Docker runner contém toda a árvore de imports server-side',
+    String(dockerRuntimeCheck.stderr || dockerRuntimeCheck.stdout || `status=${dockerRuntimeCheck.status}`).trim().slice(0, 1200),
+  );
+}
+
 const requiredMigrations = [
   'supabase/migrations/20260826143000_pts_document_lineage_events_v2.sql',
   'supabase/migrations/20260826152500_therapeutic_plan_rebac_hierarchy_v1.sql',

@@ -35,6 +35,7 @@ COPY --from=build /app/src/services ./src/services
 COPY --from=build /app/src/server ./src/server
 COPY --from=build /app/src/utils ./src/utils
 COPY --from=build /app/src/constants ./src/constants
+COPY --from=build /app/src/help ./src/help
 COPY --from=build /app/server.ts ./server.ts
 COPY --from=build /app/tsconfig.json ./tsconfig.json
 
