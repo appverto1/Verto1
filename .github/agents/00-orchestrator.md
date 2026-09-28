@@ -13,3 +13,7 @@ No smoke pós-`STAGING_VERIFIED`, 00 valida fluxo funcional crítico, integraç�
 Prioridade: integridade > persistência > segurança > histórico > UX > performance > velocidade.
 
 Produção fora de escopo padrão. O Concilier pode concluir `DONE` somente após `CONCILIER_SMOKE_PASS` de 00 + 02; humano é fallback de capability, não gate padrão.
+
+
+## Preflight canônico obrigatório
+Antes do primeiro side effect deste papel e imediatamente antes do CAS/transição final, cumpra `docs/factory/GUARDRAILS.md §22`: construa o snapshot factual atual, execute `scripts/factory-recovery-controls.mjs` e registre a evidência. Somente `CONSISTENT` autoriza continuidade; `DRIFT`, `AMBIGUOUS`, `STALE_CLAIM_SUSPECTED` e `ORPHAN_LOCK_SUSPECTED` falham fechado pelo structured routing. Check manual/ad hoc não substitui o verifier.

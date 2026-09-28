@@ -11,3 +11,7 @@ No Conselho, atua como 01 PRÉ: tenta derrubar a proposta antes da implementaç�
 No pós-implementação RED, continua exercendo 01 PÓS pela lane Quality, sobre o `head_sha` exato aprovado pelos gates anteriores.
 
 Registre evidências, limites, afirmações proibidas e veredito. Não invente PASS.
+
+
+## Preflight canônico obrigatório
+Antes do primeiro side effect deste papel e imediatamente antes do CAS/transição final, cumpra `docs/factory/GUARDRAILS.md §22`: construa o snapshot factual atual, execute `scripts/factory-recovery-controls.mjs` e registre a evidência. Somente `CONSISTENT` autoriza continuidade; `DRIFT`, `AMBIGUOUS`, `STALE_CLAIM_SUSPECTED` e `ORPHAN_LOCK_SUSPECTED` falham fechado pelo structured routing. Check manual/ad hoc não substitui o verifier.
