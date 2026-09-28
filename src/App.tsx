@@ -234,6 +234,9 @@ const CoordinatorDashboard = React.lazy(() =>
 const BillerWorkspace = React.lazy(() =>
   import('./components/BillerWorkspace').then((m) => ({ default: m.BillerWorkspace }))
 );
+const HelpCenter = React.lazy(() =>
+  import('./components/HelpCenter').then((m) => ({ default: m.HelpCenter }))
+);
 const AdminDashboard = React.lazy(() =>
   import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
 );
@@ -417,6 +420,7 @@ export default function App() {
     (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
   const isAccessGatewayRoute =
     typeof window !== 'undefined' && /^\/entrar\/?$/i.test(window.location.pathname);
+  const isHelpRoute = typeof window !== 'undefined' && /^\/ajuda\/?$/i.test(window.location.pathname);
   const invitationMode = typeof window !== 'undefined'
     ? String(new URLSearchParams(window.location.search).get('invite_mode') || '').trim().toLowerCase()
     : '';
@@ -8351,6 +8355,11 @@ export default function App() {
           )
         ) : user?.isPlatformAdmin === true ? (
           <SuperAdminDashboard onLogout={handleLogout} />
+        ) : isHelpRoute && isProfessionalClinicRole(user.role) ? (
+          <HelpCenter
+            clinicName={String(user?.activeAccessContext?.clinicName || user?.clinicName || user?.workspaceName || 'Clínica atual')}
+            onClose={() => window.location.assign('/')}
+          />
         ) : showWorkspacePicker && (accessContextOptions.length > 0 || pendingClinicInvitations.length > 0) ? (
           <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 sm:px-6">
             <section

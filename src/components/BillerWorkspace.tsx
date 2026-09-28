@@ -15,6 +15,7 @@ import { LogoVerto } from './Common';
 import { MonthlyConferenceCenter } from './MonthlyConferenceCenter';
 import { PayerRequirementsPanel } from './PayerRequirementsPanel';
 import { BillingCommunicationPanel } from './BillingCommunicationPanel';
+import { HelpButton } from './HelpButton';
 
 type BillerWorkspaceProps = {
   user: any;
@@ -119,6 +120,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
             {mobileNavOpen ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
             <span className="sr-only">{mobileNavOpen ? 'Fechar menu do faturamento' : 'Abrir menu do faturamento'}</span>
           </button>
+          <HelpButton />
           {accessContextCount > 1 && (
             <button
               type="button"
