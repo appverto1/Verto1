@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {createStructuredFactoryError,detectRecoveryLoop,evaluateClaimRenewal,routeConsistencyResult,routeStructuredFactoryError,validateEvidenceEnvelope,validateWriterValidationPreflight,verifyFactoryConsistency} from '../scripts/factory-recovery-controls.mjs';
 const B='1111111111111111111111111111111111111111',H='2222222222222222222222222222222222222222',O='3333333333333333333333333333333333333333',NOW='2026-09-28T03:00:00Z';
 const EXP='2026-09-28T03:55:00Z';
-const snap=()=>({issue:{number:267,contract_version:1,current_agent:'05',writer:'05',active_handoff:'A1',handoff_status:'CLAIMED',claimed_by:'run-1',claim_expires_at:EXP,branch:'factory/267-autonomous-recovery-v1',base_sha:B,head_sha:H,labels:['agent:05','status:claimed']},latest_handoff:{id:'A1',status:'CLAIMED',current_agent:'05'},winning_claim:{handoff_id:'A1',claimed_by:'run-1',claim_expires_at:EXP},refs:{branch_sha:H,staging_sha:B},dependencies:[{name:'#266',status:'SATISFIED'}],lock:{status:'INACTIVE'},write_intent:true});
+const snap=()=>({issue:{number:267,contract_version:1,current_agent:'05',writer:'05',active_handoff:'A1',handoff_status:'CLAIMED',claimed_by:'run-1',claim_expires_at:EXP,branch:'factory/267-autonomous-recovery-v1',base_sha:B,head_sha:H,labels:['agent:05','status:claimed']},latest_handoff:{id:'A1',status:'CLAIMED',current_agent:'05'},winning_claim:{handoff_id:'A1',claimed_by:'run-1',claim_expires_at:EXP},refs:{branch:'factory/267-autonomous-recovery-v1',branch_sha:H,staging_sha:B},evidence_policy:'NONE',dependencies:[{name:'#266',status:'SATISFIED'}],lock:{status:'INACTIVE'},write_intent:true});
 assert.equal(verifyFactoryConsistency(snap(),{now:NOW}).status,'CONSISTENT');
 {
  const s=snap();s.refs.branch_sha=O;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'DRIFT');assert(r.problems.some(x=>x.code==='HEAD_DRIFT'));assert.equal(routeConsistencyResult(r,{current_agent:'05',writer:'05',gate:'A1'}).owner,'05');
@@ -73,6 +73,33 @@ assert.equal(validateEvidenceEnvelope(env(),{expectedHeadSha:H,requireRunCheck:t
 }
 {
  const e=env();e.check_conclusion='failure';const r=validateEvidenceEnvelope(e,{expectedHeadSha:H,requireRunCheck:true});assert(r.errors.some(x=>x.code==='CHECK_NOT_GREEN'));
+}
+{
+ const e=env();delete e.run_id;delete e.check_id;delete e.run_head_sha;delete e.check_conclusion;const r=validateEvidenceEnvelope(e,{expectedHeadSha:H});assert(!r.valid);assert(r.errors.some(x=>x.code==='RUN_ID_MISSING'));assert(r.errors.some(x=>x.code==='CHECK_ID_MISSING'));
+}
+{
+ const e=env();e.gate='STAGING_CI';delete e.run_id;const r=validateEvidenceEnvelope(e,{expectedHeadSha:H});assert(!r.valid);assert(r.errors.some(x=>x.code==='RUN_ID_MISSING'));
+}
+{
+ const s=snap();delete s.evidence_policy;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='EVIDENCE_POLICY_MISSING'));
+}
+{
+ const s=snap();s.evidence_policy='RUN_CHECK';const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='EVIDENCE_MISSING'));
+}
+{
+ const s=snap();delete s.issue.branch;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='REQUIRED_FIELD_MISSING'));
+}
+{
+ const s=snap();delete s.refs.branch;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='BRANCH_IDENTITY_MISSING'));
+}
+{
+ const s=snap();s.refs.branch='factory/wrong-branch';const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'DRIFT');assert(r.problems.some(x=>x.code==='BRANCH_IDENTITY_DRIFT'));
+}
+{
+ const s=snap();s.evidence_policy='RUN_CHECK';s.evidence=env();const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='WRITER_VALIDATION_PREFLIGHT_MISSING'));
+}
+{
+ const s=snap();s.evidence_policy='RUN_CHECK';s.evidence=env();s.writer_validation_preflight={workflow_available:true,workflow_name:'Verto Candidate Writer Validation',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['factory-recovery-controls'],suite:'factory-recovery-controls'};assert.equal(verifyFactoryConsistency(s,{now:NOW}).status,'CONSISTENT');
 }
 {
  const route=routeStructuredFactoryError(createStructuredFactoryError('RUNTIME_CAPABILITY_MISSING',{gate:'WRITER_VALIDATION'}),{current_agent:'05',writer:'05'});assert.equal(route.owner,'00');assert.deepEqual(route.diagnostic_participation,{agent:'00',mode:'READ_ONLY',may_acquire_write_claim:false});

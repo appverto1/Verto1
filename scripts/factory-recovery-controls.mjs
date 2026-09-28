@@ -38,7 +38,8 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
     else if (!ran.has(s)) errors.push({code:'REQUIRED_SUITE_MISSING',detail:`required suite not executed: ${s}`});
   }
   if (Number.isNaN(new Date(e.timestamp).getTime())) errors.push({code:'EVIDENCE_TIMESTAMP_INVALID',detail:'invalid timestamp'});
-  if (requireRunCheck) {
+  const automatedGate = ['WRITER_VALIDATION','STAGING_CI'].includes(String(e.gate));
+  if (requireRunCheck || automatedGate) {
     if (!e.run_id) errors.push({code:'RUN_ID_MISSING',detail:'run_id required'});
     if (!e.check_id) errors.push({code:'CHECK_ID_MISSING',detail:'check_id required'});
     if (e.run_head_sha!==e.head_sha) errors.push({code:'HEAD_DRIFT',detail:'run head differs from evidence head'});
@@ -73,7 +74,7 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   const at=new Date(now); if (Number.isNaN(at.getTime())) throw new TypeError('invalid now');
   const ps=[], i=s?.issue;
   if (!i || typeof i!=='object') return {schema_version:'FACTORY_CONSISTENCY_V1',status:'AMBIGUOUS',problems:[p('ISSUE_SNAPSHOT_MISSING','canonical Issue snapshot required','AMBIGUOUS')]};
-  for (const f of ['number','contract_version','current_agent','writer','active_handoff','handoff_status']) if (i[f]===null || i[f]===undefined || i[f]==='') ps.push(p('REQUIRED_FIELD_MISSING',`issue.${f} required`,'AMBIGUOUS'));
+  for (const f of ['number','contract_version','current_agent','writer','active_handoff','handoff_status','branch']) if (i[f]===null || i[f]===undefined || i[f]==='') ps.push(p('REQUIRED_FIELD_MISSING',`issue.${f} required`,'AMBIGUOUS'));
   const h=s.latest_handoff;
   if (!h || typeof h!=='object') ps.push(p('LATEST_HANDOFF_MISSING','latest canonical handoff required','AMBIGUOUS'));
   else {
@@ -106,6 +107,8 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   const refsProvided=Boolean(s?.refs && typeof s.refs==='object' && !Array.isArray(s.refs));
   const refs=refsProvided?s.refs:{};
   if (!refsProvided) ps.push(p('REFS_SNAPSHOT_MISSING','refs snapshot is required','AMBIGUOUS'));
+  if (!nonempty(refs.branch)) ps.push(p('BRANCH_IDENTITY_MISSING','refs.branch required','AMBIGUOUS'));
+  else if (nonempty(i.branch) && refs.branch!==i.branch) ps.push(p('BRANCH_IDENTITY_DRIFT','refs.branch differs from issue.branch'));
   if (nonempty(i.head_sha)) {
     if (!SHA.test(i.head_sha)) ps.push(p('HEAD_SHA_INVALID','head_sha must be full SHA','AMBIGUOUS'));
     else if (!nonempty(refs.branch_sha)) ps.push(p('BRANCH_REF_MISSING','branch ref required','AMBIGUOUS'));
@@ -125,11 +128,25 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
     if (l.owner_operational_valid===false) ps.push(p('ORPHAN_LOCK_SUSPECTED','lock owner is not operationally valid','ORPHAN_LOCK_SUSPECTED'));
     if (s.write_intent===true && issueRef(l.owner_issue)!==issueRef(i.number)) ps.push(p('GLOBAL_WRITE_LOCK_HELD_BY_OTHER_ISSUE','write conflicts with another Issue lock'));
   }
-  if (s.writer_validation_preflight) {
+  const evidencePolicy=s.evidence_policy;
+  if (!['NONE','ENVELOPE','RUN_CHECK'].includes(evidencePolicy)) ps.push(p('EVIDENCE_POLICY_MISSING','evidence_policy must be NONE, ENVELOPE or RUN_CHECK','AMBIGUOUS'));
+  if (evidencePolicy==='ENVELOPE' || evidencePolicy==='RUN_CHECK') {
+    if (!s.evidence) ps.push(p('EVIDENCE_MISSING','evidence required by evidence_policy','AMBIGUOUS'));
+    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK'}).errors) ps.push(p(e.code,e.detail));
+  } else if (s.evidence) {
+    for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined}).errors) ps.push(p(e.code,e.detail));
+  }
+  const currentGate=String(s.evidence?.gate??'');
+  if (currentGate==='WRITER_VALIDATION') {
+    if (!s.writer_validation_preflight) ps.push(p('WRITER_VALIDATION_PREFLIGHT_MISSING','writer_validation_preflight required for WRITER_VALIDATION','AMBIGUOUS'));
+    else {
+      const pre=validateWriterValidationPreflight(s.writer_validation_preflight);
+      if (!pre.valid) ps.push(p(pre.error.code,pre.detail));
+    }
+  } else if (s.writer_validation_preflight) {
     const pre=validateWriterValidationPreflight(s.writer_validation_preflight);
     if (!pre.valid) ps.push(p(pre.error.code,pre.detail));
   }
-  if (s.evidence) for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:s.evidence_requires_run_check===true}).errors) ps.push(p(e.code,e.detail));
   return {schema_version:'FACTORY_CONSISTENCY_V1',status:statusOf(ps),problems:ps};
 }
 
