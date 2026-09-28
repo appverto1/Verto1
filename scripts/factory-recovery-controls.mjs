@@ -5,6 +5,13 @@ const SHA = /^[0-9a-f]{40}$/i;
 const EXPECTED_WRITER_VALIDATION_WORKFLOW = 'Verto Candidate Writer Validation';
 const AUTHORIZED_TARGET_SCHEMA = 'FACTORY_AUTHORIZED_TARGET_V1';
 const AUTHORIZED_TARGET_AUTHORITIES = new Set(['FOUNDER_EXPLICIT']);
+const POST_MERGE_PROOF_SCHEMA = 'FACTORY_POST_MERGE_PROOF_V1';
+const POST_MERGE_EVIDENCE = Object.freeze({
+  writer_validation:{gate:'WRITER_VALIDATION',results:new Set(['WRITER_VALIDATION_PASS']),requireRunCheck:true},
+  staging_ci:{gate:'STAGING_CI',results:new Set(['CI_PASS']),requireRunCheck:true},
+  review:{gate:'REVIEW',results:new Set(['REVIEW_PASS']),requireRunCheck:false},
+  audit:{gate:'AUDIT',results:new Set(['AUDIT_PASS','AUDIT_PASS_POS']),requireRunCheck:false},
+});
 const ERRORS = new Set([
   'HEAD_DRIFT','CHECK_NOT_GREEN','REQUIRED_SUITE_MISSING','REQUIRED_SUITE_SKIPPED','STALE_CLAIM',
   'RUNTIME_CAPABILITY_MISSING','RECOVERY_LOOP','LOCK_INCONSISTENT','STATE_AMBIGUOUS','DEPENDENCY_UNSATISFIED',
@@ -73,11 +80,67 @@ export function validateWriterValidationPreflight(input={}) {
   return {schema_version:'FACTORY_WRITER_VALIDATION_PREFLIGHT_V1',valid:true,error:null,detail:'preflight consistent'};
 }
 
+function validatePostMergeStagingSemantics(s,i,refs) {
+  const problems=[];
+  const subjectFields=['post_merge_subject_pr','post_merge_subject_base_sha','post_merge_subject_head_sha','post_merge_subject_merge_sha'];
+  const hasSubject=subjectFields.some(f=>i[f]!==null&&i[f]!==undefined&&i[f]!=='');
+  const proof=refs?.post_merge_proof;
+  if (!hasSubject && !proof) return {claimed:false,valid:false,problems};
+  for (const f of subjectFields) if (i[f]===null||i[f]===undefined||i[f]==='') problems.push(p('POST_MERGE_FIELD_MISSING',`issue.${f} is required for post-merge proof`,'AMBIGUOUS'));
+  const subjectBase=i.post_merge_subject_base_sha, subjectHead=i.post_merge_subject_head_sha, subjectMerge=i.post_merge_subject_merge_sha;
+  for (const [f,v] of [['post_merge_subject_base_sha',subjectBase],['post_merge_subject_head_sha',subjectHead],['post_merge_subject_merge_sha',subjectMerge]]) {
+    if (v!==undefined && v!==null && v!=='' && !SHA.test(String(v))) problems.push(p('POST_MERGE_FIELD_INVALID',`issue.${f} must be a full SHA`,'AMBIGUOUS'));
+  }
+  if (!proof || typeof proof!=='object' || Array.isArray(proof)) {
+    problems.push(p('POST_MERGE_PROOF_MISSING','trusted factual post-merge proof is required','AMBIGUOUS'));
+    return {claimed:true,valid:false,problems};
+  }
+  if (proof.schema_version!==POST_MERGE_PROOF_SCHEMA) problems.push(p('POST_MERGE_PROOF_SCHEMA_INVALID','post-merge proof schema is invalid','AMBIGUOUS'));
+  if (proof.merged!==true) problems.push(p('POST_MERGE_NOT_FACTUAL','pull request is not factually merged'));
+  if (String(proof.pr_number)!==String(i.post_merge_subject_pr)) problems.push(p('POST_MERGE_PR_DRIFT','merge proof belongs to a different pull request'));
+  if (!SHA.test(String(proof.merge_sha??''))) problems.push(p('POST_MERGE_FIELD_MISSING','proof.merge_sha must be a full SHA','AMBIGUOUS'));
+  else {
+    if (proof.merge_sha!==subjectMerge) problems.push(p('POST_MERGE_MERGE_SHA_DRIFT','merge proof SHA differs from canonical post-merge subject'));
+    if (proof.merge_sha!==refs.staging_sha) problems.push(p('POST_MERGE_STAGING_DRIFT','current staging is not the proved merge SHA'));
+  }
+  if (!stringArray(proof.parents) || proof.parents.length<2) problems.push(p('POST_MERGE_ANCESTRY_MISSING','merge parent evidence is required','AMBIGUOUS'));
+  else {
+    if (!proof.parents.includes(subjectBase)) problems.push(p('POST_MERGE_BASE_ANCESTRY_INVALID','merge does not derive from the recorded historical base'));
+    if (!proof.parents.includes(subjectHead)) problems.push(p('POST_MERGE_CANDIDATE_ANCESTRY_INVALID','merge does not include the exact approved candidate'));
+  }
+  for (const [name,expectedAncestor] of [['base_ancestry',subjectBase],['candidate_ancestry',subjectHead]]) {
+    const ancestry=proof[name];
+    if (!ancestry || typeof ancestry!=='object' || Array.isArray(ancestry)) {
+      problems.push(p('POST_MERGE_ANCESTRY_MISSING',`${name} proof is required`,'AMBIGUOUS'));
+      continue;
+    }
+    if (ancestry.ancestor_sha!==expectedAncestor || ancestry.descendant_sha!==subjectMerge) problems.push(p('POST_MERGE_ANCESTRY_DRIFT',`${name} does not bind the canonical subject to the merge SHA`));
+    if (ancestry.is_ancestor!==true) problems.push(p('POST_MERGE_ANCESTRY_INVALID',`${name} does not prove ancestry`));
+  }
+  const evidence=s?.post_merge_evidence;
+  if (!evidence || typeof evidence!=='object' || Array.isArray(evidence)) problems.push(p('POST_MERGE_EVIDENCE_MISSING','exact-candidate historical gate evidence is required','AMBIGUOUS'));
+  else for (const [name,policy] of Object.entries(POST_MERGE_EVIDENCE)) {
+    const envelope=evidence[name];
+    if (!envelope || typeof envelope!=='object' || Array.isArray(envelope)) {
+      problems.push(p('POST_MERGE_EVIDENCE_MISSING',`${name} evidence is required`,'AMBIGUOUS'));
+      continue;
+    }
+    for (const error of validateEvidenceEnvelope(envelope,{expectedHeadSha:subjectHead,requireRunCheck:policy.requireRunCheck}).errors) problems.push(p('POST_MERGE_EVIDENCE_STALE',`${name}: ${error.code} ${error.detail}`));
+    if (issueRef(envelope.issue)!==issueRef(i.number)) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence belongs to another Issue`));
+    if (String(envelope.contract_version)!==String(i.contract_version)) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence contract_version differs`));
+    if (envelope.gate!==policy.gate) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence gate differs`));
+    if (!policy.results.has(envelope.result)) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence is not an accepted PASS result`));
+    if (envelope.base_sha!==subjectBase) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence base differs from the historical subject base`));
+    if (envelope.head_sha!==subjectHead) problems.push(p('POST_MERGE_EVIDENCE_STALE',`${name} evidence head differs from the exact approved candidate`));
+  }
+  return {claimed:true,valid:problems.length===0,problems};
+}
+
 function validateReferenceAndTargetSemantics(s,i,refs,ps) {
   const referenceBranch=nonempty(i.reference_branch)?i.reference_branch:'staging';
   const targetBranch=nonempty(i.target_branch)?i.target_branch:referenceBranch;
   const exceptionalTarget=targetBranch!==referenceBranch;
-  const explicitBypassKeys=new Set(['skip_staging_check','bypass_staging_check','allow_arbitrary_target']);
+  const explicitBypassKeys=new Set(['skip_staging_check','bypass_staging_check','allow_arbitrary_target','post_merge','post_merge_mode','is_post_merge','allow_post_merge','post_merge_override']);
   const bypassLike=/^(?:skip|bypass|ignore|override|allow).*(?:staging|target|base|ancestry|scope)/i;
   const bypassKeys=new Set([...Object.keys(s??{}),...Object.keys(i??{})].filter(key=>explicitBypassKeys.has(key)||bypassLike.test(key)));
   for (const key of bypassKeys) ps.push(p('GENERIC_BYPASS_REJECTED',`${key} is not an authorized target mechanism`,'AMBIGUOUS'));
@@ -87,7 +150,11 @@ function validateReferenceAndTargetSemantics(s,i,refs,ps) {
   else if (freshnessSha!==refs.staging_sha) ps.push(p('STAGING_FRESHNESS_DRIFT','staging freshness differs from current staging'));
   if (!exceptionalTarget) {
     if (!SHA.test(String(i.base_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full base/staging SHAs required','AMBIGUOUS'));
-    else if (i.base_sha!==refs.staging_sha) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging'));
+    else if (i.base_sha!==refs.staging_sha) {
+      const postMerge=validatePostMergeStagingSemantics(s,i,refs);
+      ps.push(...postMerge.problems);
+      if (!postMerge.valid) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging without complete factual merge proof'));
+    }
     if (s?.authorized_target) ps.push(p('UNEXPECTED_TARGET_AUTHORIZATION','authorized_target is only valid for an exceptional target','AMBIGUOUS'));
     return;
   }
@@ -234,7 +301,7 @@ export function routeConsistencyResult(result, context={}) {
   let code='STATE_AMBIGUOUS';
   if (result.status==='STALE_CLAIM_SUSPECTED'||codes.has('STALE_CLAIM')) code='STALE_CLAIM';
   else if (result.status==='ORPHAN_LOCK_SUSPECTED'||codes.has('GLOBAL_WRITE_LOCK_HELD_BY_OTHER_ISSUE')) code='LOCK_INCONSISTENT';
-  else if (['HEAD_DRIFT','BASE_STAGING_DRIFT','STAGING_FRESHNESS_DRIFT','TARGET_BRANCH_DRIFT','TARGET_BASE_DRIFT','TARGET_ANCESTRY_DRIFT','TARGET_ANCESTRY_INVALID'].some(x=>codes.has(x))) code='HEAD_DRIFT';
+  else if (['HEAD_DRIFT','BASE_STAGING_DRIFT','STAGING_FRESHNESS_DRIFT','TARGET_BRANCH_DRIFT','TARGET_BASE_DRIFT','TARGET_ANCESTRY_DRIFT','TARGET_ANCESTRY_INVALID','POST_MERGE_STAGING_DRIFT','POST_MERGE_MERGE_SHA_DRIFT','POST_MERGE_PR_DRIFT','POST_MERGE_NOT_FACTUAL','POST_MERGE_BASE_ANCESTRY_INVALID','POST_MERGE_CANDIDATE_ANCESTRY_INVALID','POST_MERGE_ANCESTRY_DRIFT','POST_MERGE_ANCESTRY_INVALID','POST_MERGE_EVIDENCE_STALE','POST_MERGE_EVIDENCE_DRIFT'].some(x=>codes.has(x))) code='HEAD_DRIFT';
   else if (codes.has('CHECK_NOT_GREEN')) code='CHECK_NOT_GREEN';
   else if (codes.has('REQUIRED_SUITE_MISSING')) code='REQUIRED_SUITE_MISSING';
   else if (codes.has('REQUIRED_SUITE_SKIPPED')) code='REQUIRED_SUITE_SKIPPED';
