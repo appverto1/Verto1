@@ -16,6 +16,7 @@ const STATUS_LABEL = {
 const arr = (v) => Array.isArray(v) ? v : [];
 const nonempty = (v) => typeof v === 'string' && v.trim() !== '';
 const stringArray = (v) => Array.isArray(v) && v.every(nonempty);
+const nonemptyStringArray = (v) => stringArray(v) && v.length > 0;
 const issueRef = (v) => String(v ?? '').replace(/^#/,'');
 const p = (code, detail, severity='DRIFT') => ({code,detail,severity});
 const statusOf = (ps) => ps.some(x=>x.severity==='AMBIGUOUS') ? 'AMBIGUOUS'
@@ -76,9 +77,10 @@ function validateReferenceAndTargetSemantics(s,i,refs,ps) {
   const referenceBranch=nonempty(i.reference_branch)?i.reference_branch:'staging';
   const targetBranch=nonempty(i.target_branch)?i.target_branch:referenceBranch;
   const exceptionalTarget=targetBranch!==referenceBranch;
-  for (const key of ['skip_staging_check','bypass_staging_check','allow_arbitrary_target']) {
-    if (Object.prototype.hasOwnProperty.call(s??{},key) || Object.prototype.hasOwnProperty.call(i??{},key)) ps.push(p('GENERIC_BYPASS_REJECTED',`${key} is not an authorized target mechanism`,'AMBIGUOUS'));
-  }
+  const explicitBypassKeys=new Set(['skip_staging_check','bypass_staging_check','allow_arbitrary_target']);
+  const bypassLike=/^(?:skip|bypass|ignore|override|allow).*(?:staging|target|base|ancestry|scope)/i;
+  const bypassKeys=new Set([...Object.keys(s??{}),...Object.keys(i??{})].filter(key=>explicitBypassKeys.has(key)||bypassLike.test(key)));
+  for (const key of bypassKeys) ps.push(p('GENERIC_BYPASS_REJECTED',`${key} is not an authorized target mechanism`,'AMBIGUOUS'));
   if (referenceBranch!=='staging') ps.push(p('REFERENCE_BRANCH_DRIFT','reference_branch must remain staging'));
   const freshnessSha=exceptionalTarget?i.staging_freshness_sha:(i.staging_freshness_sha??i.base_sha);
   if (!SHA.test(String(freshnessSha??'')) || !SHA.test(String(refs.staging_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full staging freshness/ref SHAs required','AMBIGUOUS'));
@@ -89,9 +91,11 @@ function validateReferenceAndTargetSemantics(s,i,refs,ps) {
     if (s?.authorized_target) ps.push(p('UNEXPECTED_TARGET_AUTHORIZATION','authorized_target is only valid for an exceptional target','AMBIGUOUS'));
     return;
   }
-  const requiredIssueFields=['reference_branch','staging_freshness_sha','target_branch','target_base_sha'];
+  const requiredIssueFields=['reference_branch','staging_freshness_sha','target_branch','base_sha','target_base_sha'];
   for (const f of requiredIssueFields) if (!nonempty(i[f])) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING',`issue.${f} required for exceptional target`,'AMBIGUOUS'));
+  if (!SHA.test(String(i.base_sha??''))) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING','issue.base_sha must be a full SHA for exceptional target','AMBIGUOUS'));
   if (!SHA.test(String(i.target_base_sha??''))) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING','issue.target_base_sha must be a full SHA','AMBIGUOUS'));
+  else if (SHA.test(String(i.base_sha??'')) && i.base_sha!==i.target_base_sha) ps.push(p('TARGET_BASE_DRIFT','canonical issue.base_sha differs from issue.target_base_sha'));
   if (!nonempty(refs.target_branch)) ps.push(p('AUTHORIZED_TARGET_REF_MISSING','refs.target_branch required','AMBIGUOUS'));
   else if (refs.target_branch!==targetBranch) ps.push(p('TARGET_BRANCH_DRIFT','target branch differs from factual target ref'));
   if (!SHA.test(String(refs.target_branch_sha??''))) ps.push(p('AUTHORIZED_TARGET_REF_MISSING','refs.target_branch_sha must be a full SHA','AMBIGUOUS'));
@@ -110,10 +114,10 @@ function validateReferenceAndTargetSemantics(s,i,refs,ps) {
     if (!nonempty(auth.evidence_ref)) ps.push(p('AUTHORIZED_TARGET_EVIDENCE_MISSING','authorization evidence_ref is required','AMBIGUOUS'));
     if (!nonempty(auth.target_branch)) ps.push(p('AUTHORIZED_TARGET_FIELD_MISSING','authorization target_branch is required','AMBIGUOUS'));
     else if (auth.target_branch!==targetBranch) ps.push(p('AUTHORIZED_TARGET_BRANCH_MISMATCH','authorization does not cover requested target branch'));
-    if (!stringArray(auth.allowed_scope)) ps.push(p('AUTHORIZED_TARGET_SCOPE_INVALID','authorization allowed_scope must be an explicit string array','AMBIGUOUS'));
+    if (!nonemptyStringArray(auth.allowed_scope)) ps.push(p('AUTHORIZED_TARGET_SCOPE_INVALID','authorization allowed_scope must be a non-empty explicit string array','AMBIGUOUS'));
   }
-  if (!stringArray(s?.operation_scope)) ps.push(p('OPERATION_SCOPE_MISSING','operation_scope must be an explicit string array','AMBIGUOUS'));
-  else if (auth && stringArray(auth.allowed_scope)) {
+  if (!nonemptyStringArray(s?.operation_scope)) ps.push(p('OPERATION_SCOPE_MISSING','operation_scope must be a non-empty explicit string array','AMBIGUOUS'));
+  else if (auth && nonemptyStringArray(auth.allowed_scope)) {
     const allowed=new Set(auth.allowed_scope);
     for (const item of s.operation_scope) if (!allowed.has(item)) ps.push(p('AUTHORIZED_SCOPE_EXCEEDED',`operation scope exceeds authorization: ${item}`));
   }
