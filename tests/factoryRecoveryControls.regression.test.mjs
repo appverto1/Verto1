@@ -32,6 +32,24 @@ assert.equal(verifyFactoryConsistency(snap(),{now:NOW}).status,'CONSISTENT');
  const s=snap();s.issue.base_sha='not-a-sha';const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='FRESHNESS_EVIDENCE_MISSING'));
 }
 {
+ const s=snap();delete s.issue.base_sha;delete s.refs.staging_sha;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='FRESHNESS_EVIDENCE_MISSING'));
+}
+{
+ const s=snap();delete s.refs;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='REFS_SNAPSHOT_MISSING'));
+}
+{
+ const s=snap();delete s.lock;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='LOCK_SNAPSHOT_MISSING'));
+}
+{
+ const s=snap();s.lock={status:'UNKNOWN'};const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='LOCK_STATUS_INVALID'));
+}
+{
+ const s=snap();delete s.dependencies;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='DEPENDENCIES_SNAPSHOT_MISSING'));
+}
+{
+ const s=snap();s.dependencies=[];assert.equal(verifyFactoryConsistency(s,{now:NOW}).status,'CONSISTENT');
+}
+{
  const s=snap();s.dependencies=[{name:'#999',status:'PENDING'}];const r=verifyFactoryConsistency(s,{now:NOW});const route=routeConsistencyResult(r,{current_agent:'05',writer:'05',dependency_owner:'09',gate:'A1'});assert.equal(route.owner,'09');assert.match(route.retry_condition,/SATISFIED/);
 }
 {
@@ -71,6 +89,8 @@ assert.equal(validateEvidenceEnvelope(env(),{expectedHeadSha:H,requireRunCheck:t
  const ok=validateWriterValidationPreflight({workflow_available:true,workflow_name:'Verto Candidate Writer Validation',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['none','help-center'],suite:'none'});assert(ok.valid);
  const missing=validateWriterValidationPreflight({workflow_available:false,workflow_name:'Verto Candidate Writer Validation',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['none'],suite:'none'});assert.equal(missing.error.code,'RUNTIME_CAPABILITY_MISSING');
  const wrong=validateWriterValidationPreflight({workflow_available:true,workflow_name:'other',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['none'],suite:'none'});assert.equal(wrong.error.code,'RUNTIME_CAPABILITY_MISSING');
+ const noSuite=validateWriterValidationPreflight({workflow_available:true,workflow_name:'Verto Candidate Writer Validation',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['none']});assert.equal(noSuite.error.code,'REQUIRED_SUITE_MISSING');
+ const emptySuite=validateWriterValidationPreflight({workflow_available:true,workflow_name:'Verto Candidate Writer Validation',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['none'],suite:''});assert.equal(emptySuite.error.code,'REQUIRED_SUITE_MISSING');
 }
 {
  const s=snap();s.writer_validation_preflight={workflow_available:false,workflow_name:'Verto Candidate Writer Validation',base_sha:B,staging_sha:B,candidate_sha:H,branch_sha:H,suites_allowlisted:['none'],suite:'none'};const r=verifyFactoryConsistency(s,{now:NOW});assert(r.problems.some(x=>x.code==='RUNTIME_CAPABILITY_MISSING'));assert.equal(routeConsistencyResult(r,{current_agent:'05',writer:'05',gate:'WRITER_VALIDATION'}).owner,'00');

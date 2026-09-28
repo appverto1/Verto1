@@ -64,7 +64,8 @@ export function validateWriterValidationPreflight(input={}) {
   if (input.base_sha!==input.staging_sha) return fail('HEAD_DRIFT','authorized base differs from current staging');
   if (input.candidate_sha!==input.branch_sha) return fail('HEAD_DRIFT','candidate differs from branch ref');
   if (!stringArray(input.suites_allowlisted)) return fail('STATE_AMBIGUOUS','suites_allowlisted must be an array of non-empty strings');
-  if (nonempty(input.suite) && !input.suites_allowlisted.includes(input.suite)) return fail('REQUIRED_SUITE_MISSING','selected suite is not allowlisted');
+  if (!nonempty(input.suite)) return fail('REQUIRED_SUITE_MISSING','selected suite is required; use an explicit allowlisted value such as none when no focused suite applies');
+  if (!input.suites_allowlisted.includes(input.suite)) return fail('REQUIRED_SUITE_MISSING','selected suite is not allowlisted');
   return {schema_version:'FACTORY_WRITER_VALIDATION_PREFLIGHT_V1',valid:true,error:null,detail:'preflight consistent'};
 }
 
@@ -101,19 +102,25 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
       }
     }
   } else if (c && c.handoff_id===i.active_handoff && c.active!==false) ps.push(p('UNEXPECTED_ACTIVE_CLAIM','non-CLAIMED handoff has active claim'));
-  const refs=s.refs??{};
+
+  const refsProvided=Boolean(s?.refs && typeof s.refs==='object' && !Array.isArray(s.refs));
+  const refs=refsProvided?s.refs:{};
+  if (!refsProvided) ps.push(p('REFS_SNAPSHOT_MISSING','refs snapshot is required','AMBIGUOUS'));
   if (nonempty(i.head_sha)) {
     if (!SHA.test(i.head_sha)) ps.push(p('HEAD_SHA_INVALID','head_sha must be full SHA','AMBIGUOUS'));
     else if (!nonempty(refs.branch_sha)) ps.push(p('BRANCH_REF_MISSING','branch ref required','AMBIGUOUS'));
     else if (refs.branch_sha!==i.head_sha) ps.push(p('HEAD_DRIFT','branch ref differs from issue.head_sha'));
   }
-  if (nonempty(i.base_sha) || nonempty(refs.staging_sha)) {
-    if (!SHA.test(String(i.base_sha??'')) || !SHA.test(String(refs.staging_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full base/staging SHAs required','AMBIGUOUS'));
-    else if (i.base_sha!==refs.staging_sha) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging'));
-  }
-  for (const d of arr(s.dependencies)) if (d?.required!==false && d?.status!=='SATISFIED') ps.push(p('DEPENDENCY_UNSATISFIED',`dependency ${d?.name??'unknown'} is not SATISFIED`));
+  if (!SHA.test(String(i.base_sha??'')) || !SHA.test(String(refs.staging_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full base/staging SHAs required','AMBIGUOUS'));
+  else if (i.base_sha!==refs.staging_sha) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging'));
+
+  if (!Array.isArray(s.dependencies)) ps.push(p('DEPENDENCIES_SNAPSHOT_MISSING','dependencies must be an explicit array, including [] when none exist','AMBIGUOUS'));
+  else for (const d of s.dependencies) if (d?.required!==false && d?.status!=='SATISFIED') ps.push(p('DEPENDENCY_UNSATISFIED',`dependency ${d?.name??'unknown'} is not SATISFIED`));
+
   const l=s.lock;
-  if (l?.status==='ACTIVE') {
+  if (!l || typeof l!=='object' || Array.isArray(l)) ps.push(p('LOCK_SNAPSHOT_MISSING','lock snapshot with explicit status is required','AMBIGUOUS'));
+  else if (!['ACTIVE','INACTIVE'].includes(l.status)) ps.push(p('LOCK_STATUS_INVALID','lock.status must be ACTIVE or INACTIVE','AMBIGUOUS'));
+  else if (l.status==='ACTIVE') {
     if (!l.owner_issue || !l.owner_writer || !l.release_gate) ps.push(p('LOCK_METADATA_INCOMPLETE','active lock lacks owner/writer/release gate','ORPHAN_LOCK_SUSPECTED'));
     if (l.owner_operational_valid===false) ps.push(p('ORPHAN_LOCK_SUSPECTED','lock owner is not operationally valid','ORPHAN_LOCK_SUSPECTED'));
     if (s.write_intent===true && issueRef(l.owner_issue)!==issueRef(i.number)) ps.push(p('GLOBAL_WRITE_LOCK_HELD_BY_OTHER_ISSUE','write conflicts with another Issue lock'));
