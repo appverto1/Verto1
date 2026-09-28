@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import './factoryRecoveryControls.regression.test.mjs';
 import {
   diagnosticSignature,
   findNewTypeScriptDiagnostics,
