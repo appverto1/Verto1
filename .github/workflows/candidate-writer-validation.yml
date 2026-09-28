@@ -1,0 +1,217 @@
+name: Verto Candidate Writer Validation
+
+on:
+  push:
+    branches:
+      - 'factory/**'
+  workflow_dispatch:
+    inputs:
+      base_sha:
+        description: 'Explicit baseline commit SHA; defaults to origin/staging'
+        required: false
+        type: string
+      focused_suite:
+        description: 'Allowlisted focused test suite'
+        required: false
+        default: none
+        type: choice
+        options:
+          - none
+          - help-center
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verto-candidate-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  writer-validation:
+    name: writer-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove candidate and baseline
+        id: refs
+        shell: bash
+        env:
+          INPUT_BASE_SHA: ${{ inputs.base_sha }}
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA="$(git rev-parse HEAD)"
+          test "$CANDIDATE_SHA" = "$GITHUB_SHA"
+          git fetch --no-tags origin staging
+          RAW_BASE_SHA="${INPUT_BASE_SHA:-}"
+          if [ -z "$RAW_BASE_SHA" ]; then
+            BASE_SHA="$(git rev-parse origin/staging)"
+          else
+            if ! [[ "$RAW_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "::error::Explicit baseline must be a full 40-character commit SHA."
+              exit 3
+            fi
+            BASE_SHA="$(git rev-parse --verify "${RAW_BASE_SHA}^{commit}")" || {
+              echo "::error::Explicit baseline commit does not exist."
+              exit 3
+            }
+          fi
+          STAGING_SHA="$(git rev-parse origin/staging)"
+          if [ -n "$RAW_BASE_SHA" ]; then
+            git merge-base --is-ancestor "$BASE_SHA" "$CANDIDATE_SHA" || {
+              echo "::error::Explicit baseline must be an ancestor of the candidate."
+              exit 3
+            }
+            git merge-base --is-ancestor "$BASE_SHA" "$STAGING_SHA" || {
+              echo "::error::Explicit baseline must belong to the authorized staging lineage."
+              exit 3
+            }
+          fi
+          echo "candidate_sha=$CANDIDATE_SHA" >> "$GITHUB_OUTPUT"
+          echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Verto writer validation"
+            echo "- result namespace: WRITER_VALIDATION"
+            printf -- '- candidate SHA: `%s`\n' "$CANDIDATE_SHA"
+            printf -- '- baseline SHA: `%s`\n' "$BASE_SHA"
+            printf -- '- ref: `%s`\n' "$GITHUB_REF"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies deterministically
+        run: npm ci
+
+      - name: Resolve focused suite (allowlisted)
+        id: focused
+        shell: bash
+        env:
+          DISPATCH_SUITE: ${{ inputs.focused_suite }}
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            SUITE="${DISPATCH_SUITE:-none}"
+          else
+            CHANGED_FILES="$(git diff --name-only "$BASE_SHA"...HEAD)"
+            if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^(services/helpCenterRoutes\.ts|src/components/Help(Button|Center)\.tsx|src/help/|tests/helpCenter[^/]*\.test\.ts|supabase/migrations/[0-9_]*help_center_)'; then
+              SUITE="help-center"
+            else
+              SUITE="none"
+            fi
+          fi
+          case "$SUITE" in
+            none|help-center) ;;
+            *) echo "::error::Focused suite is not allowlisted."; exit 2 ;;
+          esac
+          echo "suite=$SUITE" >> "$GITHUB_OUTPUT"
+          printf -- '- focused suite: `%s`\n' "$SUITE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Focused tests (allowlisted)
+        if: ${{ steps.focused.outputs.suite != 'none' }}
+        shell: bash
+        env:
+          FOCUSED_SUITE: ${{ steps.focused.outputs.suite }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          case "$FOCUSED_SUITE" in
+            help-center)
+              test -f tests/helpCenterManifest.test.ts
+              test -f tests/helpCenterRoutes.test.ts
+              npx tsx tests/helpCenterManifest.test.ts
+              npx tsx tests/helpCenterRoutes.test.ts
+              ;;
+            *)
+              echo "::error::Focused suite is not allowlisted."
+              exit 2
+              ;;
+          esac
+
+      - name: Typecheck ratchet regression tests
+        run: node tests/typecheckRatchet.regression.test.mjs
+
+      - name: Typecheck ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+        run: |
+          set -uo pipefail
+          HEAD_LOG="$RUNNER_TEMP/typecheck-head.log"
+          BASE_LOG="$RUNNER_TEMP/typecheck-base.log"
+          NEW_LOG="$RUNNER_TEMP/typecheck-new.log"
+          BASE_WORKTREE="$RUNNER_TEMP/verto-base"
+          set +e
+          npm run typecheck >"$HEAD_LOG" 2>&1
+          HEAD_STATUS=$?
+          set -e
+          cat "$HEAD_LOG"
+          if [ "$HEAD_STATUS" -eq 0 ]; then exit 0; fi
+          git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"
+          pushd "$BASE_WORKTREE" >/dev/null
+          npm ci --prefer-offline --no-audit
+          set +e
+          npm run typecheck >"$BASE_LOG" 2>&1
+          BASE_STATUS=$?
+          set -e
+          popd >/dev/null
+          if [ "$BASE_STATUS" -eq 0 ]; then
+            echo "::error::Baseline typecheck passes but candidate fails."
+            exit "$HEAD_STATUS"
+          fi
+          node scripts/typecheck-ratchet.mjs --candidate "$HEAD_LOG" --baseline "$BASE_LOG" --output "$NEW_LOG"
+
+      - name: Production build
+        run: npm run build
+
+      - name: Pre-main ratchet
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.refs.outputs.base_sha }}
+        run: |
+          set -uo pipefail
+          HEAD_LOG="$RUNNER_TEMP/pre-main-head.log"
+          BASE_LOG="$RUNNER_TEMP/pre-main-base.log"
+          NEW_LOG="$RUNNER_TEMP/pre-main-new.log"
+          BASE_WORKTREE="$RUNNER_TEMP/verto-base"
+          set +e
+          npm run check:pre-main >"$HEAD_LOG" 2>&1
+          HEAD_STATUS=$?
+          set -e
+          cat "$HEAD_LOG"
+          if [ "$HEAD_STATUS" -eq 0 ]; then exit 0; fi
+          if [ ! -d "$BASE_WORKTREE" ]; then git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"; fi
+          pushd "$BASE_WORKTREE" >/dev/null
+          if [ ! -d node_modules ]; then npm ci --prefer-offline --no-audit; fi
+          set +e
+          npm run check:pre-main >"$BASE_LOG" 2>&1
+          BASE_STATUS=$?
+          set -e
+          popd >/dev/null
+          if [ "$BASE_STATUS" -eq 0 ]; then
+            echo "::error::Baseline pre-main passes but candidate fails."
+            exit "$HEAD_STATUS"
+          fi
+          normalize_failures() {
+            grep -E '^[[:space:]]*✗[[:space:]]+' "$1" | sed -E 's/^[[:space:]]*✗[[:space:]]+//' | sed -E 's/[[:space:]]+—.*$//' | sort -u || true
+          }
+          comm -23 <(normalize_failures "$HEAD_LOG") <(normalize_failures "$BASE_LOG") > "$NEW_LOG"
+          if [ -s "$NEW_LOG" ]; then
+            echo "::error::New pre-main regressions relative to baseline:"
+            cat "$NEW_LOG"
+            exit 1
+          fi
+
+      - name: Record writer validation result
+        if: ${{ success() }}
+        run: |
+          echo "### WRITER_VALIDATION_PASS" >> "$GITHUB_STEP_SUMMARY"
+          echo "This is writer validation evidence only; it is not CI_PASS, PR_READY, review, merge, deploy, or staging verification." >> "$GITHUB_STEP_SUMMARY"
