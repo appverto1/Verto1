@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const SHA = /^[0-9a-f]{40}$/i;
+const EXPECTED_WRITER_VALIDATION_WORKFLOW = 'Verto Candidate Writer Validation';
 const ERRORS = new Set([
   'HEAD_DRIFT','CHECK_NOT_GREEN','REQUIRED_SUITE_MISSING','REQUIRED_SUITE_SKIPPED','STALE_CLAIM',
   'RUNTIME_CAPABILITY_MISSING','RECOVERY_LOOP','LOCK_INCONSISTENT','STATE_AMBIGUOUS','DEPENDENCY_UNSATISFIED',
@@ -12,6 +13,7 @@ const STATUS_LABEL = {
 };
 const arr = (v) => Array.isArray(v) ? v : [];
 const nonempty = (v) => typeof v === 'string' && v.trim() !== '';
+const stringArray = (v) => Array.isArray(v) && v.every(nonempty);
 const issueRef = (v) => String(v ?? '').replace(/^#/,'');
 const p = (code, detail, severity='DRIFT') => ({code,detail,severity});
 const statusOf = (ps) => ps.some(x=>x.severity==='AMBIGUOUS') ? 'AMBIGUOUS'
@@ -24,6 +26,9 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
   if (!e || typeof e !== 'object') return {schema_version:'FACTORY_EVIDENCE_V1',valid:false,errors:[{code:'EVIDENCE_MISSING',detail:'evidence envelope is required'}]};
   for (const f of ['issue','contract_version','gate','branch','base_sha','head_sha','result','timestamp','scope','suites_required','suites_executed','suites_skipped']) {
     if (e[f]===null || e[f]===undefined || e[f]==='') errors.push({code:'EVIDENCE_FIELD_MISSING',detail:`${f} is required`});
+  }
+  for (const f of ['suites_required','suites_executed','suites_skipped']) {
+    if (e[f]!==undefined && !stringArray(e[f])) errors.push({code:'EVIDENCE_FIELD_INVALID',detail:`${f} must be an array of non-empty strings`});
   }
   for (const f of ['base_sha','head_sha']) if (e[f]!==undefined && !SHA.test(String(e[f]))) errors.push({code:'EVIDENCE_SHA_INVALID',detail:`${f} must be a full SHA`});
   if (expectedHeadSha && e.head_sha!==expectedHeadSha) errors.push({code:'HEAD_DRIFT',detail:'evidence head differs from expected head'});
@@ -43,6 +48,26 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
   return {schema_version:'FACTORY_EVIDENCE_V1',valid:errors.length===0,errors};
 }
 
+export function validateWriterValidationPreflight(input={}) {
+  const fail = (code, detail) => ({
+    schema_version:'FACTORY_WRITER_VALIDATION_PREFLIGHT_V1',
+    valid:false,
+    error:createStructuredFactoryError(code,{gate:'WRITER_VALIDATION',head_sha:input.candidate_sha??null,evidence_ref:input.evidence_ref??null}),
+    detail,
+  });
+  if (!input || typeof input!=='object') return fail('STATE_AMBIGUOUS','preflight primitives are required');
+  if (input.workflow_available!==true) return fail('RUNTIME_CAPABILITY_MISSING','writer validation workflow is unavailable');
+  if (input.workflow_name!==EXPECTED_WRITER_VALIDATION_WORKFLOW) return fail('RUNTIME_CAPABILITY_MISSING','writer validation workflow identity mismatch');
+  for (const field of ['base_sha','staging_sha','candidate_sha','branch_sha']) {
+    if (!SHA.test(String(input[field]??''))) return fail('STATE_AMBIGUOUS',`${field} must be a full SHA`);
+  }
+  if (input.base_sha!==input.staging_sha) return fail('HEAD_DRIFT','authorized base differs from current staging');
+  if (input.candidate_sha!==input.branch_sha) return fail('HEAD_DRIFT','candidate differs from branch ref');
+  if (!stringArray(input.suites_allowlisted)) return fail('STATE_AMBIGUOUS','suites_allowlisted must be an array of non-empty strings');
+  if (nonempty(input.suite) && !input.suites_allowlisted.includes(input.suite)) return fail('REQUIRED_SUITE_MISSING','selected suite is not allowlisted');
+  return {schema_version:'FACTORY_WRITER_VALIDATION_PREFLIGHT_V1',valid:true,error:null,detail:'preflight consistent'};
+}
+
 export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   const at=new Date(now); if (Number.isNaN(at.getTime())) throw new TypeError('invalid now');
   const ps=[], i=s?.issue;
@@ -60,12 +85,20 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   if (STATUS_LABEL[i.handoff_status] && !labels.has(STATUS_LABEL[i.handoff_status])) ps.push(p('STATUS_LABEL_DRIFT',`missing ${STATUS_LABEL[i.handoff_status]}`));
   const c=s.winning_claim;
   if (i.handoff_status==='CLAIMED') {
+    if (!nonempty(i.claimed_by)) ps.push(p('ISSUE_CLAIM_OWNER_MISSING','issue.claimed_by required while CLAIMED','AMBIGUOUS'));
+    const issueExp=new Date(i.claim_expires_at);
+    const issueExpiryValid=nonempty(i.claim_expires_at) && !Number.isNaN(issueExp.getTime());
+    if (!issueExpiryValid) ps.push(p('ISSUE_CLAIM_EXPIRY_INVALID','issue.claim_expires_at required and valid while CLAIMED','AMBIGUOUS'));
     if (!c || typeof c!=='object') ps.push(p('WINNING_CLAIM_MISSING','CLAIMED handoff lacks winning claim','AMBIGUOUS'));
     else {
       if (c.handoff_id!==i.active_handoff || c.claimed_by!==i.claimed_by) ps.push(p('CLAIM_IDENTITY_DRIFT','winning claim differs from Issue CAS'));
       const exp=new Date(c.claim_expires_at);
-      if (!nonempty(c.claim_expires_at) || Number.isNaN(exp.getTime())) ps.push(p('CLAIM_EXPIRY_INVALID','claim expiry missing/invalid','AMBIGUOUS'));
-      else if (exp<=at) ps.push(p('STALE_CLAIM','winning claim expired','STALE_CLAIM_SUSPECTED'));
+      const winningExpiryValid=nonempty(c.claim_expires_at) && !Number.isNaN(exp.getTime());
+      if (!winningExpiryValid) ps.push(p('CLAIM_EXPIRY_INVALID','claim expiry missing/invalid','AMBIGUOUS'));
+      else {
+        if (issueExpiryValid && exp.getTime()!==issueExp.getTime()) ps.push(p('CLAIM_EXPIRY_DRIFT','winning claim lease differs from Issue CAS'));
+        if (exp<=at) ps.push(p('STALE_CLAIM','winning claim expired','STALE_CLAIM_SUSPECTED'));
+      }
     }
   } else if (c && c.handoff_id===i.active_handoff && c.active!==false) ps.push(p('UNEXPECTED_ACTIVE_CLAIM','non-CLAIMED handoff has active claim'));
   const refs=s.refs??{};
@@ -74,7 +107,7 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
     else if (!nonempty(refs.branch_sha)) ps.push(p('BRANCH_REF_MISSING','branch ref required','AMBIGUOUS'));
     else if (refs.branch_sha!==i.head_sha) ps.push(p('HEAD_DRIFT','branch ref differs from issue.head_sha'));
   }
-  if (i.require_fresh_base===true) {
+  if (nonempty(i.base_sha) || nonempty(refs.staging_sha)) {
     if (!SHA.test(String(i.base_sha??'')) || !SHA.test(String(refs.staging_sha??''))) ps.push(p('FRESHNESS_EVIDENCE_MISSING','full base/staging SHAs required','AMBIGUOUS'));
     else if (i.base_sha!==refs.staging_sha) ps.push(p('BASE_STAGING_DRIFT','base differs from current staging'));
   }
@@ -84,6 +117,10 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
     if (!l.owner_issue || !l.owner_writer || !l.release_gate) ps.push(p('LOCK_METADATA_INCOMPLETE','active lock lacks owner/writer/release gate','ORPHAN_LOCK_SUSPECTED'));
     if (l.owner_operational_valid===false) ps.push(p('ORPHAN_LOCK_SUSPECTED','lock owner is not operationally valid','ORPHAN_LOCK_SUSPECTED'));
     if (s.write_intent===true && issueRef(l.owner_issue)!==issueRef(i.number)) ps.push(p('GLOBAL_WRITE_LOCK_HELD_BY_OTHER_ISSUE','write conflicts with another Issue lock'));
+  }
+  if (s.writer_validation_preflight) {
+    const pre=validateWriterValidationPreflight(s.writer_validation_preflight);
+    if (!pre.valid) ps.push(p(pre.error.code,pre.detail));
   }
   if (s.evidence) for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:s.evidence_requires_run_check===true}).errors) ps.push(p(e.code,e.detail));
   return {schema_version:'FACTORY_CONSISTENCY_V1',status:statusOf(ps),problems:ps};
@@ -126,15 +163,20 @@ export function routeConsistencyResult(result, context={}) {
   else if (codes.has('REQUIRED_SUITE_MISSING')) code='REQUIRED_SUITE_MISSING';
   else if (codes.has('REQUIRED_SUITE_SKIPPED')) code='REQUIRED_SUITE_SKIPPED';
   else if (codes.has('DEPENDENCY_UNSATISFIED')) code='DEPENDENCY_UNSATISFIED';
+  else if (codes.has('RUNTIME_CAPABILITY_MISSING')) code='RUNTIME_CAPABILITY_MISSING';
   return routeStructuredFactoryError(createStructuredFactoryError(code,{gate:context.gate,head_sha:context.head_sha,fact_fingerprint:context.fact_fingerprint}),context);
 }
 
 export function evaluateClaimRenewal(input,{now=Date.now()}={}) {
   const c=input?.current_claim,e=input?.expected_claim,k=input?.checkpoint; if(!c||!e||!k)return{allowed:false,reason:'MISSING_RENEWAL_EVIDENCE'};
   if(c.handoff_id!==e.handoff_id||c.claimed_by!==e.claimed_by)return{allowed:false,reason:'CLAIM_CAS_MISMATCH'};
+  if(!nonempty(e.claim_expires_at)||c.claim_expires_at!==e.claim_expires_at)return{allowed:false,reason:'CLAIM_LEASE_CAS_MISMATCH'};
   const exp=new Date(c.claim_expires_at),at=new Date(now); if(Number.isNaN(exp.getTime())||exp<=at)return{allowed:false,reason:'STALE_CLAIM_REQUIRES_RECOVERY'};
-  if(!nonempty(k.progress_token)||k.progress_token===input.previous_progress_token)return{allowed:false,reason:'NO_OBSERVABLE_PROGRESS'};
   if(k.handoff_id!==c.handoff_id||k.claimed_by!==c.claimed_by)return{allowed:false,reason:'CHECKPOINT_CAS_MISMATCH'};
+  if(!nonempty(k.progress_fingerprint)||k.progress_fingerprint===input.previous_progress_fingerprint||!nonempty(k.evidence_ref))return{allowed:false,reason:'NO_OBSERVABLE_PROGRESS'};
+  if(nonempty(e.head_sha)){
+    if(!SHA.test(e.head_sha)||k.head_sha!==e.head_sha)return{allowed:false,reason:'CHECKPOINT_HEAD_MISMATCH'};
+  }
   return{allowed:true,reason:'OBSERVABLE_PROGRESS_AND_CAS_CONFIRMED'};
 }
 
@@ -148,5 +190,5 @@ export function detectRecoveryLoop(attempts,threshold=3) {
 }
 
 const readInput=(path)=>JSON.parse(path?readFileSync(path,'utf8'):readFileSync(0,'utf8'));
-async function main([command,path]){const input=readInput(path);let out;if(command==='consistency')out=verifyFactoryConsistency(input);else if(command==='evidence')out=validateEvidenceEnvelope(input.envelope??input,input.options??{});else if(command==='route')out=routeStructuredFactoryError(input.error,input.context??{});else if(command==='loop')out=detectRecoveryLoop(input.attempts??input,input.threshold??3);else throw new Error('usage: factory-recovery-controls.mjs <consistency|evidence|route|loop> [json-file]');process.stdout.write(`${JSON.stringify(out,null,2)}\n`);if((out.status&&out.status!=='CONSISTENT')||out.valid===false||out.accepted===false)process.exitCode=2;}
+async function main([command,path]){const input=readInput(path);let out;if(command==='consistency')out=verifyFactoryConsistency(input);else if(command==='evidence')out=validateEvidenceEnvelope(input.envelope??input,input.options??{});else if(command==='preflight')out=validateWriterValidationPreflight(input.preflight??input);else if(command==='route')out=routeStructuredFactoryError(input.error,input.context??{});else if(command==='loop')out=detectRecoveryLoop(input.attempts??input,input.threshold??3);else throw new Error('usage: factory-recovery-controls.mjs <consistency|evidence|preflight|route|loop> [json-file]');process.stdout.write(`${JSON.stringify(out,null,2)}\n`);if((out.status&&out.status!=='CONSISTENT')||out.valid===false||out.accepted===false)process.exitCode=2;}
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main(process.argv.slice(2)).catch(e=>{console.error(e instanceof Error?e.message:String(e));process.exitCode=2;});
