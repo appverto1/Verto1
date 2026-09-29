@@ -153,6 +153,7 @@ const criticalTests = [
   'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/factoryAuthorizedTarget.regression.test.mjs',
   'tests/factoryPostMergeConsistency.regression.test.mjs',
+  'tests/factoryBlockerCatalog.regression.test.mjs',
   'tests/security.regression.test.mjs',
   'tests/goLiveHardening.test.mjs',
   'tests/distributedSessionSafety.regression.test.mjs',
