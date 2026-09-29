@@ -150,4 +150,30 @@ for(const key of ['post_merge','post_merge_mode','is_post_merge','allow_post_mer
   const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'CONSISTENT');assert(!has(r,'POST_MERGE_PROOF_MISSING'));
 }
 
+
+// 16. Terminal current_agent:none representa ausência de agente operacional; labels agent:* continuam fail-closed.
+{
+  const terminal=postMerge();
+  Object.assign(terminal.issue,{state:'DONE',current_agent:'none',active_handoff:'none',handoff_status:'DONE',claimed_by:'none',claim_expires_at:'none',labels:['status:done']});
+  terminal.latest_handoff={id:'none',status:'DONE',current_agent:'none'};
+  terminal.winning_claim=null;
+  assert.equal(verifyFactoryConsistency(terminal,{now:NOW}).status,'CONSISTENT');
+
+  const staleAgent=structuredClone(terminal);staleAgent.issue.labels=['status:done','agent:00'];
+  let r=verifyFactoryConsistency(staleAgent,{now:NOW});assert.equal(r.status,'DRIFT');assert(has(r,'AGENT_LABEL_DRIFT'));
+
+  const syntheticNone=structuredClone(terminal);syntheticNone.issue.labels=['status:done','agent:none'];
+  r=verifyFactoryConsistency(syntheticNone,{now:NOW});assert.equal(r.status,'DRIFT');assert(has(r,'AGENT_LABEL_DRIFT'));
+
+  const nonTerminal=structuredClone(terminal);nonTerminal.issue.state='IMPLEMENTATION';
+  r=verifyFactoryConsistency(nonTerminal,{now:NOW});assert.equal(r.status,'DRIFT');assert(has(r,'AGENT_LABEL_DRIFT'));
+}
+{
+  const missingAgent=normal();missingAgent.issue.labels=['status:claimed'];
+  let r=verifyFactoryConsistency(missingAgent,{now:NOW});assert.equal(r.status,'DRIFT');assert(has(r,'AGENT_LABEL_DRIFT'));
+
+  const wrongAgent=normal();wrongAgent.issue.labels=['status:claimed','agent:13'];
+  r=verifyFactoryConsistency(wrongAgent,{now:NOW});assert.equal(r.status,'DRIFT');assert(has(r,'AGENT_LABEL_DRIFT'));
+}
+
 console.log('factoryPostMergeConsistency.regression.test.mjs: PASS');

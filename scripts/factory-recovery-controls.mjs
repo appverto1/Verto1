@@ -203,7 +203,15 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
     if (h.status && h.status!==i.handoff_status) ps.push(p('HANDOFF_STATUS_DRIFT','handoff_status differs from latest handoff'));
   }
   const labels=new Set(arr(i.labels));
-  if (nonempty(i.current_agent) && !labels.has(`agent:${i.current_agent}`)) ps.push(p('AGENT_LABEL_DRIFT',`missing agent:${i.current_agent}`));
+  const agentLabels=[...labels].filter(label=>typeof label==='string' && label.startsWith('agent:'));
+  const terminalWithoutAgent=i.state==='DONE' && i.current_agent==='none' && i.active_handoff==='none' && i.handoff_status==='DONE';
+  if (i.current_agent==='none') {
+    if (!terminalWithoutAgent) ps.push(p('AGENT_LABEL_DRIFT','current_agent:none is only valid for terminal DONE state without an active handoff'));
+    if (agentLabels.length>0) ps.push(p('AGENT_LABEL_DRIFT','current_agent:none requires no agent:* label'));
+  } else if (nonempty(i.current_agent)) {
+    const expectedAgentLabel=`agent:${i.current_agent}`;
+    if (!labels.has(expectedAgentLabel) || agentLabels.some(label=>label!==expectedAgentLabel)) ps.push(p('AGENT_LABEL_DRIFT',`agent labels must match ${expectedAgentLabel}`));
+  }
   if (STATUS_LABEL[i.handoff_status] && !labels.has(STATUS_LABEL[i.handoff_status])) ps.push(p('STATUS_LABEL_DRIFT',`missing ${STATUS_LABEL[i.handoff_status]}`));
   const c=s.winning_claim;
   if (i.handoff_status==='CLAIMED') {
