@@ -176,4 +176,15 @@ for(const key of ['post_merge','post_merge_mode','is_post_merge','allow_post_mer
   r=verifyFactoryConsistency(wrongAgent,{now:NOW});assert.equal(r.status,'DRIFT');assert(has(r,'AGENT_LABEL_DRIFT'));
 }
 
+// Contract v3 evidence is bound to the factual candidate tree and paths as well as SHA.
+{
+ const s=normal();s.issue.contract_version=3;
+ const manifest={schema_version:'FACTORY_CANDIDATE_MANIFEST_V1',issue:267,contract_version:3,branch:BRANCH,base_sha:B,head_sha:H,tree_sha:T,paths:[{path:'scripts/factory-recovery-controls.mjs',status:'modified',mode:'100644',blob_sha:H}]};
+ s.authorized_paths=['scripts/factory-recovery-controls.mjs'];s.candidate_manifest=structuredClone(manifest);s.refs.candidate_manifest=structuredClone(manifest);
+ assert.equal(verifyFactoryConsistency(s,{now:NOW}).status,'CONSISTENT');
+ s.candidate_manifest.paths.push({path:'__noop__',status:'added',mode:'100644',blob_sha:'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'});
+ let r=verifyFactoryConsistency(s,{now:NOW});assert(has(r,'CANDIDATE_PATH_UNAUTHORIZED'));assert(has(r,'CANDIDATE_MANIFEST_DRIFT'));
+ s.candidate_manifest=structuredClone(manifest);s.refs.candidate_manifest.tree_sha=O;
+ r=verifyFactoryConsistency(s,{now:NOW});assert(has(r,'CANDIDATE_MANIFEST_DRIFT'));
+}
 console.log('factoryPostMergeConsistency.regression.test.mjs: PASS');

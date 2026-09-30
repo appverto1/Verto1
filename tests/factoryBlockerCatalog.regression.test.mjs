@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import {existsSync, readFileSync} from 'node:fs';
+import {existsSync, readFileSync, realpathSync, mkdtempSync, writeFileSync, symlinkSync, rmSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {resolve, relative, isAbsolute, join} from 'node:path';
+import {tmpdir} from 'node:os';
 import ts from 'typescript';
 import {
   validateEvidenceEnvelope,
@@ -32,65 +35,100 @@ const parse = (text) => {
 const walk = (node, visit) => { visit(node); ts.forEachChild(node, (child) => walk(child, visit)); };
 const nameOf = (node) => node && (ts.isIdentifier(node) || ts.isStringLiteralLike(node)) ? node.text : null;
 
-// Bounded static resolution only: lexical const chains, emitter aliases and literal object members.
-// No code execution, mutable-variable inference or general JavaScript interpreter.
+// Lexical binding uses the TypeScript checker; resolution stays bounded and never executes source.
 function staticResolver(ast) {
-  const scopes = new Map(), emitters = new Set(['p','fail','createStructuredFactoryError']);
-  const scopeOf = (node) => {
-    for (let n=node; n; n=n.parent) if (ts.isSourceFile(n) || ts.isBlock(n) || ts.isFunctionLike(n)) return n;
+  const host={
+    getSourceFile:name=>name===ast.fileName?ast:undefined,
+    getDefaultLibFileName:()=>'',writeFile:()=>{},getCurrentDirectory:()=>'',getDirectories:()=>[],
+    fileExists:name=>name===ast.fileName,readFile:name=>name===ast.fileName?ast.text:undefined,
+    getCanonicalFileName:name=>name,useCaseSensitiveFileNames:()=>true,getNewLine:()=> '\n',
   };
-  const bind = (scope, name, initializer, immutable) => {
-    if (!scopes.has(scope)) scopes.set(scope, new Map());
-    scopes.get(scope).set(name, {initializer, immutable});
-  };
-  walk(ast, (node) => {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) bind(scopeOf(node.parent), node.name.text, node.initializer, Boolean(node.parent.flags & ts.NodeFlags.Const));
-    if (ts.isFunctionDeclaration(node) && node.name) bind(scopeOf(node.parent), node.name.text, node, true);
-    if (ts.isFunctionLike(node)) for (const parameter of node.parameters) if (ts.isIdentifier(parameter.name)) bind(node, parameter.name.text, undefined, false);
+  const checker=ts.createProgram([ast.fileName],{allowJs:true,noLib:true,noResolve:true},host).getTypeChecker();
+  const symbol=node=>node?.parent&&ts.isShorthandPropertyAssignment(node.parent)&&node.parent.name===node?checker.getShorthandAssignmentValueSymbol(node.parent):checker.getSymbolAtLocation(node);
+  const declaration=node=>symbol(node)?.valueDeclaration;
+  const unparen=input=>{let node=input;while(node&&ts.isParenthesizedExpression(node))node=node.expression;return node;};
+  const immutable=d=>d&&ts.isVariableDeclaration(d)&&Boolean(d.parent.flags&ts.NodeFlags.Const);
+  const assigned=new Set();
+  walk(ast,node=>{
+    if(ts.isBinaryExpression(node)&&node.operatorToken.kind>=ts.SyntaxKind.FirstAssignment&&node.operatorToken.kind<=ts.SyntaxKind.LastAssignment){
+      let target=node.left;while(ts.isPropertyAccessExpression(target)||ts.isElementAccessExpression(target))target=target.expression;
+      if(ts.isIdentifier(target))assigned.add(symbol(target));
+    }
+    if((ts.isPrefixUnaryExpression(node)||ts.isPostfixUnaryExpression(node))&&[ts.SyntaxKind.PlusPlusToken,ts.SyntaxKind.MinusMinusToken].includes(node.operator)&&ts.isIdentifier(node.operand))assigned.add(symbol(node.operand));
   });
-  const binding = (node) => {
-    for (let n=node; n; n=n.parent) if (scopes.get(n)?.has(node.text)) return scopes.get(n).get(node.text);
+  const propertyName=(node,seen=new Set())=>ts.isComputedPropertyName(node)?resolve(node.expression,'string',seen):nameOf(node);
+  // A named function is an emitter only if its returned structured code is the first parameter.
+  const emitterFunction=(fn,seen)=>{
+    if(!fn||!ts.isFunctionLike(fn)||!fn.body||!ts.isIdentifier(fn.parameters[0]?.name))return false;
+    const parameter=symbol(fn.parameters[0].name);
+    const returns=[];
+    if(ts.isArrowFunction(fn)&&!ts.isBlock(fn.body))returns.push(fn.body);
+    else {const visit=n=>{if(n!==fn.body&&ts.isFunctionLike(n))return;if(ts.isReturnStatement(n)&&n.expression)returns.push(n.expression);ts.forEachChild(n,visit);};visit(fn.body);}
+    const structured=input=>{
+      const node=unparen(input);
+      if(ts.isObjectLiteralExpression(node))return node.properties.some(member=>{
+        if(ts.isShorthandPropertyAssignment(member))return member.name.text==='code'&&symbol(member.name)===parameter;
+        if(!ts.isPropertyAssignment(member))return false;
+        if(propertyName(member.name)==='code'&&ts.isIdentifier(member.initializer)&&symbol(member.initializer)===parameter)return true;
+        return structured(member.initializer);
+      });
+      if(ts.isCallExpression(node)){
+        if(ts.isPropertyAccessExpression(node.expression)&&nameOf(node.expression.expression)==='Object'&&!declaration(node.expression.expression)&&node.expression.name.text==='freeze')return structured(node.arguments[0]);
+        return resolve(node.expression,'emitter',seen)&&ts.isIdentifier(node.arguments[0])&&symbol(node.arguments[0])===parameter;
+      }
+      return false;
+    };
+    return returns.some(structured);
   };
-  const unparen = (node) => { while (node && ts.isParenthesizedExpression(node)) node=node.expression; return node; };
-  const propertyName = (node, seen=new Set()) => ts.isComputedPropertyName(node) ? resolve(node.expression, 'string', seen) : nameOf(node);
-  const resolve = (input, kind='string', seen=new Set()) => {
+  const resolve=(input,kind='string',seen=new Set())=>{
     const node=unparen(input);
-    if (!node || seen.has(node)) return undefined;
-    const next=new Set(seen); next.add(node);
-    if (kind==='string' && ts.isStringLiteralLike(node)) return node.text;
-    if (kind==='object' && ts.isObjectLiteralExpression(node)) return node;
-    if (ts.isIdentifier(node)) {
-      const b=binding(node);
-      if (kind==='emitter' && emitters.has(node.text) && (!b || (b.immutable && b.initializer && ts.isFunctionLike(b.initializer)))) return node.text;
-      return b?.immutable ? resolve(b.initializer,kind,next) : undefined;
+    if(!node||seen.has(node)||seen.size>=64)return undefined;
+    const next=new Set(seen);next.add(node);
+    if(kind==='string'&&ts.isStringLiteralLike(node))return node.text;
+    if(kind==='object'&&ts.isObjectLiteralExpression(node)&&!node.properties.some(ts.isSpreadAssignment))return node;
+    if(ts.isIdentifier(node)){
+      const d=declaration(node);
+      if(!d||assigned.has(symbol(node)))return undefined;
+      if(kind==='emitter'&&ts.isFunctionDeclaration(d))return emitterFunction(d,next)?d:undefined;
+      if(immutable(d)){
+        if(kind==='emitter'&&ts.isFunctionLike(d.initializer))return emitterFunction(d.initializer,next)?d:undefined;
+        return resolve(d.initializer,kind,next);
+      }
+      return undefined;
     }
-    if (kind==='string' && ts.isBinaryExpression(node) && node.operatorToken.kind===ts.SyntaxKind.PlusToken) {
-      const a=resolve(node.left,kind,next), b=resolve(node.right,kind,next);
-      return typeof a==='string' && typeof b==='string' ? a+b : undefined;
+    if(kind==='string'&&ts.isTemplateExpression(node)){
+      let value=node.head.text;
+      for(const span of node.templateSpans){const part=resolve(span.expression,'string',next);if(typeof part!=='string')return undefined;value+=part+span.literal.text;}
+      return value;
     }
-    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    if(kind==='string'&&ts.isBinaryExpression(node)&&node.operatorToken.kind===ts.SyntaxKind.PlusToken){
+      const a=resolve(node.left,kind,next),b=resolve(node.right,kind,next);
+      return typeof a==='string'&&typeof b==='string'?a+b:undefined;
+    }
+    if(ts.isPropertyAccessExpression(node)||ts.isElementAccessExpression(node)){
       const object=resolve(node.expression,'object',next);
-      const key=ts.isPropertyAccessExpression(node) ? node.name.text : resolve(node.argumentExpression,'string',next);
-      if (object && typeof key==='string') {
-        const property=object.properties.find(p=>p.name && propertyName(p.name,next)===key);
-        if (property && ts.isPropertyAssignment(property)) return resolve(property.initializer,kind,next);
-        if (property && ts.isShorthandPropertyAssignment(property)) return resolve(property.name,kind,next);
+      const key=ts.isPropertyAccessExpression(node)?node.name.text:resolve(node.argumentExpression,'string',next);
+      if(object&&typeof key==='string'){
+        const members=object.properties.filter(p=>p.name&&propertyName(p.name,next)===key);
+        if(members.length!==1)return undefined;
+        const member=members[0];
+        if(ts.isPropertyAssignment(member))return resolve(member.initializer,kind,next);
+        if(ts.isShorthandPropertyAssignment(member))return resolve(member.name,kind,next);
       }
     }
     return undefined;
   };
-  const literalOnly = (input, seen=new Set()) => {
-    const node=unparen(input);
-    if (!node || seen.has(node)) return false;
-    const next=new Set(seen); next.add(node);
-    if (ts.isLiteralExpression(node) || [ts.SyntaxKind.TrueKeyword,ts.SyntaxKind.FalseKeyword,ts.SyntaxKind.NullKeyword].includes(node.kind)) return true;
-    if (ts.isIdentifier(node)) { const b=binding(node); return Boolean(b?.immutable && literalOnly(b.initializer,next)); }
-    if (typeof resolve(node)==='string') return true;
-    if (ts.isArrayLiteralExpression(node)) return node.elements.every(n=>literalOnly(n,next));
-    if (ts.isObjectLiteralExpression(node)) return node.properties.every(p=>ts.isPropertyAssignment(p) && literalOnly(p.initializer,next));
+  const literalOnly=(input,seen=new Set())=>{
+    const node=unparen(input);if(!node||seen.has(node)||seen.size>=64)return false;
+    const next=new Set(seen);next.add(node);
+    if(ts.isLiteralExpression(node)||[ts.SyntaxKind.TrueKeyword,ts.SyntaxKind.FalseKeyword,ts.SyntaxKind.NullKeyword].includes(node.kind))return true;
+    if(ts.isIdentifier(node)){const d=declaration(node);return Boolean(immutable(d)&&!assigned.has(symbol(node))&&literalOnly(d.initializer,next));}
+    if(typeof resolve(node)==='string')return true;
+    if(ts.isArrayLiteralExpression(node))return node.elements.every(n=>literalOnly(n,next));
+    if(ts.isObjectLiteralExpression(node))return node.properties.every(p=>ts.isPropertyAssignment(p)&&literalOnly(p.initializer,next));
     return false;
   };
-  return {value:node=>resolve(node), emitter:node=>resolve(node,'emitter'), object:node=>resolve(node,'object'), propertyName, literalOnly};
+  return {value:node=>resolve(node),emitter:node=>resolve(node,'emitter'),object:node=>resolve(node,'object'),propertyName,literalOnly};
 }
 
 function structuredCodes(text) {
@@ -122,10 +160,15 @@ function structuredCodes(text) {
 // Evidence comes from tested operands/predicates or exception matchers, never diagnostic messages.
 function assertionTokens(text) {
   const ast=parse(text), tokens=new Set(), resolver=staticResolver(ast);
-  const expected = (node) => { if (node) walk(node, child=> {
-    const value=resolver.value(child); if (typeof value==='string') tokens.add(value);
-    if (ts.isRegularExpressionLiteral(child)) tokens.add(child.text.slice(1,child.text.lastIndexOf('/')));
-  }); };
+  const expected = (node) => {
+    if(!node)return;
+    const value=resolver.value(node);
+    if(typeof value==='string'){tokens.add(value);return;}
+    if(ts.isRegularExpressionLiteral(node)){tokens.add(node.text.slice(1,node.text.lastIndexOf('/')));return;}
+    if(ts.isObjectLiteralExpression(node))for(const member of node.properties)if(ts.isPropertyAssignment(member))expected(member.initializer);
+    if(ts.isArrayLiteralExpression(node))for(const member of node.elements)expected(member);
+    // Unknown calls, expressions and their arguments are never expected values.
+  };
   const pair = (a,b) => {
     if (!a || !b) return;
     if (!resolver.literalOnly(a)) expected(b);
@@ -157,13 +200,18 @@ function assertionTokens(text) {
   return tokens;
 }
 
-const readSource = (path) => {
-  assert.equal(typeof path, 'string');
-  assert(path.length > 0 && !path.includes('..') && !path.startsWith('/'), 'catalog paths must be repository-relative');
-  const url = new URL(`../${path}`, import.meta.url);
-  assert(existsSync(url), `catalog source does not exist: ${path}`);
-  return readFileSync(url, 'utf8');
+const REPO_ROOT=realpathSync(fileURLToPath(new URL('../',import.meta.url)));
+const confinedPath=(path,root=REPO_ROOT)=>{
+  assert.equal(typeof path,'string');
+  assert(path.length>0&&!isAbsolute(path)&&!path.includes('\\')&&!path.includes('%')&&!path.includes(':')&&!/[\x00-\x1f]/.test(path),'catalog paths must be repository-relative');
+  assert(path.split('/').every(part=>part&&part!=='.'&&part!=='..'),'catalog paths must be repository-relative');
+  const candidate=resolve(root,path);
+  assert(existsSync(candidate),`catalog source does not exist: ${path}`);
+  const real=realpathSync(candidate),inside=relative(realpathSync(root),real);
+  assert(inside&&!isAbsolute(inside)&&inside!=='..'&&!inside.startsWith('../'),'catalog path escapes real repository root');
+  return real;
 };
+const readSource=path=>readFileSync(confinedPath(path),'utf8');
 
 function validateCatalog(input, controls, read = readSource) {
 assert.equal(input.schema_version, 'BLOCKER_CATALOG_V1');
@@ -266,6 +314,10 @@ return emitted;
 }
 
 const emitted = validateCatalog(catalog, source);
+if(catalog.contract_manifest){
+  const counts=Object.fromEntries([...allowedCoverage].map(status=>[status,catalog.entries.filter(e=>e.coverage_status===status).length]));
+  assert.deepEqual(catalog.counts,{entries:catalog.entries.length,structured_codes:emitted.size,...counts});
+}
 
 // Mutation regressions prove the validator itself fails closed; never mutate repository files.
 const mutate = (change) => { const input = structuredClone(catalog); change(input); return input; };
@@ -290,10 +342,17 @@ for (const addition of [
 ]) assert.throws(() => validateCatalog(catalog, `${source}\n${addition}`), /structured factory blocker missing from catalog: UNCATALOGED_PROBE/);
 assert.throws(() => validateCatalog(catalog, `${source}\nconst emit=p; export function probe(){return emit("UNCATALOGED_ALIAS","detail");}`), /structured factory blocker missing from catalog: UNCATALOGED_ALIAS/);
 assert.throws(() => validateCatalog(catalog, `${source}\nexport function probe(){return {["code"]:"UNCATALOGED_COMPUTED"};}`), /structured factory blocker missing from catalog: UNCATALOGED_COMPUTED/);
-assert.deepEqual([...structuredCodes('const A="OUTER_PROBE"; function probe(){const A="INNER_PROBE";const emit=p;emit(A,"detail");}')], ['INNER_PROBE']);
+assert.deepEqual([...structuredCodes('const p=(code,detail)=>({code,detail});const A="OUTER_PROBE"; function probe(){const A="INNER_PROBE";const emit=p;emit(A,"detail");}')], ['INNER_PROBE']);
 assert.equal(structuredCodes('const A=B;const B=A;p(A,"detail");').size, 0);
 assert.equal(structuredCodes('const value={[value.key]:"cycle"};p(value.key,"detail");').size, 0);
-assert.equal(structuredCodes('function probe(p){p("PARAMETER_PROBE","detail");}').size, 0);
+assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});function probe(p){p("PARAMETER_PROBE","detail");}').size, 0);
+assert.equal(structuredCodes('const p=()=>{};p("SHADOWED_NOOP","detail");').size,0);
+assert(!structuredCodes('const p=()=>{};p("SHADOWED_NOOP","detail");').has('SHADOWED_NOOP'));
+assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});function f(){const p=()=>{};p("SHADOWED_NOOP","detail");}').size,0);
+assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});function f({p}){p("SHADOWED_DESTRUCTURED","detail");}').size,0);
+assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});let code="MUTABLE";p(code,"detail");').size,0);
+assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});const values={code:"MUTATED"};values.code="NEW";p(values.code,"detail");').size,0);
+assert.throws(()=>validateCatalog(catalog,source+'\nconst prefix="UNCATALOGED";p(`${prefix}_TEMPLATE`,"detail");'),/structured factory blocker missing from catalog: UNCATALOGED_TEMPLATE/);
 assert(structuredCodes('const ERRORS = new Set(["ENUM_PROBE"]);').has('ENUM_PROBE'));
 assert.throws(() => validateCatalog(catalog, `${source}\nconst routes = { UNCATALOGED_ROUTE_PROBE: [] };`), /structured factory blocker missing from catalog: UNCATALOGED_ROUTE_PROBE/);
 assert(!assertionTokens('assert.throws(() => { const fixture="COMMENT_ONLY"; });').has('COMMENT_ONLY'));
@@ -314,12 +373,27 @@ for (const snippet of [
   '// HEAD_DRIFT',
   'assert.equal(1,1);',
 ]) assert.throws(() => fakeCoverage(snippet), /HEAD_DRIFT: material regression assertion not found/);
+assert.throws(()=>fakeCoverage('function ignore(){return 0;}assert.equal(result.code,ignore("HEAD_DRIFT"));'),/HEAD_DRIFT: material regression assertion not found/);
 assert.doesNotThrow(() => fakeCoverage('assert.equal(result.code,"HEAD_DRIFT");'));
 assert(assertionTokens('assert(result.errors.some(e=>e.code==="HEAD_DRIFT"));').has('HEAD_DRIFT'));
 assert(assertionTokens('assert.throws(()=>validateCatalog(input,controls),/HEAD_DRIFT/);').has('HEAD_DRIFT'));
 assert.throws(() => validateCatalog(catalog, source, path => path===tested.regression_test ? `// ${tested.regression_assertion ?? tested.code}\nconst fixture = "${tested.regression_assertion ?? tested.code}";` : readSource(path)), /material regression assertion not found/);
 assert.throws(() => validateCatalog(catalog, source, path => path===tested.detection_source ? `// ${tested.code}` : readSource(path)), /coded protection not found/);
 assert.throws(() => validateCatalog(mutate(c => { c.entries.find(e=>e.code===tested.code).regression_test='tests/nonexistent-catalog-regression.mjs'; }), source), /source does not exist/);
+
+for(const path of ['%2e%2e/outside','/tmp/outside','https://example.com/file','file:///tmp/outside','../outside','C:/outside','tests/../scripts/factory-recovery-controls.mjs']){
+  assert.throws(()=>readSource(path),/catalog paths must be repository-relative/);
+}
+{
+  const outer=mkdtempSync(join(tmpdir(),'factory-confinement-'));
+  try{
+    const root=join(outer,'repo');const {mkdirSync}=await import('node:fs');mkdirSync(root);
+    writeFileSync(join(root,'inside'),'material');writeFileSync(join(outer,'outside'),'external');
+    symlinkSync(join(outer,'outside'),join(root,'escape'));
+    assert.equal(readFileSync(confinedPath('inside',root),'utf8'),'material');
+    assert.throws(()=>confinedPath('escape',root),/catalog path escapes real repository root/);
+  }finally{rmSync(outer,{recursive:true,force:true});}
+}
 
 const B='1111111111111111111111111111111111111111';
 const H='2222222222222222222222222222222222222222';

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import {validateCandidateManifest} from './factory-recovery-controls.mjs';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
@@ -8,6 +9,30 @@ const passes = [];
 
 const pass = (label) => passes.push(label);
 const fail = (label, detail = '') => failures.push({ label, detail });
+
+// Contract v3 #267: gate scope comes from the committed contract template; facts come from Git.
+const factoryCatalog=JSON.parse(readFileSync(join(root,'docs/factory/BLOCKER_CATALOG_V1.json'),'utf8'));
+const template=factoryCatalog.contract_manifest;
+if(template?.contract_version===3&&(process.env.GITHUB_REF_NAME===template.branch||spawnSync('git',['branch','--show-current'],{cwd:root,encoding:'utf8'}).stdout.trim()===template.branch)){
+  const git=args=>{const result=spawnSync('git',args,{cwd:root,encoding:'utf8'});if(result.status!==0)throw new Error(`manifest Git read failed: ${args[0]}`);return result.stdout;};
+  try{
+    const head=git(['rev-parse','HEAD']).trim(),tree=git(['rev-parse','HEAD^{tree}']).trim(),staging=git(['rev-parse','origin/staging']).trim();
+    if(staging!==template.base_sha)throw new Error('manifest baseline differs from factual staging');
+    if(process.env.GITHUB_SHA&&process.env.GITHUB_SHA!==head)throw new Error('manifest candidate differs from exact runner SHA');
+    const entries=new Map(git(['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean).map(line=>{const at=line.indexOf('\t'),[mode,,blob_sha]=line.slice(0,at).split(' ');return [line.slice(at+1),{mode,blob_sha}];}));
+    const changed=git(['diff','--name-status','--no-renames','-z',template.base_sha,'HEAD']).split('\0').filter(Boolean),paths=[];
+    for(let index=0;index<changed.length;index+=2){
+      const status={A:'added',M:'modified',D:'removed'}[changed[index]],path=changed[index+1];
+      if(!status||!path)throw new Error('invalid factual changed-path entry');
+      paths.push({path,status,...(status==='removed'?{mode:null,blob_sha:null}:entries.get(path))});
+    }
+    const manifest={schema_version:'FACTORY_CANDIDATE_MANIFEST_V1',issue:267,contract_version:3,branch:template.branch,base_sha:staging,head_sha:head,tree_sha:tree,paths};
+    const result=validateCandidateManifest(manifest,manifest,template.authorized_paths);
+    if(!result.valid)throw new Error(JSON.stringify(result.problems));
+    console.log('[factory-candidate-manifest] '+JSON.stringify(manifest));
+    pass('Factory contract v3 factual SHA/tree/path manifest');
+  }catch(error){fail('Factory contract v3 factual SHA/tree/path manifest',String(error.message));}
+}
 
 const requireFile = (path) => {
   const absolute = join(root, path);

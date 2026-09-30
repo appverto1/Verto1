@@ -31,7 +31,7 @@ const statusOf = (ps) => ps.some(x=>x.severity==='AMBIGUOUS') ? 'AMBIGUOUS'
   : ps.some(x=>x.severity==='STALE_CLAIM_SUSPECTED') ? 'STALE_CLAIM_SUSPECTED'
   : ps.length ? 'DRIFT' : 'CONSISTENT';
 
-export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=false}={}) {
+export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=false, manifestFacts, allowedPaths}={}) {
   const errors=[];
   if (!e || typeof e !== 'object') return {schema_version:'FACTORY_EVIDENCE_V1',valid:false,errors:[{code:'EVIDENCE_MISSING',detail:'evidence envelope is required'}]};
   for (const f of ['issue','contract_version','gate','branch','base_sha','head_sha','result','timestamp','scope','suites_required','suites_executed','suites_skipped']) {
@@ -54,6 +54,9 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
     if (!e.check_id) errors.push({code:'CHECK_ID_MISSING',detail:'check_id required'});
     if (e.run_head_sha!==e.head_sha) errors.push({code:'HEAD_DRIFT',detail:'run head differs from evidence head'});
     if (e.check_conclusion!=='success') errors.push({code:'CHECK_NOT_GREEN',detail:'required check is not green'});
+  }
+  if(Number(e.contract_version)>=3&&['WRITER_VALIDATION','STAGING_CI','REVIEW','AUDIT','MERGE','STAGING_VERIFY'].includes(e.gate)){
+    for(const problem of validateCandidateManifest(e.candidate_manifest,manifestFacts,allowedPaths).problems)errors.push({code:problem.code,detail:problem.detail});
   }
   if (String(e.result).endsWith('_PASS') && errors.length) errors.push({code:'PASS_INVALIDATED',detail:'PASS cannot survive mismatched/incomplete evidence'});
   return {schema_version:'FACTORY_EVIDENCE_V1',valid:errors.length===0,errors};
@@ -259,9 +262,12 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   if (!['NONE','ENVELOPE','RUN_CHECK'].includes(evidencePolicy)) ps.push(p('EVIDENCE_POLICY_MISSING','evidence_policy must be NONE, ENVELOPE or RUN_CHECK','AMBIGUOUS'));
   if (evidencePolicy==='ENVELOPE' || evidencePolicy==='RUN_CHECK') {
     if (!s.evidence) ps.push(p('EVIDENCE_MISSING','evidence required by evidence_policy','AMBIGUOUS'));
-    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK'}).errors) ps.push(p(e.code,e.detail));
+    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK',manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths}).errors) ps.push(p(e.code,e.detail));
   } else if (s.evidence) {
-    for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined}).errors) ps.push(p(e.code,e.detail));
+    for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths}).errors) ps.push(p(e.code,e.detail));
+  }
+  if(Number(i.contract_version)>=3&&s.candidate_manifest){
+    for(const problem of validateCandidateManifest(s.candidate_manifest,refs.candidate_manifest,s.authorized_paths).problems)ps.push(problem);
   }
   const currentGate=String(s.evidence?.gate??'');
   if (currentGate==='WRITER_VALIDATION') {
@@ -286,7 +292,7 @@ export function routeStructuredFactoryError(error, context={}) {
   if (!error || error.schema_version!=='FACTORY_ERROR_V1' || !ERRORS.has(error.code)) return {accepted:false,code:'STATE_AMBIGUOUS',owner:'00',unblock_action:'Reconcile canonical state and structured evidence before retry.',retry_condition:'A canonical allowlisted FACTORY_ERROR_V1 exists with unambiguous evidence.',return_gate:context.gate??null,diagnostic_participation:{agent:'00',mode:'READ_ONLY',may_acquire_write_claim:false}};
   const agent=context.current_agent??null, writer=context.writer??agent, ret=context.return_agent??writer, dep=context.dependency_owner??'00';
   const routes={
-    HEAD_DRIFT:[agent,'Refresh exact staging/base/head refs and rebuild evidence.','Fresh base/head/ref equality is restored and SHA-bound gates rerun.'],
+    HEAD_DRIFT:[Array.isArray(context.material_capabilities)?(context.material_capabilities.find(c=>c.role==='14'&&c.can_recover_feature_ref===true&&nonempty(c.evidence_ref))?.role??context.material_capabilities.find(c=>c.role===writer&&c.can_recover_feature_ref===true&&nonempty(c.evidence_ref))?.role??'00'):(['04','05','06','07','08','09'].includes(agent)&&agent===writer?writer:'00'),'Recover factual ref/metadata through a capable authorized owner; never mutate refs for discovery.','Fresh base/head/ref/manifest equality is restored, stale evidence invalidated, and SHA-bound gates rerun.'],
     CHECK_NOT_GREEN:[agent,'Inspect the exact-SHA failing check and correct the smallest owning surface.','The required check is green on exact current head_sha.'],
     REQUIRED_SUITE_MISSING:[ret,'Restore the required allowlisted suite or deterministic selection.','The required suite exists and executes on exact candidate head.'],
     REQUIRED_SUITE_SKIPPED:[ret,'Make the required allowlisted suite execute instead of skip.','The required suite is recorded executed and not skipped.'],
@@ -340,6 +346,67 @@ export function detectRecoveryLoop(attempts,threshold=3) {
   return{detected:true,count,route:routeStructuredFactoryError(error,{gate:last.gate})};
 }
 
+const sameFact=(a,b)=>{
+  const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
+  return JSON.stringify(canonical(a))===JSON.stringify(canonical(b));
+};
+const MANIFEST_SCHEMA='FACTORY_CANDIDATE_MANIFEST_V1';
+export function validateCandidateManifest(manifest,facts,allowedPaths){
+  const problems=[];
+  if(!manifest||!facts){problems.push(p('CANDIDATE_MANIFEST_MISSING','manifest and factual Git snapshot are required','AMBIGUOUS'));return {valid:false,problems};}
+  const identity=['issue','contract_version','branch','base_sha','head_sha','tree_sha'];
+  if(manifest.schema_version!==MANIFEST_SCHEMA||!Array.isArray(manifest.paths)||!nonemptyStringArray(allowedPaths)||new Set(allowedPaths).size!==allowedPaths.length||!['base_sha','head_sha','tree_sha'].every(key=>SHA.test(String(manifest[key]??'')))){
+    problems.push(p('CANDIDATE_MANIFEST_INVALID','explicit schema, SHA/tree/path manifest and authorized paths required','AMBIGUOUS'));
+  }else{
+    if(identity.some(key=>!sameFact(manifest[key],facts[key]))||!sameFact(manifest.paths,facts.paths))problems.push(p('CANDIDATE_MANIFEST_DRIFT','manifest differs from factual SHA/tree/paths'));
+    const seen=new Set();
+    for(const entry of manifest.paths){
+      if(!entry||!nonempty(entry.path)||seen.has(entry.path)||!['added','modified','removed'].includes(entry.status)||!((entry.status==='removed'&&entry.blob_sha===null&&entry.mode===null)||(SHA.test(String(entry.blob_sha??''))&&['100644','100755','120000'].includes(entry.mode)))){
+        problems.push(p('CANDIDATE_MANIFEST_INVALID','invalid or duplicate factual tree entry','AMBIGUOUS'));continue;
+      }
+      seen.add(entry.path);
+      if(!allowedPaths.includes(entry.path))problems.push(p('CANDIDATE_PATH_UNAUTHORIZED',`undeclared path: ${entry.path}`));
+    }
+  }
+  return {valid:problems.length===0,problems};
+}
+
+// Read-only discovery or orphan Git objects only. No probe may consume a canonical identity.
+export function evaluateCapabilityProbe(operation={}){
+  const allowed=operation.kind==='READ_ONLY'&&operation.mutates===false||
+    operation.kind==='ORPHAN_GIT_OBJECT'&&operation.necessary===true&&operation.ref===null&&operation.canonical_side_effect===false;
+  return allowed?{allowed:true,error:null}:{allowed:false,error:p('CAPABILITY_PROBE_CANONICAL_MUTATION','probe would mutate a canonical ref/Issue/claim/PR/deploy')};
+}
+
+const RECOVERY_FIELDS=Object.freeze(['recovery_error','recovery_invalidated_evidence','recovery_owner','recovery_unblock_action','recovery_retry_condition','recovery_evidence']);
+export function evaluateRecoveryMetadata(input={}, {now=Date.now()}={}){
+  const deny=detail=>({allowed:false,error:p('RECOVERY_METADATA_REJECTED',detail),consistency:verifyFactoryConsistency(input.current??{},{now})});
+  const {current,expected,after,provenance,executor}=input;
+  if(!current?.issue||!expected?.issue||!after?.issue||!sameFact(current,expected))return deny('exact snapshot CAS mismatch');
+  if(Number(current.issue?.contract_version)<3||current.issue?.production!=='prohibited')return deny('contract v3 authority and production prohibition required');
+  if(!provenance||!nonempty(provenance.evidence_ref)||!nonempty(provenance.snapshot_ref)||!nonempty(provenance.issue_revision)||provenance.issue_revision!==current.provenance?.issue_revision||!nonempty(provenance.verifier_blob_sha)||!SHA.test(provenance.verifier_blob_sha)||!Number.isFinite(Date.parse(provenance.timestamp))||Date.parse(provenance.timestamp)>new Date(now).getTime()||new Date(now).getTime()-Date.parse(provenance.timestamp)>60_000)return deny('missing or stale factual provenance');
+  if(!executor||executor.role!==current.issue.current_agent||!nonempty(executor.run_id))return deny('executor identity mismatch');
+  if(current.issue.handoff_status==='CLAIMED'&&(current.issue.claimed_by!==executor.run_id||current.winning_claim?.claimed_by!==executor.run_id))return deny('competing claim preserved');
+  if(!current.refs||!SHA.test(String(current.refs.branch_sha??''))||!SHA.test(String(current.refs.staging_sha??''))||current.refs.branch!==current.issue.branch||!current.lock||!['ACTIVE','INACTIVE'].includes(current.lock.status)||!nonempty(current.issue.active_handoff)||!nonempty(current.issue.writer)||!SHA.test(String(current.issue.base_sha??''))||!Array.isArray(current.dependencies))return deny('complete Issue/handoff/refs/lock/freshness identity required');
+  const result=verifyFactoryConsistency(current,{now});
+  if(!['DRIFT','AMBIGUOUS','STALE_CLAIM_SUSPECTED','ORPHAN_LOCK_SUSPECTED'].includes(result.status))return deny('exception applies only to factual non-CONSISTENT results');
+  const stripped=structuredClone(after);
+  for(const field of RECOVERY_FIELDS){
+    if(Object.hasOwn(current.issue,field))stripped.issue[field]=current.issue[field];else delete stripped.issue[field];
+  }
+  if(!sameFact(stripped,current))return deny('mutation exceeds recovery field allowlist');
+  const context={current_agent:current.issue.current_agent,writer:current.issue.writer,gate:current.issue.next_gate,head_sha:current.refs.branch_sha,material_capabilities:input.material_capabilities};
+  const route=routeConsistencyResult(result,context),record=after.issue.recovery_error,evidence=after.issue.recovery_evidence;
+  if(!route?.accepted||!record||record.schema_version!=='FACTORY_ERROR_V1'||record.code!==route.code||record.head_sha!==current.refs.branch_sha||record.evidence_ref!==provenance.evidence_ref||record.fact_fingerprint!==provenance.snapshot_ref)return deny('structured error must bind factual result and snapshot');
+  if(after.issue.recovery_owner!==route.owner||after.issue.recovery_unblock_action!==route.unblock_action||after.issue.recovery_retry_condition!==route.retry_condition)return deny('owner/action/retry must match deterministic canonical route');
+  if(!evidence||evidence.gate!=='RECOVERY_METADATA'||evidence.result!==result.status||evidence.issue!==current.issue.number||evidence.contract_version!==current.issue.contract_version||evidence.branch!==current.refs.branch||evidence.base_sha!==current.issue.base_sha||evidence.head_sha!==current.refs.branch_sha||evidence.timestamp!==provenance.timestamp||!sameFact(evidence.suites_required,[])||!sameFact(evidence.suites_executed,[])||!sameFact(evidence.suites_skipped,[])||!validateEvidenceEnvelope(evidence,{expectedHeadSha:current.refs.branch_sha}).valid)return deny('factual non-PASS Evidence Envelope required');
+  const stale=current.evidence&&current.evidence.head_sha!==current.refs.branch_sha?[current.evidence.head_sha]:[];
+  if(!sameFact(after.issue.recovery_invalidated_evidence,stale))return deny('invalidate only the proven stale evidence identity');
+  const afterResult=verifyFactoryConsistency(after,{now});
+  if(!sameFact(afterResult,result))return deny('recovery metadata must preserve factual non-CONSISTENT result');
+  return {allowed:true,error:null,consistency:result,route,allowed_fields:[...RECOVERY_FIELDS]};
+}
+
 const readInput=(path)=>JSON.parse(path?readFileSync(path,'utf8'):readFileSync(0,'utf8'));
-async function main([command,path]){const input=readInput(path);let out;if(command==='consistency')out=verifyFactoryConsistency(input);else if(command==='evidence')out=validateEvidenceEnvelope(input.envelope??input,input.options??{});else if(command==='preflight')out=validateWriterValidationPreflight(input.preflight??input);else if(command==='route')out=routeStructuredFactoryError(input.error,input.context??{});else if(command==='loop')out=detectRecoveryLoop(input.attempts??input,input.threshold??3);else throw new Error('usage: factory-recovery-controls.mjs <consistency|evidence|preflight|route|loop> [json-file]');process.stdout.write(`${JSON.stringify(out,null,2)}\n`);if((out.status&&out.status!=='CONSISTENT')||out.valid===false||out.accepted===false)process.exitCode=2;}
+async function main([command,path]){const input=readInput(path);let out;if(command==='consistency')out=verifyFactoryConsistency(input);else if(command==='evidence')out=validateEvidenceEnvelope(input.envelope??input,input.options??{});else if(command==='preflight')out=validateWriterValidationPreflight(input.preflight??input);else if(command==='route')out=routeStructuredFactoryError(input.error,input.context??{});else if(command==='recovery-metadata')out=evaluateRecoveryMetadata(input);else if(command==='probe')out=evaluateCapabilityProbe(input);else if(command==='manifest')out=validateCandidateManifest(input.manifest,input.facts,input.allowed_paths);else if(command==='loop')out=detectRecoveryLoop(input.attempts??input,input.threshold??3);else throw new Error('usage: factory-recovery-controls.mjs <consistency|evidence|preflight|route|loop> [json-file]');process.stdout.write(`${JSON.stringify(out,null,2)}\n`);if((out.status&&out.status!=='CONSISTENT')||out.valid===false||out.accepted===false||out.allowed===false)process.exitCode=2;}
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main(process.argv.slice(2)).catch(e=>{console.error(e instanceof Error?e.message:String(e));process.exitCode=2;});
