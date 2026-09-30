@@ -57,15 +57,26 @@ function staticResolver(ast) {
     if((ts.isPrefixUnaryExpression(node)||ts.isPostfixUnaryExpression(node))&&[ts.SyntaxKind.PlusPlusToken,ts.SyntaxKind.MinusMinusToken].includes(node.operator)&&ts.isIdentifier(node.operand))assigned.add(symbol(node.operand));
   });
   const propertyName=(node,seen=new Set())=>ts.isComputedPropertyName(node)?resolve(node.expression,'string',seen):nameOf(node);
+  const mutableContainer=node=>{
+    if(ts.isPropertyAccessExpression(node)||ts.isElementAccessExpression(node)){
+      let root=node.expression;
+      while(ts.isPropertyAccessExpression(root)||ts.isElementAccessExpression(root))root=root.expression;
+      return ts.isIdentifier(root)&&assigned.has(symbol(root));
+    }
+    let owner=node.parent;
+    while(owner&&(ts.isObjectLiteralExpression(owner)||ts.isPropertyAssignment(owner)||ts.isArrayLiteralExpression(owner)||ts.isParenthesizedExpression(owner)))owner=owner.parent;
+    return Boolean(owner&&ts.isVariableDeclaration(owner)&&ts.isIdentifier(owner.name)&&assigned.has(symbol(owner.name)));
+  };
   // A named function is an emitter only if its returned structured code is the first parameter.
   const emitterFunction=(fn,seen)=>{
-    if(!fn||!ts.isFunctionLike(fn)||!fn.body||!ts.isIdentifier(fn.parameters[0]?.name))return false;
+    if(!fn||!ts.isFunctionLike(fn)||!fn.body||!fn.parameters[0]||!ts.isIdentifier(fn.parameters[0].name))return false;
     const parameter=symbol(fn.parameters[0].name);
     const returns=[];
     if(ts.isArrowFunction(fn)&&!ts.isBlock(fn.body))returns.push(fn.body);
     else {const visit=n=>{if(n!==fn.body&&ts.isFunctionLike(n))return;if(ts.isReturnStatement(n)&&n.expression)returns.push(n.expression);ts.forEachChild(n,visit);};visit(fn.body);}
     const structured=input=>{
       const node=unparen(input);
+      if(!node)return false;
       if(ts.isObjectLiteralExpression(node))return node.properties.some(member=>{
         if(ts.isShorthandPropertyAssignment(member))return member.name.text==='code'&&symbol(member.name)===parameter;
         if(!ts.isPropertyAssignment(member))return false;
@@ -74,7 +85,7 @@ function staticResolver(ast) {
       });
       if(ts.isCallExpression(node)){
         if(ts.isPropertyAccessExpression(node.expression)&&nameOf(node.expression.expression)==='Object'&&!declaration(node.expression.expression)&&node.expression.name.text==='freeze')return structured(node.arguments[0]);
-        return resolve(node.expression,'emitter',seen)&&ts.isIdentifier(node.arguments[0])&&symbol(node.arguments[0])===parameter;
+        return resolve(node.expression,'emitter',seen)&&Boolean(node.arguments[0])&&ts.isIdentifier(node.arguments[0])&&symbol(node.arguments[0])===parameter;
       }
       return false;
     };
@@ -91,7 +102,7 @@ function staticResolver(ast) {
       if(!d||assigned.has(symbol(node)))return undefined;
       if(kind==='emitter'&&ts.isFunctionDeclaration(d))return emitterFunction(d,next)?d:undefined;
       if(immutable(d)){
-        if(kind==='emitter'&&ts.isFunctionLike(d.initializer))return emitterFunction(d.initializer,next)?d:undefined;
+        if(kind==='emitter'&&d.initializer&&ts.isFunctionLike(d.initializer))return emitterFunction(d.initializer,next)?d:undefined;
         return resolve(d.initializer,kind,next);
       }
       return undefined;
@@ -128,7 +139,7 @@ function staticResolver(ast) {
     if(ts.isObjectLiteralExpression(node))return node.properties.every(p=>ts.isPropertyAssignment(p)&&literalOnly(p.initializer,next));
     return false;
   };
-  return {value:node=>resolve(node),emitter:node=>resolve(node,'emitter'),object:node=>resolve(node,'object'),propertyName,literalOnly};
+  return {value:node=>resolve(node),emitter:node=>resolve(node,'emitter'),object:node=>resolve(node,'object'),propertyName,literalOnly,mutableContainer};
 }
 
 function structuredCodes(text) {
@@ -139,12 +150,12 @@ function structuredCodes(text) {
       if (resolver.emitter(node.expression)) add(node.arguments[0]);
       if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text==='has' && nameOf(node.expression.expression)==='codes') add(node.arguments[0]);
     }
-    if (ts.isPropertyAssignment(node) && ['code','reason'].includes(resolver.propertyName(node.name))) add(node.initializer);
+    if (ts.isPropertyAssignment(node) && !resolver.mutableContainer(node) && ['code','reason'].includes(resolver.propertyName(node.name))) add(node.initializer);
     if (ts.isShorthandPropertyAssignment(node) && ['code','reason'].includes(nameOf(node.name))) add(node.name);
     if (ts.isBinaryExpression(node) && node.operatorToken.kind===ts.SyntaxKind.EqualsToken) {
       const left=node.left;
       const key=ts.isPropertyAccessExpression(left) ? left.name.text : ts.isElementAccessExpression(left) ? resolver.value(left.argumentExpression) : nameOf(left);
-      if (['code','reason'].includes(key)) add(node.right);
+      if (['code','reason'].includes(key) && !resolver.mutableContainer(left)) add(node.right);
     }
     if (ts.isVariableDeclaration(node) && nameOf(node.name)==='ERRORS' && node.initializer) walk(node.initializer, child=> { if (ts.isStringLiteralLike(child) || ts.isIdentifier(child)) add(child); });
     if (ts.isVariableDeclaration(node) && nameOf(node.name)==='routes' && node.initializer) {
@@ -347,11 +358,16 @@ assert.equal(structuredCodes('const A=B;const B=A;p(A,"detail");').size, 0);
 assert.equal(structuredCodes('const value={[value.key]:"cycle"};p(value.key,"detail");').size, 0);
 assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});function probe(p){p("PARAMETER_PROBE","detail");}').size, 0);
 assert.equal(structuredCodes('const p=()=>{};p("SHADOWED_NOOP","detail");').size,0);
+assert.equal(structuredCodes('function noop(){};noop();').size,0);
+assert.equal(structuredCodes('const p=code=>Object.freeze();p("MISSING_OBJECT","detail");').size,0);
+assert.equal(structuredCodes('const p=code=>({code});const wrapper=code=>p();wrapper("MISSING_ARGUMENT","detail");').size,0);
 assert(!structuredCodes('const p=()=>{};p("SHADOWED_NOOP","detail");').has('SHADOWED_NOOP'));
 assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});function f(){const p=()=>{};p("SHADOWED_NOOP","detail");}').size,0);
 assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});function f({p}){p("SHADOWED_DESTRUCTURED","detail");}').size,0);
 assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});let code="MUTABLE";p(code,"detail");').size,0);
 assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});const values={code:"MUTATED"};values.code="NEW";p(values.code,"detail");').size,0);
+assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});const values={code:"MUTATED"};values["code"]="NEW";p(values.code,"detail");').size,0);
+assert(structuredCodes('const p=(code,detail)=>({code,detail});const values={code:"STATIC_OBJECT"};p(values.code,"detail");').has('STATIC_OBJECT'));
 assert.throws(()=>validateCatalog(catalog,source+'\nconst prefix="UNCATALOGED";p(`${prefix}_TEMPLATE`,"detail");'),/structured factory blocker missing from catalog: UNCATALOGED_TEMPLATE/);
 assert(structuredCodes('const ERRORS = new Set(["ENUM_PROBE"]);').has('ENUM_PROBE'));
 assert.throws(() => validateCatalog(catalog, `${source}\nconst routes = { UNCATALOGED_ROUTE_PROBE: [] };`), /structured factory blocker missing from catalog: UNCATALOGED_ROUTE_PROBE/);
