@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {existsSync, readFileSync, realpathSync, mkdtempSync, writeFileSync, symlinkSync, rmSync} from 'node:fs';
+import {existsSync, readFileSync, realpathSync, mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {resolve, relative, isAbsolute, join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -217,10 +217,22 @@ function structuredCodes(text) {
 function assertionTokens(text, canonicalLocals=new Map()) {
   const ast=parse(text), tokens=new Set(), resolver=staticResolver(ast);
   const controls=new Set(['validateEvidenceEnvelope','validateWriterValidationPreflight','verifyFactoryConsistency','detectRecoveryLoop','evaluateRecoveryMetadata','evaluateCapabilityProbe','validateCandidateManifest','createStructuredFactoryError','routeStructuredFactoryError','routeConsistencyResult','evaluateClaimRenewal']);
-  const returns=fn=>{
+  const returns=(fn,context=new Map())=>{
     if(!fn?.body)return [];
     if(ts.isArrowFunction(fn)&&!ts.isBlock(fn.body))return [fn.body];
-    const values=[];const visit=n=>{if(n!==fn.body&&ts.isFunctionLike(n))return;if(ts.isReturnStatement(n)&&n.expression)values.push(n.expression);ts.forEachChild(n,visit);};visit(fn.body);return values;
+    const values=[];
+    const visit=n=>{
+      if(ts.isReturnStatement(n)){if(n.expression)values.push(n.expression);return false;}
+      if(ts.isThrowStatement(n)||ts.isBreakStatement(n)||ts.isContinueStatement(n))return false;
+      if(ts.isBlock(n)){for(const s of n.statements)if(!visit(s))return false;return true;}
+      if(ts.isIfStatement(n)){
+        const value=constant(n.expression,context);
+        if(value===UNKNOWN)return !abrupt(n);
+        const branch=value?n.thenStatement:n.elseStatement;return branch?visit(branch):true;
+      }
+      return !abrupt(n);
+    };
+    visit(fn.body);return values;
   };
   const functionOf=node=>{const d=resolver.declaration(node);return d&&ts.isFunctionDeclaration(d)?d:d&&ts.isVariableDeclaration(d)&&d.initializer&&ts.isFunctionLike(d.initializer)?d.initializer:undefined;};
   const assertion=(input,seen=new Set())=>{
@@ -270,7 +282,7 @@ function assertionTokens(text, canonicalLocals=new Map()) {
       if(imp?.module==='typescript')return true;
       if(ts.isPropertyAccessExpression(callee)&&['some','every','find','filter','map','has','includes','test'].includes(callee.name.text))return origin(callee.expression,context,next);
       const fn=functionOf(callee);
-      if(fn){if(localControl(fn))return true;const values=returns(fn),bound=bind(fn,node.arguments,context);return values.length>0&&values.every(value=>origin(value,bound,next));}
+      if(fn){if(localControl(fn))return true;const bound=bind(fn,node.arguments,context),values=returns(fn,bound);return values.length>0&&values.every(value=>origin(value,bound,next));}
       if(ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='JSON'&&!resolver.declaration(callee.expression)&&callee.name.text==='parse')return origin(node.arguments[0],context,next);
     }
     if(ts.isAwaitExpression(node))return origin(node.expression,context,next);
@@ -312,10 +324,10 @@ function assertionTokens(text, canonicalLocals=new Map()) {
     if(ts.isCallExpression(node)){
       const callee=node.expression;
       if(ts.isPropertyAccessExpression(callee)&&['some','every','find'].includes(callee.name.text)&&origin(callee.expression,context)){
-        const fn=node.arguments[0];if(fn&&ts.isFunctionLike(fn)){const bound=new Map(context);for(const p of fn.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(fn))predicate(value,bound,next);}return;
+        const fn=node.arguments[0];if(fn&&ts.isFunctionLike(fn)){const bound=new Map(context);for(const p of fn.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(fn,bound))predicate(value,bound,next);}return;
       }
       if(ts.isPropertyAccessExpression(callee)&&['has','includes','test'].includes(callee.name.text)){pair(callee.expression,node.arguments[0],context);return;}
-      const fn=functionOf(callee);if(fn){const bound=bind(fn,node.arguments,context);for(const value of returns(fn))predicate(value,bound,next);}
+      const fn=functionOf(callee);if(fn){const bound=bind(fn,node.arguments,context);for(const value of returns(fn,bound))predicate(value,bound,next);}
     }
   };
   // Follow the executed callback, not every call nested anywhere in its AST.
@@ -379,18 +391,170 @@ function assertionTokens(text, canonicalLocals=new Map()) {
     }
     return {safe:true,material};
   };
-  walk(ast,node=>{
-    if(!ts.isCallExpression(node))return;const method=assertion(node.expression);if(!method)return;
-    if(['assert','ok'].includes(method))predicate(node.arguments[0]);
-    if(['equal','strictEqual','notEqual','notStrictEqual','deepEqual','deepStrictEqual','notDeepEqual','notDeepStrictEqual','match','doesNotMatch'].includes(method))pair(node.arguments[0],node.arguments[1],new Map());
+  const recordAssertion=(node,context)=>{
+    const method=assertion(node.expression);if(!method)return;
+    if(['assert','ok'].includes(method))predicate(node.arguments[0],context);
+    if(['equal','strictEqual','notEqual','notStrictEqual','deepEqual','deepStrictEqual','notDeepEqual','notDeepStrictEqual','match','doesNotMatch'].includes(method))pair(node.arguments[0],node.arguments[1],context);
     if(['throws','rejects'].includes(method)){
       const target=node.arguments[0];if(!target||!ts.isFunctionLike(target))return;
-      const flow=errorFlow(target,new Map(),new Set(),method);if(!flow.safe||!flow.material)return;
+      const flow=errorFlow(target,context,new Set(),method);if(!flow.safe||!flow.material)return;
       const matcher=node.arguments[1];
-      if(matcher&&(ts.isRegularExpressionLiteral(matcher)||ts.isObjectLiteralExpression(matcher)))expected(matcher);
-      else if(matcher&&ts.isFunctionLike(matcher)){const bound=new Map();for(const p of matcher.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(matcher))predicate(value,bound);}
+      if(matcher&&(ts.isRegularExpressionLiteral(matcher)||ts.isObjectLiteralExpression(matcher)))expected(matcher,context);
+      else if(matcher&&ts.isFunctionLike(matcher)){const bound=new Map(context);for(const p of matcher.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(matcher,bound))predicate(value,bound);}
     }
-  });
+  };
+  // Coverage starts at module execution, never at an arbitrary AST descendant.
+  // Resolve only immutable constants, called lexical functions and finite literal
+  // for-of loops. Unknown branches/callbacks/catches do not establish execution.
+  // This is a bounded static traversal: it never evaluates the supplied source.
+  const UNKNOWN=Symbol('unknown'), active=new Set();let steps=0,exhausted=false;
+  const tick=()=>{if(++steps>20000){exhausted=true;return false;}return true;};
+  const constant=(input,context,seen=new Set())=>{
+    const node=resolver.unparen(input);if(!node||seen.has(node)||seen.size>=64)return UNKNOWN;
+    const next=new Set(seen);next.add(node);
+    if(ts.isStringLiteralLike(node))return node.text;
+    if(ts.isNumericLiteral(node))return Number(node.text);
+    if(node.kind===ts.SyntaxKind.TrueKeyword)return true;
+    if(node.kind===ts.SyntaxKind.FalseKeyword)return false;
+    if(node.kind===ts.SyntaxKind.NullKeyword)return null;
+    if(ts.isIdentifier(node)){
+      if(resolver.tainted(node))return UNKNOWN;
+      const bound=context.get(resolver.symbol(node));if(bound)return constant(bound.expression,bound.context,next);
+      const d=resolver.declaration(node);return resolver.immutable(d)?constant(d.initializer,context,next):UNKNOWN;
+    }
+    if(ts.isPrefixUnaryExpression(node)&&node.operator===ts.SyntaxKind.ExclamationToken){const value=constant(node.operand,context,next);return value===UNKNOWN?UNKNOWN:!value;}
+    if(ts.isBinaryExpression(node)){
+      const a=constant(node.left,context,next),b=constant(node.right,context,next);if(a===UNKNOWN||b===UNKNOWN)return UNKNOWN;
+      switch(node.operatorToken.kind){
+        case ts.SyntaxKind.EqualsEqualsEqualsToken:return a===b;
+        case ts.SyntaxKind.ExclamationEqualsEqualsToken:return a!==b;
+        case ts.SyntaxKind.AmpersandAmpersandToken:return a&&b;
+        case ts.SyntaxKind.BarBarToken:return a||b;
+        case ts.SyntaxKind.QuestionQuestionToken:return a??b;
+      }
+    }
+    return UNKNOWN;
+  };
+  const arrayOf=(input,context,seen=new Set())=>{
+    const node=resolver.unparen(input);if(!node||seen.has(node)||seen.size>=64)return;
+    const next=new Set(seen);next.add(node);
+    if(ts.isArrayLiteralExpression(node)&&!node.elements.some(e=>ts.isSpreadElement(e)||ts.isOmittedExpression(e)))return {elements:node.elements,context};
+    if(ts.isIdentifier(node)&&!resolver.tainted(node)){
+      const bound=context.get(resolver.symbol(node));if(bound)return arrayOf(bound.expression,bound.context,next);
+      const d=resolver.declaration(node);if(resolver.immutable(d))return arrayOf(d.initializer,context,next);
+    }
+  };
+  const calledFunction=(input,context,seen=new Set())=>{
+    const node=resolver.unparen(input);if(!node||seen.has(node)||seen.size>=64)return;
+    const next=new Set(seen);next.add(node);
+    if(ts.isArrowFunction(node)||ts.isFunctionExpression(node))return {fn:node,context};
+    if(ts.isIdentifier(node)&&!resolver.tainted(node)){
+      const bound=context.get(resolver.symbol(node));if(bound)return calledFunction(bound.expression,bound.context,next);
+      const d=resolver.declaration(node);if(d&&ts.isFunctionDeclaration(d))return {fn:d,context};
+      if(resolver.immutable(d))return calledFunction(d.initializer,context,next);
+    }
+  };
+  const abrupt=node=>{
+    let found=false;const visit=n=>{if(ts.isFunctionLike(n))return;if(ts.isReturnStatement(n)||ts.isThrowStatement(n)||ts.isBreakStatement(n)||ts.isContinueStatement(n))found=true;ts.forEachChild(n,visit);};visit(node);return found;
+  };
+  const expressions=(nodes,context)=>{for(const node of nodes){const flow=expression(node,context);if(flow!=='normal')return flow;}return 'normal';};
+  const expression=(input,context)=>{
+    const node=resolver.unparen(input);if(!node||!tick())return exhausted?'unknown':'normal';
+    if(ts.isFunctionLike(node))return 'normal'; // Creating a callback does not invoke it.
+    if(ts.isCallExpression(node)){
+      let optional=Boolean(node.questionDotToken),base=node.expression;
+      while(ts.isPropertyAccessExpression(base)||ts.isElementAccessExpression(base)){optional ||= Boolean(base.questionDotToken);base=base.expression;}
+      if(optional&&!calledFunction(node.expression,context)&&!assertion(node.expression))return 'normal';
+      const flow=expressions([node.expression,...node.arguments],context);if(flow!=='normal')return flow;
+      recordAssertion(node,context);
+      const called=calledFunction(node.expression,context);
+      if(called&&!assertion(node.expression)&&!localControl(called.fn)){
+        const {fn}=called;
+        // Calling a generator creates an iterator without entering its body.
+        if(fn.asteriskToken||fn.modifiers?.some(m=>m.kind===ts.SyntaxKind.AsyncKeyword))return 'normal';
+        if(active.has(fn)||active.size>=64)return 'unknown';
+        // Unsupported parameter binding stays opaque like an imported call;
+        // assertions inside that body receive no execution credit.
+        if(fn.parameters.some(p=>p.dotDotDotToken||!ts.isIdentifier(p.name)))return 'normal';
+        active.add(fn);
+        const bound=bind(fn,node.arguments,called.context);
+        for(const [index,p] of fn.parameters.entries())if(p.initializer){
+          if(node.arguments[index]&&constant(node.arguments[index],context)===UNKNOWN){active.delete(fn);return 'normal';}
+          if(!node.arguments[index]){const flow=expression(p.initializer,bound);if(flow!=='normal'){active.delete(fn);return flow;}bound.set(resolver.symbol(p.name),{expression:p.initializer,context:bound});}
+        }
+        const result=ts.isBlock(fn.body)?statements(fn.body.statements,bound):expression(fn.body,bound);
+        active.delete(fn);return result==='return'?'normal':result;
+      }
+      return 'normal';
+    }
+    if(ts.isBinaryExpression(node)){
+      const flow=expression(node.left,context);if(flow!=='normal')return flow;
+      const op=node.operatorToken.kind;
+      if([ts.SyntaxKind.AmpersandAmpersandToken,ts.SyntaxKind.BarBarToken,ts.SyntaxKind.QuestionQuestionToken].includes(op)){
+        const value=constant(node.left,context);
+        if(value===UNKNOWN)return 'normal';
+        const evaluates=op===ts.SyntaxKind.AmpersandAmpersandToken?Boolean(value):op===ts.SyntaxKind.BarBarToken?!value:value===null;
+        return evaluates?expression(node.right,context):'normal';
+      }
+      return expression(node.right,context);
+    }
+    if(ts.isConditionalExpression(node)){
+      const flow=expression(node.condition,context);if(flow!=='normal')return flow;
+      const value=constant(node.condition,context);return value===UNKNOWN?'normal':expression(value?node.whenTrue:node.whenFalse,context);
+    }
+    if(ts.isPropertyAccessExpression(node))return expression(node.expression,context);
+    if(ts.isElementAccessExpression(node))return node.questionDotToken?expression(node.expression,context):expressions([node.expression,node.argumentExpression],context);
+    if(ts.isObjectLiteralExpression(node))return expressions(node.properties.flatMap(p=>ts.isPropertyAssignment(p)?[ts.isComputedPropertyName(p.name)?p.name.expression:undefined,p.initializer]:ts.isSpreadAssignment(p)?[p.expression]:[]),context);
+    if(ts.isArrayLiteralExpression(node))return expressions(node.elements,context);
+    if(ts.isNewExpression(node))return expressions([node.expression,...node.arguments??[]],context);
+    if(ts.isAwaitExpression(node)){
+      const flow=expression(node.expression,context);if(flow!=='normal')return flow;
+      const awaited=resolver.unparen(node.expression);
+      return ts.isCallExpression(awaited)&&assertion(awaited.expression)==='rejects'?'normal':'unknown';
+    }
+    if(ts.isPrefixUnaryExpression(node)||ts.isPostfixUnaryExpression(node)||ts.isSpreadElement(node)||ts.isDeleteExpression(node)||ts.isTypeOfExpression(node)||ts.isVoidExpression(node))return expression(node.expression??node.operand,context);
+    if(ts.isTemplateExpression(node))return expressions(node.templateSpans.map(s=>s.expression),context);
+    if(ts.isTaggedTemplateExpression(node)||ts.isYieldExpression(node))return 'unknown';
+    return 'normal';
+  };
+  const statement=(node,context)=>{
+    if(!tick())return 'unknown';
+    if(ts.isBlock(node))return statements(node.statements,context);
+    if(ts.isExpressionStatement(node))return expression(node.expression,context);
+    if(ts.isVariableStatement(node))return expressions(node.declarationList.declarations.map(d=>d.initializer),context);
+    if(ts.isReturnStatement(node)||ts.isThrowStatement(node)){const flow=expression(node.expression,context);return flow==='normal'?(ts.isReturnStatement(node)?'return':'throw'):flow;}
+    if(ts.isBreakStatement(node))return node.label?'unknown':'break';
+    if(ts.isContinueStatement(node))return node.label?'unknown':'continue';
+    if(ts.isIfStatement(node)){
+      const flow=expression(node.expression,context);if(flow!=='normal')return flow;
+      const value=constant(node.expression,context);
+      if(value===UNKNOWN)return abrupt(node)?'unknown':'normal';
+      const branch=value?node.thenStatement:node.elseStatement;return branch?statement(branch,context):'normal';
+    }
+    if(ts.isForOfStatement(node)){
+      const flow=expression(node.expression,context);if(flow!=='normal')return flow;
+      const array=arrayOf(node.expression,context),decl=ts.isVariableDeclarationList(node.initializer)&&node.initializer.declarations[0];
+      if(node.awaitModifier||!array||!decl||!resolver.immutable(decl)||!ts.isIdentifier(decl.name))return abrupt(node.statement)?'unknown':'normal';
+      for(const element of array.elements){
+        const bound=new Map(context);bound.set(resolver.symbol(decl.name),{expression:element,context:array.context});
+        const result=statement(node.statement,bound);
+        if(result==='break')return 'normal';
+        if(!['normal','continue'].includes(result))return result;
+      }
+      return 'normal';
+    }
+    if(ts.isTryStatement(node)){
+      if(node.catchClause)return 'unknown'; // Caught failures can hide skipped assertions.
+      const flow=statement(node.tryBlock,context);if(flow==='unknown')return flow;
+      const final=node.finallyBlock?statement(node.finallyBlock,context):'normal';
+      return final==='normal'?flow:final;
+    }
+    if(ts.isFunctionDeclaration(node)||ts.isImportDeclaration(node)||ts.isEmptyStatement(node))return 'normal';
+    return 'unknown'; // Unsupported control flow cannot authorize later coverage.
+  };
+  const statements=(nodes,context)=>{for(const node of nodes){const flow=statement(node,context);if(flow!=='normal')return flow;}return 'normal';};
+  statements(ast.statements,new Map());
+  if(exhausted)tokens.clear();
   return tokens;
 }
 
@@ -586,6 +750,62 @@ for (const snippet of [
 ]) assert.throws(() => fakeCoverage(snippet), /HEAD_DRIFT: material regression assertion not found/);
 assert.throws(()=>fakeCoverage('function ignore(){return 0;}assert.equal(result.code,ignore("HEAD_DRIFT"));'),/HEAD_DRIFT: material regression assertion not found/);
 const controlImports='import assert from "node:assert/strict";import {verifyFactoryConsistency,validateEvidenceEnvelope} from "../scripts/factory-recovery-controls.mjs";';
+// A78-F1: full-validator rejection and actual execution are separate proofs.
+// Only these fixed synthetic test strings are executed here, never by the analyzer.
+{
+ const check='const result=verifyFactoryConsistency({});assert(result.problems.some(p=>p.code==="HEAD_DRIFT"));';
+ const negatives=[
+  ['uninvoked_function','function unused(){'+check+'}'],
+  ['uninvoked_arrow','const unused=()=>{'+check+'};'],
+  ['unreachable_if_false','if(false){'+check+'}'],
+  ['short_circuit_skips_assert','const result=verifyFactoryConsistency({});false && assert(result.problems.some(p=>p.code==="HEAD_DRIFT"));'],
+  ['after_unconditional_return','function never(){return;'+check+'}never();'],
+  ['discarded_unknown_callback','function ignore(callback){}ignore(()=>{'+check+'});'],
+  ['empty_loop','for(const item of []){'+check+'}'],
+  ['unreachable_catch','try{}catch(error){'+check+'}'],
+ ];
+ const s={
+  issue:{number:267,contract_version:1,current_agent:'01',writer:'05',active_handoff:'synthetic-reachability',handoff_status:'PENDING',claimed_by:'none',claim_expires_at:'none',reference_branch:'staging',branch:'factory/synthetic',base_sha:'1'.repeat(40),head_sha:'2'.repeat(40),labels:['agent:01','status:pending']},
+  latest_handoff:{id:'synthetic-reachability',status:'PENDING',current_agent:'01'},winning_claim:null,
+  refs:{branch:'factory/synthetic',branch_sha:'3'.repeat(40),staging_sha:'1'.repeat(40)},lock:{status:'INACTIVE'},dependencies:[],evidence_policy:'NONE',write_intent:false,
+ };
+ const real='const result=verifyFactoryConsistency(s);assert(result.problems.some(p=>p.code==="HEAD_DRIFT"));';
+ const positives=[
+  ['executed_top_level',real],
+  ['invoked_function','function testCase(){'+real+'}testCase();'],
+  ['invoked_arrow','const testCase=()=>{'+real+'};testCase();'],
+  ['true_branch','if(true){'+real+'}'],
+  ['nonempty_loop','for(const item of [1]){'+real+'}'],
+ ];
+ for(const [name,snippet] of [...negatives,...positives]){
+  const executable=positives.some(p=>p[0]===name);
+  if(executable)assert.doesNotThrow(()=>fakeCoverage(controlImports+snippet),name);
+  else assert.throws(()=>fakeCoverage(controlImports+snippet),/HEAD_DRIFT: material regression assertion not found/,name);
+  let assertionCalls=0,controlCalls=0;
+  const trackedAssert=(...args)=>{assertionCalls++;return assert(...args);};
+  const trackedControl=(...args)=>{controlCalls++;return verifyFactoryConsistency(...args);};
+  assert.doesNotThrow(()=>new Function('assert','verifyFactoryConsistency','s',snippet)(trackedAssert,trackedControl,s),name);
+  assert.equal(assertionCalls,executable?1:0,name);
+  assert.equal(controlCalls,executable||name==='short_circuit_skips_assert'?1:0,name);
+ }
+ // Other unsupported or skipped paths fail closed without broad AST credit.
+ for(const snippet of [
+  'const enabled=false;if(enabled){'+check+'}',
+  'true || (()=>{'+check+'})();',
+  'const items=[];for(const item of items){'+check+'}',
+  'function* unused(){'+check+'}unused();',
+  'async function unused(){await new Promise(()=>{});'+check+'}unused();',
+  'const maybe=null;maybe?.method((()=>{'+check+'})());',
+  'function never(){try{return;}catch(error){}'+check+'}never();',
+  'const result=verifyFactoryConsistency({});assert(result.problems.some(p=>{return true;return p.code==="HEAD_DRIFT";}));',
+ ])assert.throws(()=>fakeCoverage(controlImports+snippet),/HEAD_DRIFT: material regression assertion not found/);
+ for(const snippet of [
+  'const enabled=true;if(enabled){'+real+'}',
+  'const testCase=()=>{'+real+'};const alias=testCase;alias();',
+  'function run(callback){callback();}run(()=>{'+real+'});',
+ ])assert.doesNotThrow(()=>fakeCoverage(controlImports+snippet));
+ console.log('factory assertion reachability: PASS (8 rejected with zero runtime assertions; 5 positive runtime assertions)');
+}
 assert.doesNotThrow(() => fakeCoverage(controlImports+'const result=verifyFactoryConsistency(s);assert(result.problems.some(p=>p.code==="HEAD_DRIFT"));'));
 assert(assertionTokens(controlImports+'const result=validateEvidenceEnvelope(e);assert(result.errors.some(e=>e.code==="HEAD_DRIFT"));').has('HEAD_DRIFT'));
 assert(!assertionTokens('import assert from "node:assert/strict";assert.throws(()=>unknown(input),/HEAD_DRIFT/);').has('HEAD_DRIFT'));
@@ -658,7 +878,7 @@ for(const path of ['%2e%2e/outside','/tmp/outside','https://example.com/file','f
 {
   const outer=mkdtempSync(join(tmpdir(),'factory-confinement-'));
   try{
-    const root=join(outer,'repo');const {mkdirSync}=await import('node:fs');mkdirSync(root);
+    const root=join(outer,'repo');mkdirSync(root);
     writeFileSync(join(root,'inside'),'material');writeFileSync(join(outer,'outside'),'external');
     symlinkSync(join(outer,'outside'),join(root,'escape'));
     assert.equal(readFileSync(confinedPath('inside',root),'utf8'),'material');
