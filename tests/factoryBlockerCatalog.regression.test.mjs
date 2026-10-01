@@ -571,14 +571,24 @@ const confinedPath=(path,root=REPO_ROOT)=>{
 };
 const readSource=path=>readFileSync(confinedPath(path),'utf8');
 
+// Repeated mutation probes reuse pure source proofs, keyed by exact text and
+// the complete canonical lexical context. No path/SHA or previous verdict is cached.
+const sourceProofCache=new Map();
 function validateCatalog(input, controls, read = readSource) {
-const codeCache=new Map(),tokenCache=new Map();
 const localAst=parse(readSource('tests/factoryBlockerCatalog.regression.test.mjs')),canonicalLocals=new Map();
 canonicalLocals.source_text=localAst.text;
 for(const statement of localAst.statements){
   if(ts.isFunctionDeclaration(statement)&&statement.name)canonicalLocals.set(statement.name.text,statement.getText(localAst));
   if(ts.isVariableStatement(statement))for(const declaration of statement.declarationList.declarations)if(ts.isIdentifier(declaration.name)&&declaration.initializer&&ts.isFunctionLike(declaration.initializer))canonicalLocals.set(declaration.name.text,declaration.initializer.getText(localAst));
 }
+const contextKey=JSON.stringify([localAst.text,...canonicalLocals]);
+if(!sourceProofCache.has(contextKey)){
+  if(sourceProofCache.size>=4)sourceProofCache.clear();
+  sourceProofCache.set(contextKey,{codeCache:new Map(),tokenCache:new Map()});
+}
+const {codeCache,tokenCache}=sourceProofCache.get(contextKey);
+if(codeCache.size>=256)codeCache.clear();
+if(tokenCache.size>=256)tokenCache.clear();
 const codesOf=text=>{if(!codeCache.has(text))codeCache.set(text,structuredCodes(text));return codeCache.get(text);};
 const tokensOf=text=>{if(!tokenCache.has(text))tokenCache.set(text,assertionTokens(text,canonicalLocals));return tokenCache.get(text);};
 assert.equal(input.schema_version, 'BLOCKER_CATALOG_V1');
@@ -679,10 +689,13 @@ for (const entry of input.entries) {
       assert(tokensOf(regression).has(regressionAssertion), `${entry.code}: material regression assertion not found`);
   }
 }
-return emitted;
+return Object.assign(new Set(emitted),{unresolved:[...emitted.unresolved]});
 }
 
 const emitted = validateCatalog(catalog, source);
+// A caller cannot mutate a cached proof through the returned Set.
+const exposedProof=validateCatalog(catalog,source);exposedProof.clear();exposedProof.add('CACHE_FIXTURE');
+assert.deepEqual([...validateCatalog(catalog,source)],[...emitted]);
 if(catalog.contract_manifest){
   const counts=Object.fromEntries([...allowedCoverage].map(status=>[status,catalog.entries.filter(e=>e.coverage_status===status).length]));
   assert.deepEqual(catalog.counts,{entries:catalog.entries.length,structured_codes:emitted.size,...counts});
