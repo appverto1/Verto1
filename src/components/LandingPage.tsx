@@ -1339,6 +1339,78 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
         </div>
       </section>
 
+      <section aria-labelledby="care-network-heading" className="bg-[#f9fafc] px-6 py-20">
+        <div className="mx-auto max-w-7xl">
+          <div className="grid gap-12 lg:grid-cols-[1.1fr_0.9fr] lg:items-center">
+            <div>
+              <span className="inline-flex rounded-full bg-[#f4f0ff] px-3 py-1 text-[10px] font-semibold uppercase tracking-widest text-[#7a32fc]">
+                Novidade na Verto
+              </span>
+              <h2 id="care-network-heading" className="mt-5 text-3xl font-semibold tracking-tight text-slate-900 md:text-5xl">
+                Conecte a Rede de Cuidado além da sua clínica.
+              </h2>
+              <p className="mt-6 max-w-3xl text-lg font-normal leading-8 text-slate-500">
+                Inclua profissionais e instituições externas que participam do cuidado do paciente e mantenha o compartilhamento sob controle. Cada parceiro acessa somente conteúdos e recursos disponibilizados à Rede, conforme o vínculo e as autorizações vigentes.
+              </p>
+              <p className="mt-6 text-sm font-semibold text-[#7a32fc]">
+                Ver como funciona →
+              </p>
+
+              <div className="mt-8 grid gap-4 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+                <div className="rounded-[28px] border border-purple-100 bg-white p-5 shadow-sm">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4f0ff] text-[#7a32fc]">
+                    <Users size={18} aria-hidden="true" />
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold tracking-tight text-slate-900">Conecte quem participa do cuidado</h3>
+                  <p className="mt-2 text-sm font-normal leading-6 text-slate-500">Cadastre profissionais de outras especialidades ou instituições externas que acompanham o paciente.</p>
+                </div>
+                <div className="rounded-[28px] border border-purple-100 bg-white p-5 shadow-sm">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4f0ff] text-[#7a32fc]">
+                    <ShieldCheck size={18} aria-hidden="true" />
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold tracking-tight text-slate-900">Compartilhe de forma controlada</h3>
+                  <p className="mt-2 text-sm font-normal leading-6 text-slate-500">Evoluções e recursos seguem as regras de compartilhamento e autorização já existentes na Rede.</p>
+                </div>
+                <div className="rounded-[28px] border border-purple-100 bg-white p-5 shadow-sm">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-[#f4f0ff] text-[#7a32fc]">
+                    <CheckCircle2 size={18} aria-hidden="true" />
+                  </div>
+                  <h3 className="mt-4 text-base font-semibold tracking-tight text-slate-900">Mantenha o vínculo sob controle</h3>
+                  <p className="mt-2 text-sm font-normal leading-6 text-slate-500">O parceiro acessa sua própria Central enquanto o vínculo estiver ativo, e esse vínculo pode ser revogado.</p>
+                </div>
+              </div>
+            </div>
+
+            <div aria-hidden="true" className="rounded-[36px] border border-purple-100 bg-white p-6 shadow-sm sm:p-8">
+              <div className="mx-auto max-w-md">
+                <div className="rounded-[28px] bg-[#f4f0ff] px-6 py-7 text-center ring-1 ring-purple-100">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#7a32fc] shadow-sm">
+                    <Users size={22} />
+                  </div>
+                  <p className="mt-4 text-sm font-semibold text-slate-900">Paciente / Clínica</p>
+                  <p className="mt-1 text-xs font-normal leading-5 text-slate-500">Núcleo da Rede de Cuidado</p>
+                </div>
+                <div className="mx-auto h-7 w-px bg-purple-200" />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="flex items-center gap-3 rounded-2xl border border-purple-100 bg-white px-4 py-4 shadow-sm">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]"><Stethoscope size={17} /></span>
+                    <span className="text-sm font-semibold text-slate-700">Psiquiatria</span>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-2xl border border-purple-100 bg-white px-4 py-4 shadow-sm">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]"><Heart size={17} /></span>
+                    <span className="text-sm font-semibold text-slate-700">Fonoaudiologia</span>
+                  </div>
+                  <div className="flex items-center gap-3 rounded-2xl border border-purple-100 bg-white px-4 py-4 shadow-sm sm:col-span-2">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]"><Building size={17} /></span>
+                    <span className="text-sm font-semibold text-slate-700">Instituição parceira</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section id="contato" className="px-6 pb-20 pt-10">
         <div className="mx-auto max-w-7xl rounded-[40px] bg-slate-900 px-8 py-10 text-white shadow-sm md:px-12 md:py-14">
           <div className="max-w-4xl">

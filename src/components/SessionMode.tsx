@@ -29,6 +29,8 @@ import {
 } from 'lucide-react';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
+import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../services/localDb';
+import { AUTOMATIC_SESSION_CLOSURE_KEYS, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import {
   normalizeAbaPromptTypeConfig,
   resolveTrialPromptInfo,
@@ -98,6 +100,17 @@ import {
   formatAbaRecommendationTitle,
   translateAbaRecommendationText
 } from '../utils/abaPlanningEngine';
+
+// Keep the completion snapshot current across awaited writes, before React renders.
+function useLiveSessionState<T>(initial: T): [T, React.Dispatch<React.SetStateAction<T>>, React.MutableRefObject<T>] {
+  const [value, setValue] = useState(initial);
+  const ref = useRef(value);
+  const update = useCallback((next: React.SetStateAction<T>) => {
+    ref.current = typeof next === 'function' ? (next as (previous: T) => T)(ref.current) : next;
+    setValue(ref.current);
+  }, []);
+  return [value, update, ref];
+}
 
 type SyncStatus = 'local' | 'syncing' | 'synced' | 'error';
 type AbcRequirement = 'REQUIRED' | 'RECOMMENDED' | 'OPTIONAL' | 'DISABLED';
@@ -228,6 +241,9 @@ type TherapeuticTimerState = {
   startedAt: string;
   runningSince: string | null;
   accumulatedMs: number;
+  recordId?: string;
+  completedAt?: string;
+  goalSnapshot?: any;
 };
 
 type AbaV3BehaviorDecision = {
@@ -1130,7 +1146,7 @@ export const SessionMode = ({
   const [manualMaintenanceProbeTargets, setManualMaintenanceProbeTargets] = useState<Record<string, ManualMaintenanceProbeActivation>>({});
   const [manualRegularOverrideTargetId, setManualRegularOverrideTargetId] = useState<string | null>(null);
   const [promptLevelKey, setPromptLevelKey] = useState('verbal');
-  const [records, setRecords] = useState<SessionRecord[]>([]);
+  const [records, setRecords, recordsRef] = useLiveSessionState<SessionRecord[]>([]);
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [maintenancePanel, setMaintenancePanel] = useState<any>(null);
@@ -1202,16 +1218,16 @@ export const SessionMode = ({
     'Prioridade será outra',
     'Outro motivo'
   ];
-  const [openDurations, setOpenDurations] = useState<OpenDurationEvent[]>([]);
-  const [therapeuticTimers, setTherapeuticTimers] = useState<Record<string, TherapeuticTimerState>>({});
+  const [openDurations, setOpenDurations, openDurationsRef] = useLiveSessionState<OpenDurationEvent[]>([]);
+  const [therapeuticTimers, setTherapeuticTimers, therapeuticTimersRef] = useLiveSessionState<Record<string, TherapeuticTimerState>>({});
   const [priorMasteryEvaluations, setPriorMasteryEvaluations] = useState<any[]>([]);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
   const [canonicalBehaviorPresets, setCanonicalBehaviorPresets] = useState<any[]>([]);
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [selectedSeverity, setSelectedSeverity] = useState(2);
-  const [rateWindow, setRateWindow] = useState<any>(null);
-  const [intervalRun, setIntervalRun] = useState<any>(null);
+  const [rateWindow, setRateWindow, rateWindowRef] = useLiveSessionState<any>(null);
+  const [intervalRun, setIntervalRun, intervalRunRef] = useLiveSessionState<any>(null);
   const [intervalSummary, setIntervalSummary] = useState<any>(null);
   const [intervalDurationMode, setIntervalDurationMode] = useState('30');
   const [intervalCustomSeconds, setIntervalCustomSeconds] = useState(45);
@@ -1239,13 +1255,14 @@ export const SessionMode = ({
   const [sessionEndPreviewAt, setSessionEndPreviewAt] = useState('');
   const [sessionNote, setSessionNote] = useState('');
   const [attendanceStatus, setAttendanceStatus] = useState<SessionAttendanceStatus>('ATTENDED');
-  const [endingSession, setEndingSession] = useState(false);
+  const [endingSession, setEndingSession, endingSessionRef] = useLiveSessionState(false);
   const [sessionEndError, setSessionEndError] = useState('');
   const [noShowReopenPromptOpen, setNoShowReopenPromptOpen] = useState(false);
   const [noShowReopenReason, setNoShowReopenReason] = useState('');
   const [noShowReopenError, setNoShowReopenError] = useState('');
   const [reopeningNoShow, setReopeningNoShow] = useState(false);
   const completionIdempotencyKeyRef = useRef('');
+  const completionRequestRef = useRef<{ payload: any; records: SessionRecord[] } | null>(null);
   const noShowReopenIdempotencyKeyRef = useRef('');
   const [sessionCompleted, setSessionCompleted] = useState(Boolean(isCompletedSessionReview));
   const [postClosureSummary, setPostClosureSummary] = useState<SessionSummary | null>(null);
@@ -2343,7 +2360,9 @@ export const SessionMode = ({
     displayLabel,
     startedAt,
     endedAt,
-    latencyMs
+    latencyMs,
+    measurementId,
+    sessionFinalization = false
   }: {
     goal: any;
     measurementType: string;
@@ -2353,6 +2372,8 @@ export const SessionMode = ({
     startedAt?: string | null;
     endedAt?: string | null;
     latencyMs?: number | null;
+    measurementId?: string;
+    sessionFinalization?: boolean;
   }) => {
     if (!ensureSessionCanRecord()) return false;
     const normalizedMeasurementType = normalizeTherapeuticMeasurementType(measurementType);
@@ -2366,7 +2387,7 @@ export const SessionMode = ({
     const targetName = goalTargetName(goal) || 'Alvo terapêutico';
     const programId = String(goal?.programId || goal?.program_id || goal?.protocolId || '').trim() || null;
     const timestamp = endedAt || new Date().toISOString();
-    const trialId = globalThis.crypto?.randomUUID?.() || `therapeutic-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+    const trialId = measurementId || globalThis.crypto.randomUUID();
     const actionKey = `therapeutic:${normalizedMeasurementType}:${targetId || targetName}`;
     if (!lockAction(actionKey, 0)) return false;
     const normalizedCollectionType = normalizeAbaCollectionType(collectionType);
@@ -2374,6 +2395,8 @@ export const SessionMode = ({
     const correct = isCorrectIncorrect ? numericValue > 0 : false;
     const rawPayload = {
       therapeuticMeasurement: true,
+      isCensored: sessionFinalization,
+      endReason: sessionFinalization ? 'SESSION_FINALIZATION' : null,
       source: 'therapeutic_program_measurement',
       measurementType: normalizedMeasurementType,
       measurementValue: numericValue,
@@ -2408,8 +2431,7 @@ export const SessionMode = ({
       independent: false,
       rawPayload
     };
-    addRecord(localRecord, 'local');
-    window.setTimeout(() => updateRecordStatus(trialId, 'syncing'), 30);
+    upsertRecord(localRecord, 'syncing');
     try {
       const cmv3Payload = buildClinicalPlanMeasurementV3Payload({
         goal,
@@ -2421,6 +2443,10 @@ export const SessionMode = ({
         endedAt: timestamp,
         trialId,
       });
+      if (cmv3Payload && sessionFinalization) {
+        cmv3Payload.isCensored = true;
+        cmv3Payload.censorReason = 'SESSION_FINALIZATION';
+      }
       const useCanonicalPlanWriter = Boolean(cmv3Payload);
       const result = useCanonicalPlanWriter
         ? await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload)
@@ -2497,7 +2523,14 @@ export const SessionMode = ({
         measurementType,
         startedAt: now,
         runningSince: now,
-        accumulatedMs: 0
+        accumulatedMs: 0,
+        recordId: globalThis.crypto.randomUUID(),
+        goalSnapshot: {
+          id: goalTargetId(goal), name: goalTargetName(goal),
+          programId: goal?.programId || goal?.program_id || goal?.protocolId || null,
+          therapeutic_objective_id: goalTherapeuticObjectiveId(goal),
+          therapeutic_plan_id: goalTherapeuticPlanId(goal)
+        }
       }
     }));
   };
@@ -2515,23 +2548,25 @@ export const SessionMode = ({
     });
   };
 
-  const finishTherapeuticTimer = async (goal: any) => {
+  const finishTherapeuticTimer = async (goal: any, endedAt = new Date().toISOString(), sessionFinalization = false) => {
     const goalKey = therapeuticGoalKey(goal);
-    const timer = therapeuticTimers[goalKey];
-    if (!timer) return;
-    const completedAt = new Date().toISOString();
-    const totalMs = timer.accumulatedMs + (timer.runningSince ? Math.max(0, Date.now() - new Date(timer.runningSince).getTime()) : 0);
-    const seconds = Math.max(0.1, Math.round(totalMs / 100) / 10);
-    setTherapeuticTimers((prev) => ({ ...prev, [goalKey]: { ...timer, accumulatedMs: totalMs, runningSince: null } }));
+    const timer = therapeuticTimersRef.current[goalKey];
+    if (!timer) return true;
+    const completedAt = timer.completedAt || endedAt;
+    const { totalMs, seconds, effectiveStartedAt } = therapeuticTimerCompletion(timer, completedAt);
+    const recordId = timer.recordId || globalThis.crypto.randomUUID();
+    setTherapeuticTimers((prev) => ({ ...prev, [goalKey]: { ...timer, recordId, completedAt, accumulatedMs: totalMs, runningSince: null } }));
     const saved = await persistTherapeuticMeasurement({
       goal,
       measurementType: timer.measurementType,
       measurementValue: seconds,
       measurementUnit: 'seconds',
       displayLabel: `${timer.measurementType === 'duration' ? 'Duração' : 'Tempo de resposta'} · ${formatDurationSeconds(seconds)}`,
-      startedAt: timer.startedAt,
+      startedAt: effectiveStartedAt,
       endedAt: completedAt,
-      latencyMs: timer.measurementType === 'latency' ? Math.round(totalMs) : null
+      latencyMs: timer.measurementType === 'latency' ? Math.round(totalMs) : null,
+      measurementId: recordId,
+      sessionFinalization
     });
     if (saved) {
       setTherapeuticTimers((prev) => {
@@ -2540,6 +2575,7 @@ export const SessionMode = ({
         return next;
       });
     }
+    return saved;
   };
 
   const cancelTherapeuticTimer = (goal: any) => {
@@ -2699,7 +2735,7 @@ export const SessionMode = ({
     const isV3 = behaviorDecision?.measurementModelVersion === 'V3';
     const persistedRecord = isV3 ? { ...record, measurementModelVersion: 'V3' } : record;
     upsertRecord(persistedRecord, 'local');
-    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    updateRecordStatus(record.id, 'syncing');
     try {
       const result = isV3
         ? await persistAbaV3BehaviorPayload(payload, behaviorDecision as AbaV3BehaviorDecision)
@@ -2741,7 +2777,7 @@ export const SessionMode = ({
     const isV3 = behaviorDecision?.measurementModelVersion === 'V3';
     const persistedRecord = isV3 ? { ...record, measurementModelVersion: 'V3' } : record;
     addRecord(persistedRecord, 'local');
-    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    updateRecordStatus(record.id, 'syncing');
     try {
       const result = isV3
         ? await persistAbaV3BehaviorPayload(payload, behaviorDecision as AbaV3BehaviorDecision)
@@ -2773,7 +2809,7 @@ export const SessionMode = ({
 
   const saveIntervalRecord = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
     addRecord(record, 'local');
-    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    updateRecordStatus(record.id, 'syncing');
     try {
       const result = await dataService.saveAbaIntervalRecord({
         ...payload,
@@ -2803,7 +2839,7 @@ export const SessionMode = ({
 
   const saveIntervalSummaryRecord = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>) => {
     addRecord(record, 'local');
-    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    updateRecordStatus(record.id, 'syncing');
     try {
       const result = await dataService.saveAbaIntervalSummary({
         ...payload,
@@ -2834,7 +2870,7 @@ export const SessionMode = ({
   const saveAbcClinicalEvent = async (payload: any, record: Omit<SessionRecord, 'syncStatus'>, mode: 'add' | 'upsert' = 'add') => {
     if (mode === 'upsert') upsertRecord(record, 'local');
     else addRecord(record, 'local');
-    setTimeout(() => updateRecordStatus(record.id, 'syncing'), 60);
+    updateRecordStatus(record.id, 'syncing');
     try {
       const result = await dataService.saveAbaAbcEvent({
         ...payload,
@@ -3646,7 +3682,7 @@ export const SessionMode = ({
       }
     });
     triggerMicroFeedback(trialLockKey, 'check');
-    setTimeout(() => updateRecordStatus(localRecordId, 'syncing'), 60);
+    updateRecordStatus(localRecordId, 'syncing');
 
     try {
       const result = await dataService.saveAbaV3TrialAction({
@@ -4108,7 +4144,7 @@ export const SessionMode = ({
       promptLabel: selectedPrompt.label,
       score
     }));
-    setTimeout(() => updateRecordStatus(trialId, 'syncing'), 60);
+    updateRecordStatus(trialId, 'syncing');
 
     try {
       await Promise.resolve(onRecordTrial(patient.id, goal.name, score, '', {
@@ -4497,12 +4533,11 @@ export const SessionMode = ({
     });
   };
 
-  const endDuration = (eventId: string) => {
-    const event = openDurations.find((item) => item.id === eventId);
+  const endDuration = async (eventId: string, endedAt = new Date().toISOString(), sessionFinalization = false) => {
+    const event = openDurationsRef.current.find((item) => item.id === eventId);
     if (!event) return;
     const durationEndLockKey = `duration:end:${eventId}`;
     if (!lockAction(durationEndLockKey, 0)) return;
-    const endedAt = new Date().toISOString();
     const durationSeconds = Math.max(0, Math.round((new Date(endedAt).getTime() - new Date(event.startedAt).getTime()) / 1000));
     setOpenDurations((prev) => prev.filter((item) => item.id !== eventId));
     showClinicalToast(buildClinicalActionToast({
@@ -4527,12 +4562,14 @@ export const SessionMode = ({
       timestamp: event.startedAt,
       raw_payload: {
         durationLifecycleStatus: 'completed',
+        isCensored: sessionFinalization,
+        endReason: sessionFinalization ? 'SESSION_FINALIZATION' : null,
         durationOnly: true,
         frequencyDerivedFromDuration: true,
         derivedOccurrences: 1
       }
     });
-    void saveExistingBehaviorEvent(payload, {
+    return await saveExistingBehaviorEvent(payload, {
       id: event.id,
       kind: 'behavior',
       title: event.behaviorName,
@@ -4661,13 +4698,13 @@ export const SessionMode = ({
     }
   };
 
-  const finishRateWindow = async () => {
-    if (!rateWindow) return;
+  const finishRateWindow = async (endedAt = new Date().toISOString()) => {
+    const rateWindow = rateWindowRef.current;
+    if (!rateWindow) return true;
     if (rateWindow.measurementModelVersion !== 'V3') {
       setRateWindow(null);
-      return;
+      return true;
     }
-    const endedAt = new Date().toISOString();
     try {
       const result = await dataService.saveAbaV3BehaviorAction({
         patientId,
@@ -4683,9 +4720,11 @@ export const SessionMode = ({
       if (!result?.success) throw new Error(result?.error || 'Não foi possível finalizar a janela de taxa V3.');
       setRateWindow(null);
       showClinicalToast({ variant: result?.pending ? 'info' : 'success', title: result?.pending ? 'Finalização preservada para sincronização' : 'Janela de taxa finalizada', subtitle: `${rateWindow.count || 0} ocorrência(s)` });
+      return true;
     } catch (error: any) {
       setSessionWarning(error?.message || 'Não foi possível finalizar a janela de taxa.');
       showClinicalToast({ variant: 'error', title: 'Não foi possível finalizar', subtitle: error?.message || 'Tente novamente.' }, 'error');
+      return false;
     }
   };
 
@@ -5714,6 +5753,7 @@ export const SessionMode = ({
     setSessionEndPreviewAt('');
     setSessionEndError('');
     completionIdempotencyKeyRef.current = '';
+    completionRequestRef.current = null;
   };
 
   const resolveDurationBeforeEnd = (eventId: string, action: 'end' | 'discard') => {
@@ -5743,6 +5783,10 @@ export const SessionMode = ({
   };
 
   const buildSessionClosureIssues = (): { blockers: SessionSummaryPendingItem[]; warnings: SessionSummaryPendingItem[] } => {
+    const records = recordsRef.current;
+    const openDurations = openDurationsRef.current;
+    const intervalRun = intervalRunRef.current;
+    const therapeuticTimers = therapeuticTimersRef.current;
     const savingLocally = records.filter((record) => record.syncStatus === 'syncing');
     const notSyncedWithServer = records.filter((record) => record.syncStatus === 'local' || record.syncStatus === 'error');
 
@@ -5757,7 +5801,7 @@ export const SessionMode = ({
     if (activeTherapeuticTimers.length > 0) {
       blockers.push({
         key: 'therapeutic_measurement_timer_open',
-        label: `${activeTherapeuticTimers.length} coleta(s) terapêutica(s) com cronômetro precisam ser finalizadas ou canceladas`,
+        label: `${activeTherapeuticTimers.length} cronômetro(s) terapêutico(s) serão finalizados automaticamente`,
         category: 'blocker',
         blocking: true,
         count: activeTherapeuticTimers.length
@@ -5771,7 +5815,7 @@ export const SessionMode = ({
     if (failedV3Trials.length > 0) {
       blockers.push({
         key: 'v3_failed_trials_require_resolution',
-        label: `${failedV3Trials.length} tentativa(s) V3 não foram gravadas. Tente novamente ou descarte o erro local antes de encerrar`,
+        label: `${failedV3Trials.length} tentativa(s) V3 serão reenviadas ao confirmar`,
         category: 'blocker',
         blocking: true,
         count: failedV3Trials.length
@@ -5780,7 +5824,7 @@ export const SessionMode = ({
     if (otherUnsynced > 0) {
       blockers.push({
         key: 'server_sync_required',
-        label: `${otherUnsynced} dado(s) precisam ser sincronizado(s) antes do encerramento`,
+        label: `${otherUnsynced} registro(s) serão enviados automaticamente ao confirmar`,
         category: 'blocker',
         blocking: true,
         count: otherUnsynced
@@ -5815,58 +5859,104 @@ export const SessionMode = ({
   };
 
   const confirmEndSession = async () => {
-    if (endingSession) return;
-    const closureIssues = buildSessionClosureIssues();
-    if (closureIssues.blockers.length > 0) {
-      setSessionWarning('Resolva os bloqueios antes de encerrar a sessão.');
-      setSessionEndError('Existem itens obrigatórios pendentes. Revise os bloqueios abaixo.');
-      return;
-    }
-
-    const endedAt = sessionEndPreviewAt || new Date().toISOString();
-    const finalSummary = calculateSessionSummary(sessionId, {
-      id: `summary-${sessionId}`,
-      sessionId,
-      patientId,
-      patientName: patientDisplayName,
-      therapistId: resolvedTherapistId || null,
-      therapistName: therapistDisplayName,
-      careSetting: (activeSessionCareSetting || null) as SessionSummary['careSetting'],
-      locationNameSnapshot: activeSessionLocationName || null,
-      locationContextSnapshot: {
-        careSetting: activeSessionCareSetting || null,
-        schoolId: activeSession?.schoolId || activeSession?.school_id || null,
-        schoolUnitId: activeSession?.schoolUnitId || activeSession?.school_unit_id || null,
-        locationName: activeSessionLocationName || null,
-        locationSource:
-          activeSession?.locationContextSnapshot?.locationSource ||
-          activeSession?.location_context_snapshot?.locationSource ||
-          null,
-        locationTimezone:
-          activeSession?.locationContextSnapshot?.locationTimezone ||
-          activeSession?.location_context_snapshot?.locationTimezone ||
-          maintenanceTimeZone,
-      },
-      startedAt: activeSession?.startedAt || activeSession?.started_at || endedAt,
-      endedAt,
-      createdAt: endedAt,
-      trials: records.filter((record) => record.kind === 'trial' && !record.therapeuticMeasurement),
-      behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
-      masterySummary: teachingMasteryRows,
-      blockingItems: closureIssues.blockers,
-      warningItems: closureIssues.warnings,
-      sessionNote,
-      syncStatus: 'synced'
-    });
-    const finalMaintenanceSummary = maintenanceProbeRows;
-    const idempotencyKey = completionIdempotencyKeyRef.current || createSessionCompletionKey();
-    completionIdempotencyKeyRef.current = idempotencyKey;
-
+    if (endingSessionRef.current) return;
     setEndingSession(true);
     setSessionWarning('');
     setSessionEndError('');
     try {
-      const completionResult = await dataService.completeAbaSession(sessionId, {
+      const endedAt = completionRequestRef.current?.payload?.endedAt || new Date().toISOString();
+      let records = completionRequestRef.current?.records || recordsRef.current;
+      let closureIssues = { blockers: [] as SessionSummaryPendingItem[], warnings: [] as SessionSummaryPendingItem[] };
+      if (!completionRequestRef.current) {
+        const mandatory = buildSessionClosureIssues().blockers.filter((item) => !AUTOMATIC_SESSION_CLOSURE_KEYS.has(item.key));
+        if (mandatory.length) throw new Error(mandatory.map((item) => item.label).join('. '));
+        await waitForSessionWrites(() => recordsRef.current.some((record) => record.syncStatus === 'syncing'));
+        for (const timer of Object.values(therapeuticTimersRef.current)) {
+          const goal = timer.goalSnapshot || sessionGoals.find((item: any) => therapeuticGoalKey(item) === timer.goalKey);
+          if (!goal) throw new Error('O alvo do cronômetro não foi encontrado. O tempo foi preservado.');
+          if (!await finishTherapeuticTimer(goal, endedAt, true)) throw new Error('Não foi possível salvar o tempo observado. Tente finalizar novamente.');
+        }
+        for (const event of [...openDurationsRef.current]) {
+          // The atomic V3 completion owns censored duration finalization. A client
+          // DURATION_STOP would incorrectly label an unknown endpoint as USER_STOP.
+          if (event.measurementModelVersion === 'V3') continue;
+          const result = await endDuration(event.id, endedAt, true);
+          if (result?.success === false && !result?.durable) throw new Error('Não foi possível salvar o evento de duração. O registro foi preservado.');
+        }
+        if (rateWindowRef.current && rateWindowRef.current.measurementModelVersion !== 'V3' && !await finishRateWindow(endedAt)) throw new Error('Não foi possível confirmar a finalização da janela de taxa.');
+        const run = intervalRunRef.current;
+        if (run && run.measurementModelVersion !== 'V3') {
+          saveIntervalAggregateV2(run, Number(run.completedCount || 0), Number(run.occurredCount || 0), endedAt, 'PARTIALLY_COMPLETED', 'SESSION_FINALIZATION');
+          setIntervalRun(null);
+        }
+        await waitForSessionWrites(() => recordsRef.current.some((record) => record.syncStatus === 'syncing'));
+        for (const record of recordsRef.current.filter((item) => item.kind === 'trial' && item.measurementModelVersion === 'V3' && item.syncStatus === 'error')) {
+          await retryFailedV3Trial(record);
+        }
+        const entityIds = recordsRef.current.flatMap((record) => [record.id, String(record.rawPayload?.clientEventId || '')]).filter(Boolean);
+        await syncOfflineData({ force: true, sessionId, entityIds });
+        const queued = await getSessionQueuedRecords(sessionId, entityIds);
+        const unconfirmedIds = new Set(queued.map((record) => String(record.entity_id || record.id)));
+        const refreshedRecords = await Promise.all(recordsRef.current.map(async (record) => {
+          if (record.syncStatus === 'synced') return record;
+          const entityId = record.measurementModelVersion === 'V3' ? String(record.rawPayload?.clientEventId || record.id) : record.id;
+          if (unconfirmedIds.has(entityId)) return record;
+          const cached = await getRecordById(entityId);
+          return cached?.sync_status === 'synced' ? { ...record, syncStatus: 'synced' as const } : record;
+        }));
+        setRecords(refreshedRecords);
+        closureIssues = buildSessionClosureIssues();
+        closureIssues.blockers = closureIssues.blockers.filter((item) => !(
+          (item.key === 'open_duration' && openDurationsRef.current.every((event) => event.measurementModelVersion === 'V3'))
+          || (item.key === 'open_interval_collection' && intervalRunRef.current?.measurementModelVersion === 'V3')
+        ));
+        if (queued.length || closureIssues.blockers.length) throw new Error('Ainda não foi possível confirmar todos os salvamentos. Os dados estão preservados; tente finalizar novamente.');
+        records = recordsRef.current.map((record) => {
+          const event = openDurationsRef.current.find((item) => item.id === record.id && item.measurementModelVersion === 'V3');
+          if (!event) return record;
+          const durationSeconds = Math.max(0, (Date.parse(endedAt) - Date.parse(event.startedAt)) / 1000);
+          return { ...record, endedAt, durationSeconds, status: 'COMPLETED', rawPayload: { ...record.rawPayload, isCensored: true, endReason: 'SESSION_FINALIZATION' } };
+        });
+      }
+      const finalSummary = completionRequestRef.current?.payload?.summary || calculateSessionSummary(sessionId, {
+        id: `summary-${sessionId}`,
+        sessionId,
+        patientId,
+        patientName: patientDisplayName,
+        therapistId: resolvedTherapistId || null,
+        therapistName: therapistDisplayName,
+        careSetting: (activeSessionCareSetting || null) as SessionSummary['careSetting'],
+        locationNameSnapshot: activeSessionLocationName || null,
+        locationContextSnapshot: {
+          careSetting: activeSessionCareSetting || null,
+          schoolId: activeSession?.schoolId || activeSession?.school_id || null,
+          schoolUnitId: activeSession?.schoolUnitId || activeSession?.school_unit_id || null,
+          locationName: activeSessionLocationName || null,
+          locationSource:
+            activeSession?.locationContextSnapshot?.locationSource ||
+            activeSession?.location_context_snapshot?.locationSource ||
+            null,
+          locationTimezone:
+            activeSession?.locationContextSnapshot?.locationTimezone ||
+            activeSession?.location_context_snapshot?.locationTimezone ||
+            maintenanceTimeZone,
+        },
+        startedAt: activeSession?.startedAt || activeSession?.started_at || endedAt,
+        endedAt,
+        createdAt: endedAt,
+        trials: records.filter((record) => record.kind === 'trial' && !record.therapeuticMeasurement),
+        behaviorEvents: records.filter((record) => record.kind === 'behavior' && !isCancelledIntervalClinicalRecord(record)),
+        masterySummary: teachingMasteryRows,
+        blockingItems: closureIssues.blockers,
+        warningItems: closureIssues.warnings,
+        sessionNote,
+        syncStatus: 'synced'
+      });
+      const finalMaintenanceSummary = completionRequestRef.current?.payload?.summary?.maintenanceSummary || maintenanceProbeRows;
+      const idempotencyKey = completionIdempotencyKeyRef.current || createSessionCompletionKey();
+      completionIdempotencyKeyRef.current = idempotencyKey;
+
+      const completionPayload = {
         patient_id: patientId,
         patientId,
         clinic_id: resolvedClinicId || undefined,
@@ -5898,13 +5988,17 @@ export const SessionMode = ({
           attendanceStatus,
           source: 'verto_web'
         }
-      });
+      };
+      completionRequestRef.current ||= { payload: completionPayload, records };
+      const completionResult = await dataService.completeAbaSession(sessionId, completionRequestRef.current.payload);
       if (!completionResult?.success) {
+        if (completionResult?.status && completionResult.status < 500) completionRequestRef.current = null;
         const completionCode = String(completionResult?.code || completionResult?.error || '').trim();
         if (completionCode === 'APPOINTMENT_NO_SHOW_REOPEN_REQUIRED' && activeAppointmentId) {
           noShowReopenIdempotencyKeyRef.current = noShowReopenIdempotencyKeyRef.current || createSessionCompletionKey();
           setNoShowReopenError('');
           setNoShowReopenPromptOpen(true);
+          completionRequestRef.current = null;
           setSessionEndError('A falta precisa ser reaberta antes de concluir esta sessão como comparecimento.');
           setSessionWarning('A sessão continua em andamento e nenhum dado clínico foi descartado.');
           return;
@@ -5934,10 +6028,15 @@ export const SessionMode = ({
       setPostClosureSummary(persistedSummary);
       setOperationalClosure(completionData?.closure || null);
       setSessionCompleted(true);
+      setRecords(records);
+      setOpenDurations([]);
+      setRateWindow(null);
+      setIntervalRun(null);
       setShowPostClosureReport(false);
       setShowComplementEditor(false);
       setShowSessionSummary(false);
       completionIdempotencyKeyRef.current = '';
+      completionRequestRef.current = null;
 
       if (typeof onSessionSummaryPersisted === 'function') {
         void Promise.resolve(onSessionSummaryPersisted(persistedSummary)).catch((error: any) => {
@@ -11605,12 +11704,12 @@ export const SessionMode = ({
             </section>
             </SessionSummaryDisclosure>
 
-            <SessionSummaryDisclosure title="Bloqueios de encerramento" meta={`${closureBlockers.length} bloqueio(s)`} tone="red">
-<section className="mt-4 rounded-[24px] bg-white border border-red-100 p-5">
-              <h4 className="text-lg font-bold text-red-700">Bloqueios de encerramento</h4>
+            <SessionSummaryDisclosure title="Preparação do encerramento" meta={`${closureBlockers.length} pendência(s)`} tone="default">
+<section className="mt-4 rounded-[24px] bg-white border border-blue-100 p-5">
+              <h4 className="text-lg font-bold text-gray-800">Preparação do encerramento</h4>
               {hasClosureBlockers && (
                 <p className="mt-2 rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
-                  Resolva os bloqueios antes de encerrar a sessão.
+                  Ao confirmar, os cronômetros serão finalizados e os registros pendentes serão enviados automaticamente.
                 </p>
               )}
               <div className="mt-3 space-y-2">
@@ -11721,8 +11820,8 @@ export const SessionMode = ({
               <button onClick={returnToActiveSession} disabled={endingSession} className="flex-1 py-3 rounded-2xl bg-white border border-blue-100 text-gray-600 font-semibold disabled:cursor-not-allowed disabled:opacity-50">Voltar para o atendimento</button>
               <button
                 onClick={confirmEndSession}
-                disabled={hasClosureBlockers || endingSession}
-                className={`flex-1 inline-flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold shadow-lg transition-all ${hasClosureBlockers || endingSession ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
+                disabled={endingSession}
+                className={`flex-1 inline-flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold shadow-lg transition-all ${endingSession ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
               >
                 {endingSession && <Loader2 size={18} className="animate-spin" />}
                 {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
