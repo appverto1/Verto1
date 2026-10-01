@@ -151,13 +151,22 @@ function staticResolver(ast) {
     return false;
   };
   // Mutation/escape of any shared alias invalidates the entire object proof.
+  const pureLocal=node=>{
+    const d=declaration(node),fn=d&&ts.isFunctionDeclaration(d)?d:d?.initializer;
+    if(!fn||!ts.isFunctionLike(fn)||!fn.body)return false;let pure=true;
+    walk(fn.body,n=>{
+      if(ts.isDeleteExpression(n)||ts.isBinaryExpression(n)&&n.operatorToken.kind>=ts.SyntaxKind.FirstAssignment&&n.operatorToken.kind<=ts.SyntaxKind.LastAssignment)pure=false;
+      if(ts.isCallExpression(n)&&!(ts.isPropertyAccessExpression(n.expression)&&['some','every','find','filter','map','has','includes','test'].includes(n.expression.name.text)))pure=false;
+    });return pure;
+  };
   walk(ast,node=>{
     if(ts.isDeleteExpression(node))assigned.add(rootSymbol(node.expression));
     if(ts.isCallExpression(node)){
       const callee=node.expression,imp=ts.isPropertyAccessExpression(callee)?imported(callee.expression):imported(callee);
       const readonly=imp&&['node:assert','node:assert/strict','node:fs','../scripts/factory-recovery-controls.mjs'].includes(imp.module)||
-        ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='Object'&&!declaration(callee.expression)&&['freeze','keys','values','entries','hasOwn'].includes(callee.name.text);
-      if(!readonly)for(const arg of node.arguments)if(resolve(arg,'object'))assigned.add(rootSymbol(arg));
+        ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='Object'&&!declaration(callee.expression)&&['freeze','keys','values','entries','hasOwn'].includes(callee.name.text)||pureLocal(callee);
+      if(!readonly)for(const arg of node.arguments)if(resolve(arg,'object')||rootSymbol(arg)&&!literalOnly(arg)&&typeof resolve(arg)!=='string')assigned.add(rootSymbol(arg));
+      if(ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='Object'&&!declaration(callee.expression)&&callee.name.text==='assign')assigned.add(rootSymbol(node.arguments[0]));
       if(ts.isPropertyAccessExpression(callee)&&['push','pop','shift','unshift','splice','sort','reverse','fill','copyWithin','set','add','delete','clear'].includes(callee.name.text))assigned.add(rootSymbol(callee.expression));
     }
     if(ts.isReturnStatement(node)&&node.expression&&ts.isIdentifier(node.expression)&&resolve(node.expression,'object'))assigned.add(rootSymbol(node.expression));
@@ -204,7 +213,7 @@ function structuredCodes(text) {
 }
 
 // Only lexically bound Node assertions over control-derived operands prove coverage.
-function assertionTokens(text) {
+function assertionTokens(text, canonicalLocals=new Map()) {
   const ast=parse(text), tokens=new Set(), resolver=staticResolver(ast);
   const controls=new Set(['validateEvidenceEnvelope','validateWriterValidationPreflight','verifyFactoryConsistency','detectRecoveryLoop','evaluateRecoveryMetadata','evaluateCapabilityProbe','validateCandidateManifest','createStructuredFactoryError','routeStructuredFactoryError','routeConsistencyResult','evaluateClaimRenewal']);
   const returns=fn=>{
@@ -228,10 +237,11 @@ function assertionTokens(text) {
   // The in-file catalog/path analyzers are controls only at their real lexical
   // declarations with imported parser/fs or material Node assertions in their body.
   const localControl=fn=>{
+    if(ast.text!==canonicalLocals.source_text)return false;
     const owner=ts.isFunctionDeclaration(fn)?fn:fn.parent;
     if(!owner||owner.parent!==ast&&!ts.isVariableDeclaration(owner))return false;
     const name=ts.isFunctionDeclaration(fn)?nameOf(fn.name):ts.isVariableDeclaration(owner)?nameOf(owner.name):null;
-    if(!['validateCatalog','structuredCodes','assertionTokens','confinedPath','readSource'].includes(name))return false;
+    if(canonicalLocals.get(name)!==fn.getText(ast))return false;
     let guarded=false;walk(fn.body,node=>{
       if(ts.isCallExpression(node)){
         const imp=resolver.imported(ts.isPropertyAccessExpression(node.expression)?node.expression.expression:node.expression);
@@ -256,7 +266,6 @@ function assertionTokens(text) {
       const callee=node.expression,imp=resolver.imported(ts.isPropertyAccessExpression(callee)?callee.expression:callee);
       if(resolver.tainted(callee))return false;
       if(imp?.module==='../scripts/factory-recovery-controls.mjs'&&controls.has(imp.name))return true;
-      if(imp?.module==='node:fs'&&['readFileSync','realpathSync'].includes(imp.name))return true;
       if(imp?.module==='typescript')return true;
       if(ts.isPropertyAccessExpression(callee)&&['some','every','find','filter','map','has','includes','test'].includes(callee.name.text))return origin(callee.expression,context,next);
       const fn=functionOf(callee);
@@ -328,8 +337,14 @@ const readSource=path=>readFileSync(confinedPath(path),'utf8');
 
 function validateCatalog(input, controls, read = readSource) {
 const codeCache=new Map(),tokenCache=new Map();
+const localAst=parse(readSource('tests/factoryBlockerCatalog.regression.test.mjs')),canonicalLocals=new Map();
+canonicalLocals.source_text=localAst.text;
+for(const statement of localAst.statements){
+  if(ts.isFunctionDeclaration(statement)&&statement.name)canonicalLocals.set(statement.name.text,statement.getText(localAst));
+  if(ts.isVariableStatement(statement))for(const declaration of statement.declarationList.declarations)if(ts.isIdentifier(declaration.name)&&declaration.initializer&&ts.isFunctionLike(declaration.initializer))canonicalLocals.set(declaration.name.text,declaration.initializer.getText(localAst));
+}
 const codesOf=text=>{if(!codeCache.has(text))codeCache.set(text,structuredCodes(text));return codeCache.get(text);};
-const tokensOf=text=>{if(!tokenCache.has(text))tokenCache.set(text,assertionTokens(text));return tokenCache.get(text);};
+const tokensOf=text=>{if(!tokenCache.has(text))tokenCache.set(text,assertionTokens(text,canonicalLocals));return tokenCache.get(text);};
 assert.equal(input.schema_version, 'BLOCKER_CATALOG_V1');
 assert(Array.isArray(input.entries), 'catalog entries must be an array');
 const byCode = new Map();
@@ -514,6 +529,9 @@ for(const snippet of [
  controlImports+'const result={code:"HEAD_DRIFT",real:verifyFactoryConsistency(s)};assert.equal(result.code,"HEAD_DRIFT");',
  controlImports+'const result=verifyFactoryConsistency(s);result.code="HEAD_DRIFT";assert.equal(result.code,"HEAD_DRIFT");',
  controlImports+'const alias=assert;alias.equal=()=>{};const result=verifyFactoryConsistency(s);assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'function validateCatalog(){const ast={};assert.ok(ast);return {code:"HEAD_DRIFT"};}const result=validateCatalog();assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency(s);Object.assign(result,{code:"HEAD_DRIFT"});assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency(s);mutate(result);assert.equal(result.code,"HEAD_DRIFT");',
 ])assert.throws(()=>fakeCoverage(snippet),/HEAD_DRIFT: material regression assertion not found/);
 assert.doesNotThrow(()=>fakeCoverage(controlImports+'const check=assert;const result=verifyFactoryConsistency(s);check(result.problems.some(p=>p.code==="HEAD_DRIFT"));'));
 for(const snippet of [
