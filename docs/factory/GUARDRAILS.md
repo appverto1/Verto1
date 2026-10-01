@@ -222,3 +222,14 @@ Esta seção é a autoridade única de adoção operacional do consistency verif
 **Imediatamente antes do CAS/transição final** que persista resultado, PASS, handoff ou mudança de estado, reconstrua o snapshot, execute novamente o mesmo verifier e registre nova evidência. Mudança factual invalida a autorização anterior.
 
 O verifier é único: não crie engine ou runner paralelo. O preflight não substitui Writer Validation #266, CI, review, auditoria, merge, verify ou smoke; cada gate mantém sua evidência exact-SHA.
+
+### 22.1 Exceção restrita de recovery metadata — contract v3 da #267
+A regra "Somente `CONSISTENT` autoriza prosseguir" continua vinculante para claim, código, refs, PASS, handoff, merge, deploy e produção. A única exceção é a avaliação canônica `evaluateRecoveryMetadata` / comando `recovery-metadata`, autorizada pelo CONTRACT v3 da #267.
+
+Sob resultado factual não-CONSISTENT, somente estes campos de Issue podem mudar: `recovery_error`, `recovery_invalidated_evidence`, `recovery_owner`, `recovery_unblock_action`, `recovery_retry_condition`, `recovery_evidence`. O patch completo, snapshot antes/depois e proveniência devem ser validados imediatamente antes do CAS. A identidade factual de Issue/versão/handoff/claim, refs, lock, dependências e freshness é obrigatória; revisão e snapshot devem corresponder exatamente. Proveniência fresca, error estruturado, owner único, retry objetivo e Evidence Envelope com o próprio estado DRIFT/AMBIGUOUS/suspected são obrigatórios. Evidência stale só pode ser marcada pelo SHA comprovadamente divergente.
+
+O resultado factual e seus problems devem permanecer idênticos após o patch. Nunca registrar PASS, alterar estado/claim/lease/handoff/labels, transferir/consumir claim concorrente, liberar lock, mudar contract/escopo, código/ref, merge/deploy ou produção através desta exceção. Identidade, escopo ou autoridade ambígua falha fechado. Recovery owner recebe diagnóstico e condição de retomada; isso não lhe concede autorização implícita para a ação corretiva, que exige seu próprio gate/autoridade.
+
+HEAD_DRIFT vai a owner capaz com proveniência de capability; sem executor materialmente comprovado, 00 atua como broker. Papel 03 não recebe correção de ref/código. Probes são read-only ou, quando indispensável, Git objects órfãos sem ref; nunca mover feature/staging/main para provar capability.
+
+Contract v3 exige manifesto factual SHA/tree/paths (inclusive arquivos vazios) nos gates SHA-bound. Evidence Envelope e preflight comparam manifesto à leitura factual Git e paths autorizados; path/tree não declarado invalida PASS. Writer Validation/pre-main publica o manifesto factual do runner. O 11 reconcilia PR/contrato/manifesto antes do CI; review independente e auditoria continuam obrigatórios.

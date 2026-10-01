@@ -150,4 +150,51 @@ for(const key of ['post_merge','post_merge_mode','is_post_merge','allow_post_mer
   const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'CONSISTENT');assert(!has(r,'POST_MERGE_PROOF_MISSING'));
 }
 
+
+// 16. Terminal current_agent:none representa ausência de agente operacional; labels agent:* continuam fail-closed.
+{
+  const terminal=postMerge();
+  Object.assign(terminal.issue,{state:'DONE',current_agent:'none',active_handoff:'none',handoff_status:'DONE',claimed_by:'none',claim_expires_at:'none',labels:['status:done']});
+  terminal.latest_handoff={id:'none',status:'DONE',current_agent:'none'};
+  terminal.winning_claim=null;
+  assert.equal(verifyFactoryConsistency(terminal,{now:NOW}).status,'CONSISTENT');
+
+  const staleAgent=structuredClone(terminal);staleAgent.issue.labels=['status:done','agent:00'];
+  const staleResult=verifyFactoryConsistency(staleAgent,{now:NOW});assert.equal(staleResult.status,'DRIFT');assert(has(staleResult,'AGENT_LABEL_DRIFT'));
+
+  const syntheticNone=structuredClone(terminal);syntheticNone.issue.labels=['status:done','agent:none'];
+  const syntheticResult=verifyFactoryConsistency(syntheticNone,{now:NOW});assert.equal(syntheticResult.status,'DRIFT');assert(has(syntheticResult,'AGENT_LABEL_DRIFT'));
+
+  const nonTerminal=structuredClone(terminal);nonTerminal.issue.state='IMPLEMENTATION';
+  const nonTerminalResult=verifyFactoryConsistency(nonTerminal,{now:NOW});assert.equal(nonTerminalResult.status,'DRIFT');assert(has(nonTerminalResult,'AGENT_LABEL_DRIFT'));
+}
+{
+  const missingAgent=normal();missingAgent.issue.labels=['status:claimed'];
+  const missingResult=verifyFactoryConsistency(missingAgent,{now:NOW});assert.equal(missingResult.status,'DRIFT');assert(has(missingResult,'AGENT_LABEL_DRIFT'));
+
+  const wrongAgent=normal();wrongAgent.issue.labels=['status:claimed','agent:13'];
+  const wrongResult=verifyFactoryConsistency(wrongAgent,{now:NOW});assert.equal(wrongResult.status,'DRIFT');assert(has(wrongResult,'AGENT_LABEL_DRIFT'));
+}
+
+// Contract v3 evidence is bound to the factual candidate tree and paths as well as SHA.
+{
+ const s=normal();s.issue.contract_version=3;
+ const manifest={schema_version:'FACTORY_CANDIDATE_MANIFEST_V1',issue:267,contract_version:3,branch:BRANCH,base_sha:B,head_sha:H,tree_sha:T,paths:[{path:'scripts/factory-recovery-controls.mjs',status:'modified',mode:'100644',blob_sha:H}]};
+ s.authorized_paths=['scripts/factory-recovery-controls.mjs'];s.candidate_manifest=structuredClone(manifest);s.refs.candidate_manifest=structuredClone(manifest);
+ assert.equal(verifyFactoryConsistency(s,{now:NOW}).status,'CONSISTENT');
+ s.candidate_manifest.paths.push({path:'__noop__',status:'added',mode:'100644',blob_sha:'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391'});
+ const pathResult=verifyFactoryConsistency(s,{now:NOW});assert(has(pathResult,'CANDIDATE_PATH_UNAUTHORIZED'));assert(has(pathResult,'CANDIDATE_MANIFEST_DRIFT'));
+ s.candidate_manifest=structuredClone(manifest);s.refs.candidate_manifest.tree_sha=O;
+ const treeResult=verifyFactoryConsistency(s,{now:NOW});assert(has(treeResult,'CANDIDATE_MANIFEST_DRIFT'));
+}
+// A70 keeps v3 post-merge proofs usable while enforcing every historical gate's identity/manifest.
+{
+ const s=postMerge();s.issue.contract_version=3;
+ const manifest={schema_version:'FACTORY_CANDIDATE_MANIFEST_V1',issue:267,contract_version:3,branch:BRANCH,base_sha:B,head_sha:H,tree_sha:T,paths:[{path:'scripts/factory-recovery-controls.mjs',status:'modified',mode:'100644',blob_sha:H}]};
+ s.candidate_manifest=structuredClone(manifest);s.refs.candidate_manifest=structuredClone(manifest);s.authorized_paths=manifest.paths.map(p=>p.path);
+ for(const e of Object.values(s.post_merge_evidence))Object.assign(e,{contract_version:3,branch:BRANCH,candidate_manifest:structuredClone(manifest)});
+ assert.equal(verifyFactoryConsistency(s,{now:NOW}).status,'CONSISTENT');
+ s.post_merge_evidence.review.contract_version=2;delete s.post_merge_evidence.review.candidate_manifest;
+ const rejected=verifyFactoryConsistency(s,{now:NOW});assert.notEqual(rejected.status,'CONSISTENT');assert(has(rejected,'POST_MERGE_EVIDENCE_STALE'));
+}
 console.log('factoryPostMergeConsistency.regression.test.mjs: PASS');
