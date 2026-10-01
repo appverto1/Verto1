@@ -9,6 +9,7 @@ import {
   validateWriterValidationPreflight,
   verifyFactoryConsistency,
   detectRecoveryLoop,
+  createStructuredFactoryError,
 } from '../scripts/factory-recovery-controls.mjs';
 
 const CATALOG_URL = new URL('../docs/factory/BLOCKER_CATALOG_V1.json', import.meta.url);
@@ -272,7 +273,16 @@ function assertionTokens(text, canonicalLocals=new Map()) {
       if(fn){if(localControl(fn))return true;const values=returns(fn),bound=bind(fn,node.arguments,context);return values.length>0&&values.every(value=>origin(value,bound,next));}
       if(ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='JSON'&&!resolver.declaration(callee.expression)&&callee.name.text==='parse')return origin(node.arguments[0],context,next);
     }
-    if(ts.isBinaryExpression(node))return [ts.SyntaxKind.BarBarToken,ts.SyntaxKind.AmpersandAmpersandToken].includes(node.operatorToken.kind)?origin(node.left,context,next)&&origin(node.right,context,next):origin(node.left,context,next)||origin(node.right,context,next);
+    if(ts.isAwaitExpression(node))return origin(node.expression,context,next);
+    if(ts.isBinaryExpression(node)){
+      const operator=node.operatorToken.kind;
+      // A sequence evaluates both operands but its value comes only from the last.
+      if(operator===ts.SyntaxKind.CommaToken)return origin(node.right,context,next);
+      if([ts.SyntaxKind.BarBarToken,ts.SyntaxKind.AmpersandAmpersandToken,ts.SyntaxKind.QuestionQuestionToken].includes(operator))return origin(node.left,context,next)&&origin(node.right,context,next);
+      if([ts.SyntaxKind.EqualsEqualsToken,ts.SyntaxKind.EqualsEqualsEqualsToken,ts.SyntaxKind.ExclamationEqualsToken,ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(operator))return origin(node.left,context,next)||origin(node.right,context,next);
+      // Arithmetic, assignment and other transformations need their own proof.
+      return false;
+    }
     return false;
   };
   const expected=(node,context=new Map(),seen=new Set())=>{
@@ -290,6 +300,7 @@ function assertionTokens(text, canonicalLocals=new Map()) {
     const next=new Set(seen);next.add(node);
     if(ts.isPrefixUnaryExpression(node)&&node.operator===ts.SyntaxKind.ExclamationToken){predicate(node.operand,context,next);return;}
     if(ts.isBinaryExpression(node)){
+      if(node.operatorToken.kind===ts.SyntaxKind.CommaToken){predicate(node.right,context,next);return;}
       if([ts.SyntaxKind.BarBarToken,ts.SyntaxKind.AmpersandAmpersandToken].includes(node.operatorToken.kind)){
         // Both branches must be control-derived. Constant/fixture short-circuits
         // and unknown predicates cannot establish a material assertion.
@@ -307,13 +318,74 @@ function assertionTokens(text, canonicalLocals=new Map()) {
       const fn=functionOf(callee);if(fn){const bound=bind(fn,node.arguments,context);for(const value of returns(fn))predicate(value,bound,next);}
     }
   };
+  // Follow the executed callback, not every call nested anywhere in its AST.
+  // Only straight-line, lexically resolved error flow is supported. Branches,
+  // catches, unknown calls and fixture throws cannot establish error provenance.
+  const errorFlow=(fn,context=new Map(),seen=new Set(),mode='throws')=>{
+    if(!fn?.body||seen.has(fn)||seen.size>=64)return {safe:false,material:false};
+    const asynchronous=fn.modifiers?.some(m=>m.kind===ts.SyntaxKind.AsyncKeyword);
+    if(asynchronous&&mode!=='rejects')return {safe:false,material:false};
+    const next=new Set(seen);next.add(fn);
+    const expression=(input,returned=false)=>{
+      const node=resolver.unparen(input);
+      if(!node)return {safe:true,material:false};
+      if(ts.isAwaitExpression(node))return expression(node.expression,true);
+      if(ts.isBinaryExpression(node)&&node.operatorToken.kind===ts.SyntaxKind.CommaToken){
+        const left=expression(node.left),right=expression(node.right,returned);
+        return {safe:left.safe&&right.safe,material:left.material||right.material};
+      }
+      if(ts.isCallExpression(node)){
+        const callee=node.expression,imp=resolver.imported(callee);
+        if(resolver.tainted(callee))return {safe:false,material:false};
+        const local=functionOf(callee);
+        if(local&&localControl(local))return {safe:true,material:true};
+        if(!node.arguments.every(arg=>expression(arg).safe))return {safe:false,material:false};
+        // Factory return values alone do not prove an error was thrown/rejected.
+        if(imp?.module==='../scripts/factory-recovery-controls.mjs'&&controls.has(imp.name))return {safe:true,material:false};
+        if(local){
+          if(local.modifiers?.some(m=>m.kind===ts.SyntaxKind.AsyncKeyword)&&!returned)return {safe:false,material:false};
+          return errorFlow(local,bind(local,node.arguments,context),next,mode);
+        }
+        // A returned rejected promise must carry the actual control error.
+        if(ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='Promise'&&!resolver.declaration(callee.expression)&&callee.name.text==='reject')return {safe:mode==='rejects'&&returned&&origin(node.arguments[0],context),material:mode==='rejects'&&returned&&origin(node.arguments[0],context)};
+        return {safe:false,material:false};
+      }
+      if(ts.isIdentifier(node)||ts.isFunctionLike(node))return {safe:!resolver.tainted(node),material:false};
+      if(ts.isPropertyAccessExpression(node)||ts.isElementAccessExpression(node))return expression(node.expression);
+      if(ts.isObjectLiteralExpression(node))return {safe:node.properties.every(p=>ts.isPropertyAssignment(p)&&expression(p.initializer).safe),material:false};
+      if(ts.isArrayLiteralExpression(node))return {safe:node.elements.every(e=>expression(e).safe),material:false};
+      return {safe:resolver.literalOnly(node)||origin(node,context),material:false};
+    };
+    if(!ts.isBlock(fn.body))return expression(fn.body,true);
+    let material=false;
+    for(const statement of fn.body.statements){
+      if(ts.isEmptyStatement(statement)||ts.isFunctionDeclaration(statement))continue;
+      if(ts.isVariableStatement(statement)){
+        for(const declaration of statement.declarationList.declarations){
+          if(!resolver.immutable(declaration))return {safe:false,material:false};
+          const value=expression(declaration.initializer);if(!value.safe)return value;
+          material ||= value.material;
+        }
+        continue;
+      }
+      if(ts.isThrowStatement(statement))return {safe:expression(statement.expression).safe&&origin(statement.expression,context),material:expression(statement.expression).safe&&origin(statement.expression,context)};
+      if(ts.isExpressionStatement(statement)||ts.isReturnStatement(statement)){
+        const value=expression(statement.expression,ts.isReturnStatement(statement));if(!value.safe)return value;
+        material ||= value.material;
+        if(ts.isReturnStatement(statement))return {safe:true,material};
+        continue;
+      }
+      return {safe:false,material:false};
+    }
+    return {safe:true,material};
+  };
   walk(ast,node=>{
     if(!ts.isCallExpression(node))return;const method=assertion(node.expression);if(!method)return;
     if(['assert','ok'].includes(method))predicate(node.arguments[0]);
     if(['equal','strictEqual','notEqual','notStrictEqual','deepEqual','deepStrictEqual','notDeepEqual','notDeepStrictEqual','match','doesNotMatch'].includes(method))pair(node.arguments[0],node.arguments[1],new Map());
     if(['throws','rejects'].includes(method)){
       const target=node.arguments[0];if(!target||!ts.isFunctionLike(target))return;
-      let tested=false;walk(target.body,n=>{if(ts.isCallExpression(n)&&origin(n))tested=true;});if(!tested)return;
+      const flow=errorFlow(target,new Map(),new Set(),method);if(!flow.safe||!flow.material)return;
       const matcher=node.arguments[1];
       if(matcher&&(ts.isRegularExpressionLiteral(matcher)||ts.isObjectLiteralExpression(matcher)))expected(matcher);
       else if(matcher&&ts.isFunctionLike(matcher)){const bound=new Map();for(const p of matcher.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(matcher))predicate(value,bound);}
@@ -517,6 +589,36 @@ const controlImports='import assert from "node:assert/strict";import {verifyFact
 assert.doesNotThrow(() => fakeCoverage(controlImports+'const result=verifyFactoryConsistency(s);assert(result.problems.some(p=>p.code==="HEAD_DRIFT"));'));
 assert(assertionTokens(controlImports+'const result=validateEvidenceEnvelope(e);assert(result.errors.some(e=>e.code==="HEAD_DRIFT"));').has('HEAD_DRIFT'));
 assert(!assertionTokens('import assert from "node:assert/strict";assert.throws(()=>unknown(input),/HEAD_DRIFT/);').has('HEAD_DRIFT'));
+// A73-F1: a discarded value or unrelated callback error cannot prove coverage.
+const errorImports=controlImports+'import {createStructuredFactoryError} from "../scripts/factory-recovery-controls.mjs";';
+for(const snippet of [
+ controlImports+'const result=verifyFactoryConsistency({});assert.equal((result,"HEAD_DRIFT"),"HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency({});assert((result,"HEAD_DRIFT")==="HEAD_DRIFT");',
+ controlImports+'assert.throws(()=>{verifyFactoryConsistency({});throw new Error("HEAD_DRIFT");},/HEAD_DRIFT/);',
+ controlImports+'const result=verifyFactoryConsistency({});assert((result,result.code==="HEAD_DRIFT",true));',
+ controlImports+'assert.throws(()=>{function unused(){verifyFactoryConsistency({});}throw new Error("HEAD_DRIFT");},/HEAD_DRIFT/);',
+ controlImports+'function fixture(){verifyFactoryConsistency({});throw new Error("HEAD_DRIFT");}assert.throws(()=>fixture(),/HEAD_DRIFT/);',
+ errorImports+'assert.throws(()=>{try{throw createStructuredFactoryError("HEAD_DRIFT");}catch{throw new Error("HEAD_DRIFT");}},/HEAD_DRIFT/);',
+ errorImports+'assert.throws(()=>{if(unknown())throw createStructuredFactoryError("HEAD_DRIFT");throw new Error("HEAD_DRIFT");},/HEAD_DRIFT/);',
+ errorImports+'assert.throws(()=>{throw (unknown(),createStructuredFactoryError("HEAD_DRIFT"));},{code:"HEAD_DRIFT"});',
+ controlImports+'assert.rejects(async()=>{verifyFactoryConsistency({});throw new Error("HEAD_DRIFT");},/HEAD_DRIFT/);',
+ controlImports+'assert.rejects(()=>{verifyFactoryConsistency({});return Promise.reject(new Error("HEAD_DRIFT"));},/HEAD_DRIFT/);',
+ errorImports+'assert.throws(()=>Promise.reject(createStructuredFactoryError("HEAD_DRIFT")),{code:"HEAD_DRIFT"});',
+ errorImports+'assert.rejects(()=>{Promise.reject(createStructuredFactoryError("HEAD_DRIFT"));return Promise.resolve();},{code:"HEAD_DRIFT"});',
+])assert.throws(()=>fakeCoverage(snippet),/HEAD_DRIFT: material regression assertion not found/);
+for(const snippet of [
+ controlImports+'const result=verifyFactoryConsistency({});assert.equal(result.problems[0].code,"HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency({});assert(("discarded",result.problems.some(p=>p.code==="HEAD_DRIFT")));',
+ errorImports+'assert.throws(()=>{throw createStructuredFactoryError("HEAD_DRIFT");},{code:"HEAD_DRIFT"});',
+ errorImports+'const error=createStructuredFactoryError("HEAD_DRIFT");assert.throws(()=>{verifyFactoryConsistency({});throw error;},{code:"HEAD_DRIFT"});',
+ errorImports+'function fail(){throw createStructuredFactoryError("HEAD_DRIFT");}assert.throws(()=>fail(),error=>error.code==="HEAD_DRIFT");',
+ errorImports+'assert.rejects(async()=>{throw createStructuredFactoryError("HEAD_DRIFT");},{code:"HEAD_DRIFT"});',
+ errorImports+'assert.rejects(()=>Promise.reject(createStructuredFactoryError("HEAD_DRIFT")),{code:"HEAD_DRIFT"});',
+])assert.doesNotThrow(()=>fakeCoverage(snippet));
+// Execute genuine error controls too: static acceptance must retain working assertions.
+assert.throws(()=>{throw createStructuredFactoryError('HEAD_DRIFT');},{code:'HEAD_DRIFT'});
+await assert.rejects(async()=>{throw createStructuredFactoryError('HEAD_DRIFT');},{code:'HEAD_DRIFT'});
+await assert.rejects(()=>Promise.reject(createStructuredFactoryError('HEAD_DRIFT')),{code:'HEAD_DRIFT'});
 // A69-F3 full-validator negatives: syntax that never tests the guarded value is insufficient.
 for(const snippet of [
  'const assert={equal(){}};const result={code:"WRONG"};assert.equal(result.code,"HEAD_DRIFT");',
