@@ -169,7 +169,8 @@ const authorized=['scripts/factory-recovery-controls.mjs'];
 const recoveryInput=()=>{
  const current=snap();Object.assign(current.issue,{contract_version:3,production:'prohibited',next_gate:'REVIEW'});
  current.refs.branch_sha=O;current.provenance={issue_revision:'rev-1'};
- current.evidence={...env(),gate:'REVIEW',head_sha:H};
+ current.candidate_manifest=manifest();current.refs.candidate_manifest={...manifest(),head_sha:O};current.authorized_paths=authorized;
+ current.evidence={...env(),contract_version:3,gate:'REVIEW',result:'REVIEW_FAIL',candidate_manifest:manifest()};
  const provenance={timestamp:NOW,evidence_ref:'snapshot:rev-1',snapshot_ref:'snapshot:rev-1',issue_revision:'rev-1',verifier_blob_sha:B};
  const material_capabilities=[{role:'14',can_recover_feature_ref:true,evidence_ref:'transport:git-object-proof'}];
  const context={current_agent:current.issue.current_agent,writer:current.issue.writer,gate:current.issue.next_gate,head_sha:O,material_capabilities};
@@ -214,6 +215,55 @@ const recoveryInput=()=>{
  }
  const active=recoveryInput();active.current.lock={status:'ACTIVE',owner_issue:267,owner_writer:'05',release_gate:'STAGING_VERIFIED',owner_operational_valid:true};active.expected=structuredClone(active.current);active.after.lock=structuredClone(active.current.lock);assert.equal(evaluateRecoveryMetadata(active,{now:NOW}).allowed,true);
  const release=structuredClone(active);release.after.lock.status='INACTIVE';assert.equal(evaluateRecoveryMetadata(release,{now:NOW}).allowed,false);
+}
+
+// A69-F1: canonical v3 identity and gate requirements cannot be downgraded by callers.
+const reviewSnapshot=()=>{
+ const s=snap();Object.assign(s.issue,{contract_version:3,state:'REVIEW',current_agent:'03',next_gate:'REVIEW',labels:['agent:03','status:claimed']});s.latest_handoff.current_agent='03';
+ s.candidate_manifest=manifest();s.refs.candidate_manifest=manifest();s.authorized_paths=authorized;
+ s.evidence_policy='ENVELOPE';s.evidence={...env(),contract_version:3,gate:'REVIEW',result:'REVIEW_PASS',candidate_manifest:manifest()};return s;
+};
+assert.equal(verifyFactoryConsistency(reviewSnapshot(),{now:NOW}).status,'CONSISTENT');
+for(const change of [
+ s=>{s.evidence.contract_version=2;delete s.evidence.candidate_manifest;delete s.candidate_manifest;delete s.refs.candidate_manifest;delete s.authorized_paths;},
+ s=>{s.evidence.issue=999;s.evidence.branch='factory/unrelated';s.evidence.base_sha=O;s.evidence.contract_version=2;},
+ s=>{delete s.evidence;s.evidence_policy='NONE';delete s.candidate_manifest;delete s.refs.candidate_manifest;delete s.authorized_paths;},
+ s=>{s.evidence.gate='AUDIT';s.evidence.result='AUDIT_PASS_POS';},
+ s=>{s.evidence.result='CI_PASS';},
+ s=>{s.evidence.contract_version=1;},
+ s=>{s.candidate_manifest.issue=999;s.refs.candidate_manifest.issue=999;s.evidence.candidate_manifest.issue=999;},
+ s=>{s.refs.candidate_manifest.head_sha=O;},
+ s=>{s.issue.head_tree_sha=B;},
+ s=>{delete s.evidence.candidate_manifest;},
+ s=>{delete s.refs.candidate_manifest;},
+]){const s=reviewSnapshot();change(s);assert.notEqual(verifyFactoryConsistency(s,{now:NOW}).status,'CONSISTENT');}
+{
+ const s=reviewSnapshot();s.evidence.issue=999;assert(verifyFactoryConsistency(s,{now:NOW}).problems.some(p=>p.code==='EVIDENCE_IDENTITY_DRIFT'));
+ const missing=reviewSnapshot();delete missing.evidence;missing.evidence_policy='NONE';assert(verifyFactoryConsistency(missing,{now:NOW}).problems.some(p=>p.code==='EVIDENCE_MISSING'));
+ const prior=reviewSnapshot();prior.operation='ROLE03_PRECLAIM';prior.issue.previous_handoff='FACTORY-H10-CI';prior.issue.previous_handoff_status='DONE';prior.evidence={...env(),contract_version:3,gate:'STAGING_CI',result:'CI_PASS',candidate_manifest:manifest()};assert.equal(verifyFactoryConsistency(prior,{now:NOW}).status,'CONSISTENT');
+ prior.evidence.result='REVIEW_PASS';assert.notEqual(verifyFactoryConsistency(prior,{now:NOW}).status,'CONSISTENT');
+ prior.evidence.result='CI_PASS';prior.operation='ROLE03_FINAL_RESULT_CAS';assert.notEqual(verifyFactoryConsistency(prior,{now:NOW}).status,'CONSISTENT');
+}
+// A69-F2: missing/invalid role and incomplete handoff/claim cannot grant recovery authority.
+for(const change of [
+ i=>{delete i.current.issue.current_agent;delete i.current.latest_handoff.current_agent;delete i.executor.role;},
+ i=>{i.current.issue.current_agent='none';i.current.latest_handoff.current_agent='none';i.executor.role='none';},
+ i=>{i.current.issue.current_agent='15';i.current.latest_handoff.current_agent='15';i.executor.role='15';},
+ i=>{i.current.issue.current_agent=5;i.current.latest_handoff.current_agent=5;i.executor.role=5;},
+ i=>{delete i.executor.role;},
+ i=>{delete i.current.latest_handoff;},
+ i=>{delete i.current.latest_handoff.current_agent;},
+ i=>{i.current.latest_handoff.id='other';},
+ i=>{i.current.latest_handoff.status='PENDING';},
+ i=>{i.current.issue.active_handoff='none';i.current.latest_handoff.id='none';},
+ i=>{delete i.current.winning_claim;},
+ i=>{delete i.current.winning_claim.handoff_id;},
+ i=>{delete i.current.issue.claim_expires_at;},
+ i=>{i.current.issue.handoff_status='UNKNOWN';i.current.latest_handoff.status='UNKNOWN';},
+ i=>{delete i.current.issue.next_gate;},
+]){
+ const i=recoveryInput();change(i);i.expected=structuredClone(i.current);const metadata=Object.fromEntries(Object.entries(i.after.issue).filter(([key])=>key.startsWith('recovery_')));i.after=structuredClone(i.current);Object.assign(i.after.issue,metadata);
+ const rejected=evaluateRecoveryMetadata(i,{now:NOW});assert.equal(rejected.allowed,false);assert.equal(rejected.error.code,'RECOVERY_METADATA_REJECTED');assert.deepEqual(rejected.consistency,verifyFactoryConsistency(i.current,{now:NOW}));
 }
 
 console.log('factoryRecoveryControls.regression.test.mjs: PASS');

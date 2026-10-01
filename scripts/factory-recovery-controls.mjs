@@ -30,8 +30,14 @@ const statusOf = (ps) => ps.some(x=>x.severity==='AMBIGUOUS') ? 'AMBIGUOUS'
   : ps.some(x=>x.severity==='ORPHAN_LOCK_SUSPECTED') ? 'ORPHAN_LOCK_SUSPECTED'
   : ps.some(x=>x.severity==='STALE_CLAIM_SUSPECTED') ? 'STALE_CLAIM_SUSPECTED'
   : ps.length ? 'DRIFT' : 'CONSISTENT';
+const FACTUAL_GATES = new Set(['WRITER_VALIDATION','STAGING_CI','REVIEW','AUDIT','MERGE','STAGING_VERIFY']);
+const GATE_RESULTS = {WRITER_VALIDATION:['WRITER_VALIDATION_PASS','WRITER_VALIDATION_FAIL'],STAGING_CI:['CI_PASS','CI_FAIL','CI_UNAVAILABLE'],REVIEW:['REVIEW_PASS','REVIEW_FAIL'],AUDIT:['AUDIT_PASS','AUDIT_PASS_POS','AUDIT_FAIL'],MERGE:['MERGE_PASS','MERGE_FAIL'],STAGING_VERIFY:['STAGING_VERIFIED','STAGING_VERIFY_PASS','STAGING_VERIFY_FAIL']};
+const gateForAgent = agent => ({'10':'STAGING_CI','03':'REVIEW','01':'AUDIT','12':'MERGE','13':'STAGING_VERIFY'})[agent];
+const canonicalIdentity = (i,gate) => ({issue:i.number,contract_version:i.contract_version,branch:i.branch,base_sha:i.base_sha,head_sha:i.head_sha,...(gate?{gate}:{})});
+const identityMatches = (actual,expected) => ['issue','contract_version','branch','base_sha','head_sha',...(expected.gate?['gate']:[])].every(key=>
+  key==='issue'?issueRef(actual?.[key])===issueRef(expected[key]):key==='contract_version'?String(actual?.[key])===String(expected[key]):actual?.[key]===expected[key]);
 
-export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=false, manifestFacts, allowedPaths}={}) {
+export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=false, manifestFacts, allowedPaths, expectedIdentity}={}) {
   const errors=[];
   if (!e || typeof e !== 'object') return {schema_version:'FACTORY_EVIDENCE_V1',valid:false,errors:[{code:'EVIDENCE_MISSING',detail:'evidence envelope is required'}]};
   for (const f of ['issue','contract_version','gate','branch','base_sha','head_sha','result','timestamp','scope','suites_required','suites_executed','suites_skipped']) {
@@ -42,6 +48,8 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
   }
   for (const f of ['base_sha','head_sha']) if (e[f]!==undefined && !SHA.test(String(e[f]))) errors.push({code:'EVIDENCE_SHA_INVALID',detail:`${f} must be a full SHA`});
   if (expectedHeadSha && e.head_sha!==expectedHeadSha) errors.push({code:'HEAD_DRIFT',detail:'evidence head differs from expected head'});
+  if (expectedIdentity && !identityMatches(e,expectedIdentity)) errors.push({code:'EVIDENCE_IDENTITY_DRIFT',detail:'evidence Issue/contract/branch/base/head/gate differs from canonical authority'});
+  if(expectedIdentity&&GATE_RESULTS[e.gate]&&!GATE_RESULTS[e.gate].includes(e.result))errors.push({code:'EVIDENCE_IDENTITY_DRIFT',detail:'result does not belong to the protected gate'});
   const req=new Set(arr(e.suites_required)), ran=new Set(arr(e.suites_executed)), skipped=new Set(arr(e.suites_skipped));
   for (const s of req) {
     if (skipped.has(s)) errors.push({code:'REQUIRED_SUITE_SKIPPED',detail:`required suite skipped: ${s}`});
@@ -55,10 +63,13 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
     if (e.run_head_sha!==e.head_sha) errors.push({code:'HEAD_DRIFT',detail:'run head differs from evidence head'});
     if (e.check_conclusion!=='success') errors.push({code:'CHECK_NOT_GREEN',detail:'required check is not green'});
   }
-  if(Number(e.contract_version)>=3&&['WRITER_VALIDATION','STAGING_CI','REVIEW','AUDIT','MERGE','STAGING_VERIFY'].includes(e.gate)){
+  const contractVersion=Number(expectedIdentity?.contract_version??manifestFacts?.contract_version??e.contract_version);
+  if(contractVersion>=3&&(FACTUAL_GATES.has(expectedIdentity?.gate)||FACTUAL_GATES.has(e.gate))){
     for(const problem of validateCandidateManifest(e.candidate_manifest,manifestFacts,allowedPaths).problems)errors.push({code:problem.code,detail:problem.detail});
+    if (!identityMatches(e,e.candidate_manifest??{})) errors.push({code:'EVIDENCE_IDENTITY_DRIFT',detail:'evidence identity differs from its factual candidate manifest'});
+    if(expectedIdentity && !identityMatches(manifestFacts,{...expectedIdentity,gate:undefined})) errors.push({code:'CANDIDATE_MANIFEST_DRIFT',detail:'factual manifest identity differs from canonical Issue'});
   }
-  if (String(e.result).endsWith('_PASS') && errors.length) errors.push({code:'PASS_INVALIDATED',detail:'PASS cannot survive mismatched/incomplete evidence'});
+  if ((/_PASS(?:_POS)?$/.test(String(e.result))||e.result==='STAGING_VERIFIED') && errors.length) errors.push({code:'PASS_INVALIDATED',detail:'PASS cannot survive mismatched/incomplete evidence'});
   return {schema_version:'FACTORY_EVIDENCE_V1',valid:errors.length===0,errors};
 }
 
@@ -128,7 +139,8 @@ function validatePostMergeStagingSemantics(s,i,refs) {
       problems.push(p('POST_MERGE_EVIDENCE_MISSING',`${name} evidence is required`,'AMBIGUOUS'));
       continue;
     }
-    for (const error of validateEvidenceEnvelope(envelope,{expectedHeadSha:subjectHead,requireRunCheck:policy.requireRunCheck}).errors) problems.push(p('POST_MERGE_EVIDENCE_STALE',`${name}: ${error.code} ${error.detail}`));
+    const expectedIdentity=Number(i.contract_version)>=3?{...canonicalIdentity(i,policy.gate),base_sha:subjectBase,head_sha:subjectHead}:undefined;
+    for (const error of validateEvidenceEnvelope(envelope,{expectedHeadSha:subjectHead,requireRunCheck:policy.requireRunCheck,expectedIdentity,manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths}).errors) problems.push(p('POST_MERGE_EVIDENCE_STALE',`${name}: ${error.code} ${error.detail}`));
     if (issueRef(envelope.issue)!==issueRef(i.number)) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence belongs to another Issue`));
     if (String(envelope.contract_version)!==String(i.contract_version)) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence contract_version differs`));
     if (envelope.gate!==policy.gate) problems.push(p('POST_MERGE_EVIDENCE_DRIFT',`${name} evidence gate differs`));
@@ -260,14 +272,25 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   }
   const evidencePolicy=s.evidence_policy;
   if (!['NONE','ENVELOPE','RUN_CHECK'].includes(evidencePolicy)) ps.push(p('EVIDENCE_POLICY_MISSING','evidence_policy must be NONE, ENVELOPE or RUN_CHECK','AMBIGUOUS'));
-  if (evidencePolicy==='ENVELOPE' || evidencePolicy==='RUN_CHECK') {
+  const v3=Number(i.contract_version)>=3;
+  const protectedGate=gateForAgent(i.current_agent)??(/WRITER_VALIDATION/.test(String(i.next_gate))||/^0[4-9]$/.test(String(i.current_agent))&&FACTUAL_GATES.has(s.evidence?.gate)?'WRITER_VALIDATION':undefined);
+  // A claim may consume the preceding completed gate's evidence. A gate result may
+  // never relabel that evidence as its own PASS or select an unrelated gate.
+  const previousAgent=String(i.previous_handoff??'').match(/-H(\d{2})-/)?.[1];
+  const previousGate=i.previous_handoff_status==='DONE'?gateForAgent(previousAgent):undefined;
+  const claimOperation=/(?:^|_)(?:PRECLAIM|CLAIM|ENTRY)(?:_|$)/.test(String(s.operation??s.protected_operation??''));
+  const gate=v3&&claimOperation&&s.evidence?.gate===previousGate?previousGate:protectedGate;
+  const expectedIdentity=v3?canonicalIdentity(i,gate):undefined;
+  if (v3&&protectedGate || evidencePolicy==='ENVELOPE' || evidencePolicy==='RUN_CHECK') {
     if (!s.evidence) ps.push(p('EVIDENCE_MISSING','evidence required by evidence_policy','AMBIGUOUS'));
-    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK',manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths}).errors) ps.push(p(e.code,e.detail));
+    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK',manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths,expectedIdentity}).errors) ps.push(p(e.code,e.detail));
   } else if (s.evidence) {
-    for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths}).errors) ps.push(p(e.code,e.detail));
+    for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths,expectedIdentity}).errors) ps.push(p(e.code,e.detail));
   }
-  if(Number(i.contract_version)>=3&&s.candidate_manifest){
+  if(v3&&nonempty(i.head_sha)){
     for(const problem of validateCandidateManifest(s.candidate_manifest,refs.candidate_manifest,s.authorized_paths).problems)ps.push(problem);
+    if(s.candidate_manifest&&!identityMatches(s.candidate_manifest,canonicalIdentity(i)))ps.push(p('CANDIDATE_MANIFEST_DRIFT','candidate manifest identity differs from canonical Issue'));
+    if(refs.candidate_manifest&&(refs.candidate_manifest.head_sha!==refs.branch_sha||nonempty(i.head_tree_sha)&&refs.candidate_manifest.tree_sha!==i.head_tree_sha))ps.push(p('CANDIDATE_MANIFEST_DRIFT','manifest facts differ from the factual ref/tree'));
   }
   const currentGate=String(s.evidence?.gate??'');
   if (currentGate==='WRITER_VALIDATION') {
@@ -383,10 +406,15 @@ export function evaluateRecoveryMetadata(input={}, {now=Date.now()}={}){
   const deny=detail=>({allowed:false,error:p('RECOVERY_METADATA_REJECTED',detail),consistency:verifyFactoryConsistency(input.current??{},{now})});
   const {current,expected,after,provenance,executor}=input;
   if(!current?.issue||!expected?.issue||!after?.issue||!sameFact(current,expected))return deny('exact snapshot CAS mismatch');
-  if(Number(current.issue?.contract_version)<3||current.issue?.production!=='prohibited')return deny('contract v3 authority and production prohibition required');
+  if(!Number.isInteger(Number(current.issue?.contract_version))||Number(current.issue.contract_version)<3||current.issue?.production!=='prohibited')return deny('contract v3 authority and production prohibition required');
   if(!provenance||!nonempty(provenance.evidence_ref)||!nonempty(provenance.snapshot_ref)||!nonempty(provenance.issue_revision)||provenance.issue_revision!==current.provenance?.issue_revision||!nonempty(provenance.verifier_blob_sha)||!SHA.test(provenance.verifier_blob_sha)||!Number.isFinite(Date.parse(provenance.timestamp))||Date.parse(provenance.timestamp)>new Date(now).getTime()||new Date(now).getTime()-Date.parse(provenance.timestamp)>60_000)return deny('missing or stale factual provenance');
-  if(!executor||executor.role!==current.issue.current_agent||!nonempty(executor.run_id))return deny('executor identity mismatch');
-  if(current.issue.handoff_status==='CLAIMED'&&(current.issue.claimed_by!==executor.run_id||current.winning_claim?.claimed_by!==executor.run_id))return deny('competing claim preserved');
+  const validRole=role=>typeof role==='string'&&/^(?:0[0-9]|1[0-4])$/.test(role);
+  if(!validRole(current.issue.current_agent)||!validRole(executor?.role)||executor.role!==current.issue.current_agent||!nonempty(executor.run_id))return deny('executor identity mismatch');
+  const handoff=current.latest_handoff,claim=current.winning_claim;
+  if(!handoff||!nonempty(current.issue.active_handoff)||current.issue.active_handoff==='none'||handoff.id!==current.issue.active_handoff||handoff.current_agent!==current.issue.current_agent||handoff.status!==current.issue.handoff_status||!['PENDING','CLAIMED','SCHEDULED'].includes(handoff.status)||!nonempty(current.issue.next_gate)||!/^0[4-9]$/.test(String(current.issue.writer)))return deny('explicit canonical handoff authority required');
+  if(current.issue.handoff_status==='CLAIMED'){
+    if(current.issue.claimed_by!==executor.run_id||claim?.claimed_by!==executor.run_id||claim.handoff_id!==current.issue.active_handoff||!nonempty(current.issue.claim_expires_at)||!Number.isFinite(Date.parse(current.issue.claim_expires_at))||claim.claim_expires_at!==current.issue.claim_expires_at)return deny('competing or ambiguous claim preserved');
+  }else if(current.issue.claimed_by!=='none'||current.issue.claim_expires_at!=='none'||claim&&claim.active!==false)return deny('ambiguous unclaimed handoff');
   if(!current.refs||!SHA.test(String(current.refs.branch_sha??''))||!SHA.test(String(current.refs.staging_sha??''))||current.refs.branch!==current.issue.branch||!current.lock||!['ACTIVE','INACTIVE'].includes(current.lock.status)||!nonempty(current.issue.active_handoff)||!nonempty(current.issue.writer)||!SHA.test(String(current.issue.base_sha??''))||!Array.isArray(current.dependencies))return deny('complete Issue/handoff/refs/lock/freshness identity required');
   const result=verifyFactoryConsistency(current,{now});
   if(!['DRIFT','AMBIGUOUS','STALE_CLAIM_SUSPECTED','ORPHAN_LOCK_SUSPECTED'].includes(result.status))return deny('exception applies only to factual non-CONSISTENT results');

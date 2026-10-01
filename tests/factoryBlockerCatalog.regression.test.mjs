@@ -45,14 +45,25 @@ function staticResolver(ast) {
   };
   const checker=ts.createProgram([ast.fileName],{allowJs:true,noLib:true,noResolve:true},host).getTypeChecker();
   const symbol=node=>node?.parent&&ts.isShorthandPropertyAssignment(node.parent)&&node.parent.name===node?checker.getShorthandAssignmentValueSymbol(node.parent):checker.getSymbolAtLocation(node);
-  const declaration=node=>symbol(node)?.valueDeclaration;
+  const declaration=node=>symbol(node)?.valueDeclaration??symbol(node)?.declarations?.[0];
+  const imported=node=>{const d=declaration(node);let parent=d;while(parent&&!ts.isImportDeclaration(parent))parent=parent.parent;return parent?{module:parent.moduleSpecifier.text,name:ts.isImportSpecifier(d)?(d.propertyName??d.name).text:ts.isImportClause(d)?'default':'*'}:null;};
   const unparen=input=>{let node=input;while(node&&ts.isParenthesizedExpression(node))node=node.expression;return node;};
   const immutable=d=>d&&ts.isVariableDeclaration(d)&&Boolean(d.parent.flags&ts.NodeFlags.Const);
   const assigned=new Set();
+  const aliases=[];
+  const rootSymbol=input=>{let node=unparen(input);while(node&&(ts.isPropertyAccessExpression(node)||ts.isElementAccessExpression(node)))node=unparen(node.expression);return node&&ts.isIdentifier(node)?symbol(node):undefined;};
   walk(ast,node=>{
+    if(ts.isVariableDeclaration(node)&&ts.isIdentifier(node.name)&&node.initializer){const root=rootSymbol(node.initializer);if(root)aliases.push([symbol(node.name),root]);}
+    if(ts.isVariableDeclaration(node)&&node.initializer){
+      const roots=[];const direct=rootSymbol(node.initializer);if(direct)roots.push(direct);
+      if(ts.isObjectLiteralExpression(node.initializer)||ts.isArrayLiteralExpression(node.initializer))walk(node.initializer,n=>{if(ts.isIdentifier(n)&&!ts.isPropertyAccessExpression(n.parent)&&!(ts.isPropertyAssignment(n.parent)&&n.parent.name===n)){const root=rootSymbol(n);if(root)roots.push(root);}});
+      const bindings=[];const collect=name=>{if(ts.isIdentifier(name))bindings.push(symbol(name));else if(ts.isBindingPattern(name))for(const e of name.elements)if(ts.isBindingElement(e))collect(e.name);};collect(node.name);
+      for(const binding of bindings)for(const root of roots)if(binding&&root)aliases.push([binding,root]);
+    }
     if(ts.isBinaryExpression(node)&&node.operatorToken.kind>=ts.SyntaxKind.FirstAssignment&&node.operatorToken.kind<=ts.SyntaxKind.LastAssignment){
       let target=node.left;while(ts.isPropertyAccessExpression(target)||ts.isElementAccessExpression(target))target=target.expression;
       if(ts.isIdentifier(target))assigned.add(symbol(target));
+      if(node.operatorToken.kind===ts.SyntaxKind.EqualsToken){const right=rootSymbol(node.right),left=rootSymbol(node.left);if(right&&left)aliases.push([left,right]);}
     }
     if((ts.isPrefixUnaryExpression(node)||ts.isPostfixUnaryExpression(node))&&[ts.SyntaxKind.PlusPlusToken,ts.SyntaxKind.MinusMinusToken].includes(node.operator)&&ts.isIdentifier(node.operand))assigned.add(symbol(node.operand));
   });
@@ -96,7 +107,7 @@ function staticResolver(ast) {
     if(!node||seen.has(node)||seen.size>=64)return undefined;
     const next=new Set(seen);next.add(node);
     if(kind==='string'&&ts.isStringLiteralLike(node))return node.text;
-    if(kind==='object'&&ts.isObjectLiteralExpression(node)&&!node.properties.some(ts.isSpreadAssignment))return node;
+    if(kind==='object'&&ts.isObjectLiteralExpression(node)&&!mutableContainer(node)&&!node.properties.some(ts.isSpreadAssignment))return node;
     if(ts.isIdentifier(node)){
       const d=declaration(node);
       if(!d||assigned.has(symbol(node)))return undefined;
@@ -139,25 +150,49 @@ function staticResolver(ast) {
     if(ts.isObjectLiteralExpression(node))return node.properties.every(p=>ts.isPropertyAssignment(p)&&literalOnly(p.initializer,next));
     return false;
   };
-  return {value:node=>resolve(node),emitter:node=>resolve(node,'emitter'),object:node=>resolve(node,'object'),propertyName,literalOnly,mutableContainer};
+  // Mutation/escape of any shared alias invalidates the entire object proof.
+  walk(ast,node=>{
+    if(ts.isDeleteExpression(node))assigned.add(rootSymbol(node.expression));
+    if(ts.isCallExpression(node)){
+      const callee=node.expression,imp=ts.isPropertyAccessExpression(callee)?imported(callee.expression):imported(callee);
+      const readonly=imp&&['node:assert','node:assert/strict','node:fs','../scripts/factory-recovery-controls.mjs'].includes(imp.module)||
+        ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='Object'&&!declaration(callee.expression)&&['freeze','keys','values','entries','hasOwn'].includes(callee.name.text);
+      if(!readonly)for(const arg of node.arguments)if(resolve(arg,'object'))assigned.add(rootSymbol(arg));
+      if(ts.isPropertyAccessExpression(callee)&&['push','pop','shift','unshift','splice','sort','reverse','fill','copyWithin','set','add','delete','clear'].includes(callee.name.text))assigned.add(rootSymbol(callee.expression));
+    }
+    if(ts.isReturnStatement(node)&&node.expression&&ts.isIdentifier(node.expression)&&resolve(node.expression,'object'))assigned.add(rootSymbol(node.expression));
+  });
+  for(let changed=true;changed;){changed=false;for(const [a,b] of aliases)if(assigned.has(a)||assigned.has(b)){if(!assigned.has(a)||!assigned.has(b))changed=true;assigned.add(a);assigned.add(b);}}
+  assigned.delete(undefined);
+  const tainted=node=>{let bad=false;if(node)walk(node,n=>{const binding=ts.isIdentifier(n)&&symbol(n);if(binding&&assigned.has(binding))bad=true;});return bad;};
+  const guardedEmitter=node=>{
+    const d=resolve(node,'emitter'),fn=d&&ts.isFunctionDeclaration(d)?d:d?.initializer;
+    if(!fn?.body||!ts.isBlock(fn.body)||!fn.parameters[0])return false;
+    return fn.body.statements.some(statement=>{
+      const condition=ts.isIfStatement(statement)&&statement.expression,call=condition&&ts.isPrefixUnaryExpression(condition)&&condition.operator===ts.SyntaxKind.ExclamationToken&&condition.operand;
+      const base=call&&ts.isCallExpression(call)&&ts.isPropertyAccessExpression(call.expression)&&call.expression.name.text==='has'&&declaration(call.expression.expression);
+      return base&&immutable(base)&&nameOf(base.name)==='ERRORS'&&ts.isNewExpression(base.initializer)&&nameOf(base.initializer.expression)==='Set'&&!declaration(base.initializer.expression)&&symbol(call.arguments[0])===symbol(fn.parameters[0].name)&&ts.isThrowStatement(statement.thenStatement);
+    });
+  };
+  return {value:node=>resolve(node),emitter:node=>resolve(node,'emitter'),guardedEmitter,object:node=>resolve(node,'object'),propertyName,literalOnly,mutableContainer,symbol,declaration,imported,unparen,immutable,tainted};
 }
 
 function structuredCodes(text) {
   const ast=parse(text), codes=new Set(), resolver=staticResolver(ast);
+  codes.unresolved=[];
   const add = (node) => { const code=resolver.value(node); if (code && code!=='OBSERVABLE_PROGRESS_AND_CAS_CONFIRMED') codes.add(code); };
   walk(ast, (node) => {
     if (ts.isCallExpression(node)) {
-      if (resolver.emitter(node.expression)) add(node.arguments[0]);
-      if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text==='has' && nameOf(node.expression.expression)==='codes') add(node.arguments[0]);
+      if (resolver.emitter(node.expression)) {add(node.arguments[0]);if(resolver.tainted(node.arguments[0])&&!resolver.guardedEmitter(node.expression))codes.unresolved.push(node.arguments[0].getText(ast));}
     }
     if (ts.isPropertyAssignment(node) && !resolver.mutableContainer(node) && ['code','reason'].includes(resolver.propertyName(node.name))) add(node.initializer);
-    if (ts.isShorthandPropertyAssignment(node) && ['code','reason'].includes(nameOf(node.name))) add(node.name);
+    if (ts.isShorthandPropertyAssignment(node) && !resolver.mutableContainer(node) && ['code','reason'].includes(nameOf(node.name))) add(node.name);
     if (ts.isBinaryExpression(node) && node.operatorToken.kind===ts.SyntaxKind.EqualsToken) {
       const left=node.left;
       const key=ts.isPropertyAccessExpression(left) ? left.name.text : ts.isElementAccessExpression(left) ? resolver.value(left.argumentExpression) : nameOf(left);
       if (['code','reason'].includes(key) && !resolver.mutableContainer(left)) add(node.right);
     }
-    if (ts.isVariableDeclaration(node) && nameOf(node.name)==='ERRORS' && node.initializer) walk(node.initializer, child=> { if (ts.isStringLiteralLike(child) || ts.isIdentifier(child)) add(child); });
+    if (ts.isVariableDeclaration(node) && nameOf(node.name)==='ERRORS' && node.initializer && node.parent?.parent?.parent===ast) walk(node.initializer, child=> { if (ts.isStringLiteralLike(child) || ts.isIdentifier(child)) add(child); });
     if (ts.isVariableDeclaration(node) && nameOf(node.name)==='routes' && node.initializer) {
       const object=resolver.object(node.initializer);
       if (object) for (const property of object.properties) if (ts.isPropertyAssignment(property)) {
@@ -168,44 +203,111 @@ function structuredCodes(text) {
   return codes;
 }
 
-// Evidence comes from tested operands/predicates or exception matchers, never diagnostic messages.
+// Only lexically bound Node assertions over control-derived operands prove coverage.
 function assertionTokens(text) {
   const ast=parse(text), tokens=new Set(), resolver=staticResolver(ast);
-  const expected = (node) => {
-    if(!node)return;
+  const controls=new Set(['validateEvidenceEnvelope','validateWriterValidationPreflight','verifyFactoryConsistency','detectRecoveryLoop','evaluateRecoveryMetadata','evaluateCapabilityProbe','validateCandidateManifest','createStructuredFactoryError','routeStructuredFactoryError','routeConsistencyResult','evaluateClaimRenewal']);
+  const returns=fn=>{
+    if(!fn?.body)return [];
+    if(ts.isArrowFunction(fn)&&!ts.isBlock(fn.body))return [fn.body];
+    const values=[];const visit=n=>{if(n!==fn.body&&ts.isFunctionLike(n))return;if(ts.isReturnStatement(n)&&n.expression)values.push(n.expression);ts.forEachChild(n,visit);};visit(fn.body);return values;
+  };
+  const functionOf=node=>{const d=resolver.declaration(node);return d&&ts.isFunctionDeclaration(d)?d:d&&ts.isVariableDeclaration(d)&&d.initializer&&ts.isFunctionLike(d.initializer)?d.initializer:undefined;};
+  const assertion=(input,seen=new Set())=>{
+    const node=resolver.unparen(input);if(!node||seen.has(node)||seen.size>=64||resolver.tainted(node))return undefined;
+    const next=new Set(seen);next.add(node);
+    if(ts.isPropertyAccessExpression(node)){const base=assertion(node.expression,next);return base==='assert'?node.name.text:undefined;}
+    if(ts.isIdentifier(node)){
+      const imp=resolver.imported(node);
+      if(imp&&['node:assert','node:assert/strict'].includes(imp.module))return ['default','*'].includes(imp.name)?'assert':imp.name;
+      const d=resolver.declaration(node);if(resolver.immutable(d))return assertion(d.initializer,next);
+    }
+    return undefined;
+  };
+  const bind=(fn,args,context)=>{const bound=new Map(context);fn.parameters.forEach((p,index)=>{if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{expression:args[index],context});});return bound;};
+  // The in-file catalog/path analyzers are controls only at their real lexical
+  // declarations with imported parser/fs or material Node assertions in their body.
+  const localControl=fn=>{
+    const owner=ts.isFunctionDeclaration(fn)?fn:fn.parent;
+    if(!owner||owner.parent!==ast&&!ts.isVariableDeclaration(owner))return false;
+    const name=ts.isFunctionDeclaration(fn)?nameOf(fn.name):ts.isVariableDeclaration(owner)?nameOf(owner.name):null;
+    if(!['validateCatalog','structuredCodes','assertionTokens','confinedPath','readSource'].includes(name))return false;
+    let guarded=false;walk(fn.body,node=>{
+      if(ts.isCallExpression(node)){
+        const imp=resolver.imported(ts.isPropertyAccessExpression(node.expression)?node.expression.expression:node.expression);
+        if(imp&&['typescript','node:fs'].includes(imp.module)||assertion(node.expression)&&node.arguments.some(arg=>!resolver.literalOnly(arg)))guarded=true;
+      }
+    });return guarded;
+  };
+  const origin=(input,context=new Map(),seen=new Set())=>{
+    const node=resolver.unparen(input);if(!node||seen.has(node)||seen.size>=64||resolver.literalOnly(node))return false;
+    const next=new Set(seen);next.add(node);
+    if(ts.isIdentifier(node)){
+      if(resolver.tainted(node))return false;
+      const bound=context.get(resolver.symbol(node));if(bound)return bound.trusted===true||origin(bound.expression,bound.context,next);
+      const d=resolver.declaration(node);return resolver.immutable(d)&&origin(d.initializer,context,next);
+    }
+    if(ts.isPropertyAccessExpression(node)||ts.isElementAccessExpression(node)){
+      const object=resolver.object(node.expression),key=ts.isPropertyAccessExpression(node)?node.name.text:resolver.value(node.argumentExpression);
+      if(object){const member=object.properties.find(p=>p.name&&resolver.propertyName(p.name)===key);return member&&ts.isPropertyAssignment(member)?origin(member.initializer,context,next):false;}
+      return origin(node.expression,context,next);
+    }
+    if(ts.isCallExpression(node)){
+      const callee=node.expression,imp=resolver.imported(ts.isPropertyAccessExpression(callee)?callee.expression:callee);
+      if(resolver.tainted(callee))return false;
+      if(imp?.module==='../scripts/factory-recovery-controls.mjs'&&controls.has(imp.name))return true;
+      if(imp?.module==='node:fs'&&['readFileSync','realpathSync'].includes(imp.name))return true;
+      if(imp?.module==='typescript')return true;
+      if(ts.isPropertyAccessExpression(callee)&&['some','every','find','filter','map','has','includes','test'].includes(callee.name.text))return origin(callee.expression,context,next);
+      const fn=functionOf(callee);
+      if(fn){if(localControl(fn))return true;const values=returns(fn),bound=bind(fn,node.arguments,context);return values.length>0&&values.every(value=>origin(value,bound,next));}
+      if(ts.isPropertyAccessExpression(callee)&&nameOf(callee.expression)==='JSON'&&!resolver.declaration(callee.expression)&&callee.name.text==='parse')return origin(node.arguments[0],context,next);
+    }
+    if(ts.isBinaryExpression(node))return [ts.SyntaxKind.BarBarToken,ts.SyntaxKind.AmpersandAmpersandToken].includes(node.operatorToken.kind)?origin(node.left,context,next)&&origin(node.right,context,next):origin(node.left,context,next)||origin(node.right,context,next);
+    return false;
+  };
+  const expected=(node,context=new Map(),seen=new Set())=>{
+    if(!node||seen.has(node)||seen.size>=64)return;const next=new Set(seen);next.add(node);
+    if(ts.isIdentifier(node)){const bound=context.get(resolver.symbol(node));if(bound?.expression){expected(bound.expression,bound.context,next);return;}}
     const value=resolver.value(node);
     if(typeof value==='string'){tokens.add(value);return;}
     if(ts.isRegularExpressionLiteral(node)){tokens.add(node.text.slice(1,node.text.lastIndexOf('/')));return;}
-    if(ts.isObjectLiteralExpression(node))for(const member of node.properties)if(ts.isPropertyAssignment(member))expected(member.initializer);
-    if(ts.isArrayLiteralExpression(node))for(const member of node.elements)expected(member);
-    // Unknown calls, expressions and their arguments are never expected values.
+    if(ts.isObjectLiteralExpression(node))for(const member of node.properties)if(ts.isPropertyAssignment(member))expected(member.initializer,context,next);
+    if(ts.isArrayLiteralExpression(node))for(const member of node.elements)expected(member,context,next);
   };
-  const pair = (a,b) => {
-    if (!a || !b) return;
-    if (!resolver.literalOnly(a)) expected(b);
-    if (!resolver.literalOnly(b)) expected(a);
-  };
-  const predicate = (node) => { if (node) walk(node, child=> {
-    if (ts.isBinaryExpression(child) && [ts.SyntaxKind.EqualsEqualsToken,ts.SyntaxKind.EqualsEqualsEqualsToken,ts.SyntaxKind.ExclamationEqualsToken,ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(child.operatorToken.kind)) pair(child.left,child.right);
-    if (ts.isCallExpression(child)) {
-      if (ts.isPropertyAccessExpression(child.expression) && ['has','includes','test'].includes(child.expression.name.text)) pair(child.expression.expression,child.arguments[0]);
-      if (nameOf(child.expression)==='has' && child.arguments.length===2) pair(child.arguments[0],child.arguments[1]);
+  const pair=(a,b,context)=>{if(origin(a,context))expected(b,context);if(origin(b,context))expected(a,context);};
+  const predicate=(input,context=new Map(),seen=new Set())=>{
+    const node=resolver.unparen(input);if(!node||seen.has(node)||seen.size>=64)return;
+    const next=new Set(seen);next.add(node);
+    if(ts.isPrefixUnaryExpression(node)&&node.operator===ts.SyntaxKind.ExclamationToken){predicate(node.operand,context,next);return;}
+    if(ts.isBinaryExpression(node)){
+      if([ts.SyntaxKind.BarBarToken,ts.SyntaxKind.AmpersandAmpersandToken].includes(node.operatorToken.kind)){
+        // Both branches must be control-derived. Constant/fixture short-circuits
+        // and unknown predicates cannot establish a material assertion.
+        if(origin(node.left,context)&&origin(node.right,context)){predicate(node.left,context,next);predicate(node.right,context,next);}return;
+      }
+      if([ts.SyntaxKind.EqualsEqualsToken,ts.SyntaxKind.EqualsEqualsEqualsToken,ts.SyntaxKind.ExclamationEqualsToken,ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(node.operatorToken.kind))pair(node.left,node.right,context);
+      return;
     }
-  }); };
-  walk(ast, (node) => {
-    if (!ts.isCallExpression(node)) return;
-    const callee=node.expression;
-    if (nameOf(callee)==='assert') { predicate(node.arguments[0]); return; }
-    if (!ts.isPropertyAccessExpression(callee) || nameOf(callee.expression)!=='assert') return;
-    const method=callee.name.text;
-    if (method==='ok') predicate(node.arguments[0]);
-    if (['equal','strictEqual','notEqual','notStrictEqual','deepEqual','deepStrictEqual','notDeepEqual','notDeepStrictEqual','match','doesNotMatch'].includes(method)) pair(node.arguments[0],node.arguments[1]);
-    if (['throws','rejects'].includes(method)) {
+    if(ts.isCallExpression(node)){
+      const callee=node.expression;
+      if(ts.isPropertyAccessExpression(callee)&&['some','every','find'].includes(callee.name.text)&&origin(callee.expression,context)){
+        const fn=node.arguments[0];if(fn&&ts.isFunctionLike(fn)){const bound=new Map(context);for(const p of fn.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(fn))predicate(value,bound,next);}return;
+      }
+      if(ts.isPropertyAccessExpression(callee)&&['has','includes','test'].includes(callee.name.text)){pair(callee.expression,node.arguments[0],context);return;}
+      const fn=functionOf(callee);if(fn){const bound=bind(fn,node.arguments,context);for(const value of returns(fn))predicate(value,bound,next);}
+    }
+  };
+  walk(ast,node=>{
+    if(!ts.isCallExpression(node))return;const method=assertion(node.expression);if(!method)return;
+    if(['assert','ok'].includes(method))predicate(node.arguments[0]);
+    if(['equal','strictEqual','notEqual','notStrictEqual','deepEqual','deepStrictEqual','notDeepEqual','notDeepStrictEqual','match','doesNotMatch'].includes(method))pair(node.arguments[0],node.arguments[1],new Map());
+    if(['throws','rejects'].includes(method)){
+      const target=node.arguments[0];if(!target||!ts.isFunctionLike(target))return;
+      let tested=false;walk(target.body,n=>{if(ts.isCallExpression(n)&&origin(n))tested=true;});if(!tested)return;
       const matcher=node.arguments[1];
-      // In Node assert.throws(fn, string), the second argument is also a message.
-      if (matcher && ts.isRegularExpressionLiteral(matcher)) expected(matcher);
-      else if (matcher && ts.isObjectLiteralExpression(matcher)) expected(matcher);
-      else if (matcher && ts.isFunctionLike(matcher)) predicate(matcher);
+      if(matcher&&(ts.isRegularExpressionLiteral(matcher)||ts.isObjectLiteralExpression(matcher)))expected(matcher);
+      else if(matcher&&ts.isFunctionLike(matcher)){const bound=new Map();for(const p of matcher.parameters)if(ts.isIdentifier(p.name))bound.set(resolver.symbol(p.name),{trusted:true});for(const value of returns(matcher))predicate(value,bound);}
     }
   });
   return tokens;
@@ -225,6 +327,9 @@ const confinedPath=(path,root=REPO_ROOT)=>{
 const readSource=path=>readFileSync(confinedPath(path),'utf8');
 
 function validateCatalog(input, controls, read = readSource) {
+const codeCache=new Map(),tokenCache=new Map();
+const codesOf=text=>{if(!codeCache.has(text))codeCache.set(text,structuredCodes(text));return codeCache.get(text);};
+const tokensOf=text=>{if(!tokenCache.has(text))tokenCache.set(text,assertionTokens(text));return tokenCache.get(text);};
 assert.equal(input.schema_version, 'BLOCKER_CATALOG_V1');
 assert(Array.isArray(input.entries), 'catalog entries must be an array');
 const byCode = new Map();
@@ -291,7 +396,8 @@ const mandatory = [
   "BLOCKER_CATALOG_FALSE_MATERIAL_ASSERTION_COVERAGE"
 ];
 for (const code of mandatory) assert(byCode.has(code), `mandatory blocker missing from catalog: ${code}`);
-const emitted = structuredCodes(controls);
+const emitted = codesOf(controls);
+assert.equal(emitted.unresolved.length,0,'structured factory blocker has mutable or escaped code');
 for (const code of emitted) assert(byCode.has(code), `structured factory blocker missing from catalog: ${code}`);
 
 // Coverage may never claim code/test protection that cannot be located materially.
@@ -300,9 +406,10 @@ for (const entry of input.entries) {
     assert.equal(typeof entry.detection_source, 'string', `${entry.code}: coded coverage requires detection_source`);
     assert(entry.detection_source.length > 0, `${entry.code}: coded coverage requires detection_source`);
     if (entry.source_kind === 'REGRESSION_GUARD') {
-      assert(assertionTokens(read(entry.detection_source)).has(entry.detection_assertion), `${entry.code}: catalog claims nonexistent regression guard`);
+      assert(tokensOf(read(entry.detection_source)).has(entry.detection_assertion), `${entry.code}: catalog claims nonexistent regression guard`);
     } else {
-    const detectionCodes = structuredCodes(read(entry.detection_source));
+    const detectionCodes = codesOf(read(entry.detection_source));
+    assert.equal(detectionCodes.unresolved.length,0,'structured factory blocker has mutable or escaped code');
     const mappedCodes = entry.maps_to ?? [entry.code];
     assert(Array.isArray(mappedCodes) && mappedCodes.length > 0, `${entry.code}: invalid detection mapping`);
     for (const code of mappedCodes) {
@@ -318,7 +425,7 @@ for (const entry of input.entries) {
     const regressionAssertion = entry.regression_assertion ?? entry.code;
     assert.equal(typeof regressionAssertion, 'string', `${entry.code}: CODED_AND_TESTED requires a regression assertion`);
     assert(regressionAssertion.length > 0, `${entry.code}: CODED_AND_TESTED requires a regression assertion`);
-      assert(assertionTokens(regression).has(regressionAssertion), `${entry.code}: material regression assertion not found`);
+      assert(tokensOf(regression).has(regressionAssertion), `${entry.code}: material regression assertion not found`);
   }
 }
 return emitted;
@@ -370,6 +477,7 @@ assert.equal(structuredCodes('const p=(code,detail)=>({code,detail});const value
 assert(structuredCodes('const p=(code,detail)=>({code,detail});const values={code:"STATIC_OBJECT"};p(values.code,"detail");').has('STATIC_OBJECT'));
 assert.throws(()=>validateCatalog(catalog,source+'\nconst prefix="UNCATALOGED";p(`${prefix}_TEMPLATE`,"detail");'),/structured factory blocker missing from catalog: UNCATALOGED_TEMPLATE/);
 assert(structuredCodes('const ERRORS = new Set(["ENUM_PROBE"]);').has('ENUM_PROBE'));
+assert.equal(structuredCodes('function fixture(){const ERRORS=new Set(["FIXTURE_ONLY"]);return 1;}').size,0);
 assert.throws(() => validateCatalog(catalog, `${source}\nconst routes = { UNCATALOGED_ROUTE_PROBE: [] };`), /structured factory blocker missing from catalog: UNCATALOGED_ROUTE_PROBE/);
 assert(!assertionTokens('assert.throws(() => { const fixture="COMMENT_ONLY"; });').has('COMMENT_ONLY'));
 assert(!structuredCodes('// p("COMMENT_ONLY", "not protection")').has('COMMENT_ONLY'));
@@ -390,9 +498,36 @@ for (const snippet of [
   'assert.equal(1,1);',
 ]) assert.throws(() => fakeCoverage(snippet), /HEAD_DRIFT: material regression assertion not found/);
 assert.throws(()=>fakeCoverage('function ignore(){return 0;}assert.equal(result.code,ignore("HEAD_DRIFT"));'),/HEAD_DRIFT: material regression assertion not found/);
-assert.doesNotThrow(() => fakeCoverage('assert.equal(result.code,"HEAD_DRIFT");'));
-assert(assertionTokens('assert(result.errors.some(e=>e.code==="HEAD_DRIFT"));').has('HEAD_DRIFT'));
-assert(assertionTokens('assert.throws(()=>validateCatalog(input,controls),/HEAD_DRIFT/);').has('HEAD_DRIFT'));
+const controlImports='import assert from "node:assert/strict";import {verifyFactoryConsistency,validateEvidenceEnvelope} from "../scripts/factory-recovery-controls.mjs";';
+assert.doesNotThrow(() => fakeCoverage(controlImports+'const result=verifyFactoryConsistency(s);assert(result.problems.some(p=>p.code==="HEAD_DRIFT"));'));
+assert(assertionTokens(controlImports+'const result=validateEvidenceEnvelope(e);assert(result.errors.some(e=>e.code==="HEAD_DRIFT"));').has('HEAD_DRIFT'));
+assert(!assertionTokens('import assert from "node:assert/strict";assert.throws(()=>unknown(input),/HEAD_DRIFT/);').has('HEAD_DRIFT'));
+// A69-F3 full-validator negatives: syntax that never tests the guarded value is insufficient.
+for(const snippet of [
+ 'const assert={equal(){}};const result={code:"WRONG"};assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'function f(assert){const result=verifyFactoryConsistency(s);assert.equal(result.code,"HEAD_DRIFT");}',
+ controlImports+'function fixture(){return {code:"HEAD_DRIFT"}}const result=fixture();assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'function has(){return true;}const result=verifyFactoryConsistency(s);assert(has(result,"HEAD_DRIFT"));',
+ controlImports+'const result=verifyFactoryConsistency(s);assert(true || result.code==="HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency(s);assert(false && result.code==="HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency(s);assert(unknown() || result.code==="HEAD_DRIFT");',
+ controlImports+'const result={code:"HEAD_DRIFT",real:verifyFactoryConsistency(s)};assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'const result=verifyFactoryConsistency(s);result.code="HEAD_DRIFT";assert.equal(result.code,"HEAD_DRIFT");',
+ controlImports+'const alias=assert;alias.equal=()=>{};const result=verifyFactoryConsistency(s);assert.equal(result.code,"HEAD_DRIFT");',
+])assert.throws(()=>fakeCoverage(snippet),/HEAD_DRIFT: material regression assertion not found/);
+assert.doesNotThrow(()=>fakeCoverage(controlImports+'const check=assert;const result=verifyFactoryConsistency(s);check(result.problems.some(p=>p.code==="HEAD_DRIFT"));'));
+for(const snippet of [
+ 'const valueAliasFixture={code:"HEAD_DRIFT"};const sharedAlias=valueAliasFixture;sharedAlias.code="UNCATALOGED_ALIAS_MUTATION";p(valueAliasFixture.code,"detail");',
+ 'const valueAliasFixture={code:"HEAD_DRIFT"};const sharedAlias=valueAliasFixture;const second=sharedAlias;second["code"]="UNCATALOGED_ALIAS_MUTATION";p(valueAliasFixture.code,"detail");',
+ 'const valueAliasFixture={code:"HEAD_DRIFT"};mutate(valueAliasFixture);p(valueAliasFixture.code,"detail");',
+ 'const valueAliasFixture={code:"HEAD_DRIFT"};delete valueAliasFixture.code;p(valueAliasFixture.code,"detail");',
+ 'const valueAliasFixture={nested:{code:"HEAD_DRIFT"}};const {nested}=valueAliasFixture;nested.code="UNCATALOGED_ALIAS_MUTATION";p(valueAliasFixture.nested.code,"detail");',
+ 'const valueAliasFixture={code:"HEAD_DRIFT"};const holder={value:valueAliasFixture};holder.value.code="UNCATALOGED_ALIAS_MUTATION";p(valueAliasFixture.code,"detail");',
+]){
+ assert.equal(structuredCodes('const p=code=>({code});'+snippet).size,0);
+ assert.throws(()=>validateCatalog(catalog,source+'\n'+snippet),/structured factory blocker has mutable or escaped code/);
+}
+assert.doesNotThrow(()=>validateCatalog(catalog,source+'\nconst values={primary:"HEAD_DRIFT"};const immutableAlias=values;p(immutableAlias.primary,"detail");'));
 assert.throws(() => validateCatalog(catalog, source, path => path===tested.regression_test ? `// ${tested.regression_assertion ?? tested.code}\nconst fixture = "${tested.regression_assertion ?? tested.code}";` : readSource(path)), /material regression assertion not found/);
 assert.throws(() => validateCatalog(catalog, source, path => path===tested.detection_source ? `// ${tested.code}` : readSource(path)), /coded protection not found/);
 assert.throws(() => validateCatalog(mutate(c => { c.entries.find(e=>e.code===tested.code).regression_test='tests/nonexistent-catalog-regression.mjs'; }), source), /source does not exist/);
