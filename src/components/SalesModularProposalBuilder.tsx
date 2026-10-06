@@ -134,7 +134,8 @@ const SALES_FUNCTIONAL_MODULE_KEYS = [
   'school_management'
 ] as const;
 
-const SALES_PATIENT_CAPACITY_BLOCKS = [10, 20, 30, 40, 50] as const;
+const SALES_ESSENTIAL_PATIENT_LIMIT = 50;
+const SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50;
 const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000;
 const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000;
 
@@ -143,10 +144,16 @@ const isSalesFunctionalModuleItemKey = (value: string) =>
     value as (typeof SALES_FUNCTIONAL_MODULE_KEYS)[number]
   );
 
-const commercialCapacityForDemand = (patientQuantity: number) =>
-  SALES_PATIENT_CAPACITY_BLOCKS.find(
-    (capacity) => patientQuantity <= capacity
-  ) ?? null;
+const commercialCapacityForDemand = (patientQuantity: number) => {
+  const demand = Math.max(1, Math.floor(Number(patientQuantity) || 1));
+  if (demand <= SALES_ESSENTIAL_PATIENT_LIMIT) {
+    return SALES_ESSENTIAL_PATIENT_LIMIT;
+  }
+  return (
+    Math.ceil(demand / SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS) *
+    SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+  );
+};
 
 const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
   if (marginBasisPoints == null) {
@@ -527,8 +534,7 @@ export const SalesModularProposalBuilder = ({
           core.tiers.find((tier) => tier.maximumQuantity === null) ||
           null;
         const initialCapacity =
-          commercialCapacityForDemand(patientQuantity) ||
-          Math.max(51, patientQuantity);
+          commercialCapacityForDemand(patientQuantity);
         const initialBaseTier = customCapacityTier || recommendedTier;
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
@@ -629,8 +635,7 @@ export const SalesModularProposalBuilder = ({
             );
       const currentLimit = Number(input.customBasePackageLimit || 0);
       if (currentLimit >= demand) return;
-      const nextLimit =
-        commercialCapacityForDemand(demand) || Math.max(51, demand);
+      const nextLimit = commercialCapacityForDemand(demand);
       setInput((current) =>
         current
           ? {
