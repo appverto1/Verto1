@@ -196,6 +196,7 @@ const criticalTests = [
   'tests/ptsTherapeuticDashboard.test.mjs',
   'tests/clinicCanonicalTimeZone.regression.test.mjs',
   'tests/abaSessionClinicalDateTimezone.regression.test.mjs',
+  'tests/abaReinforcersRuntime.regression.test.mjs',
   'tests/patientDirectoryOrdering.regression.test.mjs',
   'tests/progressReportFilters.regression.test.mjs',
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
