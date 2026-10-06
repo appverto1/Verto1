@@ -1,113 +1,56 @@
 {
-  "generatedAt": "2026-07-31T14:25:30-03:00",
-  "delivery": "verto_professional_reinvite_same_access_fix_20260731",
-  "sourceArchive": "Verto(26).zip",
-  "scope": {
-    "modifiedFiles": 4,
-    "newFiles": 1,
-    "migrationAdded": false,
-    "databaseChanged": false,
-    "deployExecuted": false
-  },
+  "base_main_sha": "a5b63960712ec076c42ea7046f838f99fa5d08f7",
+  "scope": [
+    "timeline/session hotfix",
+    "#206 patient photo repair",
+    "#167 landing care network",
+    "#193 landing informational CTA"
+  ],
   "files": [
     {
+      "path": "SQL_MANUAL/01-restaurar-timeline-v2.sql",
+      "sha256": "cdf3d4f59de76ea6aeb96c31ee4e951601dc2ecc2e49eabae8cbe4d188812072",
+      "size": 12970
+    },
+    {
+      "path": "SQL_MANUAL/02-verificar-timeline-v2.sql",
+      "sha256": "7d0a1874336a73fd91dc67ee23b1e9637560f75d9b8ef704f088382be7330485",
+      "size": 1415
+    },
+    {
       "path": "server.ts",
-      "status": "modified",
-      "beforeSha256": "421969f94fdd28be6633f6a18ab35964599a5965d073b3628fb3296528c4a584",
-      "afterSha256": "2fcf83ec8626a34a75ab1a76a37886ed6c7d2cbefd66c2f5486bb440c1de72a9",
-      "beforeBytes": 3559679,
-      "afterBytes": 3564407
+      "sha256": "ad546647448a9a1618163a012f09da90b3b441efa31629ee65a84b671842391b",
+      "size": 4721308
     },
     {
-      "path": "src/App.tsx",
-      "status": "modified",
-      "beforeSha256": "7b0bceac3bcd7068aac9b3a05d6ca4ec77a688e4e3743aa6beb7059fab4eb145",
-      "afterSha256": "4600e53b60cfe347d3d7d52e3627b3ddff88580c4da0413bac77f1a61033a2d7",
-      "beforeBytes": 341295,
-      "afterBytes": 342562
+      "path": "src/components/LandingPage.tsx",
+      "sha256": "7d070d0e74301f26553e5aae9df2821c1a78bf99aa930a23fa79ce7dd041549b",
+      "size": 101553
     },
     {
-      "path": "src/components/ActivationAccess.tsx",
-      "status": "modified",
-      "beforeSha256": "9b3b47bf2296ea4c3ca4654023d6d2b174cad061377c69c52fdeb91584b7a428",
-      "afterSha256": "506e9decf10ef09a5dfb4f1cd1fe3d1d7dc5deb11b918a9fc0826a53335cdf15",
-      "beforeBytes": 15869,
-      "afterBytes": 19441
+      "path": "src/components/SessionMode.tsx",
+      "sha256": "55201e791290e4f28f42820de45b20ef7f8cfa64974d5e6139a283d659816193",
+      "size": 666172
     },
     {
-      "path": "src/lib/supabase.ts",
-      "status": "modified",
-      "beforeSha256": "fb4d05cab96cdc67394674588eec3edf6907c36f55acb9765fca61b958924005",
-      "afterSha256": "79454689d3e34b621b003cb1b1c4fcaa354fa49d6605af22b3fa91b4b374341e",
-      "beforeBytes": 5858,
-      "afterBytes": 6029
+      "path": "src/services/localDb.ts",
+      "sha256": "47e520a527bbeb6fda7c3ba4ae3a1a0157baae7379d5d7560c2220b416a2a4ee",
+      "size": 31286
     },
     {
-      "path": "tests/clinicReinviteAccess.test.ts",
-      "status": "new",
-      "beforeSha256": null,
-      "afterSha256": "58194a6bf3e09f3df2881f2cd49f86a25a9ee3c14f359cc2bf075ea89a454502",
-      "beforeBytes": 0,
-      "afterBytes": 4157
+      "path": "src/utils/sessionAutoFinalization.ts",
+      "sha256": "b22345d4e3a90622fe09021e23086510aa20587b8d0f56fb7a4864f5ad18b4af",
+      "size": 2093
+    },
+    {
+      "path": "tests/patientPortalPhotoCanonicalRepair.regression.test.mjs",
+      "sha256": "aceac0506f4a9131054d2ea4a2ca7854e6970a629fc1956f01d3a28b826de78a",
+      "size": 4453
+    },
+    {
+      "path": "tests/sessionAutoFinalization.regression.test.mjs",
+      "sha256": "558f6d1d5a23158fe697508c626aa2a8eca3392d4f01bb0c420efb45776edb71",
+      "size": 9927
     }
-  ],
-  "validation": {
-    "destructiveActionsExecuted": false,
-    "deployExecuted": false,
-    "databaseSqlExecuted": false,
-    "railwayChanged": false,
-    "gitCommitOrPushExecuted": false,
-    "migrationAdded": false,
-    "syntaxTranspile": {
-      "status": "passed",
-      "files": [
-        "server.ts",
-        "src/App.tsx",
-        "src/components/ActivationAccess.tsx",
-        "src/lib/supabase.ts",
-        "tests/clinicReinviteAccess.test.ts"
-      ]
-    },
-    "focusedTests": {
-      "status": "passed",
-      "tests": [
-        "tests/clinicReinviteAccess.test.ts",
-        "tests/clinicInvitationDelivery.test.ts",
-        "tests/invitedProfessionalOnboarding.test.ts",
-        "tests/clinicMembershipAuthority.test.ts",
-        "tests/security.regression.test.mjs",
-        "tests/ownerMfaEnforcement.test.ts",
-        "tests/billing.test.ts"
-      ],
-      "passed": 7,
-      "failed": 0
-    },
-    "dockerRuntimeImports": {
-      "status": "passed",
-      "coveredFiles": 65
-    },
-    "whitespaceChecks": {
-      "status": "passed",
-      "files": [
-        "server.ts",
-        "src/App.tsx",
-        "src/components/ActivationAccess.tsx",
-        "src/lib/supabase.ts",
-        "tests/clinicReinviteAccess.test.ts"
-      ]
-    },
-    "officialBuild": {
-      "status": "not_completed",
-      "detail": "O ambiente continua sem dependências locais completas. `npm ci` havia sido interrompido por HTTP 404 do registry interno para yallist-3.1.1.tgz; por isso `vite` não está disponível."
-    },
-    "auxiliaryFullSuite": {
-      "status": "partially_completed",
-      "passedTestFiles": 26,
-      "moduleStartFailures": [
-        "tests/patientListVisibility.test.ts — @supabase/supabase-js ausente",
-        "tests/salesModularCapacityBlockPricing.test.ts — react ausente"
-      ],
-      "detail": "As duas falhas ocorreram antes das asserções por dependências ausentes."
-    }
-  }
+  ]
 }
