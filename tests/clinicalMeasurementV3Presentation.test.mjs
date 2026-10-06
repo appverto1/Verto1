@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const routes = readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
+const routes = [
+  readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8'),
+].join('\n');
 const dataService = readFileSync('src/services/dataService.ts', 'utf8');
 const panel = readFileSync('src/components/ClinicalMeasurementV3Panel.tsx', 'utf8');
 const workspace = readFileSync('src/components/ClinicalChartsWorkspace.tsx', 'utf8');
