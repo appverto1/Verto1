@@ -107,6 +107,9 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: Tutorial support isolation
+        run: node --import tsx tests/helpTutorialSupport.test.ts
+
       - name: Verto pre-main regression ratchet
         shell: bash
         env:

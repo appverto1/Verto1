@@ -3,7 +3,7 @@ import { registerHelpCenterRoutes } from '../services/helpCenterRoutes';
 
 type Handler=(req:any,res:any,next?:()=>Promise<void>|void)=>any;
 const routes=new Map<string,Handler[]>();
-const app:any={get:(path:string,...handlers:Handler[])=>routes.set(path,handlers)};
+const app:any={get:(path:string,...handlers:Handler[])=>routes.set(path,handlers),post:(path:string,...handlers:Handler[])=>routes.set(path,handlers)};
 const pass:Handler=(_req,_res,next)=>next?.();
 const checkAuth:Handler=(req,res,next)=>req.session?.user?next?.():res.status(401).json({error:'AUTH_REQUIRED'});
 const requireClinicCapability=(_cap:string):Handler=>(req,res,next)=>req.authorizationContext?.capabilities?.has('clinic.view')?next?.():res.status(403).json({error:'FORBIDDEN'});

@@ -1,22 +1,11 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowUpRight, BookOpen, Menu, Search, X } from 'lucide-react';
+import type { HelpArticle } from '../help/helpManifest';
+import { HelpSupportChat } from './HelpSupportChat';
+import { HelpTutorialArticle } from './HelpTutorialArticle';
+import { pausedSupportQuery } from '../help/helpSupport';
 
-type Topic = {
-  articleId:string;
-  slug:string;
-  theme:string;
-  title:string;
-  summary:string;
-  keywords:string[];
-  synonyms?:string[];
-  steps:string[];
-  audienceLabel?:string;
-  prerequisites?:string[];
-  expectedResult?:string;
-  recovery?:string[];
-  relatedArticleIds?:string[];
-  routeKey?:string;
-};
+type Topic = HelpArticle;
 
 const HELP_ROUTE_ALLOWLIST: Readonly<Record<string,string>> = Object.freeze({
   billing_workspace: '/',
@@ -53,6 +42,8 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
   const [loading,setLoading]=React.useState(true);
   const [error,setError]=React.useState('');
   const [contextClinicId,setContextClinicId]=React.useState('');
+  const [contextKey,setContextKey]=useState('');
+  const [progress,setProgress]=useState<Record<string,string|null>>({});
   const [contextLabel,setContextLabel]=React.useState(clinicName);
   const [ctaBusy,setCtaBusy]=React.useState(false);
   const [ctaError,setCtaError]=React.useState('');
@@ -67,6 +58,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
     setTopics([]);
     setSelected('');
     setContextClinicId('');
+    setContextKey('');setProgress({});
     try{
       const response=await fetch('/api/help/catalog',{credentials:'include',cache:'no-store'});
       if(!response.ok)throw new Error('catalog');
@@ -75,14 +67,18 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
       const nextClinicId=String(payload?.clinicId||'').trim();
       if(!nextClinicId)throw new Error('context');
       setContextClinicId(nextClinicId);
+      setContextKey(String(payload?.contextKey||''));
       setContextLabel(String(payload?.clinicName||'Clínica atual'));
       setTopics(Array.isArray(payload?.articles)?payload.articles:[]);
-      setSelected('');
+      setProgress(Object.fromEntries((Array.isArray(payload?.progress)?payload.progress:[]).map((row:any)=>[`${row.articleId}:${row.contentRevision}`,row.completedAt||null])));
+      const requested=new URLSearchParams(window.location.search).get('topico')||'';
+      setSelected((payload.articles||[]).some((topic:any)=>topic.articleId===requested)?requested:'');
     }catch{
       if(request!==requestRef.current)return;
       setTopics([]);
       setSelected('');
       setContextClinicId('');
+      setContextKey('');setProgress({});
       setError('Não foi possível carregar a ajuda agora.');
     }finally{
       if(request===requestRef.current)setLoading(false);
@@ -115,7 +111,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
   },[drawer]);
 
   const filtered=useMemo(
-    ()=>topics
+    ()=>pausedSupportQuery(query)?[]:topics
       .map(topic=>({topic,score:scoreTopic(topic,query)}))
       .filter(x=>x.score>0)
       .sort((a,b)=>b.score-a.score||a.topic.title.localeCompare(b.topic.title,'pt-BR'))
@@ -123,6 +119,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
     [query,topics],
   );
   const article=topics.find(t=>t.articleId===selected) || filtered[0];
+  const selectTopic=(id:string)=>{setSelected(id);setDrawer(false);window.history.replaceState(null,'',`/ajuda?topico=${encodeURIComponent(id)}`);};
   const related=(article?.relatedArticleIds||[])
     .map(id=>topics.find(topic=>topic.articleId===id))
     .filter((topic):topic is Topic=>Boolean(topic));
@@ -178,7 +175,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
       </div>
       <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-6">
         <aside ref={drawerRef} className={`${drawer?'block':'hidden'} mb-4 rounded-2xl border border-slate-200 bg-white p-2 lg:sticky lg:top-24 lg:block lg:self-start`} aria-label="Temas de ajuda">
-          {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:filtered.length?filtered.map(t=><button key={t.articleId} type="button" onClick={()=>{setSelected(t.articleId);setDrawer(false)}} className={`mb-1 min-h-11 w-full rounded-xl px-3 py-2 text-left text-sm ${article?.articleId===t.articleId?'bg-violet-50 font-semibold text-violet-700':'text-slate-700 hover:bg-slate-50'}`}><span className="block text-xs text-slate-400">{t.theme}</span><span className="block">{t.title}</span><span className="mt-1 block text-xs font-normal leading-4 text-slate-500">{excerpt(t.summary)}</span></button>):<p className="p-3 text-sm text-slate-500" role="status">Nenhum tutorial encontrado. Tente outro termo.</p>}
+          {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:filtered.length?filtered.map(t=><button key={t.articleId} type="button" onClick={()=>selectTopic(t.articleId)} className={`mb-1 min-h-11 w-full rounded-xl px-3 py-2 text-left text-sm ${article?.articleId===t.articleId?'bg-violet-50 font-semibold text-violet-700':'text-slate-700 hover:bg-slate-50'}`}><span className="block text-xs text-slate-400">{t.theme}</span><span className="block">{t.title}{progress[`${t.articleId}:${t.contentRevision}`]&&<span className="ml-1 text-xs text-emerald-700">✓ Concluído</span>}</span><span className="mt-1 block text-xs font-normal leading-4 text-slate-500">{excerpt(t.summary)}</span></button>):<p className="p-3 text-sm text-slate-500" role="status">Nenhum tutorial encontrado. Tente outro termo.</p>}
         </aside>
         <article className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
           {article?<>
@@ -187,12 +184,12 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
             <h2 className="mt-1 text-2xl font-semibold">{article.title}</h2>
             <p className="mt-3 text-slate-600">{article.summary}</p>
 
+            {article.tutorialSteps?<React.Fragment key={`${contextKey}:${article.articleId}:${article.contentRevision}`}><HelpTutorialArticle article={article} contextKey={contextKey} completed={Boolean(progress[`${article.articleId}:${article.contentRevision}`])} onContextChanged={()=>void loadCatalog()} onSaved={completedAt=>setProgress(old=>({...old,[`${article.articleId}:${article.contentRevision}`]:completedAt}))}/></React.Fragment>:<>
             <section className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-4" aria-labelledby="help-prerequisites">
               <h3 id="help-prerequisites" className="font-semibold">Para quem e pré-requisitos</h3>
               <p className="mt-2 text-sm text-slate-600">{article.audienceLabel||'Profissionais autorizados no contexto atual.'}</p>
               {(article.prerequisites||[]).length>0&&<ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-600">{article.prerequisites?.map(item=><li key={item}>{item}</li>)}</ul>}
             </section>
-
             <h3 className="mt-6 font-semibold">Passo a passo</h3>
             <ol className="mt-3 space-y-3">{article.steps.map((s,i)=><li key={s} className="flex gap-3"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-semibold text-violet-700">{i+1}</span><span className="pt-1 text-sm text-slate-700">{s}</span></li>)}</ol>
 
@@ -210,16 +207,18 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
               <h3 id="help-related" className="font-semibold">Artigos relacionados</h3>
               {related.length?<div className="mt-2 flex flex-wrap gap-2">{related.map(item=><button key={item.articleId} type="button" onClick={()=>setSelected(item.articleId)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50">{item.title}</button>)}</div>:<p className="mt-2 text-sm text-slate-500">Nenhum artigo relacionado publicado nesta coorte.</p>}
             </section>
+            </>}
 
             {article.routeKey&&HELP_ROUTE_ALLOWLIST[article.routeKey]&&<div className="mt-7">
               <button type="button" disabled={ctaBusy||!contextClinicId} onClick={()=>void openArticleArea(article)} className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-violet-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-wait disabled:opacity-60">{ctaBusy?'Validando acesso…':'Abrir esta área na Verto'}<ArrowUpRight size={17} aria-hidden="true"/></button>
               {ctaError&&<p className="mt-2 text-sm text-rose-700" role="alert">{ctaError}</p>}
             </div>}
 
-            <div className="mt-7 rounded-xl bg-slate-50 p-4 text-sm text-slate-600"><strong>Conteúdo visual:</strong> prints e microvídeos serão exibidos aqui somente após revisão em ambiente sintético seguro. O passo a passo textual permanece completo sem a mídia.</div>
+            {!article.tutorialSteps&&<div className="mt-7 rounded-xl bg-slate-50 p-4 text-sm text-slate-600"><strong>Conteúdo visual:</strong> prints e microvídeos serão exibidos aqui somente após revisão em ambiente sintético seguro. O passo a passo textual permanece completo sem a mídia.</div>}
           </>:<p role="status">Escolha um tema para começar.</p>}
         </article>
       </div>
     </main>
+    {contextKey&&!loading&&<React.Fragment key={contextKey}><HelpSupportChat articles={topics} contextKey={contextKey} onOpenTopic={selectTopic} onContextChanged={()=>void loadCatalog()}/></React.Fragment>}
   </div>;
 }
