@@ -1015,6 +1015,88 @@ function resolveContractCapacityPhase(
   };
 }
 
+const ESSENTIAL_PATIENT_LIMIT = 50;
+const ENTERPRISE_BLOCK_SIZE_PATIENTS = 50;
+
+function usesFrozenPerPatientCapacityBilling(
+  contract: ModularCapacityBillingContract
+): boolean {
+  return (
+    contract.blockSizePatients === ENTERPRISE_BLOCK_SIZE_PATIENTS &&
+    toSafeString(contract.sourceSnapshot?.blockPricingBasis, 80) ===
+      'selected_module_per_patient_prices'
+  );
+}
+
+function frozenPerPatientUnitPriceCents(
+  contract: ModularCapacityBillingContract,
+  phase: ContractCapacityPhase
+): number {
+  if (!usesFrozenPerPatientCapacityBilling(contract)) {
+    return phase.blockPriceCents;
+  }
+  if (
+    phase.blockPriceCents % contract.blockSizePatients !== 0
+  ) {
+    throw new Error('MODULAR_PER_PATIENT_PRICE_INVALID');
+  }
+  const unitPrice = phase.blockPriceCents / contract.blockSizePatients;
+  if (!Number.isSafeInteger(unitPrice) || unitPrice <= 0) {
+    throw new Error('MODULAR_PER_PATIENT_PRICE_INVALID');
+  }
+  return unitPrice;
+}
+
+function acceptedFrozenPatientQuantity(
+  contract: ModularCapacityBillingContract
+): number {
+  const phases = Array.isArray(contract.sourceSnapshot?.capacityBlockPhases)
+    ? contract.sourceSnapshot.capacityBlockPhases
+    : [];
+  const firstBlockPriceCents = toSafeInteger(phases?.[0]?.blockPriceCents);
+  const acceptedMonthlyAmountCents = toSafeInteger(
+    contract.sourceSnapshot?.acceptedMonthlyAmountCents
+  );
+  if (
+    firstBlockPriceCents === null ||
+    acceptedMonthlyAmountCents === null ||
+    firstBlockPriceCents % contract.blockSizePatients !== 0
+  ) {
+    throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
+  }
+  const unitPriceCents = firstBlockPriceCents / contract.blockSizePatients;
+  if (
+    !Number.isSafeInteger(unitPriceCents) ||
+    unitPriceCents <= 0 ||
+    acceptedMonthlyAmountCents % unitPriceCents !== 0
+  ) {
+    throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
+  }
+  const quantity = acceptedMonthlyAmountCents / unitPriceCents;
+  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100_000) {
+    throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
+  }
+  return quantity;
+}
+
+function enterpriseBlockNumber(patientQuantity: number): number {
+  if (patientQuantity <= ESSENTIAL_PATIENT_LIMIT) return 0;
+  return Math.ceil(
+    (patientQuantity - ESSENTIAL_PATIENT_LIMIT) /
+      ENTERPRISE_BLOCK_SIZE_PATIENTS
+  );
+}
+
+function commercialPatientLimit(patientQuantity: number): number {
+  if (patientQuantity <= ESSENTIAL_PATIENT_LIMIT) {
+    return ESSENTIAL_PATIENT_LIMIT;
+  }
+  return (
+    Math.ceil(patientQuantity / ENTERPRISE_BLOCK_SIZE_PATIENTS) *
+    ENTERPRISE_BLOCK_SIZE_PATIENTS
+  );
+}
+
 function stripePriceProductId(price: Stripe.Price | null | undefined): string {
   const product = (price as any)?.product;
   if (typeof product === 'string') return toSafeString(product, 200);
@@ -1137,7 +1219,8 @@ async function syncModularCapacityStripeAmount(params: {
   const currentPhase = resolveContractCapacityPhase(params.contract, Date.now());
   const currentTargetAmount =
     currentPhase.initialBlocksRevenueCents
-    + params.targetAdditionalBlocks * currentPhase.blockPriceCents;
+    + params.targetAdditionalBlocks *
+      frozenPerPatientUnitPriceCents(params.contract, currentPhase);
   const currentPeriodEnd = Number((params.subscription as any)?.current_period_end || 0);
   const effectiveDate = currentPeriodEnd > 0
     ? new Date(currentPeriodEnd * 1000).toISOString()
@@ -1179,7 +1262,8 @@ async function syncModularCapacityStripeAmount(params: {
           const contractPhase = resolveContractCapacityPhase(params.contract, phaseInstantMs);
           const targetAmount =
             contractPhase.initialBlocksRevenueCents
-            + params.targetAdditionalBlocks * contractPhase.blockPriceCents;
+            + params.targetAdditionalBlocks *
+              frozenPerPatientUnitPriceCents(params.contract, contractPhase);
           const phasePriceId = targetAmount > 0
             ? await createCapacityPrice({
                 stripe: params.stripe,
@@ -1340,6 +1424,118 @@ async function syncModularCapacityBillingContract(params: {
       synced: false,
       subscriptionId: subscription.id,
       reason: 'modular_subscription_not_billable'
+    };
+  }
+
+  if (usesFrozenPerPatientCapacityBilling(contract)) {
+    const acceptedPatientQuantity = acceptedFrozenPatientQuantity(contract);
+    const targetAdditionalPatients = Math.max(
+      contract.billedAdditionalBlocks,
+      Math.max(activePatients - acceptedPatientQuantity, 0)
+    );
+    const previousEnterpriseBlock = enterpriseBlockNumber(
+      contract.lastActivePatientCount
+    );
+    const currentEnterpriseBlock = enterpriseBlockNumber(activePatients);
+    const currentCommercialLimit = commercialPatientLimit(activePatients);
+    let stripeSync: Awaited<ReturnType<typeof syncModularCapacityStripeAmount>> | null = null;
+
+    if (targetAdditionalPatients > contract.billedAdditionalBlocks) {
+      stripeSync = await syncModularCapacityStripeAmount({
+        stripe: params.stripe,
+        contract,
+        subscription,
+        targetAdditionalBlocks: targetAdditionalPatients,
+        idempotencyKey: params.idempotencyKey
+      });
+    }
+
+    const nowIso = new Date().toISOString();
+    await patchModularCapacityBillingContract(params.supabase, contract.id, {
+      billed_additional_blocks: targetAdditionalPatients,
+      last_active_patient_count: activePatients,
+      overage_started_at: null,
+      grace_expires_at: null,
+      last_capacity_sync_error: null,
+      ...(stripeSync
+        ? {
+            last_capacity_sync_at: nowIso,
+            capacity_product_id: stripeSync.productId,
+            capacity_subscription_item_id: stripeSync.subscriptionItemId,
+            capacity_price_id: stripeSync.priceId,
+            stripe_schedule_id:
+              contract.stripeScheduleId ||
+              scheduleIdFromSubscription(subscription) ||
+              null
+          }
+        : {})
+    });
+
+    const enterpriseReviewRequired =
+      currentEnterpriseBlock > 0;
+    await patchClinicBillingSafely(params.supabase, params.clinicId, {
+      stripe_customer_id:
+        toSafeString(String(subscription.customer || ''), 200) || undefined,
+      stripe_subscription_id: subscription.id,
+      ...(stripeSync?.subscriptionItemId
+        ? { stripe_subscription_item_id: stripeSync.subscriptionItemId }
+        : {}),
+      ...(stripeSync?.priceId
+        ? { stripe_price_id: stripeSync.priceId }
+        : {}),
+      subscription_status: subscription.status,
+      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+      active_patient_count: activePatients,
+      current_active_patient_count: activePatients,
+      current_active_patient_limit: currentCommercialLimit,
+      pending_billing_quantity: targetAdditionalPatients,
+      pending_billing_status: enterpriseReviewRequired
+        ? 'enterprise_review_required'
+        : targetAdditionalPatients > contract.billedAdditionalBlocks
+          ? 'scheduled_next_cycle'
+          : null,
+      ...(stripeSync?.effectiveDate
+        ? { pending_effective_date: stripeSync.effectiveDate }
+        : {}),
+      billing_sync_status: enterpriseReviewRequired
+        ? 'enterprise_review_required'
+        : stripeSync
+          ? 'per_patient_growth_synced'
+          : 'within_essential_plan',
+      billing_sync_error: null,
+      last_billing_sync_at: nowIso,
+      updated_at: nowIso
+    });
+
+    if (currentEnterpriseBlock > previousEnterpriseBlock) {
+      params.logger.warn(
+        '[Stripe Sync] Clínica entrou em novo bloco Enterprise; revisão comercial recomendada.',
+        {
+          clinicId: params.clinicId,
+          subscriptionId: subscription.id,
+          activePatients,
+          enterpriseBlock: currentEnterpriseBlock,
+          commercialLimitPatients: currentCommercialLimit,
+          trigger: params.trigger
+        }
+      );
+    }
+
+    return {
+      success: true,
+      activePatients,
+      billableQuantity: targetAdditionalPatients,
+      synced: true,
+      subscriptionId: subscription.id,
+      subscriptionItemId:
+        stripeSync?.subscriptionItemId ||
+        contract.capacitySubscriptionItemId ||
+        undefined,
+      reason: enterpriseReviewRequired
+        ? 'enterprise_review_required'
+        : stripeSync
+          ? 'per_patient_growth_synced'
+          : 'within_essential_plan'
     };
   }
 
