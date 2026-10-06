@@ -11,7 +11,7 @@ export type CustomCapacityPolicy = {
 export const DEFAULT_CUSTOM_CAPACITY_POLICY: Readonly<CustomCapacityPolicy> =
   Object.freeze({
     enabled: true,
-    blockSizePatients: 10,
+    blockSizePatients: 50,
     blockPriceCents: 7_990,
     includedStorageMbPerPatient: 100,
     gracePeriodDays: 7,
