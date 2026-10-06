@@ -234,6 +234,7 @@ export function registerClinicAppointmentPolicyRoutes(
     noStoreDynamicResponse,
     checkAuth,
     requireClinicCapability,
-    currentClinicId
+    currentClinicId,
+    actionLimiter: portalActionLimiter
   });
 }
