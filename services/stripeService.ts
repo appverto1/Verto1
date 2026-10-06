@@ -1047,30 +1047,35 @@ function frozenPerPatientUnitPriceCents(
   return unitPrice;
 }
 
-function acceptedFrozenPatientQuantity(
+async function acceptedFrozenPatientQuantity(
+  supabase: SupabaseClientLike,
   contract: ModularCapacityBillingContract
-): number {
-  const acceptedPostPromotionMonthlyAmountCents = toSafeInteger(
-    contract.sourceSnapshot?.acceptedPostPromotionMonthlyAmountCents
+): Promise<number> {
+  const cached = toSafeInteger(
+    contract.sourceSnapshot?.acceptedPatientQuantity
+  );
+  if (cached && cached <= contract.acceptedCapacityLimitPatients) {
+    return cached;
+  }
+
+  const { data, error } = await supabase
+    .from('sales_offers')
+    .select('simulation_snapshot,modular_snapshot')
+    .eq('id', contract.salesOfferId)
+    .maybeSingle();
+  if (error) throw error;
+
+  const quantity = toSafeInteger(
+    data?.simulation_snapshot?.results?.input?.patientQuantity
+    ?? data?.modular_snapshot?.input?.patientQuantity
+    ?? data?.modular_snapshot?.basePackage?.occupiedQuantity
   );
   if (
-    acceptedPostPromotionMonthlyAmountCents === null ||
-    contract.blockPriceCents % contract.blockSizePatients !== 0
+    !quantity ||
+    quantity < 1 ||
+    quantity > contract.acceptedCapacityLimitPatients ||
+    quantity > 100_000
   ) {
-    throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
-  }
-  const unitPriceCents =
-    contract.blockPriceCents / contract.blockSizePatients;
-  if (
-    !Number.isSafeInteger(unitPriceCents) ||
-    unitPriceCents <= 0 ||
-    acceptedPostPromotionMonthlyAmountCents % unitPriceCents !== 0
-  ) {
-    throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
-  }
-  const quantity =
-    acceptedPostPromotionMonthlyAmountCents / unitPriceCents;
-  if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100_000) {
     throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
   }
   return quantity;
@@ -1425,7 +1430,8 @@ async function syncModularCapacityBillingContract(params: {
   }
 
   if (usesFrozenPerPatientCapacityBilling(contract)) {
-    const acceptedPatientQuantity = acceptedFrozenPatientQuantity(contract);
+    const acceptedPatientQuantity =
+      await acceptedFrozenPatientQuantity(params.supabase, contract);
     const targetAdditionalPatients = Math.max(
       contract.billedAdditionalBlocks,
       Math.max(activePatients - acceptedPatientQuantity, 0)
@@ -1454,6 +1460,15 @@ async function syncModularCapacityBillingContract(params: {
       overage_started_at: null,
       grace_expires_at: null,
       last_capacity_sync_error: null,
+      source_snapshot: {
+        ...contract.sourceSnapshot,
+        acceptedPatientQuantity,
+        billingUnit: 'active_patient',
+        essentialPatientLimit: ESSENTIAL_PATIENT_LIMIT,
+        enterpriseBlockSizePatients: ENTERPRISE_BLOCK_SIZE_PATIENTS,
+        frozenPricePerPatientCents:
+          contract.blockPriceCents / contract.blockSizePatients
+      },
       ...(stripeSync
         ? {
             last_capacity_sync_at: nowIso,
