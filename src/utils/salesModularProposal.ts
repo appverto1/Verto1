@@ -606,10 +606,14 @@ export function deriveSalesCapacityBlockPhases(args: {
 }): SalesCapacityBlockPhasePricing[] {
   const contractedCapacityPatients =
     args.capacity.totalContractedLimitPatients;
+  const billingQuantityPatients = args.capacity.demandPatients;
   const blockSizePatients = args.capacity.policy.blockSizePatients;
   if (
     !Number.isSafeInteger(contractedCapacityPatients) ||
     contractedCapacityPatients < 1 ||
+    !Number.isSafeInteger(billingQuantityPatients) ||
+    billingQuantityPatients < 1 ||
+    billingQuantityPatients > contractedCapacityPatients ||
     !Number.isSafeInteger(blockSizePatients) ||
     blockSizePatients < 1
   ) {
@@ -629,7 +633,7 @@ export function deriveSalesCapacityBlockPhases(args: {
       if (
         !source ||
         source.normalPricePerPatientCents === null ||
-        phaseLine.activePriceCents % contractedCapacityPatients !== 0
+        phaseLine.activePriceCents % billingQuantityPatients !== 0
       ) {
         throw new Error(
           `PRICING_PHASE_PER_PATIENT_MISMATCH:${phaseLine.itemKey}`
@@ -639,7 +643,7 @@ export function deriveSalesCapacityBlockPhases(args: {
         source.normalPricePerPatientCents
       );
       const effectivePricePerPatientCents =
-        phaseLine.activePriceCents / contractedCapacityPatients;
+        phaseLine.activePriceCents / billingQuantityPatients;
       const normalBlockRevenueCents =
         normalPricePerPatientCents * blockSizePatients;
       const blockRevenueCents =
@@ -1162,6 +1166,17 @@ export function validateSalesModularProposalInput(
     (!Number.isInteger(input.customBasePackageLimit) ||
       input.customBasePackageLimit < 1 ||
       input.customBasePackageLimit > 100_000)
+  ) {
+    errors.push('customBasePackageLimit');
+  }
+  if (
+    input.commercialPricingMode === 'manual_module_prices' &&
+    input.customBasePackageLimit !== undefined &&
+    input.customBasePackageLimit !== null &&
+    (
+      input.customBasePackageLimit < 50 ||
+      input.customBasePackageLimit % 50 !== 0
+    )
   ) {
     errors.push('customBasePackageLimit');
   }
@@ -2642,7 +2657,12 @@ export function calculateSalesModularProposal(
     catalog.status === 'active' &&
     validateCustomCapacityPolicy(catalog.customCapacityPolicy);
   const customCapacityPolicy = hasVersionedCustomCapacityPolicy
-    ? catalog.customCapacityPolicy
+    ? {
+        ...catalog.customCapacityPolicy!,
+        blockSizePatients: perPatientPricingEnabled
+          ? 50
+          : catalog.customCapacityPolicy!.blockSizePatients
+      }
     : null;
   let capacity = isCustomBaseTier && customCapacityPolicy
     ? calculateCustomCapacity(
