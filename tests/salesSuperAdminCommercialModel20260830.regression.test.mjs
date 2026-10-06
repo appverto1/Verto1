@@ -5,6 +5,8 @@ const builder = readFileSync('src/components/SalesModularProposalBuilder.tsx', '
 const assumptions = readFileSync('src/components/SalesFinancialAssumptionsPanel.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
 const engine = readFileSync('src/utils/salesModularProposal.ts', 'utf8');
+const catalogPanel = readFileSync('src/components/SalesPricingCatalogPanel.tsx', 'utf8');
+const stripeService = readFileSync('services/stripeService.ts', 'utf8');
 
 for (const itemKey of [
   'clinical_core',
@@ -17,12 +19,24 @@ for (const itemKey of [
   assert.match(server, new RegExp(`"${itemKey}"`));
 }
 
-assert.match(builder, /SALES_PATIENT_CAPACITY_BLOCKS = \[10, 20, 30, 40, 50\]/);
-assert.match(server, /SALES_STANDARD_PATIENT_CAPACITY_BLOCKS = new Set\(\[\s*10,\s*20,\s*30,\s*40,\s*50,/);
+assert.match(builder, /SALES_ESSENTIAL_PATIENT_LIMIT = 50/);
+assert.match(builder, /SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50/);
+assert.match(builder, /Math\.ceil\(demand \/ SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS\)/);
 assert.match(builder, /Enterprise/);
+assert.match(engine, /blockSizePatients:\s*perPatientPricingEnabled\s*\? 50/);
+assert.match(engine, /input\.customBasePackageLimit % 50 !== 0/);
+assert.match(engine, /quantity \* proposedPricePerPatientCents/);
 assert.match(server, /PROPOSAL_CAPACITY_BLOCK_INVALID/);
-assert.match(server, /contractedCapacity > 50/);
 assert.match(server, /contractedCapacity < requestedDemand/);
+assert.match(catalogPanel, /Plano Essencial/);
+assert.match(catalogPanel, /1 a 50 pacientes/);
+assert.match(catalogPanel, /Enterprise 1/);
+assert.match(catalogPanel, /51 a 100 pacientes/);
+assert.match(catalogPanel, /Enterprise 2\+/);
+assert.match(stripeService, /usesFrozenPerPatientCapacityBilling/);
+assert.match(stripeService, /targetAdditionalPatients/);
+assert.match(stripeService, /enterprise_review_required/);
+assert.match(stripeService, /commercialPatientLimit/);
 
 assert.match(builder, /SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000/);
 assert.match(builder, /SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000/);
