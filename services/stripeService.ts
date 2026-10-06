@@ -1436,11 +1436,18 @@ async function syncModularCapacityBillingContract(params: {
       contract.billedAdditionalBlocks,
       Math.max(activePatients - acceptedPatientQuantity, 0)
     );
-    const previousEnterpriseBlock = enterpriseBlockNumber(
-      contract.lastActivePatientCount
+    const currentCommercialPatientQuantity = Math.max(
+      activePatients,
+      acceptedPatientQuantity
     );
-    const currentEnterpriseBlock = enterpriseBlockNumber(activePatients);
-    const currentCommercialLimit = commercialPatientLimit(activePatients);
+    const currentEnterpriseBlock = enterpriseBlockNumber(
+      currentCommercialPatientQuantity
+    );
+    const notifiedEnterpriseBlock =
+      toSafeInteger(contract.sourceSnapshot?.enterpriseBlockNotified) || 0;
+    const currentCommercialLimit = commercialPatientLimit(
+      currentCommercialPatientQuantity
+    );
     let stripeSync: Awaited<ReturnType<typeof syncModularCapacityStripeAmount>> | null = null;
 
     if (targetAdditionalPatients > contract.billedAdditionalBlocks) {
@@ -1467,7 +1474,11 @@ async function syncModularCapacityBillingContract(params: {
         essentialPatientLimit: ESSENTIAL_PATIENT_LIMIT,
         enterpriseBlockSizePatients: ENTERPRISE_BLOCK_SIZE_PATIENTS,
         frozenPricePerPatientCents:
-          contract.blockPriceCents / contract.blockSizePatients
+          contract.blockPriceCents / contract.blockSizePatients,
+        enterpriseBlockNotified: Math.max(
+          notifiedEnterpriseBlock,
+          currentEnterpriseBlock
+        )
       },
       ...(stripeSync
         ? {
@@ -1519,7 +1530,7 @@ async function syncModularCapacityBillingContract(params: {
       updated_at: nowIso
     });
 
-    if (currentEnterpriseBlock > previousEnterpriseBlock) {
+    if (currentEnterpriseBlock > notifiedEnterpriseBlock) {
       params.logger.warn(
         '[Stripe Sync] Clínica entrou em novo bloco Enterprise; revisão comercial recomendada.',
         {
