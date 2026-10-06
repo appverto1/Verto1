@@ -2615,14 +2615,16 @@ export const dataService = {
       started_at: session?.started_at || session?.startedAt || new Date().toISOString(),
       source: session?.source || session?.clientSource || ABA_DEFAULT_SOURCE
     };
-    const therapeuticPlanId = String(session?.therapeutic_plan_id || session?.therapeuticPlanId || '').trim();
+    // Opening a clinical session establishes authoritative server state. Never
+    // report a locally queued session as started: completion and appointment
+    // linkage both depend on this exact session id already existing server-side.
     return await saveOfflineFirst(
       id,
       data,
       'aba',
       '/api/aba/sessions',
       'POST',
-      { requireServerAck: Boolean(therapeuticPlanId) },
+      { requireServerAck: true },
     );
   },
 
