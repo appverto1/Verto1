@@ -134,7 +134,8 @@ const SALES_FUNCTIONAL_MODULE_KEYS = [
   'school_management'
 ] as const;
 
-const SALES_PATIENT_CAPACITY_BLOCKS = [10, 20, 30, 40, 50] as const;
+const SALES_ESSENTIAL_PATIENT_LIMIT = 50;
+const SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50;
 const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000;
 const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000;
 
@@ -143,10 +144,35 @@ const isSalesFunctionalModuleItemKey = (value: string) =>
     value as (typeof SALES_FUNCTIONAL_MODULE_KEYS)[number]
   );
 
-const commercialCapacityForDemand = (patientQuantity: number) =>
-  SALES_PATIENT_CAPACITY_BLOCKS.find(
-    (capacity) => patientQuantity <= capacity
-  ) ?? null;
+const commercialCapacityForDemand = (patientQuantity: number) => {
+  const demand = Math.max(1, Math.floor(Number(patientQuantity) || 1));
+  if (demand <= SALES_ESSENTIAL_PATIENT_LIMIT) {
+    return SALES_ESSENTIAL_PATIENT_LIMIT;
+  }
+  return (
+    Math.ceil(demand / SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS) *
+    SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+  );
+};
+
+const commercialPlanLabelForCapacity = (capacity: number) => {
+  const safeCapacity = Math.max(
+    SALES_ESSENTIAL_PATIENT_LIMIT,
+    Math.floor(Number(capacity) || SALES_ESSENTIAL_PATIENT_LIMIT)
+  );
+  if (safeCapacity <= SALES_ESSENTIAL_PATIENT_LIMIT) {
+    return 'Plano Essencial · 1 a 50 pacientes';
+  }
+  const enterpriseBlock = Math.ceil(
+    (safeCapacity - SALES_ESSENTIAL_PATIENT_LIMIT) /
+      SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+  );
+  const startsAt =
+    SALES_ESSENTIAL_PATIENT_LIMIT +
+    (enterpriseBlock - 1) * SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS +
+    1;
+  return `Enterprise ${enterpriseBlock} · ${startsAt} a ${safeCapacity} pacientes`;
+};
 
 const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
   if (marginBasisPoints == null) {
@@ -527,8 +553,7 @@ export const SalesModularProposalBuilder = ({
           core.tiers.find((tier) => tier.maximumQuantity === null) ||
           null;
         const initialCapacity =
-          commercialCapacityForDemand(patientQuantity) ||
-          Math.max(51, patientQuantity);
+          commercialCapacityForDemand(patientQuantity);
         const initialBaseTier = customCapacityTier || recommendedTier;
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
@@ -629,8 +654,7 @@ export const SalesModularProposalBuilder = ({
             );
       const currentLimit = Number(input.customBasePackageLimit || 0);
       if (currentLimit >= demand) return;
-      const nextLimit =
-        commercialCapacityForDemand(demand) || Math.max(51, demand);
+      const nextLimit = commercialCapacityForDemand(demand);
       setInput((current) =>
         current
           ? {
@@ -645,7 +669,7 @@ export const SalesModularProposalBuilder = ({
       setNotice(
         nextLimit > 50
           ? `A quantidade atual exige capacidade Enterprise de ${nextLimit} pacientes.`
-          : `A capacidade foi ajustada para o bloco de ${nextLimit} pacientes para comportar os pacientes atuais.`
+          : `A proposta está no Plano Essencial, com faixa de 1 a 50 pacientes.`
       );
       return;
     }
@@ -1284,57 +1308,6 @@ export const SalesModularProposalBuilder = ({
     });
   };
 
-  const selectCommercialCapacity = (capacity: number | 'enterprise') => {
-    if (!catalog || !input) return;
-    const core = catalog.items.find(
-      (item) => item.itemKey === 'clinical_core'
-    );
-    const customTier =
-      core?.tiers.find((tier) => tier.isCustom) ||
-      core?.tiers.find((tier) => tier.maximumQuantity === null) ||
-      null;
-    if (!core || !customTier) {
-      setError('O catálogo ativo não possui faixa personalizada para esta capacidade.');
-      return;
-    }
-    const minimumCapacity =
-      input.commercialCapacityBasis === 'current_patients'
-        ? input.patientQuantity
-        : salesPackageDemand(
-            input.patientQuantity,
-            input.expectedPatientQuantity12Months
-          );
-    const nextCapacity =
-      capacity === 'enterprise'
-        ? Math.max(51, minimumCapacity, Number(input.customBasePackageLimit || 0))
-        : capacity;
-    if (nextCapacity < minimumCapacity) {
-      setError(
-        `A clínica já possui ${minimumCapacity} pacientes. Escolha um bloco que comporte a demanda atual.`
-      );
-      return;
-    }
-    const lines = input.lines.map((line) =>
-      line.itemKey === 'clinical_core'
-        ? { ...line, tierId: customTier.id, quantity: input.patientQuantity }
-        : line
-    );
-    updateInput({
-      basePackageTierId: customTier.id,
-      basePackageSelectionMode: 'manual',
-      customBasePackageLimit: nextCapacity,
-      customCapacityBlocks: null,
-      customCapacitySelectionMode: 'automatic',
-      lines
-    });
-    setError('');
-    setNotice(
-      capacity === 'enterprise'
-        ? 'Capacidade Enterprise selecionada. Defina o limite acima de 50 pacientes.'
-        : `Bloco de ${nextCapacity} pacientes selecionado.`
-    );
-  };
-
   const toggleItem = (item: SalesPricingCatalogItem) => {
     if (!input || !catalog) return;
     const exists = input.lines.some((line) => line.itemKey === item.itemKey);
@@ -1869,10 +1842,8 @@ export const SalesModularProposalBuilder = ({
     Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
   );
   const nextStandardCommercialCapacity =
-    currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
-      ? SALES_PATIENT_CAPACITY_BLOCKS.find(
-          (capacity) => capacity > currentCommercialCapacity
-        ) || null
+    currentCommercialCapacity > 0
+      ? currentCommercialCapacity + SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
       : null;
   const selectedCommercialModuleNames = input && catalog
     ? input.lines
@@ -1888,7 +1859,10 @@ export const SalesModularProposalBuilder = ({
     nextStandardCommercialCapacity &&
     currentCapacityBlockPhase?.blockPriceCents != null
       ? preview.promotionalRecurringRevenueCents +
-        currentCapacityBlockPhase.blockPriceCents
+        Math.round(
+          currentCapacityBlockPhase.blockPriceCents /
+            SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+        )
       : null;
 
   return (
@@ -2121,53 +2095,18 @@ export const SalesModularProposalBuilder = ({
                     </div>
                   </div>
                 </div>
-                <div className="mt-4">
-                  <p className="text-xs font-medium text-slate-600">
-                    Bloco de pacientes
+                <div className="mt-4 rounded-xl border border-violet-200 bg-violet-50/60 p-4">
+                  <p className="text-xs font-medium uppercase tracking-wide text-violet-700">
+                    Plano de capacidade
                   </p>
-                  <div
-                    role="radiogroup"
-                    aria-label="Capacidade contratada"
-                    className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-6"
-                  >
-                    {SALES_PATIENT_CAPACITY_BLOCKS.map((capacity) => {
-                      const selected =
-                        Number(input.customBasePackageLimit || 0) === capacity;
-                      const disabled = currentPackageDemand > capacity;
-                      return (
-                        <button
-                          key={capacity}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          disabled={disabled}
-                          onClick={() => selectCommercialCapacity(capacity)}
-                          className={`min-h-11 rounded-xl border px-3 text-sm font-medium transition ${
-                            selected
-                              ? 'border-violet-300 bg-violet-600 text-white'
-                              : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50'
-                          } disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300`}
-                        >
-                          {capacity}
-                        </button>
-                      );
-                    })}
-                    <button
-                      type="button"
-                      role="radio"
-                      aria-checked={Number(input.customBasePackageLimit || 0) > 50}
-                      onClick={() => selectCommercialCapacity('enterprise')}
-                      className={`min-h-11 rounded-xl border px-3 text-sm font-medium transition ${
-                        Number(input.customBasePackageLimit || 0) > 50
-                          ? 'border-violet-300 bg-violet-600 text-white'
-                          : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50'
-                      }`}
-                    >
-                      Enterprise
-                    </button>
-                  </div>
-                  <p className="mt-2 text-xs font-normal text-slate-500">
-                    10, 20, 30, 40 ou 50 pacientes. Acima disso, preço e capacidade são tratados sob consulta.
+                  <p className="mt-1 text-sm font-semibold text-violet-950">
+                    {commercialPlanLabelForCapacity(
+                      Number(input.customBasePackageLimit || SALES_ESSENTIAL_PATIENT_LIMIT)
+                    )}
+                  </p>
+                  <p className="mt-2 text-xs font-normal leading-5 text-violet-700">
+                    A faixa é definida automaticamente pela quantidade de pacientes.
+                    O preço por paciente dos módulos permanece congelado no contrato.
                   </p>
                 </div>
                 {coreItem ? (
@@ -4586,9 +4525,9 @@ export const SalesModularProposalBuilder = ({
                 Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
               );
               const nextStandardCommercialCapacity =
-                currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
-                  ? SALES_PATIENT_CAPACITY_BLOCKS.find((capacity) => capacity > currentCommercialCapacity) || null
-                  : null;
+    currentCommercialCapacity > 0
+      ? currentCommercialCapacity + SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+      : null;
               const selectedCommercialModuleNames = preview
                 ? preview.lines
                     .filter((line) => isSalesFunctionalModuleItemKey(line.itemKey))
@@ -4596,7 +4535,10 @@ export const SalesModularProposalBuilder = ({
                 : [];
               const nextCommercialMonthlyAmountCents =
                 preview && nextStandardCommercialCapacity && currentCapacityBlockPhase?.blockPriceCents != null
-                  ? preview.promotionalRecurringRevenueCents + currentCapacityBlockPhase.blockPriceCents
+                  ? preview.promotionalRecurringRevenueCents + Math.round(
+                    currentCapacityBlockPhase.blockPriceCents /
+                      SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+                  )
                   : null;
               return (
             <aside className="min-w-0 space-y-4 lg:sticky lg:top-[104px] lg:self-start">
@@ -4652,9 +4594,7 @@ export const SalesModularProposalBuilder = ({
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                         <dt className="font-normal text-slate-500">Plano da proposta</dt>
                         <dd className="mt-1 text-sm font-semibold text-slate-900">
-                          {currentCommercialCapacity > 50
-                            ? `Enterprise · ${currentCommercialCapacity}`
-                            : `Até ${currentCommercialCapacity} pacientes`}
+                          {commercialPlanLabelForCapacity(currentCommercialCapacity)}
                         </dd>
                       </div>
                       <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -4681,7 +4621,7 @@ export const SalesModularProposalBuilder = ({
                         <div className="col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
                           <dt className="font-normal text-amber-700">Próximo passo</dt>
                           <dd className="mt-1 font-medium leading-5 text-amber-950">
-                            A partir do 51º paciente, a conta entra em revisão Enterprise; nenhum preço é criado automaticamente.
+                            A partir do 51º paciente, a conta entra em Enterprise e recebe sinalização comercial; a cobrança continua usando o mesmo preço por paciente já contratado.
                           </dd>
                         </div>
                       ) : null}
