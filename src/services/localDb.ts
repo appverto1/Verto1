@@ -691,6 +691,12 @@ export const syncOfflineData = async () => {
     const blockedEntities = new Set<string>();
 
     for (const record of pending) {
+      // Dedicated authenticated Supabase RPC intents share the durable outbox,
+      // but are drained by their feature adapter rather than the generic HTTP sync.
+      if (record.endpoint.startsWith('supabase-rpc:')) {
+        (record as any).data = null;
+        continue;
+      }
       const syncEntityKey = `${record.type}:${entityIdForRecord(record)}`;
       if (blockedEntities.has(syncEntityKey)) {
         (record as any).data = null;

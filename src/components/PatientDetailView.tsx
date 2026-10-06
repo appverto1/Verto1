@@ -12,6 +12,7 @@ import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
+import { AbaReinforcerCatalogPanel } from './AbaReinforcerCatalogPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { PatientEvolutionTimelinePanel } from './PatientEvolutionTimelinePanel';
@@ -11949,6 +11950,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       isDark={isPanelDark}
                       onStartSession={(planContext: any) => requestSessionStart('fullscreen', planContext)}
                     />
+                  )}
+                  {therapeuticPlanMode === 'pts' && hasAbaClinicalProfile && (
+                    <AbaReinforcerCatalogPanel patientId={String(patient?.id || '')} isDark={isPanelDark} />
                   )}
                   {therapeuticPlanMode === 'pei' && (
                   <details open className={`overflow-hidden rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}>
