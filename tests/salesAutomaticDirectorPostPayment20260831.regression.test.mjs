@@ -14,7 +14,9 @@ const verification = server.match(/const verifySalesDirectorContractAccess =[^]*
 assert.match(processPaid, /paymentStatus === "paid"/);
 assert.match(processPaid, /confirm_sales_assisted_checkout_payment/);
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
-assert.doesNotMatch(processPaid, /buildSalesPostPaymentActivationEmail|prepareSalesActivationAccess\(|sendTransactionalEmail|resend\.emails\.send/);
+assert.doesNotMatch(processPaid, /buildSalesPostPaymentActivationEmail|sendTransactionalEmail|resend\.emails\.send/);
+assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
 const createUserBlock = provision.match(/supabase\.auth\.admin\.createUser\(\{[^]*?\}\);/)?.[0] || '';
 assert.match(createUserBlock, /email,/);
