@@ -1050,29 +1050,26 @@ function frozenPerPatientUnitPriceCents(
 function acceptedFrozenPatientQuantity(
   contract: ModularCapacityBillingContract
 ): number {
-  const phases = Array.isArray(contract.sourceSnapshot?.capacityBlockPhases)
-    ? contract.sourceSnapshot.capacityBlockPhases
-    : [];
-  const firstBlockPriceCents = toSafeInteger(phases?.[0]?.blockPriceCents);
-  const acceptedMonthlyAmountCents = toSafeInteger(
-    contract.sourceSnapshot?.acceptedMonthlyAmountCents
+  const acceptedPostPromotionMonthlyAmountCents = toSafeInteger(
+    contract.sourceSnapshot?.acceptedPostPromotionMonthlyAmountCents
   );
   if (
-    firstBlockPriceCents === null ||
-    acceptedMonthlyAmountCents === null ||
-    firstBlockPriceCents % contract.blockSizePatients !== 0
+    acceptedPostPromotionMonthlyAmountCents === null ||
+    contract.blockPriceCents % contract.blockSizePatients !== 0
   ) {
     throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
   }
-  const unitPriceCents = firstBlockPriceCents / contract.blockSizePatients;
+  const unitPriceCents =
+    contract.blockPriceCents / contract.blockSizePatients;
   if (
     !Number.isSafeInteger(unitPriceCents) ||
     unitPriceCents <= 0 ||
-    acceptedMonthlyAmountCents % unitPriceCents !== 0
+    acceptedPostPromotionMonthlyAmountCents % unitPriceCents !== 0
   ) {
     throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
   }
-  const quantity = acceptedMonthlyAmountCents / unitPriceCents;
+  const quantity =
+    acceptedPostPromotionMonthlyAmountCents / unitPriceCents;
   if (!Number.isSafeInteger(quantity) || quantity < 1 || quantity > 100_000) {
     throw new Error('MODULAR_PER_PATIENT_BASELINE_INVALID');
   }
