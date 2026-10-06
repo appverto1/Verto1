@@ -32,6 +32,9 @@ as RPCs a `anon` e `authenticated`; só o backend recebe acesso. A chave única
 é usuário/clínica/tópico/revisão. Alterar papel não concede acesso a aulas de
 outro papel: a projeção e as permissões sempre são revalidadas.
 
+O POST usa a proteção central de origem/CSRF já existente na Verto, inclusive
+o domínio confiável configurado para o aplicativo quando houver proxy.
+
 Os 65 JPGs são cópias exatas dos prints revisados, sem barra de navegador,
 URL de staging ou metadados EXIF. Ficam em `services/help-media`, fora dos
 arquivos públicos, e são servidos por uma rota autenticada após autorização

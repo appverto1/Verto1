@@ -6,6 +6,7 @@ import { registerHelpCenterRoutes } from '../services/helpCenterRoutes';
 import { publishedTutorialHelpProjection, TUTORIAL_ARTICLES } from '../services/helpTutorialCatalog';
 import { findSupportTopics, pausedSupportQuery } from '../src/help/helpSupport';
 import { CAPABILITY_CATALOG } from '../src/constants/authorizationModel';
+import { createSensitiveApiMutationProtectionMiddleware } from '../src/utils/sensitiveApiMutationProtection.mjs';
 
 const caps=CAPABILITY_CATALOG.map(c=>c.key),modules=['clinical_core','appointments_communication','financial_management','insurance_tiss'];
 assert.equal(new Set(TUTORIAL_ARTICLES.flatMap(a=>a.requiredCapabilities).filter(c=>!caps.includes(c as any))).size,0);
@@ -48,6 +49,7 @@ const supabase:any={
   }
 };
 const app=express();app.use(express.json({limit:'2kb'}));
+app.use('/api',createSensitiveApiMutationProtectionMiddleware({configuredAppBase:()=> 'https://appverto.example.invalid'}));
 registerHelpCenterRoutes(app,{supabase,supportNumber:()=>number,
   noStoreDynamicResponse:(_req:any,res:any,next:any)=>{res.setHeader('Cache-Control','private, no-store');next();},
   checkAuth:(req:any,res:any,next:any)=>{const ctx=contexts.get(req.get('x-test-session'));if(!ctx)return res.sendStatus(401);req.session={user:{id:ctx.userId,clinicId:ctx.clinicId}};next();},
@@ -56,7 +58,7 @@ registerHelpCenterRoutes(app,{supabase,supportNumber:()=>number,
 });
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address() as any;const base=`http://127.0.0.1:${address.port}`;
 const call=async(path:string,session='a',body?:any,headers:any={})=>{
-  const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{'x-test-session':session,'Content-Type':'application/json',...headers},body:body===undefined?undefined:JSON.stringify(body)});
+  const r=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{'x-test-session':session,'Content-Type':'application/json',Cookie:'verto-session=synthetic-test',Origin:base,...headers},body:body===undefined?undefined:JSON.stringify(body)});
   const text=await r.text();return {status:r.status,body:()=>JSON.parse(text),text,headers:r.headers};
 };
 try{
@@ -70,6 +72,8 @@ try{
   assert.equal((await call('/api/help/tutorial-progress','a',{...body,completed:true,clinicId:'clinic-b'})).status,400);
   const before=rpcCalls;
   assert.equal((await call('/api/help/support','a',body,{Origin:'https://evil.invalid'})).status,403);assert.equal(rpcCalls,before);
+  assert.equal((await call('/api/help/support','a',body,{Origin:'',Referer:''})).status,403,'cookie mutation needs trusted browser origin');
+  assert.equal((await call('/api/help/support','a',body,{Origin:'https://appverto.example.invalid'})).status,200,'configured app origin remains accepted through API proxy');
   assert.equal((await call('/api/help/tutorial-progress','a',{...body,completed:'yes'})).status,400);
   assert.equal((await call('/api/help/tutorial-progress','a',{...body,completed:true})).status,200);
   const first=(await call('/api/help/tutorial-progress','a',{...body,completed:true})).body().completedAt;

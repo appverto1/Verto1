@@ -71,10 +71,8 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   });
 
   const validateAction=(req:any,res:any,next:any)=>{
-    const origin=String(req.headers?.origin||'');
-    let sameOrigin=true;
-    try{if(origin)sameOrigin=new URL(origin).host===req.get('host');}catch{sameOrigin=false;}
-    if(!sameOrigin||req.headers?.['sec-fetch-site']==='cross-site')return res.status(403).json({error:'HELP_ORIGIN_DENIED'});
+    // Origin/CSRF protection is already mounted centrally for every /api mutation.
+    // Preserve its trusted app-origin/proxy policy instead of introducing another one.
     if(!req.is('application/json')||!req.body||Array.isArray(req.body)||JSON.stringify(req.body).length>1024)
       return res.status(400).json({error:'HELP_INVALID_REQUEST'});
     return next();
