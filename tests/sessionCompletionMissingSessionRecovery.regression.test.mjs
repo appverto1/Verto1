@@ -10,12 +10,19 @@ const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'u
 const server = read('server.ts');
 const dataService = read('src/services/dataService.ts');
 const sessionMode = read('src/components/SessionMode.tsx');
+const patientDetail = read('src/components/PatientDetailView.tsx');
 const summary = read('src/utils/abaSessionSummary.ts');
 
 // The server distinguishes a missing session (safe to recreate through the canonical
 // start contract) from a missing appointment (never auto-healed).
 assert.match(server, /SESSION_COMPLETION_SESSION_NOT_FOUND[\s\S]*missingResource: 'session'[\s\S]*recoverable: true/);
 assert.match(server, /SESSION_COMPLETION_APPOINTMENT_NOT_FOUND[\s\S]*missingResource: 'appointment'[\s\S]*recoverable: false/);
+
+// Starting an ABA session is server-authoritative. A locally queued session must
+// never become the active clinical session before the server confirms persistence.
+assert.match(dataService, /saveAbaSession\(session:[\s\S]*?requireServerAck: true/);
+assert.doesNotMatch(patientDetail, /if \(!requiresServerIssuedPlanContext\) persistActiveSession\(nextSession\)/);
+assert.match(patientDetail, /saveResult\?\.success === true[\s\S]*saveResult\?\.offline !== true[\s\S]*saveResult\?\.pending !== true[\s\S]*Boolean\(savedSession\?\.id\)[\s\S]*persistActiveSession\(\{[\s\S]*\.\.\.nextSession/);
 
 // Completion recovery is deliberately narrow: only the explicit missing-session
 // response may trigger one canonical save of the same session id.
