@@ -24,8 +24,8 @@ assert.match(
 );
 assert.match(
   patientDetail,
-  /if \(!requiresServerIssuedPlanContext\) persistActiveSession\(nextSession\)/,
-  'sessão vinculada a plano não pode virar contexto local definitivo antes do ACK do servidor',
+  /if \(!abaV2Enabled\) persistActiveSession\(nextSession\)/,
+  'sessão ABA V2 não pode virar contexto local definitivo antes do ACK do servidor',
 );
 assert.match(
   patientDetail,
@@ -34,8 +34,8 @@ assert.match(
 );
 assert.match(
   dataService,
-  /requireServerAck: Boolean\(therapeuticPlanId\)/,
-  'cold start de sessão por especialidade não pode entrar no outbox sem contexto canônico emitido',
+  /saveAbaSession\(session: any\)[\s\S]*?requireServerAck: true/,
+  'qualquer início de sessão ABA V2 deve receber ACK do servidor antes de virar contexto clínico ativo',
 );
 assert.match(
   dataService,

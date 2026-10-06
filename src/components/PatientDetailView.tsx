@@ -2269,10 +2269,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       recordCount: 0
     };
     const requiresServerIssuedPlanContext = Boolean(nextSession.therapeutic_plan_id);
-    // A plan-scoped session becomes locally active only after the server has
-    // issued the immutable specialty-plan/PTS context. Generic legacy sessions
-    // preserve the existing offline-first behavior.
-    if (!requiresServerIssuedPlanContext) persistActiveSession(nextSession);
+    // ABA V2 session start is server-authoritative. Only the disabled/legacy
+    // surface keeps the historical local-only behavior.
+    if (!abaV2Enabled) persistActiveSession(nextSession);
     if (abaV2Enabled) {
       const saveResult = await dataService.saveAbaSession({
         id: nextSession.id,
@@ -2400,6 +2399,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ? 'Sessão não encontrada. Atualize a agenda e tente novamente.'
               : errorText || 'Não foi possível vincular a Sessão ABA a este agendamento clínico.';
         alert(humanError);
+        return;
+      }
+      const serverSessionConfirmed =
+        saveResult?.success === true &&
+        saveResult?.offline !== true &&
+        saveResult?.pending !== true &&
+        Boolean(savedSession?.id);
+      if (!serverSessionConfirmed) {
+        clearActiveSession();
+        setShowSessionStartConfirm(false);
+        setPendingSessionPlanContext(null);
+        const serverPersistenceError = String(saveResult?.error || saveResult?.message || '').trim();
+        alert(
+          serverPersistenceError ||
+          'Não foi possível confirmar o início da sessão no servidor. Verifique a conexão e tente novamente.'
+        );
         return;
       }
       if (requiresServerIssuedPlanContext) {
