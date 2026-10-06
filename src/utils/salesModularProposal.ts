@@ -1406,13 +1406,13 @@ const resolveGrossAmounts = (
       : editMode === 'per_patient'
         ? roundSalesMoneyCents(Number(sourceAmount))
         : roundSalesMoneyCents(
-            Number(sourceAmount) / contractedCapacityPatients
+            Number(sourceAmount) / quantity
           );
     const recurringAmountCents =
       proposedPricePerPatientCents === null
         ? 0
         : roundSalesMoneyCents(
-            contractedCapacityPatients * proposedPricePerPatientCents
+            quantity * proposedPricePerPatientCents
           );
     const monthlyTotalRepresentable =
       editMode !== 'monthly_total' ||
@@ -2799,7 +2799,7 @@ export function calculateSalesModularProposal(
         ? normalizePerPatientOfferDiscount(
             normalizedOfferDiscount,
             normalPricePerPatientCents,
-            basePackageContractedLimit
+            amounts.quantity
           )
         : normalizedOfferDiscount;
     const legacyDiscountBasisPoints = nonNegativeInteger(
@@ -2827,7 +2827,7 @@ export function calculateSalesModularProposal(
         : 0
       : normalPricePerPatientCents === null
         ? multiplyBasisPoints(amounts.recurringAmountCents, discountBasisPoints)
-        : basePackageContractedLimit *
+        : amounts.quantity *
           multiplyBasisPoints(
             normalPricePerPatientCents,
             discountBasisPoints
@@ -2870,7 +2870,7 @@ export function calculateSalesModularProposal(
           ? null
           : roundSalesMoneyCents(
               (amounts.recurringAmountCents - itemDiscountCents) /
-                basePackageContractedLimit
+                amounts.quantity
             ),
       postPromotionPricePerPatientCents:
         normalPricePerPatientCents === null
@@ -2879,7 +2879,7 @@ export function calculateSalesModularProposal(
             ? normalPricePerPatientCents
             : roundSalesMoneyCents(
                 (amounts.recurringAmountCents - itemDiscountCents) /
-                  basePackageContractedLimit
+                  amounts.quantity
               ),
       commercialPricing: resolvedAmounts.commercialPricing,
       directCostCents: costResolution.monthlyCostCents,
