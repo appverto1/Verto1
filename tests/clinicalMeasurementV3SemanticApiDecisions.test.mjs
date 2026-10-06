@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
 const migration = fs.readFileSync('supabase/migrations/20260820220000_clinical_measurement_v3_semantic_api_decisions.sql','utf8');
-const route = fs.readFileSync('services/clinicalMeasurementV3Routes.ts','utf8');
+const route = [
+  fs.readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8'),
+  fs.readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8'),
+  fs.readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8'),
+  fs.readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8'),
+].join('\n');
 const server = fs.readFileSync('server.ts','utf8');
 
 for (const table of [

@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 
 const writer = readFileSync('supabase/migrations/20260823200000_clinical_measurement_v3_plan_writer_ui_convergence.sql', 'utf8');
 const reader = readFileSync('supabase/migrations/20260823200500_clinical_measurement_v3_plan_read_model_proportion.sql', 'utf8');
-const routes = readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
+const routes = [
+  readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8'),
+].join('\n');
 const sessionMode = readFileSync('src/components/SessionMode.tsx', 'utf8');
 const therapeuticPlan = readFileSync('src/utils/therapeuticPlan.ts', 'utf8');
 

@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 
 const migration = readFileSync('supabase/migrations/20260820233000_clinical_measurement_v3_security_shadow_hardening.sql', 'utf8');
 const lower = migration.toLowerCase();
-const routes = readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
+const routes = [
+  readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8'),
+  readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8'),
+].join('\n');
 const threatModel = readFileSync('docs/architecture/clinical-measurement-v3/security/threat-model.md', 'utf8');
 const matrix = readFileSync('docs/architecture/clinical-measurement-v3/verification/architecture-test-matrix.md', 'utf8');
 
