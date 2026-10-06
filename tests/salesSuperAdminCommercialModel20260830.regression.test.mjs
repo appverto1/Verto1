@@ -38,6 +38,21 @@ assert.match(stripeService, /targetAdditionalPatients/);
 assert.match(stripeService, /enterprise_review_required/);
 assert.match(stripeService, /commercialPatientLimit/);
 
+const commercialLimit = (patients) =>
+  patients <= 50 ? 50 : Math.ceil(patients / 50) * 50;
+assert.equal(commercialLimit(1), 50);
+assert.equal(commercialLimit(50), 50);
+assert.equal(commercialLimit(51), 100);
+assert.equal(commercialLimit(100), 100);
+assert.equal(commercialLimit(101), 150);
+assert.equal(commercialLimit(150), 150);
+assert.equal(commercialLimit(151), 200);
+
+const frozenModulePricePerPatientCents = 3_000;
+assert.equal(50 * frozenModulePricePerPatientCents, 150_000);
+assert.equal(51 * frozenModulePricePerPatientCents, 153_000);
+assert.equal(101 * frozenModulePricePerPatientCents, 303_000);
+
 assert.match(builder, /SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000/);
 assert.match(builder, /SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000/);
 assert.match(builder, /border-emerald-200/);
