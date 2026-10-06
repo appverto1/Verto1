@@ -1616,7 +1616,43 @@ export const SalesPricingCatalogPanel = () => {
                   </span>
                 </summary>
                 <div className="border-t border-slate-100 p-4">
-                  {item.tiers.length > 0 ? (
+                  {item.itemKey === 'clinical_core' ? (
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      <div className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-violet-700">
+                          Plano Essencial
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-slate-900">
+                          1 a 50 pacientes
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          O preço por paciente é a soma dos módulos contratados e fica congelado no contrato.
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                          Enterprise 1
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-slate-900">
+                          51 a 100 pacientes
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          O paciente 51 inicia o primeiro bloco Enterprise e gera sinalização comercial.
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-slate-200 bg-white p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+                          Enterprise 2+
+                        </p>
+                        <p className="mt-1 text-sm font-medium text-slate-900">
+                          101 a 150, 151 a 200 e sucessivos
+                        </p>
+                        <p className="mt-2 text-xs leading-5 text-slate-600">
+                          Cada novo bloco cobre mais 50 pacientes sem reprecificar automaticamente os módulos já contratados.
+                        </p>
+                      </div>
+                    </div>
+                  ) : item.tiers.length > 0 ? (
                     <div className="overflow-x-auto">
                       <table className="min-w-[620px] w-full text-left text-xs">
                         <thead className="text-slate-500">
