@@ -2303,6 +2303,7 @@ export default function App() {
   const [therapistNotes, setTherapistNotes] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const historyRef = useRef<any[]>([]);
+  const taskCompletionInFlightRef = useRef<Set<string>>(new Set());
   const [tasks, setTasks] = useState<any[]>([]);
   const [patientAssignedTaskCount, setPatientAssignedTaskCount] = useState(0);
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
@@ -7094,6 +7095,19 @@ export default function App() {
   };
 
   const handleCompleteTask = async (t: any, e: number | null, n: string) => {
+    const taskCompletionLockKey = String(
+      t?.assignedTaskId ||
+      t?.legacyTaskId ||
+      t?.task_data?.legacyTaskId ||
+      t?.task_data?.legacy_task_id ||
+      t?.id ||
+      ''
+    ).trim();
+    if (taskCompletionLockKey && taskCompletionInFlightRef.current.has(taskCompletionLockKey)) {
+      return { success: false, pending: true, error: 'Esta tarefa já está sendo processada.' };
+    }
+    if (taskCompletionLockKey) taskCompletionInFlightRef.current.add(taskCompletionLockKey);
+    try {
     const identity = resolvePatientIdentityForPortal(t);
     const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
     const portalKind = resolvePatientPortalKind(user);
@@ -7212,6 +7226,9 @@ export default function App() {
     }Anotações do Paciente: ${n || 'Nenhuma observação.'}`;
     await handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
     return { success: true, data: newHistoryItem };
+    } finally {
+      if (taskCompletionLockKey) taskCompletionInFlightRef.current.delete(taskCompletionLockKey);
+    }
   };
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
     const targetPatient = allPatients.find(p => p.id === pid);
