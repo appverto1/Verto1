@@ -816,38 +816,63 @@ export function CoordinatorDashboard({
       setAuthorizationHydrated(true);
       return () => { cancelled = true; };
     }
-    void dataService.getClinicAuthorizationContext().then((result: any) => {
+
+    const applyFailClosedAuthorization = () => {
       if (cancelled) return;
-      if (result?.success && Array.isArray(result?.data?.capabilities)) {
-        setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
-        const nextMode = result?.data?.moduleAccessMode === "legacy_full" ? "legacy_full" : "contract";
-        setModuleAccessMode(nextMode);
-        setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
-        setOrganizationModules(new Set(
-          Array.isArray(result?.data?.modules)
-            ? result.data.modules
-                .map((value: any) => String(value || '').trim())
-                .filter((value: string): value is OrganizationModuleKey =>
-                  ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
-                )
-            : [],
-        ));
-      }
+      // Authorization hydration failures must fail closed for optional modules
+      // while preserving the mandatory clinical baseline.
+      setEffectiveCapabilities(
+        new Set(filterCapabilitiesByOrganizationModules(baseCapabilities, 'contract', new Set<OrganizationModuleKey>())),
+      );
+      setModuleAccessMode('contract');
+      setOrganizationModules(new Set());
       setAuthorizationHydrated(true);
-    }).catch(() => {
-      if (!cancelled) {
-        // Authorization hydration failures must fail closed for optional modules
-        // while preserving the mandatory clinical baseline.
-        setEffectiveCapabilities(
-          new Set(filterCapabilitiesByOrganizationModules(baseCapabilities, 'contract', new Set<OrganizationModuleKey>())),
-        );
-        setModuleAccessMode('contract');
-        setOrganizationModules(new Set());
-        setAuthorizationHydrated(true);
+    };
+
+    const hydrateAuthorization = async () => {
+      // First login/context selection can race the server-side session refresh.
+      // Retry exactly once so an entitled receptionist does not need F5 to see
+      // modules that the canonical authorization endpoint already allows.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let result: any;
+        try {
+          result = await dataService.getClinicAuthorizationContext();
+        } catch {
+          result = { success: false };
+        }
+        if (cancelled) return;
+
+        if (result?.success && Array.isArray(result?.data?.capabilities)) {
+          setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
+          const nextMode = result?.data?.moduleAccessMode === "legacy_full" ? "legacy_full" : "contract";
+          setModuleAccessMode(nextMode);
+          setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
+          setOrganizationModules(new Set(
+            Array.isArray(result?.data?.modules)
+              ? result.data.modules
+                  .map((value: any) => String(value || '').trim())
+                  .filter((value: string): value is OrganizationModuleKey =>
+                    ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
+                  )
+              : [],
+          ));
+          setAuthorizationHydrated(true);
+          return;
+        }
       }
-    });
+
+      applyFailClosedAuthorization();
+    };
+
+    void hydrateAuthorization();
     return () => { cancelled = true; };
-  }, [baseCapabilities, normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
+  }, [
+    baseCapabilities,
+    normalizedRole,
+    user?.activeAccessContextId,
+    user?.activeWorkspaceId,
+    user?.clinicId,
+  ]);
 
   const hasCapability = useCallback(
     (capability: string) => effectiveCapabilities.has(capability),
