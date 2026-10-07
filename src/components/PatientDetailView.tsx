@@ -68,6 +68,7 @@ import html2canvas from 'html2canvas';
 import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
+import { appointmentClinicalSpecialtyKey, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -2084,7 +2085,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   }, [sessionStorageKey, patient?.id]);
 
-  const requestSessionStart = (
+  const requestSessionStart = async (
     nextAction: 'tab' | 'fullscreen' = 'fullscreen',
     planContext?: { therapeuticPlanId?: string | null; specialty?: string | null } | null,
   ) => {
@@ -2097,11 +2098,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setIsSessionModeOpen(true);
       return;
     }
+
+    let requestedPlanId = String(planContext?.therapeuticPlanId || '').trim();
+    let requestedPlanSpecialty = String(planContext?.specialty || '').trim() || null;
+
+    // Sessions opened from Agenda must inherit the appointment specialty rather
+    // than falling back to every plan visible for the patient.
+    if (!requestedPlanId && scheduledSessionForPatient && appointmentClinicalSpecialtyKey(scheduledSessionForPatient)) {
+      const planResult = await dataService.getPatientTherapeuticPlan(String(patient?.id || ''), { force: false });
+      if (planResult?.success === false) {
+        alert(planResult?.message || planResult?.error || 'Não foi possível confirmar o plano desta especialidade.');
+        return;
+      }
+      const scopes = Array.isArray(planResult?.data?.planScopes) ? planResult.data.planScopes : [];
+      const candidates = sessionSpecialtyPlanCandidates(scopes, scheduledSessionForPatient)
+        .filter((scope: any) => scope?.canEdit === true);
+      if (candidates.length > 1) {
+        alert('Existe mais de um plano ativo para a especialidade deste atendimento. Inicie a sessão pelo plano correto.');
+        return;
+      }
+      if (candidates.length === 1) {
+        requestedPlanId = String(candidates[0]?.id || '').trim();
+        requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
+      }
+      // Zero active specialty plans is valid: keep the session unbound so the
+      // shared/legacy PEI can remain available without importing a paused or
+      // different-specialty therapeutic plan.
+    }
+
     setPendingSessionAction(resolvedAction);
-    const requestedPlanId = String(planContext?.therapeuticPlanId || '').trim();
     setPendingSessionPlanContext(requestedPlanId ? {
       therapeuticPlanId: requestedPlanId,
-      specialty: String(planContext?.specialty || '').trim() || null,
+      specialty: requestedPlanSpecialty,
     } : null);
     setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
     setRestoreSessionData(false);

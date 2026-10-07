@@ -187,6 +187,7 @@ const criticalTests = [
   'tests/supabaseSchemaSelectGuard.test.ts',
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',
   'tests/therapeuticPlanSessionContext.regression.test.mjs',
+  'tests/sessionSpecialtyIsolation.test.ts',
   'tests/patientCaseTeamCoordinatorAuthority.regression.test.mjs',
   'tests/patientCaseTeamManagerRemoval.regression.test.mjs',
   'tests/patientCaseTeamPrimaryPointerNullable.regression.test.mjs',
