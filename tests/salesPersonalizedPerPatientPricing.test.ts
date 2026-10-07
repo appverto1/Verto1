@@ -406,6 +406,219 @@ assert.notEqual(
   'o catálogo real do clinical_core deve produzir margem consolidada'
 );
 
+const liveAgenda40 = recurringModule();
+liveAgenda40.pricingMode = 'package_limit';
+liveAgenda40.unitName = 'pacientes';
+liveAgenda40.recurringAmountCents = null;
+liveAgenda40.tiers = [
+  {
+    id: 'agenda-up-to-50',
+    itemId: liveAgenda40.id,
+    tierKey: 'up_to_50',
+    publicName: 'Agenda até 50',
+    minimumQuantity: 1,
+    maximumQuantity: 50,
+    includedQuantity: 50,
+    recurringAmountCents: 12900,
+    oneTimeAmountCents: null,
+    sortOrder: 30,
+    isCustom: false,
+    metadata: {}
+  },
+  {
+    id: 'agenda-custom',
+    itemId: liveAgenda40.id,
+    tierKey: 'custom',
+    publicName: 'Agenda personalizada',
+    minimumQuantity: 101,
+    maximumQuantity: null,
+    includedQuantity: null,
+    recurringAmountCents: null,
+    oneTimeAmountCents: null,
+    sortOrder: 50,
+    isCustom: true,
+    metadata: {}
+  }
+];
+liveAgenda40.costModel = {
+  ...liveAgenda40.costModel!,
+  directFixedMonthlyCostCents: null,
+  directCostPerPatientCents: 0,
+  directCostPerClinicCents: 0,
+  directCostPerUsageUnitCents: 0,
+  storageCostPerGbCents: null,
+  egressCostPerGbCents: null,
+  notificationCostPerUnitCents: 0,
+  processingCostPerUnitCents: null,
+  otherVariableCostCents: 0,
+  supportFixedMonthlyCostCents: 625,
+  supportCostPerPatientCents: 31,
+  operationalFixedMonthlyCostCents: 625,
+  sharedCostAllocationWeight: 2,
+  driverConfig: {
+    schemaVersion: 2,
+    requiredDrivers: [
+      'monthlyAppointments',
+      'remindersPerAppointment',
+      'internalNotifications',
+      'emails',
+      'webPushNotifications'
+    ],
+    profiles: {
+      light: {
+        monthlyAppointments: driver(20),
+        remindersPerAppointment: driver(1),
+        internalNotifications: driver(20),
+        emails: driver(20),
+        webPushNotifications: driver(20)
+      },
+      standard: {
+        monthlyAppointments: driver(40),
+        remindersPerAppointment: driver(2),
+        internalNotifications: driver(40),
+        emails: driver(80),
+        webPushNotifications: driver(80)
+      },
+      intensive: {
+        monthlyAppointments: driver(80),
+        remindersPerAppointment: driver(3),
+        internalNotifications: driver(80),
+        emails: driver(240),
+        webPushNotifications: driver(240)
+      }
+    },
+    unitCostsCents: {}
+  }
+};
+
+const liveFinance40: SalesPricingCatalogItem = {
+  id: 'financial-item-live',
+  itemKey: 'financial_management',
+  publicName: 'Financeiro e Gestão',
+  internalName: 'Financeiro gerencial',
+  description: 'Financeiro gerencial',
+  pricingMode: 'flat_monthly',
+  billingInterval: 'monthly',
+  unitName: 'clínica',
+  includedQuantity: null,
+  maximumQuantity: null,
+  recurringAmountCents: 9900,
+  oneTimeAmountCents: null,
+  sortOrder: 30,
+  isRequired: false,
+  isPublic: true,
+  isActive: true,
+  compatibleBasePackages: [],
+  metadata: {},
+  tiers: [],
+  costModel: {
+    id: 'financial-cost-live',
+    itemId: 'financial-item-live',
+    version: 1,
+    directFixedMonthlyCostCents: 0,
+    directCostPerPatientCents: null,
+    directCostPerClinicCents: 0,
+    directCostPerUsageUnitCents: 0,
+    storageCostPerGbCents: null,
+    egressCostPerGbCents: null,
+    notificationCostPerUnitCents: null,
+    processingCostPerUnitCents: 0,
+    otherVariableCostCents: 0,
+    supportFixedMonthlyCostCents: 625,
+    supportCostPerPatientCents: null,
+    operationalFixedMonthlyCostCents: 623,
+    onboardingCostCents: null,
+    sharedCostAllocationWeight: 1,
+    costSource: 'estimated',
+    sourceDetail: 'Premissa econômica pré-lançamento reproduzida do catálogo ativo.',
+    effectiveAt,
+    driverConfig: {
+      schemaVersion: 2,
+      requiredDrivers: [
+        'financialEntries',
+        'financialReports',
+        'recurringProcesses'
+      ],
+      profiles: {
+        light: {
+          financialEntries: driver(40),
+          financialReports: driver(2),
+          recurringProcesses: driver(4)
+        },
+        standard: {
+          financialEntries: driver(100),
+          financialReports: driver(5),
+          recurringProcesses: driver(10)
+        },
+        intensive: {
+          financialEntries: driver(250),
+          financialReports: driver(10),
+          recurringProcesses: driver(20)
+        }
+      },
+      unitCostsCents: {
+        financialReports: 0,
+        recurringProcesses: 0
+      }
+    }
+  }
+};
+
+const liveThreeModuleCatalog40 = structuredClone(liveClinicalCatalog40);
+liveThreeModuleCatalog40.items = [
+  ...liveThreeModuleCatalog40.items.filter(
+    (item) => !['appointments_communication', 'financial_management'].includes(item.itemKey)
+  ),
+  liveAgenda40,
+  liveFinance40
+];
+
+const liveThreeModuleInput40 = structuredClone(builderState40);
+liveThreeModuleInput40.lines.push(
+  {
+    itemKey: 'appointments_communication',
+    tierId: 'agenda-custom',
+    quantity: 40,
+    itemDiscountBasisPoints: 0,
+    pricingEditMode: 'monthly_total',
+    proposedPricePerPatientCents: null,
+    customRecurringAmountCents: 4900
+  },
+  {
+    itemKey: 'financial_management',
+    tierId: null,
+    quantity: 40,
+    itemDiscountBasisPoints: 0,
+    pricingEditMode: 'monthly_total',
+    proposedPricePerPatientCents: null,
+    customRecurringAmountCents: 9900
+  }
+);
+
+const liveThreeModuleResult40 = calculateSalesModularProposal(
+  liveThreeModuleInput40,
+  liveThreeModuleCatalog40,
+  recoveredAssumptions40
+);
+for (const itemKey of [
+  'clinical_core',
+  'appointments_communication',
+  'financial_management'
+]) {
+  const line = liveThreeModuleResult40.lines.find((candidate) => candidate.itemKey === itemKey);
+  assert.ok(line, `linha ausente: ${itemKey}`);
+  assert.notEqual(
+    line.postPromotion.ebitdaMarginBasisPoints,
+    null,
+    `margem indisponível no cenário real: ${itemKey}`
+  );
+}
+assert.notEqual(
+  liveThreeModuleResult40.promotional.ebitdaMarginBasisPoints,
+  null,
+  'Clínica + Agenda + Financeiro devem produzir margem consolidada'
+);
+
 const result150 = calculateSalesModularProposal(
   unitInput(150),
   catalog(),
