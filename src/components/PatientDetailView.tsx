@@ -785,7 +785,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [allowedTabs, hasAbaSessionSurface, hasAnySessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
-  const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
+  const canViewAnamnesis =
+    canAccessTab('history') &&
+    canAccessTab('notes') &&
+    hasCapability('clinical.anamnesis.view');
+  const canEditAnamnesis =
+    canViewAnamnesis &&
+    hasCapability('clinical.anamnesis.edit');
   const getSessionFallbackTab = () =>
     allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
 
@@ -799,11 +805,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [initialTab, patient?.id, allowedTabsSet, hasAbaSessionSurface]);
 
   useEffect(() => {
-    if (openAnamnesisOnLoad) {
+    if (openAnamnesisOnLoad && canEditAnamnesis) {
       setShowAnamnesis(true);
       onAnamnesisOpenConsumed?.();
     }
-  }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
+  }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id, canEditAnamnesis]);
 
   const resolvePatientProfessionalId = resolvePatientPrimaryProfessionalId;
 
@@ -836,7 +842,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   ]);
 
   const loadAnamnesisFlow = async () => {
-    if (!patient?.id || !canOpenAnamnesis) return null;
+    if (!patient?.id || !canViewAnamnesis) return null;
     try {
       const result = await dataService.getPatientAnamnesisFlow(String(patient.id));
       if (result?.success) {
@@ -852,7 +858,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     void loadAnamnesisFlow();
-  }, [patient?.id, canOpenAnamnesis]);
+  }, [patient?.id, canViewAnamnesis]);
 
   const getAnamnesisStatusLabel = () => {
     const requestStatus = String(anamnesisFlow?.request?.status || '').toUpperCase();
@@ -10722,7 +10728,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </h1>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <span className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Paciente</span>
-                    {canOpenAnamnesis && (
+                    {canViewAnamnesis && (
                       <span
                         className={`rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
                           getAnamnesisStatusLabel().includes('revisada')
@@ -10735,7 +10741,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         {getAnamnesisStatusLabel()}
                       </span>
                     )}
-                    {canOpenAnamnesis && anamnesisFlowMessage && (
+                    {canViewAnamnesis && anamnesisFlowMessage && (
                       <span className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                         {anamnesisFlowMessage}
                       </span>
@@ -10792,7 +10798,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <MessageCircle size={15} /> WhatsApp
               </a>
 
-              {canOpenAnamnesis && (
+              {canEditAnamnesis && (
                 <button
                   id="anamnesis-btn"
                   onClick={() => setShowAnamnesis(true)}
@@ -10806,7 +10812,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canOpenAnamnesis && (
+              {canEditAnamnesis && (
                 <button
                   onClick={() => void handleSendAnamnesisRequest()}
                   disabled={isSendingAnamnesisRequest}
@@ -10820,7 +10826,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canOpenAnamnesis && hasSubmittedAnamnesisFlow && (
+              {canViewAnamnesis && hasSubmittedAnamnesisFlow && (
                 <button
                   onClick={openSubmittedAnamnesisForFiles}
                   className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-center text-[11px] font-medium leading-tight text-indigo-700 transition-colors hover:bg-indigo-100 sm:flex-none"
@@ -10829,7 +10835,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canOpenAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
+              {canEditAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
                 <button
                   onClick={() => void handleReviewAnamnesisFlow()}
                   disabled={isReviewingAnamnesis}
