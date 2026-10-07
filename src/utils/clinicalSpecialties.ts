@@ -12,6 +12,74 @@ export const CLINICAL_SPECIALTY_OPTIONS = [
 
 export type ClinicalSpecialty = (typeof CLINICAL_SPECIALTY_OPTIONS)[number];
 
+export type ClinicalSpecialtyScopeKey =
+  | 'psychotherapy'
+  | 'speech_therapy'
+  | 'occupational_therapy'
+  | 'nutrition'
+  | 'psychomotricity'
+  | 'psychopedagogy'
+  | 'art_therapy'
+  | 'music_therapy'
+  | 'physiotherapy';
+
+const specialtyScopeByCanonical = new Map<ClinicalSpecialty, ClinicalSpecialtyScopeKey>([
+  ['Psicoterapeuta', 'psychotherapy'],
+  ['Fonoaudiólogo', 'speech_therapy'],
+  ['Terapeuta Ocupacional', 'occupational_therapy'],
+  ['Nutricionista', 'nutrition'],
+  ['Psicomotricista', 'psychomotricity'],
+  ['Psicopedagogo', 'psychopedagogy'],
+  ['Arteterapeuta', 'art_therapy'],
+  ['Musicoterapeuta', 'music_therapy'],
+  ['Fisioterapeuta', 'physiotherapy'],
+]);
+
+const normalizeSpecialtyAlias = (value: unknown) =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('pt-BR')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * Canonical operational key shared by professional specialties and appointment
+ * service labels. ABA deliberately has no key because it is an approach/model,
+ * not a clinical specialty.
+ */
+export function clinicalSpecialtyScopeKey(
+  value: unknown,
+): ClinicalSpecialtyScopeKey | null {
+  const canonical = normalizeClinicalSpecialty(value);
+  if (canonical) return specialtyScopeByCanonical.get(canonical) ?? null;
+
+  const normalized = normalizeSpecialtyAlias(value);
+  if (!normalized || normalized === 'aba') return null;
+
+  if (['speech therapy', 'fono', 'fonoaudiologia', 'fonoaudiologo', 'fonoaudiologa'].includes(normalized)) return 'speech_therapy';
+  if (['occupational therapy', 'terapia ocupacional', 'terapeuta ocupacional', 'to'].includes(normalized)) return 'occupational_therapy';
+  if (['psychology', 'psicologia', 'psicoterapia', 'psicoterapeuta', 'psicologo', 'psicologa'].includes(normalized)) return 'psychotherapy';
+  if (['nutrition', 'nutricao', 'nutricionista'].includes(normalized)) return 'nutrition';
+  if (['psychomotricity', 'psicomotricidade', 'psicomotricista'].includes(normalized)) return 'psychomotricity';
+  if (['psychopedagogy', 'psicopedagogia', 'psicopedagogo', 'psicopedagoga'].includes(normalized)) return 'psychopedagogy';
+  if (['art therapy', 'arteterapia', 'arteterapeuta'].includes(normalized)) return 'art_therapy';
+  if (['music therapy', 'musicoterapia', 'musicoterapeuta'].includes(normalized)) return 'music_therapy';
+  if (['physiotherapy', 'fisioterapia', 'fisioterapeuta'].includes(normalized)) return 'physiotherapy';
+
+  if (normalized === 'speech therapy') return 'speech_therapy';
+  if (normalized === 'occupational therapy') return 'occupational_therapy';
+  if (normalized === 'psychopedagogy') return 'psychopedagogy';
+  if (normalized === 'physiotherapy') return 'physiotherapy';
+  return null;
+}
+
+export function clinicalSpecialtiesMatch(left: unknown, right: unknown): boolean {
+  const leftKey = clinicalSpecialtyScopeKey(left);
+  const rightKey = clinicalSpecialtyScopeKey(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
 export const DEFAULT_CLINICAL_SPECIALTY: ClinicalSpecialty =
   CLINICAL_SPECIALTY_OPTIONS[0];
 
