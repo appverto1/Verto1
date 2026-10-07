@@ -428,6 +428,10 @@ import {
   readClinicalSpecialtyFromSource
 } from './src/utils/clinicalSpecialties';
 import {
+  clinicalGraphLegacySnapshotVisibleToActor,
+  filterClinicalGraphPlanScopesForActor
+} from './src/utils/clinicalGraphScope';
+import {
   canEditTherapeuticPlanScope,
   filterTherapeuticPlanProgramsForActor,
   filterTherapeuticPlanScopesForActor,
@@ -28458,6 +28462,8 @@ async function startServer() {
           if (evidence.activeSupervisionLink) {
             req.patientSupervisionLink = evidence.activeSupervisionLink;
           }
+          req.patientActorSpecialty =
+            normalizeClinicalSpecialty(evidence.activeProfessionalProfile?.specialty) || null;
           return next();
         }
 
@@ -86706,14 +86712,28 @@ async function startServer() {
       }
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
+      const actorSpecialty =
+        normalizeClinicalSpecialty(
+          req.patientActorSpecialty ||
+          req.session.user?.activeAccessContext?.specialty
+        ) || null;
+      const hasGraphSupervisionAccess =
+        actorRole === 'supervisor' || Boolean(req.patientSupervisionLink);
+      const graphActorScope = {
+        actorRole,
+        actorSpecialty,
+        hasSupervisionAccess: hasGraphSupervisionAccess
+      };
       const accessContext = { actorId, actorRole, professionalLinks: linkResult.data || [], supervisionLinks: supervisionResult.data || [] };
       const allPlans = planResult.data || [];
-      const visiblePlans = filterTherapeuticPlanScopesForActor(allPlans, accessContext).map((plan: any) => ({
+      const rebacVisiblePlans = filterTherapeuticPlanScopesForActor(allPlans, accessContext);
+      const graphVisiblePlanScopes = filterClinicalGraphPlanScopesForActor(rebacVisiblePlans, graphActorScope);
+      const visiblePlans = graphVisiblePlanScopes.map((plan: any) => ({
         ...plan,
         canEdit: canEditTherapeuticPlanScope(plan, accessContext)
       }));
       const visiblePlanIds = new Set(visiblePlans.map((plan: any) => String(plan.id)));
-      const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], allPlans, accessContext);
+      const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], graphVisiblePlanScopes, accessContext);
       const visibleProgramIds = new Set(visiblePrograms.map((program: any) => String(program.id)));
       const visibleProgramIdList = Array.from(visibleProgramIds).map((programId) => sanitizeString(programId, 180)).filter(Boolean);
       const historyBindingResult = isUuid(clinicId) && visibleProgramIdList.length > 0
@@ -86816,6 +86836,10 @@ async function startServer() {
         const program: any = target ? programById.get(String(target.program_id || '')) : null;
         const planId = program?.therapeutic_plan_id ? String(program.therapeutic_plan_id) : null;
         if (planId && !visiblePlanIds.has(planId)) return null;
+        if (
+          !planId &&
+          !clinicalGraphLegacySnapshotVisibleToActor(point.specialty, graphActorScope)
+        ) return null;
         return {
           id: String(point.id),
           planId,
