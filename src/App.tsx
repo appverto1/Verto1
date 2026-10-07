@@ -4425,7 +4425,7 @@ export default function App() {
         });
         const clinicalPortalEnabled = portalHasModule('clinical_core');
         const [historyRes, notesRes] = await Promise.allSettled([
-          clinicalPortalEnabled ? dataService.getPatientSelfHistory() : Promise.resolve({ success: true, data: [] }),
+          clinicalPortalEnabled ? dataService.getPatientSelfHistory(resolvedContextPatientId) : Promise.resolve({ success: true, data: [] }),
           clinicalPortalEnabled
             ? dataService.getNotesByEmail(portalContext?.resolvedPatientEmail || user.email)
             : Promise.resolve({ success: true, data: [] })
