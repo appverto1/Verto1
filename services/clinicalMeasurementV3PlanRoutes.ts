@@ -38,6 +38,8 @@ export function registerClinicalMeasurementV3PlanRoutes(app: Express, deps: Clin
         const planId=sanitizeString(req.body?.planId||req.body?.plan_id,120);
         const goalId=sanitizeString(req.body?.goalId||req.body?.goal_id,100);
         const therapeuticObjectiveId=sanitizeString(req.body?.therapeuticObjectiveId||req.body?.therapeutic_objective_id,120);
+        const sessionId=sanitizeString(req.body?.sessionId||req.body?.session_id,180);
+        const requestedSessionPlanId=sanitizeString(req.body?.therapeuticPlanId||req.body?.therapeutic_plan_id,120);
         const clientEventId=sanitizeString(req.body?.idempotencyKey||req.body?.idempotency_key||req.body?.clientEventId||req.body?.client_event_id,160);
         const metricKey=sanitizeString(req.body?.metricKey||req.body?.metric_key,120).toLowerCase();
         const metricLabel=sanitizeString(req.body?.metricLabel||req.body?.metric_label,180);
@@ -89,13 +91,29 @@ export function registerClinicalMeasurementV3PlanRoutes(app: Express, deps: Clin
         const sourcePromise=sourceKind==='PLAN_GOAL'
           ? supabase.from('patient_therapeutic_plans').select('id,patient_id,organization_id,clinic_id,mode,specialty,participant_specialties,responsible_professional_id,participant_professional_ids,status').eq('id',planId).eq('organization_id',clinicId).eq('patient_id',patientId).limit(1).maybeSingle()
           : supabase.from('patient_therapeutic_objectives').select('id,organization_id,patient_id,status').eq('id',therapeuticObjectiveId).eq('organization_id',clinicId).eq('patient_id',patientId).limit(1).maybeSingle();
-        const objectiveProgramsPromise=sourceKind==='THERAPEUTIC_OBJECTIVE'&&!THERAPEUTIC_PLAN_MANAGER_ROLES.has(actorRole)
+        const objectiveProgramsPromise=sourceKind==='THERAPEUTIC_OBJECTIVE'&&(Boolean(sessionId)||!THERAPEUTIC_PLAN_MANAGER_ROLES.has(actorRole))
           ? supabase.from('aba_programs').select('therapeutic_plan_id').eq('organization_id',clinicId).eq('patient_id',patientId).eq('therapeutic_objective_id',therapeuticObjectiveId).not('therapeutic_plan_id','is',null).limit(50)
           : Promise.resolve({data:[],error:null});
-        const [membershipResult,linkResult,sourceResult,objectiveProgramsResult]=await Promise.all([membershipPromise,linkPromise,sourcePromise,objectiveProgramsPromise]);
-        if(membershipResult.error) throw membershipResult.error; if(linkResult.error) throw linkResult.error; if(sourceResult.error) throw sourceResult.error; if(objectiveProgramsResult.error) throw objectiveProgramsResult.error;
+        const sessionPromise=sessionId
+          ? supabase.from('aba_sessions')
+              .select('id,patient_id,clinic_id,status,therapeutic_plan_id')
+              .eq('id',sessionId).eq('clinic_id',clinicId).eq('patient_id',patientId).limit(1).maybeSingle()
+          : Promise.resolve({data:null,error:null});
+        const [membershipResult,linkResult,sourceResult,objectiveProgramsResult,sessionResult]=await Promise.all([membershipPromise,linkPromise,sourcePromise,objectiveProgramsPromise,sessionPromise]);
+        if(membershipResult.error) throw membershipResult.error; if(linkResult.error) throw linkResult.error; if(sourceResult.error) throw sourceResult.error; if(objectiveProgramsResult.error) throw objectiveProgramsResult.error; if(sessionResult.error) throw sessionResult.error;
         if(!membershipResult.data?.id) return res.status(403).json({success:false,error:'CMV3_PLAN_WRITE_MEMBERSHIP_REQUIRED'});
         if(!sourceResult.data) return res.status(404).json({success:false,error:'CMV3_PLAN_WRITE_SOURCE_NOT_FOUND'});
+
+        const sessionPlanId=sessionId?sanitizeString(sessionResult.data?.therapeutic_plan_id,120):'';
+        if(sessionId&&!sessionResult.data) return res.status(404).json({success:false,error:'CMV3_SESSION_NOT_FOUND',message:'A sessão clínica não foi encontrada.'});
+        if(sessionId&&!sessionPlanId) return res.status(409).json({success:false,error:'CMV3_SESSION_SPECIALTY_PLAN_REQUIRED',message:'A sessão não possui um plano por especialidade congelado.'});
+        if(sessionId&&requestedSessionPlanId&&requestedSessionPlanId!==sessionPlanId) return res.status(409).json({success:false,error:'CMV3_SESSION_SPECIALTY_SCOPE_MISMATCH',message:'A sessão está vinculada a outro plano por especialidade.'});
+        if(sessionId&&sourceKind==='PLAN_GOAL'&&planId!==sessionPlanId) return res.status(409).json({success:false,error:'CMV3_SESSION_SPECIALTY_SCOPE_MISMATCH',message:'Esta meta pertence a outra especialidade.'});
+        if(sessionId&&sourceKind==='THERAPEUTIC_OBJECTIVE') {
+          const objectivePlanIds=new Set((objectiveProgramsResult.data||[]).map((row:any)=>sanitizeString(row?.therapeutic_plan_id,120)).filter(Boolean));
+          if(!objectivePlanIds.has(sessionPlanId)) return res.status(409).json({success:false,error:'CMV3_SESSION_SPECIALTY_SCOPE_MISMATCH',message:'Este objetivo pertence a outra especialidade.'});
+        }
+
         const accessContext={actorId,actorRole,professionalLinks:linkResult.data?[linkResult.data]:[]};
         if(sourceKind==='PLAN_GOAL'&&!canEditTherapeuticPlanScope(sourceResult.data,accessContext)) return res.status(403).json({success:false,error:'CMV3_PLAN_WRITE_ACCESS_DENIED',message:'Você não possui permissão para registrar evidências neste plano.'});
         if(sourceKind==='THERAPEUTIC_OBJECTIVE'&&!THERAPEUTIC_PLAN_MANAGER_ROLES.has(actorRole)) {
