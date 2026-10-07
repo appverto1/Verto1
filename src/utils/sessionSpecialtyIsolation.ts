@@ -71,7 +71,7 @@ export function sessionSpecialtyPlanCandidates<T extends SessionSpecialtyPlanLik
     const status = clean(plan?.status).toLowerCase();
     const mode = clean(plan?.mode).toLowerCase();
     return status === 'active'
-      && mode !== 'interdisciplinary'
+      && mode === 'specialty'
       && planClinicalSpecialtyKey(plan) === appointmentKey;
   });
 }
