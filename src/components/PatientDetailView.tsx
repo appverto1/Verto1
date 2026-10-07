@@ -5062,16 +5062,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const d2 = comparisonDate2 || fallbackDates[fallbackDates.length - 1] || fallbackDates[0] || '';
     if (!d1 || !d2) return [];
 
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
+
     const scoredEvents = kidsReportScoredRows
       .map((h: any) => {
         const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
         const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
-        const score = Math.max(0, Math.min(1, Number(h?.score ?? 0) || 0));
+        const rawScore = Number(h?.score ?? 0) || 0;
+        const score = isVbMappProtocol
+          ? Math.max(0, Math.min(1, rawScore))
+          : Math.max(0, rawScore);
+        const rawMaxScore = Number(
+          h?.maxScore ??
+          h?.max_score ??
+          h?.task_data?.maxScore ??
+          h?.task_data?.max_score
+        );
+        const eventMaxScore = Number.isFinite(rawMaxScore) && rawMaxScore > 0 ? rawMaxScore : null;
         return {
           ...h,
           _timestamp: ts,
           _title: title,
           _score: score,
+          _maxScore: eventMaxScore,
           _domain: String(h?.domain || h?.domainName || h?.task_data?.domain || h?.task_data?.domainName || '').trim()
         };
       })
@@ -5082,9 +5096,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const parsed = new Date(`${dateKey}T23:59:59.999`).getTime();
       return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     };
-
-    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
-    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
 
     const getDomainScoresForDate = (date: string) => {
       const cutoffTs = resolveCutoffTimestamp(date);
@@ -5106,13 +5117,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             const matchesSkill = domainTasks.some((task: any) => isSameClinicalTask(task.name, event?._title || ''));
             return matchesDomain || matchesSkill;
           })
-          .map((event: any) => ({
-            title: event?._title || '',
-            score: event?._score,
-            maxScore: 1,
-            consecutive_successes: event?.consecutive_successes,
-            created_at: event?.created_at || event?.date || null
-          }));
+          .map((event: any) => {
+            const matchedTask = domainTasks.find((task: any) =>
+              isSameClinicalTask(task.name, event?._title || '')
+            );
+            const maxScore = isVbMappProtocol
+              ? 1
+              : Math.max(1, Number(event?._maxScore ?? matchedTask?.maxScore ?? 1) || 1);
+            return {
+              title: event?._title || '',
+              score: event?._score,
+              maxScore,
+              consecutive_successes: event?.consecutive_successes,
+              created_at: event?.created_at || event?.date || null
+            };
+          });
 
         return calculateDomainMastery(domainEvents, domainTasks, {
           mode: 'latest',

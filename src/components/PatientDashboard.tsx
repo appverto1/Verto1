@@ -1577,11 +1577,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       : [];
 
     const sourceHistory = Array.isArray(activeKidsProtocolEvents) ? activeKidsProtocolEvents : [];
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
     const scoredEvents = sourceHistory
       .map((h: any) => {
         const scoreRaw = getEventScore(h);
         if (scoreRaw === null) return null;
-        const score = Math.max(0, Math.min(1, Number(scoreRaw) || 0));
+        const rawScore = Number(scoreRaw) || 0;
+        const score = isVbMappProtocol
+          ? Math.max(0, Math.min(1, rawScore))
+          : Math.max(0, rawScore);
+        const rawMaxScore = Number(
+          h?.maxScore ??
+          h?.max_score ??
+          h?.task_data?.maxScore ??
+          h?.task_data?.max_score
+        );
+        const eventMaxScore = Number.isFinite(rawMaxScore) && rawMaxScore > 0 ? rawMaxScore : null;
         const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
         const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
         const domain = String(
@@ -1596,6 +1608,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         return {
           ...h,
           _score: score,
+          _maxScore: eventMaxScore,
           _timestamp: ts,
           _title: title,
           _titleKey: normalizeClinicalKey(title),
@@ -1634,9 +1647,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     };
 
-    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
-    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
-
     const resolveDomainProgressPercent = (dateFilter: string | null, mode: 'first' | 'latest') => {
       const cutoffTs = resolveCutoffTimestamp(dateFilter);
       const modeNormalized = mode === 'first' ? 'baseline' : 'latest';
@@ -1653,13 +1663,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             const matchesSkill = domainTasks.some((task: any) => isSameClinicalSkill(task.name, event?._title || ''));
             return matchesDomain || matchesSkill;
           })
-          .map((event: any) => ({
-            title: event?._title || '',
-            score: event?._score,
-            maxScore: 1,
-            consecutive_successes: event?.consecutive_successes,
-            created_at: event?.created_at || event?.date || null
-          }));
+          .map((event: any) => {
+            const matchedTask = domainTasks.find((task: any) =>
+              isSameClinicalSkill(task.name, event?._title || '')
+            );
+            const maxScore = isVbMappProtocol
+              ? 1
+              : Math.max(1, Number(event?._maxScore ?? matchedTask?.maxScore ?? 1) || 1);
+            return {
+              title: event?._title || '',
+              score: event?._score,
+              maxScore,
+              consecutive_successes: event?.consecutive_successes,
+              created_at: event?.created_at || event?.date || null
+            };
+          });
         return calculateDomainMastery(domainEvents, domainTasks, {
           mode: modeNormalized as any,
           protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
