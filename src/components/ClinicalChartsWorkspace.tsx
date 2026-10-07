@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BarChart3, BrainCircuit } from 'lucide-react';
-import { AbaClinicalChartsPanel } from './AbaClinicalChartsPanel';
+import { LegacyAssessmentChartsPanel } from './LegacyAssessmentChartsPanel';
 import { AbaV3ClinicalChartPanel } from './AbaV3ClinicalChartPanel';
 import { ClinicalMeasurementV3Panel } from './ClinicalMeasurementV3Panel';
 import { ClinicalOutcomesDashboard } from './ClinicalOutcomesDashboard';
@@ -12,10 +12,11 @@ type ClinicalChartsWorkspaceProps = {
   showAbaDetails?: boolean;
   showAbaV3Details?: boolean;
   showClinicalMeasurementV3Details?: boolean;
+  legacyAssessmentProtocols?: any[];
   onOpenSessionReport?: (sessionId: string) => void;
 };
 
-export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, onOpenSessionReport }: ClinicalChartsWorkspaceProps) {
+export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, legacyAssessmentProtocols = [], onOpenSessionReport }: ClinicalChartsWorkspaceProps) {
   const [view, setView] = useState<'plans' | 'aba' | 'aba-v3' | 'clinical-v3'>('plans');
   return (
     <div className="space-y-4" data-testid="clinical-charts-workspace">
@@ -28,7 +29,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
         </div>
       )}
       {view === 'aba' && showAbaDetails
-        ? <AbaClinicalChartsPanel patientId={patientId} isPanelDark={isPanelDark} onOpenSessionReport={onOpenSessionReport} />
+        ? <LegacyAssessmentChartsPanel patientId={patientId} protocols={legacyAssessmentProtocols} isPanelDark={isPanelDark} />
         : view === 'aba-v3' && showAbaV3Details
           ? <AbaV3ClinicalChartPanel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
           : view === 'clinical-v3' && showClinicalMeasurementV3Details
