@@ -265,6 +265,147 @@ const selectionForItem = (
   };
 };
 
+const normalizeBuilderInputForCalculation = (
+  input: SalesModularProposalInput,
+  catalog: SalesPricingCatalogSnapshot
+): SalesModularProposalInput => {
+  const coreItem = catalog.items.find(
+    (item) => item.itemKey === 'clinical_core'
+  );
+  const baseTier = coreItem?.tiers.find(
+    (tier) => tier.id === input.basePackageTierId
+  );
+  if (!coreItem || !baseTier) return input;
+
+  const patientQuantity = input.patientQuantity;
+  const rawCapacity = Number(input.customBasePackageLimit || 0);
+  const validCommercialCapacity =
+    Number.isInteger(rawCapacity) &&
+    rawCapacity >= SALES_ESSENTIAL_PATIENT_LIMIT &&
+    rawCapacity >= patientQuantity &&
+    rawCapacity % SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS === 0;
+  const customBasePackageLimit =
+    input.commercialPricingMode === 'manual_module_prices' &&
+    (baseTier.isCustom || baseTier.maximumQuantity === null)
+      ? validCommercialCapacity
+        ? rawCapacity
+        : commercialCapacityForDemand(patientQuantity)
+      : input.customBasePackageLimit;
+
+  const lines = input.lines.map((line) => {
+    const item = catalog.items.find(
+      (candidate) => candidate.itemKey === line.itemKey
+    );
+    if (!item) return line;
+
+    let normalized: SalesModularLineSelection = { ...line };
+    if (item.itemKey === 'clinical_core') {
+      normalized = {
+        ...normalized,
+        tierId: baseTier.id,
+        quantity: patientQuantity
+      };
+    } else if (
+      item.pricingMode === 'package_limit' &&
+      item.itemKey !== 'insurance_tiss'
+    ) {
+      const selectedTier = item.tiers.find(
+        (tier) => tier.id === normalized.tierId
+      );
+      const selectedTierFits =
+        Boolean(selectedTier) &&
+        Number(selectedTier?.minimumQuantity || 0) <= patientQuantity &&
+        (
+          selectedTier?.maximumQuantity === null ||
+          patientQuantity <= Number(selectedTier?.maximumQuantity)
+        );
+      const compatibleTier = selectedTierFits
+        ? selectedTier
+        : itemTierForQuantity(item, patientQuantity);
+      normalized = {
+        ...normalized,
+        tierId: compatibleTier?.id || normalized.tierId || null,
+        quantity: patientQuantity
+      };
+    }
+
+    if (
+      input.commercialPricingMode === 'manual_module_prices' &&
+      item.billingInterval !== 'one_time'
+    ) {
+      const editMode =
+        normalized.pricingEditMode === 'monthly_total'
+          ? 'monthly_total'
+          : 'per_patient';
+      if (editMode === 'per_patient') {
+        normalized = {
+          ...normalized,
+          pricingEditMode: editMode,
+          proposedPricePerPatientCents:
+            typeof normalized.proposedPricePerPatientCents === 'number' &&
+            Number.isFinite(normalized.proposedPricePerPatientCents) &&
+            normalized.proposedPricePerPatientCents >= 0
+              ? Math.round(normalized.proposedPricePerPatientCents)
+              : null,
+          customRecurringAmountCents: null
+        };
+      } else {
+        normalized = {
+          ...normalized,
+          pricingEditMode: editMode,
+          proposedPricePerPatientCents: null,
+          customRecurringAmountCents:
+            typeof normalized.customRecurringAmountCents === 'number' &&
+            Number.isFinite(normalized.customRecurringAmountCents) &&
+            normalized.customRecurringAmountCents >= 0
+              ? Math.round(normalized.customRecurringAmountCents)
+              : null
+        };
+      }
+    }
+
+    return normalized;
+  });
+
+  return {
+    ...input,
+    customBasePackageLimit,
+    lines
+  };
+};
+
+const proposalCalculationErrorMessage = (
+  rawCode: string | null,
+  catalog: SalesPricingCatalogSnapshot | null
+) => {
+  if (!rawCode) return null;
+  if (rawCode === SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE) {
+    return rawCode;
+  }
+  const [code, detail = ''] = rawCode.split(':');
+  const itemKey = detail.split('.')[0];
+  const itemName =
+    catalog?.items.find((item) => item.itemKey === itemKey)?.publicName ||
+    itemKey ||
+    'módulo';
+  if (code === 'PRICING_TIER_NOT_FOUND') {
+    return `A faixa comercial de ${itemName} ficou inconsistente. Revise o módulo e tente novamente.`;
+  }
+  if (code === 'PRICING_PACKAGE_LIMIT_EXCEEDED') {
+    return `A faixa de ${itemName} não comporta a quantidade atual de pacientes.`;
+  }
+  if (code === 'PROPOSAL_SIMULATION_INVALID') {
+    return `Há um valor comercial incompleto ou inconsistente em ${itemName}.`;
+  }
+  if (code === 'PRICING_TOTAL_MISMATCH') {
+    return 'O resumo financeiro ficou inconsistente durante o recálculo. Revise os valores da proposta.';
+  }
+  if (code === 'PROPOSAL_PRICE_PER_PATIENT_MISSING') {
+    return 'Informe o preço por paciente de todos os módulos selecionados.';
+  }
+  return `Não foi possível recalcular a proposta. Código: ${code || 'PROPOSAL_CALCULATION_FAILED'}.`;
+};
+
 const ratingStyle: Record<SalesModularProposalResult['rating'], string> = {
   healthy: 'border-emerald-200 bg-emerald-50 text-emerald-800',
   attention: 'border-amber-200 bg-amber-50 text-amber-800',
@@ -776,27 +917,65 @@ export const SalesModularProposalBuilder = ({
     }
   }, [catalog, input]);
 
+  const calculationInput = useMemo(
+    () =>
+      input && catalog
+        ? normalizeBuilderInputForCalculation(input, catalog)
+        : input,
+    [catalog, input]
+  );
   const hasValidVersionedProfitabilityPolicy = Boolean(
     catalog?.hasVersionedProfitabilityPolicy === true &&
       validateSalesProfitabilityPolicy(catalog.profitabilityPolicy)
   );
   const proposalRequiresVersionedProfitabilityPolicy =
-    salesModularProposalRequiresVersionedProfitabilityPolicy(input, catalog);
+    salesModularProposalRequiresVersionedProfitabilityPolicy(
+      calculationInput,
+      catalog
+    );
   const profitabilityPolicyRequired = Boolean(
     catalog?.status === 'active' &&
       proposalRequiresVersionedProfitabilityPolicy &&
       !hasValidVersionedProfitabilityPolicy
   );
-  const preview = useMemo(() => {
-    if (!input || !catalog || !assumptions || profitabilityPolicyRequired) {
-      return null;
+  const previewComputation = useMemo(() => {
+    if (!calculationInput || !catalog || !assumptions) {
+      return { preview: null, errorCode: null };
+    }
+    if (profitabilityPolicyRequired) {
+      return {
+        preview: null,
+        errorCode: SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE
+      };
     }
     try {
-      return calculateSalesModularProposal(input, catalog, assumptions);
-    } catch {
-      return null;
+      return {
+        preview: calculateSalesModularProposal(
+          calculationInput,
+          catalog,
+          assumptions
+        ),
+        errorCode: null
+      };
+    } catch (calculationError: any) {
+      return {
+        preview: null,
+        errorCode: String(
+          calculationError?.message || 'PROPOSAL_CALCULATION_FAILED'
+        ).slice(0, 220)
+      };
     }
-  }, [assumptions, catalog, input, profitabilityPolicyRequired]);
+  }, [
+    assumptions,
+    calculationInput,
+    catalog,
+    profitabilityPolicyRequired
+  ]);
+  const preview = previewComputation.preview;
+  const previewErrorMessage = proposalCalculationErrorMessage(
+    previewComputation.errorCode,
+    catalog
+  );
   const promotionalMoneyFlow = useMemo(() => {
     if (!preview || !assumptions || !input) return null;
     return buildSalesRecurringMoneyFlow({
@@ -1032,7 +1211,8 @@ export const SalesModularProposalBuilder = ({
       )
     : null;
   const summaryPreview = selectedSimulation?.results_snapshot || preview;
-  const summaryInput = selectedSimulation?.modular_input_snapshot || input;
+  const summaryInput =
+    selectedSimulation?.modular_input_snapshot || calculationInput;
   const summaryAssumptions = selectedSimulation
     ? selectedSimulation.assumptions_snapshot || null
     : assumptions;
@@ -1360,7 +1540,7 @@ export const SalesModularProposalBuilder = ({
   };
 
   const saveSimulation = async () => {
-    if (!input || !catalog || !assumptions || !preview) return;
+    if (!calculationInput || !catalog || !assumptions || !preview) return;
     if (!hasValidVersionedProfitabilityPolicy) {
       setError(SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE);
       return;
@@ -1379,7 +1559,7 @@ export const SalesModularProposalBuilder = ({
             catalogVersionId: catalog.id,
             assumptionSetId: assumptions.id,
             scenarioName,
-            input,
+            input: calculationInput,
             internalJustification,
             approveCommercialException,
             commercialExceptionConfirmed: approveCommercialException,
@@ -5306,9 +5486,18 @@ export const SalesModularProposalBuilder = ({
                     ) : null}
                   </>
                 ) : (
-                  <p className="mt-4 text-sm text-slate-500">
-                    Complete faixas e valores personalizados para calcular.
-                  </p>
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <p className="font-medium">
+                      {previewErrorMessage
+                        ? 'Não foi possível calcular a proposta'
+                        : 'Complete faixas e valores personalizados para calcular.'}
+                    </p>
+                    {previewErrorMessage ? (
+                      <p className="mt-1 text-xs leading-5">
+                        {previewErrorMessage}
+                      </p>
+                    ) : null}
+                  </div>
                 )}
               </section>
 
