@@ -31,6 +31,39 @@ assert.match(
   /kidsReportAvailableSnapshots\.map[\s\S]*?formatReportDateLabel\(date\)/,
   'os filtros de data devem consumir as datas comparáveis e exibi-las em pt-BR',
 );
+
+assert.match(
+  detail,
+  /const score = isVbMappProtocol[\s\S]*?Math\.max\(0, rawScore\)/,
+  'protocolos não binários devem preservar a pontuação real do item em vez de achatar tudo para 0–1',
+);
+assert.match(
+  detail,
+  /matchedTask\?\.maxScore[\s\S]*?maxScore,/,
+  'o relatório profissional deve enviar ao cálculo o maxScore real do item do protocolo',
+);
+assert.doesNotMatch(
+  detail,
+  /const score = Math\.max\(0, Math\.min\(1, Number\(h\?\.score/,
+  'o relatório profissional não pode impor escala global 0–1',
+);
+
+const patientDashboard = fs.readFileSync('src/components/PatientDashboard.tsx', 'utf8');
+assert.match(
+  patientDashboard,
+  /const score = isVbMappProtocol[\s\S]*?Math\.max\(0, rawScore\)/,
+  'o portal do paciente deve preservar a pontuação real de protocolos como AFLS',
+);
+assert.match(
+  patientDashboard,
+  /matchedTask\?\.maxScore[\s\S]*?maxScore,/,
+  'o portal do paciente deve usar o maxScore real do item ao calcular domínio',
+);
+assert.doesNotMatch(
+  patientDashboard,
+  /const score = Math\.max\(0, Math\.min\(1, Number\(scoreRaw\)/,
+  'o portal do paciente não pode impor escala global 0–1',
+);
 assert.match(
   charts,
   /emptyMessage \|\| 'Selecione dois períodos com medições para comparar o progresso\.'/,
