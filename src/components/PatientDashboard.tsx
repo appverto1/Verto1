@@ -85,6 +85,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isInterventionUploading, setIsInterventionUploading] = useState(false);
   const [taskStep, setTaskStep] = useState(1);
   const [showTaskSuccess, setShowTaskSuccess] = useState(false);
+  const [isTaskSaving, setIsTaskSaving] = useState(false);
   const [selectedMood, setSelectedMood] = useState<any>(null);
   const [hoveredMood, setHoveredMood] = useState<any>(null);
   const [isMoodModalOpen, setIsMoodModalOpen] = useState(false);
@@ -4033,25 +4034,30 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setTaskStep(2);
   };
   const handleConfirmTask = async () => {
-    if (isReadOnlyMode || !selectedTask) return;
+    if (isReadOnlyMode || !selectedTask || isTaskSaving) return;
     if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
-    const interventionDetails = [
-      interventionResponse?.trim() ? `Resposta:
+    setIsTaskSaving(true);
+    try {
+      const interventionDetails = [
+        interventionResponse?.trim() ? `Resposta:
 ${interventionResponse.trim()}` : '',
-      taskNote?.trim() ? `Observação:
+        taskNote?.trim() ? `Observação:
 ${taskNote.trim()}` : '',
-      interventionImages.length > 0 ? `Anexos:
+        interventionImages.length > 0 ? `Anexos:
 ${interventionImages.join('\n')}` : ''
-    ].filter(Boolean).join('\n\n');
-    const finalNote = selectedTask.type === 'intervention' ? interventionDetails : taskNote;
-    const result = await onCompleteTask(selectedTask, taskEnergy, finalNote);
-    if (result?.success === false) return;
-    setShowTaskSuccess(true);
-    window.setTimeout(() => setShowTaskSuccess(false), 1200);
-    setSelectedTask(null);
-    setInterventionResponse("");
-    setInterventionImages([]);
-    setTaskStep(1);
+      ].filter(Boolean).join('\n\n');
+      const finalNote = selectedTask.type === 'intervention' ? interventionDetails : taskNote;
+      const result = await onCompleteTask(selectedTask, taskEnergy, finalNote);
+      if (result?.success === false) return;
+      setShowTaskSuccess(true);
+      window.setTimeout(() => setShowTaskSuccess(false), 1200);
+      setSelectedTask(null);
+      setInterventionResponse("");
+      setInterventionImages([]);
+      setTaskStep(1);
+    } finally {
+      setIsTaskSaving(false);
+    }
   };
 
   const dailyReviewTasks = useMemo(() => {
@@ -4491,7 +4497,7 @@ ${interventionImages.join('\n')}` : ''
                     {!isKidsProfile ? (
                       <button
                         onClick={handleInterventionResponseContinue}
-                        disabled={showTaskSuccess || !interventionResponse.trim() || isInterventionUploading}
+                        disabled={isTaskSaving || showTaskSuccess || !interventionResponse.trim() || isInterventionUploading}
                         className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Check size={20} strokeWidth={3} /> Enviar Resposta
@@ -4499,10 +4505,10 @@ ${interventionImages.join('\n')}` : ''
                     ) : (
                       <button
                         onClick={handleConfirmTask}
-                        disabled={showTaskSuccess || !interventionResponse.trim()}
+                        disabled={isTaskSaving || showTaskSuccess || !interventionResponse.trim()}
                         className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                       >
-                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
+                        {isTaskSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin"/> Enviando...</React.Fragment> : showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
                       </button>
                     )}
                   </React.Fragment>
@@ -4530,10 +4536,10 @@ ${interventionImages.join('\n')}` : ''
                     </div>
                     <button
                       onClick={handleConfirmTask}
-                      disabled={showTaskSuccess || taskEnergy === null}
+                      disabled={isTaskSaving || showTaskSuccess || taskEnergy === null}
                       className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                     >
-                      {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir tarefa</React.Fragment>}
+                      {isTaskSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin"/> Salvando...</React.Fragment> : showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir tarefa</React.Fragment>}
                     </button>
                     <button
                       type="button"
@@ -4651,7 +4657,7 @@ ${interventionImages.join('\n')}` : ''
                   )}
                 </div>
                 <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea>
-                <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button>
+                <button onClick={handleConfirmTask} disabled={isTaskSaving || showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {isTaskSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin"/> Salvando...</React.Fragment> : showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button>
               </div>
             )}
           </div>
