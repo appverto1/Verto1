@@ -47,6 +47,7 @@ const sessionMode = fs.readFileSync('src/components/SessionMode.tsx', 'utf8');
 const cmv3PlanRoutes = fs.readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8');
 const migrationV1 = fs.readFileSync('supabase/migrations/20261007003500_session_specialty_isolation_v1.sql', 'utf8');
 const migrationV2 = fs.readFileSync('supabase/migrations/20261007004500_session_specialty_isolation_v2.sql', 'utf8');
+const migrationV3 = fs.readFileSync('supabase/migrations/20261007005500_session_specialty_isolation_v3.sql', 'utf8');
 
 assert.match(
   patientDetail,
@@ -87,6 +88,21 @@ assert.doesNotMatch(
   migrationV2,
   /tg_op = 'UPDATE'[\s\S]*?new\.therapeutic_plan_id :=/,
   'UPDATE nunca pode reinterpretar a especialidade congelada da sessão',
+);
+assert.match(
+  migrationV3,
+  /ABA_SESSION_SPECIALTY_PLAN_REQUIRED/,
+  'agendamento com especialidade reconhecida deve exigir plano explícito e autorizado',
+);
+assert.match(
+  migrationV3,
+  /source_payload[\s\S]*?specialty[\s\S]*?service_type[\s\S]*?approach/,
+  'especialidade canônica deve ser resolvida de campos clínicos antes de usar abordagem como fallback',
+);
+assert.doesNotMatch(
+  migrationV3,
+  /new\.therapeutic_plan_id\s*:=/,
+  'o banco não deve inventar vínculo de plano em nome do usuário',
 );
 
 console.log('sessionSpecialtyIsolation.test.ts: ok');
