@@ -1,7 +1,7 @@
 diff --git a/scripts/pre-main-gate.mjs b/scripts/pre-main-gate.mjs
 --- a/scripts/pre-main-gate.mjs
 +++ b/scripts/pre-main-gate.mjs
-@@ -153,7 +153,13 @@ const criticalTests = [
+@@ -153,5 +153,11 @@ const criticalTests = [
    'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
    'tests/clinicalProgramChangeOverview.regression.test.mjs',
    'tests/sidebarHoverExpansion.regression.test.mjs',
