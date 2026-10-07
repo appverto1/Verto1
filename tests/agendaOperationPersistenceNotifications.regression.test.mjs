@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
-const cron = fs.readFileSync(new URL('../services/cronService.ts', import.meta.url), 'utf8');
+const cron = [
+  fs.readFileSync(new URL('../services/cronService.ts', import.meta.url), 'utf8'),
+  fs.readFileSync(new URL('../services/clinicAnnouncementCronService.ts', import.meta.url), 'utf8'),
+].join('\n');
 const push = fs.readFileSync(new URL('../services/pushNotificationService.ts', import.meta.url), 'utf8');
 const dataService = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
