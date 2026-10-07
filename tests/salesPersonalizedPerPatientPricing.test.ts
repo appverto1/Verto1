@@ -289,6 +289,123 @@ assert.notEqual(
   'o estado real do builder deve manter margem consolidada disponível'
 );
 
+const liveClinicalCatalog40 = catalog();
+liveClinicalCatalog.modularCostSettings = {
+  schemaVersion: 2,
+  ownership: {
+    variablePatientCost: 'item_direct',
+    variableClinicCost: 'item_direct',
+    storageCost: 'item_direct',
+    egressCost: 'item_direct',
+    processingCost: 'item_direct',
+    notificationCost: 'item_direct',
+    otherVariableCost: 'item_direct',
+    supportClinicCost: 'item_direct',
+    supportPatientCost: 'item_direct',
+    operationalCost: 'item_direct',
+    fixedMonthlyEligibleCost: 'shared'
+  },
+  ownershipJustifications: {},
+  includedStorageMbPerPatient: 100,
+  usageProfiles: {
+    light: {
+      storageUtilizationBasisPoints: 2500,
+      expectedEgressMultiplier: 0.5
+    },
+    standard: {
+      storageUtilizationBasisPoints: 6000,
+      expectedEgressMultiplier: 2
+    },
+    intensive: {
+      storageUtilizationBasisPoints: 10000,
+      expectedEgressMultiplier: 5
+    }
+  }
+};
+const liveClinicalCore40 = liveClinicalCatalog40.items.find(
+  (item) => item.itemKey === 'clinical_core'
+);
+assert.ok(liveClinicalCore40);
+liveClinicalCore40.costModel = {
+  ...liveClinicalCore40.costModel!,
+  version: 1,
+  directFixedMonthlyCostCents: null,
+  directCostPerPatientCents: 0,
+  directCostPerClinicCents: 0,
+  directCostPerUsageUnitCents: 0,
+  storageCostPerGbCents: 11,
+  egressCostPerGbCents: 46,
+  notificationCostPerUnitCents: null,
+  processingCostPerUnitCents: null,
+  otherVariableCostCents: 0,
+  supportFixedMonthlyCostCents: 1875,
+  supportCostPerPatientCents: 125,
+  operationalFixedMonthlyCostCents: 1875,
+  onboardingCostCents: null,
+  sharedCostAllocationWeight: 4,
+  costSource: 'estimated',
+  sourceDetail: 'Premissa econômica pré-lançamento reproduzida do catálogo ativo.',
+  effectiveAt,
+  driverConfig: {
+    schemaVersion: 2,
+    requiredDrivers: [
+      'monthlyClinicalSessions',
+      'monthlyAbaSessions',
+      'monthlyAbaRecords',
+      'generatedDocuments'
+    ],
+    profiles: {
+      light: {
+        monthlyClinicalSessions: driver(20),
+        monthlyAbaSessions: driver(40),
+        monthlyAbaRecords: driver(4000),
+        generatedDocuments: driver(2)
+      },
+      standard: {
+        monthlyClinicalSessions: driver(40),
+        monthlyAbaSessions: driver(120),
+        monthlyAbaRecords: driver(12000),
+        generatedDocuments: driver(5)
+      },
+      intensive: {
+        monthlyClinicalSessions: driver(80),
+        monthlyAbaSessions: driver(300),
+        monthlyAbaRecords: driver(30000),
+        generatedDocuments: driver(10)
+      }
+    },
+    unitCostsCents: {
+      monthlyAbaSessions: 0,
+      monthlyAbaRecords: 0,
+      generatedDocuments: 0
+    }
+  }
+};
+
+const liveClinicalResult40 = calculateSalesModularProposal(
+  builderState40,
+  liveClinicalCatalog40,
+  recoveredAssumptions40
+);
+const liveClinicalCoreResult40 = liveClinicalResult40.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.notEqual(
+  liveClinicalCoreResult40?.commercialPricing.estimatedMonthlyCostCents,
+  null,
+  'o modelo de custo real do clinical_core deve produzir custo mensal'
+);
+assert.notEqual(
+  liveClinicalCoreResult40?.postPromotion.ebitdaMarginBasisPoints,
+  null,
+  'o modelo de custo real do clinical_core deve produzir margem'
+);
+assert.notEqual(
+  liveClinicalResult40.promotional.ebitdaMarginBasisPoints,
+  null,
+  'o catálogo real do clinical_core deve produzir margem consolidada'
+);
+
 const result150 = calculateSalesModularProposal(
   unitInput(150),
   catalog(),
