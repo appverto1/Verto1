@@ -122,6 +122,10 @@ export function evaluatePatientClinicalAccess(params: {
       && cleanText(supervision.status).toLowerCase() === 'active'
       && (
         cleanText(supervision.patient_id) === patientId
+        // User-scoped supervision is accepted here only after the server evidence
+        // loader has proved that supervised_user_id is an active case-team
+        // professional for this exact patient. Never pass an arbitrary
+        // clinical_supervision_links row into this helper.
         || cleanText(supervision.supervised_user_id).length > 0
       )
     ) {
