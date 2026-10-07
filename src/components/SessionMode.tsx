@@ -1425,9 +1425,7 @@ export const SessionMode = ({
         }
         const normalizedPrograms = normalizeTherapeuticPrograms(result?.data || result);
         setTherapeuticPrograms(
-          normalizedPrograms.filter((program: any) =>
-            String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId
-          )
+          normalizedPrograms.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId)
         );
       })
       .catch((loadError: any) => {
