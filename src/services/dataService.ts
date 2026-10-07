@@ -524,6 +524,29 @@ async function fetchNoStoreJsonWithRetry(
   return await safeNoStoreJson(response, staleError);
 }
 
+const SERVER_SESSION_EXPIRED_EVENT = 'verto:server-session-expired';
+const SERVER_SESSION_EXPIRED_CODES = new Set(['SERVER_SESSION_REQUIRED', 'SESSION_REVOKED']);
+let lastServerSessionExpiryDispatchAt = 0;
+
+async function notifyServerSessionExpiredIfNeeded(response: Response) {
+  if (response.status !== 401 || typeof window === 'undefined') return;
+
+  let payload: any = null;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return;
+  }
+
+  const code = String(payload?.code || payload?.error_code || payload?.error || '').trim().toUpperCase();
+  if (!SERVER_SESSION_EXPIRED_CODES.has(code)) return;
+
+  const now = Date.now();
+  if (now - lastServerSessionExpiryDispatchAt < 5000) return;
+  lastServerSessionExpiryDispatchAt = now;
+  window.dispatchEvent(new CustomEvent(SERVER_SESSION_EXPIRED_EVENT, { detail: { code } }));
+}
+
 async function fetchWithAuthRetry(url: string, init: RequestInit) {
   let response = await fetch(url, init);
   if (response.status !== 401) return response;
@@ -533,6 +556,12 @@ async function fetchWithAuthRetry(url: string, init: RequestInit) {
     ...(await getAuthHeaders(true))
   };
   response = await fetch(url, { ...init, headers: retryHeaders });
+
+  // Only a second authoritative 401 may expire the UI session. The first 401
+  // remains refreshable and must never force a logout by itself.
+  if (response.status === 401) {
+    await notifyServerSessionExpiredIfNeeded(response);
+  }
   return response;
 }
 

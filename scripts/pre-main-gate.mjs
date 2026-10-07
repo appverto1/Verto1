@@ -211,6 +211,7 @@ const criticalTests = [
   'tests/clinicReinviteAccess.test.ts',
   'tests/teamManagementTenantRefresh.regression.test.mjs',
   'tests/patientSelfTenantIsolation.regression.test.mjs',
+  'tests/sessionExpiredCleanLogout.regression.test.mjs',
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
