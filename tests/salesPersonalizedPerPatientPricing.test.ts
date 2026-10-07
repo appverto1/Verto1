@@ -235,6 +235,60 @@ assert.notEqual(
   'a margem consolidada deve ser calculável com premissas completas'
 );
 
+const builderState40 = proposalInputFixture(
+  40,
+  PACKAGE_TIERS.custom.id,
+  50,
+  null
+);
+builderState40.commercialPricingMode = 'manual_module_prices';
+builderState40.commercialCapacityBasis = 'current_patients';
+builderState40.platformFoundationPricingMode = 'manual';
+builderState40.platformFoundationMonthlyAmountCents = 0;
+builderState40.basePackageSelectionMode = 'manual';
+builderState40.expectedPatientQuantity12Months = 40;
+builderState40.customCapacityBlocks = null;
+builderState40.customCapacitySelectionMode = 'automatic';
+builderState40.offerStartsAt = effectiveAt;
+builderState40.usageProfile = 'intensive';
+builderState40.lines[0] = {
+  ...builderState40.lines[0],
+  tierId: PACKAGE_TIERS.custom.id,
+  quantity: 40,
+  pricingEditMode: 'per_patient',
+  proposedPricePerPatientCents: 1241,
+  customRecurringAmountCents: null
+};
+
+const builderState40Result = calculateSalesModularProposal(
+  builderState40,
+  catalog(),
+  recoveredAssumptions40
+);
+const builderState40Core = builderState40Result.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.equal(
+  builderState40Result.basePackage.limitQuantity,
+  50,
+  'o estado inicial do builder deve representar Essencial 1–50 sem quebrar o cálculo'
+);
+assert.equal(
+  builderState40Core?.commercialPricing.derivedMonthlyRevenueCents,
+  40 * 1241,
+  'o tier técnico custom não pode converter a capacidade de 50 em 50 pacientes faturados'
+);
+assert.notEqual(
+  builderState40Core?.postPromotion.ebitdaMarginBasisPoints,
+  null,
+  'o estado real do builder deve manter margem do módulo disponível'
+);
+assert.notEqual(
+  builderState40Result.promotional.ebitdaMarginBasisPoints,
+  null,
+  'o estado real do builder deve manter margem consolidada disponível'
+);
+
 const result150 = calculateSalesModularProposal(
   unitInput(150),
   catalog(),
