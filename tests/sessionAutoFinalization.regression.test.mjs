@@ -84,7 +84,7 @@ await test('offline queue distinguishes durable network state from terminal vali
  const retryable={...pending,id:'r',sync_status:'failed',last_error:'Failed to fetch network'};
  const terminal={...pending,id:'t',sync_status:'failed',last_error:'HTTP 400 validation'};
  const split=partitionSessionQueueForClosure([pending,retryable,terminal]);
- assert.deepEqual(split.durable.map(r=>r.id),['p','r']);assert.deepEqual(split.terminal.map(r=>r.id),['t']);
+ assert.equal(Array.from(split.durable,r=>r.id).join(','),'p,r');assert.equal(Array.from(split.terminal,r=>r.id).join(','),'t');
 });
 await test('session completion cannot overtake an older queued trial',()=>{
  const trial={id:'trial',type:'aba',sync_status:'pending',last_updated:10,method:'POST',endpoint:'/api/aba/trials',data:{sessionId:'s1'}};
