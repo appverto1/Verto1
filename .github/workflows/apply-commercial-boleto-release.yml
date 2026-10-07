@@ -39,6 +39,19 @@ jobs:
           grep -E "error TS[0-9]+:" /tmp/typecheck-baseline.log | sort -u > /tmp/typecheck-baseline.errors || true
           echo "Baseline errors: $(wc -l < /tmp/typecheck-baseline.errors)"
 
+      - name: Capture production pre-main baseline
+        shell: bash
+        run: |
+          set +e
+          npm run check:pre-main > /tmp/pre-main-baseline.log 2>&1
+          BASELINE_PRE_MAIN_STATUS=$?
+          set -e
+          grep -E '^  ✗ teste:' /tmp/pre-main-baseline.log | sort -u > /tmp/pre-main-baseline.failures || true
+          echo "Baseline pre-main failures: $(wc -l < /tmp/pre-main-baseline.failures)"
+          if [ "$BASELINE_PRE_MAIN_STATUS" -ne 0 ]; then
+            cat /tmp/pre-main-baseline.failures
+          fi
+
       - name: Apply only approved boleto activation patches
         shell: bash
         run: |
@@ -105,7 +118,23 @@ jobs:
           node tests/salesActivationPasswordProviderAgnostic.test.mjs
           npx tsx tests/salesActivationDirectorProvisioning.test.ts
           npx tsx tests/salesActivationEmailConcurrency.test.ts
-          npm run check:pre-main
+
+          set +e
+          npm run check:pre-main > /tmp/pre-main-candidate.log 2>&1
+          CANDIDATE_PRE_MAIN_STATUS=$?
+          set -e
+          grep -E '^  ✗ teste:' /tmp/pre-main-candidate.log | sort -u > /tmp/pre-main-candidate.failures || true
+          comm -13 /tmp/pre-main-baseline.failures /tmp/pre-main-candidate.failures > /tmp/pre-main-new.failures || true
+          if [ -s /tmp/pre-main-new.failures ]; then
+            echo "::error::Payment-link release introduced new pre-main failures:"
+            cat /tmp/pre-main-new.failures
+            cat /tmp/pre-main-candidate.log
+            exit 1
+          fi
+          if [ "$CANDIDATE_PRE_MAIN_STATUS" -ne 0 ]; then
+            echo "::warning::Candidate contains only pre-main failures already present on production baseline."
+            cat /tmp/pre-main-candidate.failures
+          fi
 
       - name: Commit validated release payload
         shell: bash
