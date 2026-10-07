@@ -2113,16 +2113,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const scopes = Array.isArray(planResult?.data?.planScopes) ? planResult.data.planScopes : [];
       const candidates = sessionSpecialtyPlanCandidates(scopes, scheduledSessionForPatient)
         .filter((scope: any) => scope?.canEdit === true);
-      if (candidates.length !== 1) {
-        alert(
-          candidates.length > 1
-            ? 'Existe mais de um plano ativo para a especialidade deste atendimento. Inicie a sessão pelo plano correto.'
-            : 'Não há um plano ativo e editável correspondente à especialidade deste atendimento.'
-        );
+      if (candidates.length > 1) {
+        alert('Existe mais de um plano ativo para a especialidade deste atendimento. Inicie a sessão pelo plano correto.');
         return;
       }
-      requestedPlanId = String(candidates[0]?.id || '').trim();
-      requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
+      if (candidates.length === 1) {
+        requestedPlanId = String(candidates[0]?.id || '').trim();
+        requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
+      }
+      // Zero active specialty plans is valid: keep the session unbound so the
+      // shared/legacy PEI can remain available without importing a paused or
+      // different-specialty therapeutic plan.
     }
 
     setPendingSessionAction(resolvedAction);
