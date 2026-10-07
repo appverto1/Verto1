@@ -12838,7 +12838,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
+          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} legacyAssessmentProtocols={protocols} onOpenSessionReport={openCompletedSessionReport} />
         ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
         ) : activeTab === 'session' && hasConventionalSessionSurface ? (
