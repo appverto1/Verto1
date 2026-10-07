@@ -207,6 +207,7 @@ const criticalTests = [
   'tests/anamnesisProfessionalCapability.regression.test.mjs',
   'tests/authorizationRoleMatrixE2E.regression.test.ts',
   'tests/supervisorPatientScopeE2E.regression.test.mjs',
+  'tests/clinicalGraphRoleScopeP0.regression.test.ts',
   'tests/existingProfessionalInAppInvitation.test.mjs',
   'tests/clinicReinviteAccess.test.ts',
   'tests/teamManagementTenantRefresh.regression.test.mjs',
