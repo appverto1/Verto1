@@ -39,6 +39,14 @@ assert.deepEqual(
   ['to-active'],
   'sessão de TO deve considerar somente o plano ativo de TO',
 );
+assert.deepEqual(
+  sessionSpecialtyPlanCandidates(
+    [{ id: 'fono-paused-only', specialty: 'Fonoaudiólogo', status: 'paused', mode: 'specialty' }],
+    fonoAppointment,
+  ),
+  [],
+  'plano pausado não pode ser reativado implicitamente pela sessão',
+);
 assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[0], fonoAppointment), true);
 assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[2], fonoAppointment), false);
 
@@ -48,11 +56,12 @@ const cmv3PlanRoutes = fs.readFileSync('services/clinicalMeasurementV3PlanRoutes
 const migrationV1 = fs.readFileSync('supabase/migrations/20261007003500_session_specialty_isolation_v1.sql', 'utf8');
 const migrationV2 = fs.readFileSync('supabase/migrations/20261007004500_session_specialty_isolation_v2.sql', 'utf8');
 const migrationV3 = fs.readFileSync('supabase/migrations/20261007005500_session_specialty_isolation_v3.sql', 'utf8');
+const migrationV4 = fs.readFileSync('supabase/migrations/20261007006500_session_specialty_isolation_v4.sql', 'utf8');
 
 assert.match(
   patientDetail,
-  /sessionSpecialtyPlanCandidates\(scopes, scheduledSessionForPatient\)[\s\S]*?candidates\.length !== 1/,
-  'início pela Agenda deve resolver exatamente um plano ativo da especialidade',
+  /sessionSpecialtyPlanCandidates\(scopes, scheduledSessionForPatient\)[\s\S]*?candidates\.length > 1/,
+  'início pela Agenda deve bloquear somente ambiguidade e nunca escolher entre múltiplos planos ativos',
 );
 assert.match(
   sessionMode,
@@ -103,6 +112,21 @@ assert.doesNotMatch(
   migrationV3,
   /new\.therapeutic_plan_id\s*:=/,
   'o banco não deve inventar vínculo de plano em nome do usuário',
+);
+assert.match(
+  migrationV4,
+  /if new\.therapeutic_plan_id is null or v_appointment_key is null then[\s\S]*?return new/,
+  'sessão PEI-only deve permanecer válida sem importar plano pausado ou de outra especialidade',
+);
+assert.match(
+  migrationV4,
+  /tg_op = 'INSERT' and v_plan_status <> 'active'/,
+  'um novo binding explícito só pode apontar para plano ativo',
+);
+assert.doesNotMatch(
+  migrationV4,
+  /tg_op = 'UPDATE'[\s\S]*?v_plan_status <> 'active'/,
+  'binding histórico não deve quebrar apenas porque o plano foi pausado após a abertura da sessão',
 );
 
 console.log('sessionSpecialtyIsolation.test.ts: ok');
