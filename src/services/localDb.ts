@@ -1,5 +1,8 @@
 import Dexie, { Table } from 'dexie';
+import { isQueuedRecordForSession } from '../utils/sessionAutoFinalization';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
+
+type SessionSyncOptions = { force?: boolean; sessionId?: string; entityIds?: string[] };
 import {
   OFFLINE_SYNC_MAX_RETRIES,
   isIdempotentConflictPayload,
@@ -574,7 +577,7 @@ export async function getRecordsByType(type: OfflineRecord['type']): Promise<Off
   return Array.from(merged.values());
 }
 
-export async function getPendingRecords(): Promise<OfflineRecord[]> {
+export async function getPendingRecords(options: SessionSyncOptions = {}): Promise<OfflineRecord[]> {
   const currentUserId = await getCurrentUserIdOrNull();
   if (!currentUserId) return [];
   const [pendingRows, failedRows, conflictRows] = await Promise.all([
@@ -594,7 +597,9 @@ export async function getPendingRecords(): Promise<OfflineRecord[]> {
   const decoded = await Promise.all(mergedRows.map(mapStoredToOfflineRecord));
   const now = Date.now();
   return (decoded.filter(Boolean) as OfflineRecord[]).filter((record) => {
-    if (!shouldAttemptOfflineRecord(record, now)) return false;
+    if (options.sessionId && !isQueuedRecordForSession(record, options.sessionId, options.entityIds)) return false;
+    const retryRecord = options.force ? { ...record, next_retry_at: null } : record;
+    if (!shouldAttemptOfflineRecord(retryRecord, now)) return false;
     const entityId = entityIdForRecord(record);
     // Never let a newer mutation overtake an unresolved older mutation for the
     // same entity. This preserves causal ordering across reloads/relogins.
@@ -604,6 +609,17 @@ export async function getPendingRecords(): Promise<OfflineRecord[]> {
       Number(blocker.last_updated || 0) <= Number(record.last_updated || 0)
     );
   });
+}
+
+// Include permanent failures/conflicts as unconfirmed: closure must never hide them.
+export async function getSessionQueuedRecords(sessionId: string, entityIds: string[] = []): Promise<OfflineRecord[]> {
+  const userId = await getCurrentUserIdOrNull();
+  if (!userId) throw new Error('A sessão de acesso expirou. Entre novamente para confirmar os salvamentos.');
+  const rows = (await db.records.where('user_id').equals(userId).toArray())
+    .filter((row) => ['aba', 'aba_v3'].includes(row.type) && row.sync_status !== 'synced');
+  const decoded = await Promise.all(rows.map(mapStoredToOfflineRecord));
+  if (decoded.some((record) => !record)) throw new Error('Há um registro local que não pôde ser lido. Nenhum dado foi descartado.');
+  return (decoded as OfflineRecord[]).filter((record) => isQueuedRecordForSession(record, sessionId, entityIds));
 }
 
 export async function getFailedSyncRecords(): Promise<OfflineRecord[]> {
@@ -667,20 +683,16 @@ export async function clearSensitiveOfflineCacheForUser(userId?: string | null) 
   seedInFlight = null;
 }
 
-let isSyncing = false;
+let activeSync: Promise<void> | null = null;
 let lastSyncAttempt = 0;
 const SYNC_COOLDOWN = 5000;
 
-export const syncOfflineData = async () => {
-  const now = Date.now();
-  if (!navigator.onLine || isSyncing || now - lastSyncAttempt < SYNC_COOLDOWN) return;
-
-  isSyncing = true;
-  lastSyncAttempt = now;
+const runOfflineSync = async (options: SessionSyncOptions) => {
+  lastSyncAttempt = Date.now();
   console.log('Starting offline sync...');
 
   try {
-    const pending = await getPendingRecords();
+    const pending = await getPendingRecords(options);
 
     if (pending.length === 0) {
       console.log('No pending records to sync.');
@@ -775,7 +787,24 @@ export const syncOfflineData = async () => {
       }
     }
   } finally {
-    isSyncing = false;
     console.log('Offline sync finished.');
+  }
+};
+
+// Background sync and explicit completion share one worker. An explicit flush waits
+// for any active pass, then reads a fresh scoped queue and bypasses only backoff.
+export const syncOfflineData = async (options: SessionSyncOptions = {}) => {
+  if (!navigator.onLine) return;
+  while (activeSync) {
+    await activeSync;
+    if (!options.force) return;
+  }
+  if (!options.force && Date.now() - lastSyncAttempt < SYNC_COOLDOWN) return;
+  const task = runOfflineSync(options);
+  activeSync = task;
+  try {
+    await task;
+  } finally {
+    if (activeSync === task) activeSync = null;
   }
 };
