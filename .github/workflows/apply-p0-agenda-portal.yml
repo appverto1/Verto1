@@ -1,0 +1,46 @@
+name: Apply P0 agenda portal patch
+
+on:
+  push:
+    branches:
+      - fix/p0-agenda-portal-resilience-20261007
+    paths:
+      - 'release/p0-agenda-portal.patch'
+      - '.github/workflows/apply-p0-agenda-portal.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Apply exact server patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check release/p0-agenda-portal.patch
+          git apply release/p0-agenda-portal.patch
+      - name: Focused P0 regression
+        run: node tests/agendaPortalActionsP0.regression.test.mjs
+      - name: Build
+        run: npm run build
+      - name: Commit materialized change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm release/p0-agenda-portal.patch
+          git rm .github/workflows/apply-p0-agenda-portal.yml
+          git config user.name "Verto P0 Bot"
+          git config user.email "p0-bot@users.noreply.github.com"
+          git add server.ts tests scripts
+          git commit -m "fix(p0): harden agenda portal actions"
+          git push origin HEAD:fix/p0-agenda-portal-resilience-20261007
