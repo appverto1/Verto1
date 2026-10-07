@@ -58,6 +58,14 @@ assert.equal(101 * frozenModulePricePerPatientCents, 303_000);
 
 assert.match(builder, /SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000/);
 assert.match(builder, /SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000/);
+assert.match(builder, /normalizeBuilderInputForCalculation/);
+assert.match(builder, /previewComputation/);
+assert.match(builder, /proposalCalculationErrorMessage/);
+assert.match(builder, /input: calculationInput/);
+assert.doesNotMatch(
+  builder,
+  /try \{\s*return calculateSalesModularProposal\(input, catalog, assumptions\);\s*\} catch \{\s*return null;\s*\}/
+);
 assert.match(builder, /border-emerald-200/);
 assert.match(builder, /border-amber-200/);
 assert.match(builder, /border-rose-200/);
