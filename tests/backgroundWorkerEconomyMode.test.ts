@@ -206,6 +206,8 @@ assert.equal(unrelatedLease, true);
 assert.equal(rpcCalls, 3);
 
 const cronService = read('services/cronService.ts');
+const clinicAnnouncementCronService = read('services/clinicAnnouncementCronService.ts');
+const recurringCronSources = [cronService, clinicAnnouncementCronService].join('\n');
 const noShowService = read('services/appointmentNoShowService.ts');
 const backgroundWorkerMode = read('services/backgroundWorkerMode.ts');
 const distributedRuntime = read('services/distributedRuntimeState.ts');
@@ -213,9 +215,9 @@ const server = read('server.ts');
 const envExample = read('.env.example');
 
 // All known node-cron recurring workers use the singleton guarded by backgroundWorkerMode.
-assert.equal((cronService.match(/cron\.schedule\(/g) || []).length, 2);
+assert.equal((recurringCronSources.match(/cron\.schedule\(/g) || []).length, 2);
 assert.equal((noShowService.match(/cron\.schedule\(/g) || []).length, 1);
-assert.match(cronService, /from 'node-cron'/);
+assert.match(recurringCronSources, /from 'node-cron'/);
 assert.match(noShowService, /from 'node-cron'/);
 assert.match(backgroundWorkerMode, /from 'node-cron'/);
 assert.match(backgroundWorkerMode, /scheduler\.createTask/);
@@ -223,7 +225,7 @@ assert.match(backgroundWorkerMode, /notification_jobs_startup/);
 assert.match(backgroundWorkerMode, /startup_warmup/);
 assert.match(backgroundWorkerMode, /VERTO_BACKGROUND_WORKER_MODE=economy é proibido em production/);
 assert.match(cronService, /runAppointmentReminderScan/);
-assert.match(cronService, /runClinicAnnouncementDispatchScan/);
+assert.match(recurringCronSources, /runClinicAnnouncementDispatchScan/);
 assert.match(noShowService, /runAppointmentNoShowScan/);
 
 for (const jobKey of automaticBillingLeaseKeys) {
