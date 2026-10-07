@@ -203,6 +203,7 @@ const criticalTests = [
   'tests/patientDirectoryOrdering.regression.test.mjs',
   'tests/progressReportFilters.regression.test.mjs',
   'tests/anamnesisSavePersistenceConfirmation.regression.test.mjs',
+  'tests/anamnesisPortalReadOnlyStatus.regression.test.mjs',
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
