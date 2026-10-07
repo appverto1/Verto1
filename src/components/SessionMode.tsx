@@ -1405,6 +1405,16 @@ export const SessionMode = ({
     let cancelled = false;
     setTherapeuticPlanLoading(true);
     setTherapeuticPrograms([]);
+
+    // A session without a frozen specialty plan must never aggregate every
+    // specialty plan visible for the patient. Legacy PEI remains separate.
+    if (!activeTherapeuticPlanId) {
+      setTherapeuticPlanLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     dataService.getPatientTherapeuticPlan(patientId)
       .then((result: any) => {
         if (cancelled) return;
@@ -1414,9 +1424,11 @@ export const SessionMode = ({
           return;
         }
         const normalizedPrograms = normalizeTherapeuticPrograms(result?.data || result);
-        setTherapeuticPrograms(activeTherapeuticPlanId
-          ? normalizedPrograms.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId)
-          : normalizedPrograms);
+        setTherapeuticPrograms(
+          normalizedPrograms.filter((program: any) =>
+            String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId
+          )
+        );
       })
       .catch((loadError: any) => {
         if (import.meta.env.DEV) console.warn('Falha ao carregar programas terapêuticos na sessão:', loadError);
@@ -2342,6 +2354,8 @@ export const SessionMode = ({
       observedAt: timestamp,
       idempotencyKey: trialId,
       numericValue,
+      sessionId,
+      therapeuticPlanId: activeTherapeuticPlanId || null,
     };
     if (measurementType === 'duration' || measurementType === 'latency') {
       payload.startedAt = startedAt;
