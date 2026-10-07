@@ -207,6 +207,8 @@ const criticalTests = [
   'tests/sidebarHoverExpansion.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',
   'tests/salesSuperAdminCommercialModel20260830.regression.test.mjs',
+  'tests/salesCheckoutLinkMonotonicLifecycle.test.mjs',
+  'tests/salesBoletoAsyncActivationEmail20261005.regression.test.mjs',
   'tests/modulePurchaseEligibility.test.ts',
   'tests/moduleSubscriptionUpgrade.test.ts',
   'tests/moduleSubscriptionUpgradeExecution.test.ts',
