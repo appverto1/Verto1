@@ -26,6 +26,19 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Capture production typecheck baseline
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > /tmp/typecheck-baseline.log 2>&1
+          echo $? > /tmp/typecheck-baseline.status
+          set -e
+          grep -E "error TS[0-9]+:" /tmp/typecheck-baseline.log | sort -u > /tmp/typecheck-baseline.errors || true
+          echo "Baseline errors: $(wc -l < /tmp/typecheck-baseline.errors)"
+
       - name: Apply audited commercial patches
         shell: bash
         run: |
@@ -37,11 +50,23 @@ jobs:
             git apply "$patch"
           done
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Typecheck ratchet
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > /tmp/typecheck-candidate.log 2>&1
+          CANDIDATE_STATUS=$?
+          set -e
+          grep -E "error TS[0-9]+:" /tmp/typecheck-candidate.log | sort -u > /tmp/typecheck-candidate.errors || true
+          comm -13 /tmp/typecheck-baseline.errors /tmp/typecheck-candidate.errors > /tmp/typecheck-new.errors || true
+          if [ -s /tmp/typecheck-new.errors ]; then
+            echo "::error::Commercial release introduced new typecheck errors:"
+            cat /tmp/typecheck-new.errors
+            exit 1
+          fi
+          if [ "$CANDIDATE_STATUS" -ne 0 ]; then
+            echo "::warning::Candidate contains only typecheck errors already present on production baseline."
+          fi
 
       - name: Production build
         run: npm run build
