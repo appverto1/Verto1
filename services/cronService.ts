@@ -20,6 +20,7 @@ import {
 } from './distributedRuntimeState';
 import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 import { createClinicAnnouncementCronService } from './clinicAnnouncementCronService';
+import { createAppointmentReminderBrandingService } from './appointmentReminderBranding';
 export type { ClinicAnnouncementDispatchSummary } from './clinicAnnouncementCronService';
 
 dayjs.extend(utc);
@@ -990,246 +991,22 @@ export const chooseDueReminder = (
   return null;
 };
 
-const clinicBrandingCache = new Map<string, {
-  clinicName: string;
-  clinicLogoUrl: string | null;
-  expiresAtMs: number;
-}>();
+const reminderBrandingService = createAppointmentReminderBrandingService({
+  sanitizeText,
+  isUuid,
+  extractReminderMissingColumnName,
+  extractReminderClinicLogoStoragePath,
+  isGenericClinicNotificationName,
+  sanitizeClinicNotificationLogoUrl,
+  defaultClinicName: DEFAULT_CLINIC_NOTIFICATION_NAME,
+  cacheTtlMs: CLINIC_BRANDING_CACHE_TTL_MS,
+});
 
-export const invalidateReminderClinicBranding = (clinicId?: string | null) => {
-  const safeClinicId = sanitizeText(clinicId, 120);
-  if (safeClinicId) clinicBrandingCache.delete(safeClinicId);
-};
-
-type ClinicBrandingResolverOptions = Pick<ActiveCronServiceOptions, 'supabase' | 'logger'>;
-
-const notificationAssetSigningSecret = () =>
-  sanitizeText(process.env.SESSION_SECRET, 500);
-
-const notificationAssetSignature = (clinicId: string, storagePath: string) => {
-  const secret = notificationAssetSigningSecret();
-  if (!secret) return '';
-  return crypto
-    .createHmac('sha256', secret)
-    .update(`${clinicId}:${storagePath}`)
-    .digest('hex');
-};
-
-export function buildStableClinicNotificationLogoUrl(
-  clinicId: unknown,
-  storagePath: unknown,
-): string | null {
-  const safeClinicId = sanitizeText(clinicId, 120);
-  const safeStoragePath = extractReminderClinicLogoStoragePath(storagePath) || sanitizeText(storagePath, 2000);
-  if (!isUuid(safeClinicId) || !safeStoragePath || safeStoragePath.includes('..')) return null;
-  const signature = notificationAssetSignature(safeClinicId, safeStoragePath);
-  if (!signature) return null;
-  const baseUrl = sanitizeText(
-    process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || 'https://www.appverto.com.br',
-    500,
-  ).replace(/\/+$/, '');
-  if (!/^https:\/\//i.test(baseUrl)) return null;
-  const query = new URLSearchParams({
-    clinic_id: safeClinicId,
-    path: safeStoragePath,
-    signature,
-  });
-  return `${baseUrl}/api/public/notification-assets/clinic-logo?${query.toString()}`;
-}
-
-export function verifyStableClinicNotificationLogoSignature(params: {
-  clinicId: unknown;
-  storagePath: unknown;
-  signature: unknown;
-}): boolean {
-  const clinicId = sanitizeText(params.clinicId, 120);
-  const storagePath = sanitizeText(params.storagePath, 2000);
-  const signature = sanitizeText(params.signature, 128).toLowerCase();
-  if (!isUuid(clinicId) || !storagePath || storagePath.includes('..') || !/^[a-f0-9]{64}$/.test(signature)) {
-    return false;
-  }
-  const expected = notificationAssetSignature(clinicId, storagePath);
-  if (!expected) return false;
-  const providedBuffer = Buffer.from(signature, 'hex');
-  const expectedBuffer = Buffer.from(expected, 'hex');
-  return providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
-}
-
-export async function resolvePushSafeClinicLogoUrl(
-  options: ClinicBrandingResolverOptions,
-  candidates: unknown[],
-  clinicId?: string | null,
-) {
-  for (const candidate of candidates) {
-    const storagePath = extractReminderClinicLogoStoragePath(candidate);
-    if (storagePath && !storagePath.includes('..')) {
-      const stableUrl = buildStableClinicNotificationLogoUrl(clinicId, storagePath);
-      if (stableUrl) return stableUrl;
-      options.logger.warn('[Appointment Reminder Cron] Logo institucional não recebeu URL pública estável.', {
-        clinicId: sanitizeText(clinicId, 120) || null,
-        storagePath,
-      });
-      continue;
-    }
-
-    const safeUrl = sanitizeClinicNotificationLogoUrl(candidate);
-    if (/^https?:\/\//i.test(safeUrl) || (safeUrl.startsWith('/') && !safeUrl.startsWith('/api/'))) {
-      return safeUrl;
-    }
-  }
-  return null;
-}
-
-async function resolveReminderClinicBranding(
-  options: ClinicBrandingResolverOptions,
-  clinicId?: string | null,
-) {
-  const safeClinicId = sanitizeText(clinicId, 120);
-  if (!isUuid(safeClinicId)) {
-    return { clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME, clinicLogoUrl: null };
-  }
-  const cached = clinicBrandingCache.get(safeClinicId);
-  if (cached && cached.expiresAtMs > Date.now()) {
-    return { clinicName: cached.clinicName, clinicLogoUrl: cached.clinicLogoUrl };
-  }
-  if (cached) clinicBrandingCache.delete(safeClinicId);
-
-  const read = (columns: string) =>
-    options.supabase
-      .from('clinics')
-      .select(columns)
-      .eq('id', safeClinicId)
-      .limit(1)
-      .maybeSingle();
-
-  // Em tenants com schema legado, preserve logo_url/name enquanto remove apenas
-  // a coluna opcional ausente. O fallback anterior descartava logo_url junto
-  // com display_name e fazia o push voltar para o avatar generico.
-  let data: any = null;
-  let error: any = null;
-  let clinicColumns = ['id', 'name', 'display_name', 'legal_name', 'logo_url', 'owner_user_id'];
-  while (clinicColumns.length >= 2) {
-    const result = await read(clinicColumns.join(','));
-    data = result.data;
-    error = result.error;
-    if (!error) break;
-    const missingColumn = extractReminderMissingColumnName(error);
-    if (!missingColumn || !clinicColumns.includes(missingColumn)) break;
-    clinicColumns = clinicColumns.filter((column) => column !== missingColumn);
-  }
-  if (error) {
-    options.logger.warn('[Appointment Reminder Cron] Branding da clinica nao carregado.', {
-      clinicId: safeClinicId,
-      message: error.message
-    });
-    const fallback = {
-      clinicName: DEFAULT_CLINIC_NOTIFICATION_NAME,
-      clinicLogoUrl: null,
-      expiresAtMs: Date.now() + CLINIC_BRANDING_CACHE_TTL_MS,
-    };
-    clinicBrandingCache.set(safeClinicId, fallback);
-    return fallback;
-  }
-
-  let profileBrandingRows: any[] = [];
-  const readProfileBranding = (columns: string) =>
-    options.supabase
-      .from('professional_profiles')
-      .select(columns)
-      .eq('clinic_id', safeClinicId)
-      .order('updated_at', { ascending: false })
-      .limit(20);
-  let profileBranding = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at');
-  if (profileBranding.error && extractReminderMissingColumnName(profileBranding.error) === 'metadata') {
-    profileBranding = await readProfileBranding('user_id,full_name,clinic_name,clinic_logo_url,updated_at');
-  }
-  if (!profileBranding.error) {
-    profileBrandingRows = Array.isArray(profileBranding.data) ? profileBranding.data : [];
-  } else if (extractReminderMissingColumnName(profileBranding.error) === 'clinic_id' && isUuid(data?.owner_user_id)) {
-    let ownerProfile = await options.supabase
-      .from('professional_profiles')
-      .select('user_id,full_name,clinic_name,clinic_logo_url,metadata,updated_at')
-      .eq('user_id', data.owner_user_id)
-      .limit(1)
-      .maybeSingle();
-    if (ownerProfile.error && extractReminderMissingColumnName(ownerProfile.error) === 'metadata') {
-      ownerProfile = await options.supabase
-        .from('professional_profiles')
-        .select('user_id,full_name,clinic_name,clinic_logo_url,updated_at')
-        .eq('user_id', data.owner_user_id)
-        .limit(1)
-        .maybeSingle();
-    }
-    if (!ownerProfile.error && ownerProfile.data) profileBrandingRows = [ownerProfile.data];
-  }
-  const institutionalProfile = profileBrandingRows.find((row: any) => {
-    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-    return sanitizeText(row?.clinic_name || metadata.clinicName || metadata.clinicSettings?.clinicName, 160) ||
-      sanitizeClinicNotificationLogoUrl(row?.clinic_logo_url || metadata.clinicLogoUrl || metadata.clinicSettings?.clinicLogoUrl);
-  });
-  const profileWithUsableName = profileBrandingRows.find((row: any) => {
-    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-    return !isGenericClinicNotificationName(
-      row?.clinic_name ||
-        metadata.clinicName ||
-        metadata.clinicSettings?.clinicName ||
-        metadata.clinic_settings?.clinicName
-    );
-  });
-  const profileWithUsableLogo = profileBrandingRows.find((row: any) => {
-    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
-    return sanitizeClinicNotificationLogoUrl(
-      row?.clinic_logo_url ||
-        metadata.clinicLogoUrl ||
-        metadata.clinicSettings?.clinicLogoUrl ||
-        metadata.clinic_settings?.clinicLogoUrl ||
-        metadata.clinicLogoPath ||
-        metadata.clinicSettings?.clinicLogoPath ||
-        metadata.clinic_settings?.clinicLogoPath
-    );
-  });
-  const profileNameSource = profileWithUsableName || institutionalProfile;
-  const profileLogoSource = profileWithUsableLogo || institutionalProfile;
-  const profileNameMetadata = profileNameSource?.metadata && typeof profileNameSource.metadata === 'object'
-    ? profileNameSource.metadata
-    : {};
-  const profileLogoMetadata = profileLogoSource?.metadata && typeof profileLogoSource.metadata === 'object'
-    ? profileLogoSource.metadata
-    : {};
-  const clinicName = sanitizeText(data?.display_name || data?.name || data?.legal_name, 160);
-  const profileClinicName = sanitizeText(
-    profileNameSource?.clinic_name ||
-      profileNameMetadata.clinicName ||
-      profileNameMetadata.clinicSettings?.clinicName ||
-      profileNameMetadata.clinic_settings?.clinicName,
-    160
-  );
-  const clinicLogoUrl = await resolvePushSafeClinicLogoUrl(options, [
-    profileLogoSource?.clinic_logo_url,
-    profileLogoMetadata.clinicLogoUrl,
-    profileLogoMetadata.clinicSettings?.clinicLogoUrl,
-    profileLogoMetadata.clinic_settings?.clinicLogoUrl,
-    profileLogoMetadata.clinicLogoPath,
-    profileLogoMetadata.clinicSettings?.clinicLogoPath,
-    profileLogoMetadata.clinic_settings?.clinicLogoPath,
-    data?.logo_url,
-  ], safeClinicId);
-  const ownerProfessionalName = sanitizeText(profileNameSource?.full_name, 180);
-  const clinicNameIsOwnerName = Boolean(
-    clinicName && ownerProfessionalName &&
-    clinicName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() ===
-      ownerProfessionalName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
-  );
-  const branding = {
-    clinicName: !isGenericClinicNotificationName(profileClinicName)
-      ? profileClinicName
-      : (!isGenericClinicNotificationName(clinicName) && !clinicNameIsOwnerName ? clinicName : DEFAULT_CLINIC_NOTIFICATION_NAME),
-    clinicLogoUrl,
-    expiresAtMs: Date.now() + CLINIC_BRANDING_CACHE_TTL_MS,
-  };
-  clinicBrandingCache.set(safeClinicId, branding);
-  return { clinicName: branding.clinicName, clinicLogoUrl: branding.clinicLogoUrl };
-}
+export const invalidateReminderClinicBranding = reminderBrandingService.invalidateReminderClinicBranding;
+export const buildStableClinicNotificationLogoUrl = reminderBrandingService.buildStableClinicNotificationLogoUrl;
+export const verifyStableClinicNotificationLogoSignature = reminderBrandingService.verifyStableClinicNotificationLogoSignature;
+export const resolvePushSafeClinicLogoUrl = reminderBrandingService.resolvePushSafeClinicLogoUrl;
+const resolveReminderClinicBranding = reminderBrandingService.resolveReminderClinicBranding;
 
 async function persistPortalReminder(params: {
   options: ActiveCronServiceOptions;
