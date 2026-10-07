@@ -148,7 +148,7 @@ assert.match(app, /dataService\.selectAccessContext\(/);
 assert.match(app, /getLastActiveAccessContextId\(candidateUser\?\.id\)/);
 assert.match(app, /Preferência local nunca ativa um tenant por conta própria/);
 assert.match(app, /Trabalhar/);
-assert.match(app, /Meu cuidado/);
+assert.match(app, /Cuidar de mim/);
 assert.match(dataService, /fetch\('\/api\/access-contexts\/select'/);
 assert.match(dataService, /body: JSON\.stringify\(\{ accessContextId: safeAccessContextId \}\)/);
 assert.match(dataService, /\[404, 405\]\.includes\(response\.status\) && safeFallbackClinicId/);
