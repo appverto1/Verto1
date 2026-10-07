@@ -5874,7 +5874,7 @@ export const SessionMode = ({
         const mandatory = buildSessionClosureIssues().blockers.filter((item) => !AUTOMATIC_SESSION_CLOSURE_KEYS.has(item.key));
         if (mandatory.length) throw new Error(mandatory.map((item) => item.label).join('. '));
         await waitForSessionWrites(() => recordsRef.current.some((record) => record.syncStatus === 'syncing'));
-        for (const timer of Object.values(therapeuticTimersRef.current)) {
+        for (const timer of Object.values(therapeuticTimersRef.current) as TherapeuticTimerState[]) {
           const goal = timer.goalSnapshot || sessionGoals.find((item: any) => therapeuticGoalKey(item) === timer.goalKey);
           if (!goal) throw new Error('O alvo do cronômetro não foi encontrado. O tempo foi preservado.');
           if (!await finishTherapeuticTimer(goal, endedAt, true)) throw new Error('Não foi possível salvar o tempo observado. Tente finalizar novamente.');
