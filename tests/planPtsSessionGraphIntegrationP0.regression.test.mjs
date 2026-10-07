@@ -21,7 +21,7 @@ assert.match(route, /programId:/);
 assert.match(route, /goalId:/);
 assert.match(route, /planId:/);
 assert.match(route, /mergeClinicalOutcomeRowsV3First/);
-assert.match(route, /canonicalAbaSessionTargets/);
+assert.match(server, /canonicalAbaSessionTargets/);
 assert.match(route, /rawEventsRead: false/);
 
 assert.match(
