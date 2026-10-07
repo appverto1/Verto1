@@ -215,6 +215,7 @@ const criticalTests = [
   'tests/patientTaskCompletionIdempotency.regression.test.mjs',
   'tests/agendaPortalActionsP0.regression.test.mjs',
   'tests/receptionAuthorizationFirstRender.regression.test.mjs',
+  'tests/familyDiaryPersistence.regression.test.mjs',
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
