@@ -156,6 +156,85 @@ const unitInput = (
   return input;
 };
 
+const essencial40Input = proposalInputFixture(
+  40,
+  PACKAGE_TIERS.upTo50.id,
+  null,
+  null
+);
+essencial40Input.commercialPricingMode = 'manual_module_prices';
+essencial40Input.commercialCapacityBasis = 'current_patients';
+essencial40Input.platformFoundationPricingMode = 'manual';
+essencial40Input.platformFoundationMonthlyAmountCents = 0;
+essencial40Input.expectedPatientQuantity12Months = 40;
+essencial40Input.customCapacityBlocks = null;
+essencial40Input.customCapacitySelectionMode = 'automatic';
+essencial40Input.offerStartsAt = effectiveAt;
+essencial40Input.usageProfile = 'intensive';
+essencial40Input.lines[0] = {
+  ...essencial40Input.lines[0],
+  quantity: 40,
+  pricingEditMode: 'per_patient',
+  proposedPricePerPatientCents: 1241,
+  customRecurringAmountCents: null
+};
+
+const recoveredAssumptions40 = structuredClone(modularAssumptionsFixture);
+recoveredAssumptions40.version = 1;
+recoveredAssumptions40.name = 'Recuperação staging — baseline comercial 2026-10-07';
+recoveredAssumptions40.values = {
+  ...recoveredAssumptions40.values,
+  stripeFeeBasisPoints: 399,
+  stripeFixedFeeCents: 39,
+  revenueTaxBasisPoints: 0,
+  estimatedDelinquencyBasisPoints: 0,
+  refundChargebackBasisPoints: 0,
+  fixedMonthlyEligibleCostCents: 11092,
+  fixedAllocationMethod: 'per_clinic',
+  fixedAllocationPatientCount: null,
+  fixedAllocationClinicCount: 1,
+  depreciationAmortizationCents: 0,
+  financialExpensesCents: 0,
+  profitTaxBasisPoints: 0,
+  otherBelowEbitdaCents: 0,
+  minimumMarginBasisPoints: 6000,
+  healthyMarginBasisPoints: 7000,
+  attentionMarginBasisPoints: 6000
+};
+
+const essencial40 = calculateSalesModularProposal(
+  essencial40Input,
+  catalog(),
+  recoveredAssumptions40
+);
+const essencial40Core = essencial40.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.equal(
+  essencial40.basePackage.limitQuantity,
+  50,
+  '40 pacientes devem permanecer na capacidade Essencial de 50'
+);
+assert.equal(
+  essencial40Core?.commercialPricing.proposedPricePerPatientCents,
+  1241
+);
+assert.equal(
+  essencial40Core?.commercialPricing.derivedMonthlyRevenueCents,
+  40 * 1241,
+  'o faturamento recorrente deve usar pacientes atuais, não a capacidade máxima'
+);
+assert.notEqual(
+  essencial40Core?.postPromotion.ebitdaMarginBasisPoints,
+  null,
+  'a margem do módulo deve ser calculável com premissas completas'
+);
+assert.notEqual(
+  essencial40.promotional.ebitdaMarginBasisPoints,
+  null,
+  'a margem consolidada deve ser calculável com premissas completas'
+);
+
 const result150 = calculateSalesModularProposal(
   unitInput(150),
   catalog(),
