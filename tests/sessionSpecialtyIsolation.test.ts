@@ -28,6 +28,7 @@ const plans = [
   { id: 'fono-paused', specialty: 'Fonoaudiólogo', status: 'paused', mode: 'specialty' },
   { id: 'to-active', specialty: 'Terapeuta Ocupacional', status: 'active', mode: 'specialty' },
   { id: 'pts', specialty: null, status: 'active', mode: 'interdisciplinary' },
+  { id: 'legacy-fono', specialty: 'Fonoaudiólogo', status: 'active', mode: 'legacy' },
 ];
 assert.deepEqual(
   sessionSpecialtyPlanCandidates(plans, fonoAppointment).map((plan) => plan.id),
@@ -57,6 +58,7 @@ const migrationV1 = fs.readFileSync('supabase/migrations/20261007003500_session_
 const migrationV2 = fs.readFileSync('supabase/migrations/20261007004500_session_specialty_isolation_v2.sql', 'utf8');
 const migrationV3 = fs.readFileSync('supabase/migrations/20261007005500_session_specialty_isolation_v3.sql', 'utf8');
 const migrationV4 = fs.readFileSync('supabase/migrations/20261007006500_session_specialty_isolation_v4.sql', 'utf8');
+const migrationV5 = fs.readFileSync('supabase/migrations/20261007007500_session_specialty_isolation_v5.sql', 'utf8');
 
 assert.match(
   patientDetail,
@@ -98,35 +100,35 @@ assert.doesNotMatch(
   /tg_op = 'UPDATE'[\s\S]*?new\.therapeutic_plan_id :=/,
   'UPDATE nunca pode reinterpretar a especialidade congelada da sessão',
 );
-assert.match(
-  migrationV3,
-  /ABA_SESSION_SPECIALTY_PLAN_REQUIRED/,
-  'agendamento com especialidade reconhecida deve exigir plano explícito e autorizado',
-);
-assert.match(
-  migrationV3,
-  /source_payload[\s\S]*?specialty[\s\S]*?service_type[\s\S]*?approach/,
-  'especialidade canônica deve ser resolvida de campos clínicos antes de usar abordagem como fallback',
-);
 assert.doesNotMatch(
   migrationV3,
   /new\.therapeutic_plan_id\s*:=/,
   'o banco não deve inventar vínculo de plano em nome do usuário',
 );
 assert.match(
-  migrationV4,
+  migrationV5,
+  /public\.clinic_state[\s\S]*?jsonb_array_elements/,
+  'fallback de agendamento legado também deve participar da validação de especialidade',
+);
+assert.match(
+  migrationV5,
   /if new\.therapeutic_plan_id is null or v_appointment_key is null then[\s\S]*?return new/,
   'sessão PEI-only deve permanecer válida sem importar plano pausado ou de outra especialidade',
 );
 assert.match(
-  migrationV4,
+  migrationV5,
   /tg_op = 'INSERT' and v_plan_status <> 'active'/,
   'um novo binding explícito só pode apontar para plano ativo',
 );
+assert.match(
+  migrationV5,
+  /ABA_SESSION_SPECIALTY_PLAN_MISMATCH/,
+  'plano explicitamente vinculado deve corresponder à especialidade do atendimento',
+);
 assert.doesNotMatch(
-  migrationV4,
-  /tg_op = 'UPDATE'[\s\S]*?v_plan_status <> 'active'/,
-  'binding histórico não deve quebrar apenas porque o plano foi pausado após a abertura da sessão',
+  migrationV5,
+  /new\.therapeutic_plan_id\s*:=/,
+  'nem o caminho canônico nem o legado podem inventar vínculo de plano em nome do usuário',
 );
 
 console.log('sessionSpecialtyIsolation.test.ts: ok');
