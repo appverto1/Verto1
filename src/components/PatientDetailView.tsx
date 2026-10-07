@@ -6473,74 +6473,85 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return message && scheduleDate && scheduleTime; 
   }; 
   const handleSaveTaskEdit = () => { if (editingTask && editingTask.title) { onUpdateTask(editingTask.id, { title: editingTask.title, description: editingTask.description }); setEditingTask(null); } }; 
-  const handleUpdateAnamnesis = (updatedData: any) => {
+  const handleUpdateAnamnesis = async (updatedData: any) => {
     if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
     setIsPreparingAnamnesisSave(true);
-    const normalizedBirthDate = String(updatedData?.dataNascimento || '').trim();
-    const normalizedCep = String(updatedData?.cep || '').trim();
-    const normalizedAddress = {
-      logradouro: String(updatedData?.logradouro || '').trim() || null,
-      numero: String(updatedData?.numero || '').trim() || null,
-      complemento: String(updatedData?.complemento || '').trim() || null,
-      bairro: String(updatedData?.bairro || '').trim() || null,
-      cidade: String(updatedData?.cidade || '').trim() || null,
-    };
-    const normalizedGuardian = Boolean(updatedData?.menorDeIdade)
-      ? {
-          nome: String(updatedData?.responsavelNome || '').trim() || null,
-          dataNascimento: String(updatedData?.responsavelDataNascimento || '').trim() || null,
-          cpf: String(updatedData?.responsavelCpf || '').trim() || null,
-          telefone: String(updatedData?.responsavelTelefone || '').trim() || null,
+    try {
+      const normalizedBirthDate = String(updatedData?.dataNascimento || '').trim();
+      const normalizedCep = String(updatedData?.cep || '').trim();
+      const normalizedAddress = {
+        logradouro: String(updatedData?.logradouro || '').trim() || null,
+        numero: String(updatedData?.numero || '').trim() || null,
+        complemento: String(updatedData?.complemento || '').trim() || null,
+        bairro: String(updatedData?.bairro || '').trim() || null,
+        cidade: String(updatedData?.cidade || '').trim() || null,
+      };
+      const normalizedGuardian = Boolean(updatedData?.menorDeIdade)
+        ? {
+            nome: String(updatedData?.responsavelNome || '').trim() || null,
+            dataNascimento: String(updatedData?.responsavelDataNascimento || '').trim() || null,
+            cpf: String(updatedData?.responsavelCpf || '').trim() || null,
+            telefone: String(updatedData?.responsavelTelefone || '').trim() || null,
+          }
+        : null;
+      const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
+      if (onUpdatePatient) {
+        const patientUpdateResult = await onUpdatePatient({
+          id: patient.id,
+          name: String(updatedData?.nome || '').trim() || patient?.name,
+          socialName: String(updatedData?.nomeSocial || '').trim() || null,
+          phone: String(updatedData?.telefone || '').trim() || null,
+          email: String(updatedData?.email || '').trim().toLowerCase() || null,
+          cpf: String(updatedData?.cpf || '').trim() || null,
+          age: typeof recalculatedAge === 'number' ? recalculatedAge : patient?.age,
+          gender: String(updatedData?.genero || '').trim() || null,
+          dataNascimento: normalizedBirthDate || null,
+          birthDate: normalizedBirthDate || null,
+          cep: normalizedCep || null,
+          address: normalizedAddress,
+          notes: String(updatedData?.outrasInformacoes || '').trim() || null,
+          isMinor: Boolean(updatedData?.menorDeIdade),
+          guardian: normalizedGuardian,
+          diagnosis: updatedData.motivoConsulta,
+          anamnesisData: updatedData,
+          anamnesisPending: false,
+          lastAnamnesisAt: new Date().toISOString()
+        });
+        if (!patientUpdateResult?.success) {
+          if (!patientUpdateResult?.error) {
+            alert('Não foi possível confirmar a persistência da anamnese. A ficha permanece aberta para nova tentativa.');
+          }
+          return;
         }
-      : null;
-    const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
-    if (onUpdatePatient) {
-      onUpdatePatient({
-        id: patient.id,
-        name: String(updatedData?.nome || '').trim() || patient?.name,
-        socialName: String(updatedData?.nomeSocial || '').trim() || null,
-        phone: String(updatedData?.telefone || '').trim() || null,
-        email: String(updatedData?.email || '').trim().toLowerCase() || null,
-        cpf: String(updatedData?.cpf || '').trim() || null,
-        age: typeof recalculatedAge === 'number' ? recalculatedAge : patient?.age,
-        gender: String(updatedData?.genero || '').trim() || null,
-        dataNascimento: normalizedBirthDate || null,
-        birthDate: normalizedBirthDate || null,
-        cep: normalizedCep || null,
-        address: normalizedAddress,
-        notes: String(updatedData?.outrasInformacoes || '').trim() || null,
-        isMinor: Boolean(updatedData?.menorDeIdade),
-        guardian: normalizedGuardian,
-        diagnosis: updatedData.motivoConsulta,
-        anamnesisData: updatedData,
-        anamnesisPending: false,
-        lastAnamnesisAt: new Date().toISOString()
-      });
-    }
+      }
 
-    const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
-    setPendingAnamnesisPayload(fichePayload);
-    setPendingAnamnesisData(updatedData);
-    setAnamnesisFileName(defaultName);
-    setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
-    setShowAnamnesis(false);
-    setShowAnamnesisFileModal(true);
-    setIsPreparingAnamnesisSave(false);
-    void dataService.submitPatientAnamnesis(String(patient.id), updatedData, anamnesisFlow?.request?.id || null)
-      .then((result) => {
-        if (result?.success) {
-          void loadAnamnesisFlow();
-        }
-      })
-      .catch((error) => console.warn('Falha ao sincronizar resposta da anamnese:', error));
-    onAddActivityLog?.(
-      "Ficha de anamnese salva",
-      `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
-      "clinical",
-    );
-  }; 
-  
+      const submissionResult = await dataService.submitPatientAnamnesis(
+        String(patient.id),
+        updatedData,
+        anamnesisFlow?.request?.id || null
+      );
+      if (!submissionResult?.success) {
+        alert(submissionResult?.error || 'Não foi possível confirmar a submissão da anamnese. A ficha permanece aberta para nova tentativa.');
+        return;
+      }
+
+      const referenceDate = new Date().toISOString().slice(0, 10);
+      const fichePayload = buildAnamnesisDocumentHtml(updatedData, referenceDate);
+      const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${referenceDate}.pdf`;
+      setPendingAnamnesisPayload(fichePayload);
+      setPendingAnamnesisData(updatedData);
+      setAnamnesisFileName(defaultName);
+      setAnamnesisFileDate(referenceDate);
+      setShowAnamnesis(false);
+      setShowAnamnesisFileModal(true);
+      void loadAnamnesisFlow();
+    } catch (error: any) {
+      alert(error?.message || 'Não foi possível confirmar a persistência da anamnese. A ficha permanece aberta para nova tentativa.');
+    } finally {
+      setIsPreparingAnamnesisSave(false);
+    }
+  };
+
   const handleUnlinkPatient = () => {
     if (onUpdatePatient) {
       // When unlinking, we keep the history but remove the clinic association
