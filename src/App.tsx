@@ -8047,6 +8047,20 @@ export default function App() {
     }, 1200);
   };
 
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const handleServerSessionExpired = () => {
+      if (manualLogoutInProgressRef.current) return;
+      void handleLogout();
+    };
+
+    window.addEventListener('verto:server-session-expired', handleServerSessionExpired);
+    return () => {
+      window.removeEventListener('verto:server-session-expired', handleServerSessionExpired);
+    };
+  }, [user?.id]);
+
   const handleAccessContextSelect = async (context: AccessContextOption) => {
     if (!context?.id || selectingAccessContextId) return;
     setSelectingAccessContextId(context.id);
