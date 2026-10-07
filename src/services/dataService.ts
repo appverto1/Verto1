@@ -2614,27 +2614,64 @@ export const dataService = {
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
-  async getPatientSelfHistory() {
+  async getPatientSelfHistory(patientId?: string) {
+    const canonicalPatientId = String(patientId || '').trim();
+    const mergePendingLocalHistory = async (remoteData: any[]) => {
+      const local = await getRecordsByType('history');
+      const pendingLocal = local
+        .filter((record) => record.sync_status !== 'synced')
+        .filter((record) => {
+          const localPatientId = String(record?.data?.patient_id || record?.data?.patientId || '').trim();
+          return Boolean(canonicalPatientId) && localPatientId === canonicalPatientId;
+        })
+        .map((record) => ({ ...record.data, sync_status: record.sync_status || 'pending' }));
+      const byId = new Map<string, any>();
+      for (const row of Array.isArray(remoteData) ? remoteData : []) {
+        const id = String(row?.id || '').trim();
+        if (id) byId.set(id, row);
+      }
+      for (const row of pendingLocal) {
+        const id = String(row?.id || '').trim();
+        if (id && !byId.has(id)) byId.set(id, row);
+      }
+      return Array.from(byId.values()).sort((a: any, b: any) =>
+        new Date(b?.created_at || b?.date || 0).getTime() - new Date(a?.created_at || a?.date || 0).getTime()
+      );
+    };
+
     try {
-      const response = await fetch(endpointWithLimit('/api/patient/self/history', 20), {
+      const response = await fetchWithAuthRetry(endpointWithLimit('/api/patient/self/history', 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      if (response.ok) {
-        const result = await response.json();
-        return result;
+      const result = await safeJson(response);
+      if (response.ok && result?.success !== false) {
+        return {
+          ...result,
+          data: await mergePendingLocalHistory(Array.isArray(result?.data) ? result.data : [])
+        };
       }
     } catch (error) {
       console.log('Fetching patient self history from local storage...');
     }
+
     const local = await getRecordsByType('history');
+    if (canonicalPatientId) {
+      return {
+        success: true,
+        data: local
+          .filter((record) => String(record?.data?.patient_id || record?.data?.patientId || '').trim() === canonicalPatientId)
+          .map((record) => ({ ...record.data, sync_status: record.sync_status }))
+      };
+    }
+
     const profileResponse = await this.getCurrentUserProfile();
     const selfEmail = String(profileResponse?.data?.email || '').trim().toLowerCase();
     return {
       success: true,
       data: local
-        .filter(r => String(r?.data?.patient_email || '').trim().toLowerCase() === selfEmail)
-        .map(r => r.data)
+        .filter((record) => String(record?.data?.patient_email || '').trim().toLowerCase() === selfEmail)
+        .map((record) => ({ ...record.data, sync_status: record.sync_status }))
     };
   },
 
