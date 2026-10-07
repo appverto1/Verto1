@@ -11,6 +11,7 @@ import {
 const serviceWorker = fs.readFileSync('public/sw.js', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 const cron = fs.readFileSync('services/cronService.ts', 'utf8');
+const reminderBranding = fs.readFileSync('services/appointmentReminderBranding.ts', 'utf8');
 
 const section = (source: string, start: string, end: string): string => {
   const startIndex = source.indexOf(start);
@@ -79,11 +80,12 @@ assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
 assert.doesNotMatch(serviceWorker, /brandLogo \|\| payloadIcon/);
 
 // Logo privado recebe URL HTTPS estável assinada, sem signed URL temporária do Supabase.
+assert.match(cron, /createAppointmentReminderBrandingService/);
 assert.match(cron, /buildStableClinicNotificationLogoUrl/);
-assert.match(cron, /createHmac\('sha256', secret\)/);
 assert.match(cron, /verifyStableClinicNotificationLogoSignature/);
-assert.match(cron, /\/api\/public\/notification-assets\/clinic-logo/);
-assert.doesNotMatch(cron, /createSignedUrl\(/);
+assert.match(reminderBranding, /createHmac\('sha256', secret\)/);
+assert.match(reminderBranding, /\/api\/public\/notification-assets\/clinic-logo/);
+assert.doesNotMatch(reminderBranding, /createSignedUrl\(/);
 
 const reminderCron = section(cron, 'for (const appointment of appointments)', 'if (result.sent > 0)');
 assert.match(reminderCron, /resolveReminderClinicBranding\(options, appointment\.clinicId\)/);
