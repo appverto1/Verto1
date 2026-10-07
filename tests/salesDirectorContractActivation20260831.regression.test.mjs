@@ -12,10 +12,12 @@ const verification = server.match(/const verifySalesDirectorContractAccess =[^]*
 const provision = server.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
 const finalize = server.match(/async function finalizeSalesActivationForUser[^]*?const mutationActionLabel/)?.[0] || '';
 
-// New paid contracts are provisioned server-side as Director. E-mail is not a gate.
+// New paid contracts are provisioned server-side as Director. E-mail is never a
+// provisioning gate, but delayed payment methods may send a first-access link.
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
 assert.match(processPaid, /preparePaidDirectorSessionBootstrap\(/);
-assert.doesNotMatch(processPaid, /prepareSalesActivationAccess\(/);
+assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 assert.doesNotMatch(processPaid, /buildSalesPostPaymentActivationEmail|sendTransactionalEmailWithResultSafe|resend\.emails\.send/);
 
 assert.match(provision, /role:\s*"director"/);

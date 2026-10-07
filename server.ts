@@ -21450,6 +21450,7 @@ async function startServer() {
     email: string;
     clinicLabel?: string | null;
     attemptEmail?: boolean;
+    preserveProvisioningStatus?: boolean;
   }) => {
     const offerId = sanitizeString(params.offerId, 120);
     const leadId = sanitizeString(params.leadId, 120);
@@ -21575,18 +21576,20 @@ async function startServer() {
     let emailErrorCode = sanitizeString(activation.activation_email_error_code, 120) || null;
     const activationEmailAttempts = Math.max(0, Number(activation.activation_email_attempts || 0));
 
-    const { error: preparedStatusError } = await supabase
-      .from("sales_offers")
-      .update({
-        provisioning_status: activationEmailSent ? "pending" : "email_pending",
-        provisioning_error_code: activationEmailSent ? null : emailErrorCode,
-        provisioning_updated_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", offerId)
-      .eq("lead_id", leadId)
-      .eq("status", "paid");
-    if (preparedStatusError) throw preparedStatusError;
+    if (!params.preserveProvisioningStatus) {
+      const { error: preparedStatusError } = await supabase
+        .from("sales_offers")
+        .update({
+          provisioning_status: activationEmailSent ? "pending" : "email_pending",
+          provisioning_error_code: activationEmailSent ? null : emailErrorCode,
+          provisioning_updated_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", offerId)
+        .eq("lead_id", leadId)
+        .eq("status", "paid");
+      if (preparedStatusError) throw preparedStatusError;
+    }
 
     if (!activationEmailSent && params.attemptEmail !== false) {
       const claim = await claimSalesActivationEmailDelivery(checkoutSessionId);
@@ -21634,17 +21637,21 @@ async function startServer() {
               }],
               { onConflict: "idempotency_key", ignoreDuplicates: true },
             ),
-            supabase
-              .from("sales_offers")
-              .update({
-                provisioning_status: "pending",
-                provisioning_error_code: null,
-                provisioning_updated_at: sentAt,
-                updated_at: sentAt,
-              })
-              .eq("id", offerId)
-              .eq("lead_id", leadId)
-              .eq("status", "paid"),
+            ...(!params.preserveProvisioningStatus
+              ? [
+                  supabase
+                    .from("sales_offers")
+                    .update({
+                      provisioning_status: "pending",
+                      provisioning_error_code: null,
+                      provisioning_updated_at: sentAt,
+                      updated_at: sentAt,
+                    })
+                    .eq("id", offerId)
+                    .eq("lead_id", leadId)
+                    .eq("status", "paid"),
+                ]
+              : []),
           ]);
           const firstError = results.find((result: any) => result?.error)?.error;
           if (firstError) throw firstError;
@@ -21662,17 +21669,21 @@ async function startServer() {
               })
               .eq("id", activation.id)
               .eq("used", false),
-            supabase
-              .from("sales_offers")
-              .update({
-                provisioning_status: "email_pending",
-                provisioning_error_code: emailErrorCode,
-                provisioning_updated_at: sentAt,
-                updated_at: sentAt,
-              })
-              .eq("id", offerId)
-              .eq("lead_id", leadId)
-              .eq("status", "paid"),
+            ...(!params.preserveProvisioningStatus
+              ? [
+                  supabase
+                    .from("sales_offers")
+                    .update({
+                      provisioning_status: "email_pending",
+                      provisioning_error_code: emailErrorCode,
+                      provisioning_updated_at: sentAt,
+                      updated_at: sentAt,
+                    })
+                    .eq("id", offerId)
+                    .eq("lead_id", leadId)
+                    .eq("status", "paid"),
+                ]
+              : []),
           ]);
           const failureError = failureResults.find((result: any) => result?.error)?.error;
           if (failureError) throw failureError;
@@ -21798,6 +21809,7 @@ async function startServer() {
   const processSalesAssistedCheckoutCompleted = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
+    options: { sendActivationEmail?: boolean } = {},
   ) => {
     const metadata = (session.metadata || {}) as Record<string, string>;
     if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
@@ -22088,6 +22100,23 @@ async function startServer() {
       email: directorEmail,
     });
 
+    const activationEmail = options.sendActivationEmail
+      ? await prepareSalesActivationAccess({
+          offerId,
+          leadId,
+          checkoutSessionId: session.id,
+          email: directorEmail,
+          clinicLabel:
+            sanitizeString(lead.clinic_name || lead.name, 180) || null,
+          attemptEmail: true,
+          // For delayed payment methods (for example boleto), the Director and
+          // contracted modules are already provisioned before this message is sent.
+          // The e-mail is only a durable first-access path, so it must never move
+          // provisioning_status backwards from the completed state.
+          preserveProvisioningStatus: true,
+        })
+      : null;
+
     if (subscription) {
       try {
         await syncSalesSubscriptionDiscount(subscription);
@@ -22107,10 +22136,10 @@ async function startServer() {
       sessionClaimed: bootstrap.sessionClaimed,
       directorUserId: directorProvisioning.userId,
       directorClinicId: directorProvisioning.clinicId,
-      activationPrepared: false,
-      activationEmailSent: false,
-      activationPath: null,
-      emailErrorCode: null,
+      activationPrepared: Boolean(activationEmail?.activationReady),
+      activationEmailSent: Boolean(activationEmail?.activationEmailSent),
+      activationPath: activationEmail?.activationPath || null,
+      emailErrorCode: activationEmail?.emailErrorCode || null,
     };
   };
 
@@ -22880,9 +22909,10 @@ async function startServer() {
   const reconcileSalesAssistedCheckout = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
+    options: { sendActivationEmail?: boolean } = {},
   ) => {
     await ensureModularSubscriptionSchedule(stripe, session);
-    return await processSalesAssistedCheckoutCompleted(stripe, session);
+    return await processSalesAssistedCheckoutCompleted(stripe, session, options);
   };
 
   const isSalesAssistedStripeEvent = async (
@@ -22891,6 +22921,7 @@ async function startServer() {
   ): Promise<boolean> => {
     if (
       event.type === "checkout.session.completed" ||
+      event.type === "checkout.session.async_payment_succeeded" ||
       event.type === "checkout.session.expired"
     ) {
       const session = event.data.object as Stripe.Checkout.Session;
@@ -22937,11 +22968,21 @@ async function startServer() {
       return { handled: false };
     }
 
-    if (event.type === "checkout.session.completed") {
+    if (
+      event.type === "checkout.session.completed" ||
+      event.type === "checkout.session.async_payment_succeeded"
+    ) {
       const completedSession = event.data.object as Stripe.Checkout.Session;
       const result = await reconcileSalesAssistedCheckout(
         stripe,
         completedSession,
+        {
+          // Card payments keep the current immediate browser handoff. Delayed
+          // payment methods complete later, so the activation e-mail becomes the
+          // durable path back to first access and onboarding.
+          sendActivationEmail:
+            event.type === "checkout.session.async_payment_succeeded",
+        },
       );
       if (
         sanitizeString((completedSession.metadata as any)?.flowType, 80)
@@ -23148,6 +23189,7 @@ async function startServer() {
         const result = await reconcileSalesAssistedCheckout(
           stripe,
           checkoutSession,
+          { sendActivationEmail: true },
         );
         return { handled: true, result };
       }

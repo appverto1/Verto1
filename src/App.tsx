@@ -372,6 +372,7 @@ class LazyImportBoundary extends React.Component<LazyImportBoundaryProps, LazyIm
 
 const AUTO_RETRIED_FAILED_SYNC_KEY = 'verto.failedSyncAutoRetried.v1';
 const ACTIVATION_ERROR_KEY = 'verto_activation_error';
+const SALES_ACTIVATION_OAUTH_PENDING_KEY = 'verto_sales_activation_oauth_pending';
 
 const publishActivationErrorMessage = (value: unknown) => {
   const message = String(value || 'Não foi possível concluir este convite. Abra novamente o link recebido por e-mail.').trim();
@@ -504,6 +505,7 @@ export default function App() {
     hasSupabaseAuthReturnParams;
   const [user, setUser] = useState<any>(null); 
   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
+  const salesActivationOAuthLoginRef = useRef<{ accessToken: string; promise: Promise<any> } | null>(null);
 
   useEffect(() => {
     if (user && isSalesActivationRoute && typeof window !== 'undefined') {
@@ -1559,6 +1561,102 @@ export default function App() {
     };
   }, [user]);
 
+  const completeSalesActivationOAuth = async (session: any) => {
+    if (typeof window === 'undefined' || !session?.access_token) {
+      return { handled: false as const, result: null };
+    }
+
+    const routeMatch = window.location.pathname.match(/^\/ativacao-comercial\/([^/]+)\/?$/i);
+    if (!routeMatch) return { handled: false as const, result: null };
+
+    let routeToken = '';
+    try {
+      routeToken = decodeURIComponent(routeMatch[1]);
+    } catch {
+      routeToken = '';
+    }
+
+    const pendingToken = String(
+      localStorage.getItem(SALES_ACTIVATION_OAUTH_PENDING_KEY) || '',
+    ).trim();
+    const activationEmail = String(
+      localStorage.getItem('verto_activation_email') || '',
+    ).trim().toLowerCase();
+
+    // Only the explicit "enter with Google" action may finish a paid sales
+    // activation. The token marker prevents a stale Google session from being
+    // reinterpreted as authorization for another commercial activation link.
+    if (!routeToken || pendingToken !== routeToken || !activationEmail) {
+      return { handled: false as const, result: null };
+    }
+
+    const accessToken = String(session.access_token);
+    if (salesActivationOAuthLoginRef.current?.accessToken === accessToken) {
+      return {
+        handled: true as const,
+        result: await salesActivationOAuthLoginRef.current.promise,
+      };
+    }
+
+    const loginPromise = (async () => {
+      try {
+        localStorage.removeItem('verto_intended_role');
+      } catch {
+        // Storage cleanup is UX-only.
+      }
+
+      // Do not trust app_metadata.provider here. When Google is linked to an
+      // existing e-mail account Supabase can keep "email" as the primary
+      // provider even though this exact authentication attempt came from Google.
+      const loginResult = await handleLoginSuccess(session, 'director', undefined, {
+        provider: 'google',
+        activationFlow: true,
+        activationEmail,
+      });
+
+      if (!loginResult?.success) {
+        if (loginResult?.code === 'SALES_ACTIVATION_EMAIL_MISMATCH') {
+          try {
+            const supabase = await getSupabase();
+            await supabase.auth.signOut({ scope: 'local' } as any);
+          } catch {
+            // The backend already denied the mismatched identity.
+          }
+          try {
+            localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
+          } catch {
+            // Storage is optional.
+          }
+        }
+
+        setUser(null);
+        setProfilePicture(null);
+        setShowWorkspacePicker(false);
+        publishActivationErrorMessage(
+          loginResult?.error ||
+            'Não foi possível concluir a ativação com Google. Tente novamente.',
+        );
+        return loginResult;
+      }
+
+      try {
+        localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
+      } catch {
+        // Storage is optional.
+      }
+      return loginResult;
+    })();
+
+    salesActivationOAuthLoginRef.current = { accessToken, promise: loginPromise };
+    try {
+      return { handled: true as const, result: await loginPromise };
+    } finally {
+      if (salesActivationOAuthLoginRef.current?.accessToken === accessToken) {
+        salesActivationOAuthLoginRef.current = null;
+      }
+    }
+  };
+
   useEffect(() => {
     const LOADING_WATCHDOG_MS = 12000;
     const watchdog = window.setTimeout(() => {
@@ -1599,6 +1697,11 @@ export default function App() {
               // return here must not create/overwrite clinic role or membership; the external
               // surface exchanges the verified Supabase session for its isolated server session.
               if (isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) {
+                setLoading(false);
+                return;
+              }
+              const salesActivationOAuth = await completeSalesActivationOAuth(session);
+              if (salesActivationOAuth.handled) {
                 setLoading(false);
                 return;
               }
@@ -1730,6 +1833,9 @@ export default function App() {
 
       try {
         let session = await withTimeout(ensureFreshSession(), 8000, null as any);
+        const salesActivationOAuth = await completeSalesActivationOAuth(session);
+        if (salesActivationOAuth.handled) return;
+
         let token = session?.access_token;
         let authData: any = null;
         let lastError: any = null;
@@ -1999,6 +2105,7 @@ export default function App() {
     const clearActivationInvitationContext = () => {
       try {
         localStorage.removeItem('verto_activation_email');
+        localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
         localStorage.removeItem('verto_activation_invitation_id');
         localStorage.removeItem('verto_activation_invite_mode');
         localStorage.removeItem('verto_pending_invitation_acceptance');
