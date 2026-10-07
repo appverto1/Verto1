@@ -10814,7 +10814,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
               {canEditAnamnesis && (
                 <button
-                  onClick={() => void handleSendAnamnesisRequest()
+                  onClick={() => void handleSendAnamnesisRequest()}
                   disabled={isSendingAnamnesisRequest}
                   className={`flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-center text-[11px] font-medium leading-tight transition-colors disabled:opacity-60 sm:flex-none ${
                     isPanelDark
