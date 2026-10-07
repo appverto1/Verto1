@@ -39,16 +39,36 @@ jobs:
           grep -E "error TS[0-9]+:" /tmp/typecheck-baseline.log | sort -u > /tmp/typecheck-baseline.errors || true
           echo "Baseline errors: $(wc -l < /tmp/typecheck-baseline.errors)"
 
-      - name: Apply audited commercial patches
+      - name: Apply only approved boleto activation patches
         shell: bash
         run: |
           set -euo pipefail
-          for patch in             release/01-boleto-async.patch             release/02-boleto-google.patch             release/03-plans-per-patient.patch             release/04-margin-recovery.patch             release/05-commercial-gate.patch
+          for patch in             release/01-boleto-async.patch             release/02-boleto-google.patch
           do
             echo "Checking $patch"
             git apply --check "$patch"
             git apply "$patch"
           done
+
+      - name: Enforce release scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --name-only | sort > /tmp/changed-files.txt
+          cat > /tmp/allowed-files.txt <<'EOF'
+          server.ts
+          src/App.tsx
+          src/components/SalesActivationAccess.tsx
+          tests/salesAutomaticDirectorPostPayment20260831.regression.test.mjs
+          tests/salesBoletoAsyncActivationEmail20261005.regression.test.mjs
+          tests/salesDirectorContractActivation20260831.regression.test.mjs
+          tests/salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs
+          EOF
+          sort -o /tmp/allowed-files.txt /tmp/allowed-files.txt
+          if ! diff -u /tmp/allowed-files.txt /tmp/changed-files.txt; then
+            echo "::error::Release scope differs from the approved payment-link/boleto files."
+            exit 1
+          fi
 
       - name: Typecheck ratchet
         shell: bash
@@ -60,7 +80,7 @@ jobs:
           grep -E "error TS[0-9]+:" /tmp/typecheck-candidate.log | sort -u > /tmp/typecheck-candidate.errors || true
           comm -13 /tmp/typecheck-baseline.errors /tmp/typecheck-candidate.errors > /tmp/typecheck-new.errors || true
           if [ -s /tmp/typecheck-new.errors ]; then
-            echo "::error::Commercial release introduced new typecheck errors:"
+            echo "::error::Payment-link release introduced new typecheck errors:"
             cat /tmp/typecheck-new.errors
             exit 1
           fi
@@ -71,39 +91,20 @@ jobs:
       - name: Production build
         run: npm run build
 
-      - name: Validate commercial flow regressions
+      - name: Validate payment-link and activation regressions
         shell: bash
         run: |
           set -euo pipefail
           node tests/salesCheckoutLinkMonotonicLifecycle.test.mjs
-          node tests/salesBoletoAsyncActivationEmail20261005.regression.test.mjs
+          node tests/salesActivationExpiredLinkReissue.test.mjs
           node tests/salesAutomaticDirectorPostPayment20260831.regression.test.mjs
+          node tests/salesBoletoAsyncActivationEmail20261005.regression.test.mjs
           node tests/salesDirectorContractActivation20260831.regression.test.mjs
           node tests/salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs
-          node tests/salesSuperAdminCommercialModel20260830.regression.test.mjs
-          set +e
-          npx tsx tests/salesPersonalizedPerPatientPricing.test.ts > /tmp/patient-pricing-candidate.log 2>&1
-          CANDIDATE_PRICING_STATUS=$?
-          set -e
-          git worktree add --detach /tmp/verto-staging origin/staging
-          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/verto-staging/node_modules
-          set +e
-          (cd /tmp/verto-staging && "$GITHUB_WORKSPACE/node_modules/.bin/tsx" tests/salesPersonalizedPerPatientPricing.test.ts) > /tmp/patient-pricing-staging.log 2>&1
-          STAGING_PRICING_STATUS=$?
-          set -e
-          if [ "$CANDIDATE_PRICING_STATUS" -ne 0 ]; then
-            CANDIDATE_SIG=$(grep -E "Error: [A-Z0-9_:-]+|AssertionError" /tmp/patient-pricing-candidate.log | head -1 || true)
-            STAGING_SIG=$(grep -E "Error: [A-Z0-9_:-]+|AssertionError" /tmp/patient-pricing-staging.log | head -1 || true)
-            if [ "$STAGING_PRICING_STATUS" -eq 0 ] || [ "$CANDIDATE_SIG" != "$STAGING_SIG" ]; then
-              echo "::error::Per-patient pricing candidate regressed relative to staging."
-              cat /tmp/patient-pricing-candidate.log
-              echo "--- staging probe ---"
-              cat /tmp/patient-pricing-staging.log
-              exit 1
-            fi
-            echo "::warning::Per-patient pricing diagnostic has the same known failure on staging and candidate: $CANDIDATE_SIG"
-          fi
-          npx tsx tests/salesModularStripeAssisted.test.ts
+          node tests/googleOauthActivationUi.regression.test.mjs
+          node tests/salesActivationPasswordProviderAgnostic.test.mjs
+          npx tsx tests/salesActivationDirectorProvisioning.test.ts
+          npx tsx tests/salesActivationEmailConcurrency.test.ts
           npm run check:pre-main
 
       - name: Commit validated release payload
@@ -114,6 +115,6 @@ jobs:
           git rm .github/workflows/apply-commercial-boleto-release.yml
           git config user.name "Verto Release Bot"
           git config user.email "release-bot@users.noreply.github.com"
-          git add server.ts src services scripts tests
-          git commit -m "release(prod): promote validated commercial boleto flow"
+          git add server.ts src tests
+          git commit -m "release(prod): promote validated boleto payment-link flow"
           git push origin HEAD:release/commercial-boleto-production-20261007
