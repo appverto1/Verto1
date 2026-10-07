@@ -9419,7 +9419,7 @@ export const dataService = {
 
   async getClinicAuthorizationContext() {
     try {
-      const response = await fetch('/api/clinic/authorization/me', {
+      const response = await fetchWithAuthRetry('/api/clinic/authorization/me', {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
