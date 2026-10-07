@@ -1490,7 +1490,7 @@ export default function App() {
     );
     const handleOnline = () => {
       setIsOnline(true);
-      if (canSyncCurrentUser) void syncOfflineData();
+      if (canSyncCurrentUser) void syncOfflineData({ force: true });
     };
     const handleOffline = () => setIsOnline(false);
 
