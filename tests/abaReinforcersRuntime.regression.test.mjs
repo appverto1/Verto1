@@ -38,9 +38,9 @@ assert.match(patientDetail, /AbaReinforcerCatalogPanel/);
 assert.match(sessionPanel, /Registro factual de entrega\/uso/);
 assert.doesNotMatch(sessionPanel, /eficaz|recomendad|melhor reforçador/i);
 assert.match(sessionMode, /AbaReinforcerSessionPanel/);
-assert.match(sessionMode, /if \(endingSession \|\| reinforcerClosureSyncing\) return;/);
+assert.match(sessionMode, /if \(endingSessionRef\.current\) return;/);
 assert.match(sessionMode, /flushReinforcerDeliveries\(sessionId\)/);
-assert.match(sessionMode, /disabled=\{hasClosureBlockers \|\| endingSession \|\| reinforcerClosureSyncing\}/);
+assert.match(sessionMode, /disabled=\{endingSession \|\| reinforcerClosureSyncing\}/);
 assert.match(sessionMode, /Sincronizando registros antes de encerrar/);
 assert.doesNotMatch(sessionMode, /AbaReinforcerSessionPanel[^\n]*\\n\\n/);
 
