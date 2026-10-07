@@ -57966,12 +57966,35 @@ async function startServer() {
       durationMinutes
     );
     if (selectedOptions.length === 0) return { ok: false, status: 400, error: 'Escolha pelo menos um horário disponível.' };
-    const availabilityResult = await buildPortalRescheduleAvailabilityForAppointment(appointment, user, body);
-    const availableSlots = flattenRescheduleSlotGroups(availabilityResult.data?.days || []);
+
+    // Selected options may come from different navigated weeks. Revalidate each
+    // exact day instead of assuming every option belongs to one request window.
+    const availabilityByDate = new Map<string, PortalRescheduleSlot[]>();
     const validOptions: PortalRescheduleOption[] = [];
-    for (const option of selectedOptions) {
-      const selectedStart = new Date(option.scheduledStart).getTime();
-      const match = availableSlots.find((slot) => Math.abs(new Date(slot.scheduledStart).getTime() - selectedStart) < 60_000);
+    for (const option of selectedOptions.slice(0, PORTAL_RESCHEDULE_MAX_OPTIONS)) {
+      const selectedStartDate = new Date(option.scheduledStart);
+      if (Number.isNaN(selectedStartDate.getTime())) {
+        return { ok: false, status: 400, error: 'Um dos horários selecionados é inválido.' };
+      }
+      const selectedDate = formatDateInAppointmentTimezone(selectedStartDate);
+      if (!availabilityByDate.has(selectedDate)) {
+        const availabilityResult = await buildPortalRescheduleAvailabilityForAppointment(appointment, user, {
+          ...body,
+          dateFrom: selectedDate,
+          date_from: selectedDate,
+          maxDays: 1,
+          max_days: 1
+        });
+        availabilityByDate.set(
+          selectedDate,
+          flattenRescheduleSlotGroups(availabilityResult.data?.days || [])
+        );
+      }
+      const availableSlots = availabilityByDate.get(selectedDate) || [];
+      const selectedStart = selectedStartDate.getTime();
+      const match = availableSlots.find((slot) =>
+        Math.abs(new Date(slot.scheduledStart).getTime() - selectedStart) < 60_000
+      );
       if (!match) {
         return { ok: false, status: 409, error: 'Este horário não está mais disponível. Escolha outra opção.' };
       }
@@ -58565,6 +58588,20 @@ async function startServer() {
       }));
     } catch (error: any) {
       console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
+      const transientCode = sanitizeString(error?.code, 40).toUpperCase();
+      const transientStatus = Number(error?.status || error?.statusCode || 0);
+      const transientMessage = sanitizeString(error?.message || error?.details || '', 600).toUpperCase();
+      const isTransient = [408, 425, 429, 502, 503, 504].includes(transientStatus)
+        || ['PGRST000','PGRST001','PGRST002','PGRST003','08000','08001','08003','08004','08006','08007','08P01','40001','40P01','53300','53400','57P01','57P02','57P03'].includes(transientCode)
+        || /TIMEOUT|TIMED OUT|ECONNRESET|ECONNREFUSED|CONNECTION (?:RESET|REFUSED)|DATABASE (?:UNAVAILABLE|STARTING)|UPSTREAM UNAVAILABLE/.test(transientMessage);
+      if (isTransient) {
+        return res.status(503).json({
+          success: false,
+          code: 'APPOINTMENT_CONFIRMATION_TEMPORARILY_UNAVAILABLE',
+          retryable: true,
+          error: 'A confirmação está temporariamente indisponível. Tente novamente em instantes.'
+        });
+      }
       return res.status(500).json(portalSafeError(500));
     }
   });
