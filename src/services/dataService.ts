@@ -2574,7 +2574,7 @@ export const dataService = {
         from: params.from,
         to: params.to
       });
-      const response = await fetch(endpoint, {
+      const response = await fetchWithAuthRetry(endpoint, {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
