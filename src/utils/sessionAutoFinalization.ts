@@ -1,4 +1,4 @@
-import { isRecoverableFailedOfflineSyncRecord } from './offlineSyncResilience';
+import { isRecoverableFailedOfflineSyncRecord, type OfflineSyncStatus } from './offlineSyncResilience';
 
 export const AUTOMATIC_SESSION_CLOSURE_KEYS = new Set([
   'open_duration', 'open_interval_collection', 'therapeutic_measurement_timer_open',
@@ -9,7 +9,7 @@ export type SessionQueueRecord = {
   id: string;
   entity_id?: string;
   type: string;
-  sync_status?: string;
+  sync_status?: OfflineSyncStatus;
   last_updated?: number;
   last_error?: string | null;
   method?: string;
