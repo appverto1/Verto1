@@ -10,8 +10,8 @@ const statusRoute = server.match(/"\/api\/public\/sales-offers\/:token\/payment-
 const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
 const sessionRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
 
-// Compatibility intent of the old recovery test: a delayed webhook must be recoverable,
-// but the new architecture performs server-side Stripe reconciliation instead of e-mail delivery.
+// Compatibility intent: the Director remains provisioned server-side. For delayed
+// payment methods, a payment-confirmed e-mail is an additional durable first-access path.
 assert.match(bootstrap, /deriveSalesActivationToken\(checkoutSessionId\)/);
 assert.match(bootstrap, /hashSalesOfferToken\(bootstrapToken\)/);
 assert.match(bootstrap, /pending_activations/);
@@ -40,7 +40,8 @@ assert.match(sessionRoute, /properties\?\.hashed_token/);
 assert.doesNotMatch(sessionRoute, /emails\.send|sendTransactionalEmail/);
 
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
-assert.doesNotMatch(processPaid, /prepareSalesActivationAccess\(/);
+assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
 assert.match(publicOffer, /director-session/);
 assert.match(publicOffer, /supabase\.auth\.verifyOtp/);

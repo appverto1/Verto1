@@ -19,6 +19,9 @@ type SalesActivationAccessProps = {
   ) => Promise<any>;
 };
 
+const ACTIVATION_ERROR_KEY = 'verto_activation_error';
+const SALES_ACTIVATION_OAUTH_PENDING_KEY = 'verto_sales_activation_oauth_pending';
+
 type ActivationSummary = {
   name: string;
   clinicName: string | null;
@@ -90,6 +93,32 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     return () => controller.abort();
   }, [token]);
 
+  useEffect(() => {
+    const applyActivationError = (value: unknown) => {
+      const message = String(value || '').trim();
+      if (message) setError(message);
+    };
+
+    try {
+      const storedMessage = sessionStorage.getItem(ACTIVATION_ERROR_KEY);
+      if (storedMessage) {
+        sessionStorage.removeItem(ACTIVATION_ERROR_KEY);
+        applyActivationError(storedMessage);
+      }
+    } catch {
+      // Session storage is optional; the live event below still works.
+    }
+
+    const handleActivationError = (event: Event) => {
+      const customEvent = event as CustomEvent<{ message?: string }>;
+      applyActivationError(customEvent.detail?.message);
+    };
+    window.addEventListener('verto:activation-error', handleActivationError);
+    return () => {
+      window.removeEventListener('verto:activation-error', handleActivationError);
+    };
+  }, []);
+
   const handleGoogleLogin = async () => {
     if (!activation?.email) return;
     setSubmitting(true);
@@ -98,16 +127,23 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     try {
       localStorage.setItem('verto_intended_role', 'director');
       localStorage.setItem('verto_activation_email', activation.email.toLowerCase());
+      localStorage.setItem(SALES_ACTIVATION_OAUTH_PENDING_KEY, token);
       const supabase = await getSupabase();
       const { error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${window.location.origin}/ativacao-comercial/${encodeURIComponent(token)}`,
           scopes: 'https://www.googleapis.com/auth/userinfo.email',
+          queryParams: { prompt: 'select_account' },
         },
       });
       if (oauthError) throw oauthError;
     } catch (oauthError: any) {
+      try {
+        localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
+      } catch {
+        // Storage is optional.
+      }
       setError(oauthError?.message || 'Não foi possível iniciar o acesso com Google.');
       setSubmitting(false);
     }
