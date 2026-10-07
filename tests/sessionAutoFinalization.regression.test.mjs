@@ -41,4 +41,35 @@ await test('failed timer, unconfirmed queue and mandatory reason preserve sessio
 await test('network retry reuses exact payload and never repeats saved measurements',async()=>{const f=fixture({networkFailure:true}),close=vm.runInNewContext(extract(source,'confirmEndSession'),f.c);await close();await close();assert.equal(f.requests.length,2);assert.equal(JSON.stringify(f.requests[0]),JSON.stringify(f.requests[1]));assert.deepEqual(f.events,['timer:g1','timer:g2','reinforcer','sync','complete','complete']);assert.equal(f.completed,true);});
 await test('V3 duration stays owned by atomic completion and is marked censored',async()=>{const f=fixture();f.c.openDurationsRef.current=[{id:'d',measurementModelVersion:'V3',startedAt:'2026-10-01T10:00:00Z'}];f.records.current.push({id:'d',kind:'behavior',measurementType:'duration',syncStatus:'synced'});f.c.endDuration=()=>{throw Error('false USER_STOP');};await vm.runInNewContext(extract(source,'confirmEndSession'),f.c)();assert.equal(f.completed,true);assert.equal(f.requests[0].summary.behaviorEvents[0].rawPayload.isCensored,true);});
 await test('forced flush awaits active background pass then reads fresh scoped queue',async()=>{let pass=0,release;const gate=new Promise(r=>release=r),opts=[];const c={navigator:{onLine:true},Date,runOfflineSync:async o=>{opts.push(o);if(++pass===1)await gate;},activeSync:null,lastSyncAttempt:0,SYNC_COOLDOWN:5000};const q=fs.readFileSync(new URL('../src/services/localDb.ts',import.meta.url),'utf8');const sync=vm.runInNewContext(extract(q,'syncOfflineData'),c);const a=sync(),b=sync({force:true,sessionId:'s1'});assert.equal(pass,1);release();await Promise.all([a,b]);assert.equal(pass,2);assert.equal(opts[1].sessionId,'s1');});
+
+await test('legacy duration timer is finalized automatically at session close',async()=>{
+ const f=fixture();f.timers.current={};f.records.current=[{id:'duration-1',kind:'behavior',syncStatus:'synced'}];
+ f.c.openDurationsRef.current=[{id:'duration-1',measurementModelVersion:'LEGACY_V2',startedAt:'2026-10-01T10:00:00Z'}];
+ f.c.endDuration=async(id,endedAt,sessionFinalization)=>{f.events.push('duration:'+id+':'+sessionFinalization);f.c.openDurationsRef.current=[];return {success:true,durable:true};};
+ await vm.runInNewContext(extract(source,'confirmEndSession'),f.c)();
+ assert.equal(f.completed,true);assert.ok(f.events.includes('duration:duration-1:true'));assert.ok(f.events.indexOf('duration:duration-1:true')<f.events.indexOf('complete'));
+});
+await test('legacy rate timer is finalized automatically at session close',async()=>{
+ const f=fixture();f.timers.current={};f.records.current=[{id:'rate-record',kind:'behavior',syncStatus:'synced'}];
+ f.c.rateWindowRef.current={id:'rate-1',measurementModelVersion:'LEGACY_V2',startedAt:'2026-10-01T10:00:00Z',count:2};
+ f.c.finishRateWindow=async()=>{f.events.push('rate:rate-1');f.c.rateWindowRef.current=null;return true;};
+ await vm.runInNewContext(extract(source,'confirmEndSession'),f.c)();
+ assert.equal(f.completed,true);assert.ok(f.events.includes('rate:rate-1'));assert.ok(f.events.indexOf('rate:rate-1')<f.events.indexOf('complete'));
+});
+await test('legacy interval timer is closed as partial collection at session close',async()=>{
+ const f=fixture();f.timers.current={};f.records.current=[{id:'interval-record',kind:'behavior',syncStatus:'synced'}];
+ f.c.intervalRunRef.current={id:'interval-1',measurementModelVersion:'LEGACY_V2',completedCount:2,occurredCount:1,totalIntervals:5};
+ f.c.saveIntervalAggregateV2=(run,completed,occurred,endedAt,status,reason)=>{f.events.push('interval:'+run.id+':'+status+':'+reason);return {};};
+ await vm.runInNewContext(extract(source,'confirmEndSession'),f.c)();
+ assert.equal(f.completed,true);assert.equal(f.c.intervalRunRef.current,null);assert.ok(f.events.includes('interval:interval-1:PARTIALLY_COMPLETED:SESSION_FINALIZATION'));assert.ok(f.events.indexOf('interval:interval-1:PARTIALLY_COMPLETED:SESSION_FINALIZATION')<f.events.indexOf('complete'));
+});
+await test('V3 duration, rate observation and interval timers are owned by atomic server finalization',()=>{
+ const behaviorSql=fs.readFileSync(new URL('../supabase/migrations/20260815163000_aba_measurement_v3_behavior_engine.sql',import.meta.url),'utf8');
+ const intervalSql=fs.readFileSync(new URL('../supabase/migrations/20260815183000_aba_measurement_v3_task_interval_ioa.sql',import.meta.url),'utf8');
+ assert.match(behaviorSql,/aba_behavior_observation_slices_v3[\s\S]*close_reason = 'SESSION_FINALIZATION'/);
+ assert.match(behaviorSql,/measurement_kind = 'DURATION'[\s\S]*end_reason = 'SESSION_FINALIZATION'/);
+ assert.match(intervalSql,/finalize_aba_interval_runs_for_session_v3[\s\S]*finalize_aba_interval_run_v3\(v_run_id, p_actor_id, p_session_ended_at, 'SESSION_FINALIZATION'\)/);
+ assert.match(intervalSql,/finalize_aba_behavior_timers_v3\(p_session_id, v_effective_end\)/);
+});
+
 console.log(`${checks} behavioral checks passed.`);
