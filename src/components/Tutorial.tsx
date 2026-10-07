@@ -21,7 +21,7 @@ export const TutorialOverlay = ({
   currentStepIndex,
   onStepChange,
 }: {
-  steps: Array<{ targetId: string; title: string; content: string; placement?: 'top' | 'bottom' }>;
+  steps: Array<{ targetId: string; title: string; content: string; placement?: string }>;
   onClose: (reason?: TutorialCloseReason) => void;
   currentStepIndex: number;
   onStepChange: (index: number) => void;
