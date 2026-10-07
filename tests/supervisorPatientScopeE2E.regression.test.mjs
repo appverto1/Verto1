@@ -39,8 +39,13 @@ assert.match(
 );
 assert.match(
   listScope,
-  /from\('patient_professional_links'\)[\s\S]*?in\('professional_id', supervisedUserIds\)[\s\S]*?eq\('status', 'active'\)/,
-  'supervised-professional scope must resolve back through active canonical patient-professional links',
+  /const caseLinksResult = await supabase[\s\S]*?from\('patient_professional_links'\)[\s\S]*?in\('professional_id', supervisedUserIds\)/,
+  'supervised-professional scope must resolve back through canonical patient-professional links',
+);
+assert.match(
+  listScope,
+  /const caseLinksResult = await supabase[\s\S]*?eq\('status', 'active'\)/,
+  'only active patient-professional links may widen the supervised patient list',
 );
 assert.doesNotMatch(
   listScope,
