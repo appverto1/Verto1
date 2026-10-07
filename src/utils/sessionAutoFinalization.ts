@@ -11,6 +11,7 @@ export type SessionQueueRecord = {
   type: string;
   sync_status?: string;
   last_updated?: number;
+  last_error?: string | null;
   method?: string;
   endpoint: string;
   data?: any;
