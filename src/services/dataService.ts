@@ -8155,7 +8155,10 @@ export const dataService = {
     try {
       const response = await fetchWithAuthRetry(`/api/assigned-tasks/${taskId}/complete`, {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Idempotency-Key': `assigned-task-completion:${String(taskId)}`
+        },
         credentials: 'include',
         body: JSON.stringify(payload)
       });
