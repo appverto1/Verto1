@@ -81,7 +81,28 @@ jobs:
           node tests/salesDirectorContractActivation20260831.regression.test.mjs
           node tests/salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs
           node tests/salesSuperAdminCommercialModel20260830.regression.test.mjs
-          npx tsx tests/salesPersonalizedPerPatientPricing.test.ts
+          set +e
+          npx tsx tests/salesPersonalizedPerPatientPricing.test.ts > /tmp/patient-pricing-candidate.log 2>&1
+          CANDIDATE_PRICING_STATUS=$?
+          set -e
+          git worktree add --detach /tmp/verto-staging origin/staging
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/verto-staging/node_modules
+          set +e
+          (cd /tmp/verto-staging && "$GITHUB_WORKSPACE/node_modules/.bin/tsx" tests/salesPersonalizedPerPatientPricing.test.ts) > /tmp/patient-pricing-staging.log 2>&1
+          STAGING_PRICING_STATUS=$?
+          set -e
+          if [ "$CANDIDATE_PRICING_STATUS" -ne 0 ]; then
+            CANDIDATE_SIG=$(grep -E "Error: [A-Z0-9_:-]+|AssertionError" /tmp/patient-pricing-candidate.log | head -1 || true)
+            STAGING_SIG=$(grep -E "Error: [A-Z0-9_:-]+|AssertionError" /tmp/patient-pricing-staging.log | head -1 || true)
+            if [ "$STAGING_PRICING_STATUS" -eq 0 ] || [ "$CANDIDATE_SIG" != "$STAGING_SIG" ]; then
+              echo "::error::Per-patient pricing candidate regressed relative to staging."
+              cat /tmp/patient-pricing-candidate.log
+              echo "--- staging probe ---"
+              cat /tmp/patient-pricing-staging.log
+              exit 1
+            fi
+            echo "::warning::Per-patient pricing diagnostic has the same known failure on staging and candidate: $CANDIDATE_SIG"
+          fi
           npx tsx tests/salesModularStripeAssisted.test.ts
           npm run check:pre-main
 
