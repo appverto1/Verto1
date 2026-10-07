@@ -1,5 +1,5 @@
 import Dexie, { Table } from 'dexie';
-import { isQueuedRecordForSession } from '../utils/sessionAutoFinalization';
+import { hasUnresolvedSessionPredecessor, isQueuedRecordForSession, isSessionCompletionQueueRecord, queuedSessionId } from '../utils/sessionAutoFinalization';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 
 type SessionSyncOptions = { force?: boolean; sessionId?: string; entityIds?: string[] };
@@ -709,6 +709,21 @@ const runOfflineSync = async (options: SessionSyncOptions) => {
         (record as any).data = null;
         continue;
       }
+
+      // Session completion is a causal barrier. Never let it overtake an earlier
+      // clinical mutation from the same session, otherwise the server can close
+      // the session and reject the still-pending trial as SESSION_CLOSED.
+      if (isSessionCompletionQueueRecord(record)) {
+        const completionSessionId = queuedSessionId(record);
+        const sessionQueue = completionSessionId
+          ? await getSessionQueuedRecords(completionSessionId)
+          : [];
+        if (!completionSessionId || hasUnresolvedSessionPredecessor(record, sessionQueue)) {
+          (record as any).data = null;
+          continue;
+        }
+      }
+
       const syncEntityKey = `${record.type}:${entityIdForRecord(record)}`;
       if (blockedEntities.has(syncEntityKey)) {
         (record as any).data = null;

@@ -5,6 +5,7 @@ import {
   getLatestTypeUpdate,
   getRecordById,
   getRecordsByType,
+  getSessionQueuedRecords,
   discardFailedOfflineEntityMutations,
   markRecordSyncStatus,
   markRecordSyncFailure,
@@ -20,6 +21,7 @@ import {
 import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
+import { isDurableDeferredSessionRecord, isSessionCompletionQueueRecord } from '../utils/sessionAutoFinalization';
 import { normalizePatientProfileType } from '../utils/patientProfileType';
 import {
   mirrorPatientInsuranceEligibilityAliases,
@@ -954,9 +956,9 @@ function createIdempotencyKey(scope: string, entityId?: string) {
 }
 
 let lastOfflineMutationTimestamp = 0;
-function nextOfflineMutationTimestamp() {
+function nextOfflineMutationTimestamp(minimumExclusive = 0) {
   const now = Date.now();
-  lastOfflineMutationTimestamp = Math.max(now, lastOfflineMutationTimestamp + 1);
+  lastOfflineMutationTimestamp = Math.max(now, lastOfflineMutationTimestamp + 1, Number(minimumExclusive || 0) + 1);
   return lastOfflineMutationTimestamp;
 }
 
@@ -1036,8 +1038,8 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string; requireServerAck?: boolean } = {}) {
-  const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string; requireServerAck?: boolean; deferSync?: boolean; idempotencyKey?: string; causalAfter?: number } = {}) {
+  const idempotencyKey = String(options?.idempotencyKey || data?.idempotencyKey || '').trim() || createIdempotencyKey(`${method}:${endpoint}`, id);
   // Ordinary offline-first mutations get their own durable outbox row. Reusing
   // an id while a prior request is in-flight can let an older response
   // acknowledge/delete a newer edit. Server-context mutations deliberately skip
@@ -1065,7 +1067,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         data: payloadWithIdempotency,
         type,
         sync_status: 'pending',
-        last_updated: nextOfflineMutationTimestamp(),
+        last_updated: nextOfflineMutationTimestamp(options?.causalAfter),
         retry_count: 0,
         last_attempt_at: null,
         next_retry_at: null,
@@ -1077,6 +1079,18 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     } catch (offlineError) {
       console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
     }
+  }
+
+  if (options?.deferSync === true) {
+    return {
+      success: locallyPersisted,
+      offline: true,
+      pending: locallyPersisted,
+      durable: locallyPersisted,
+      deferred: locallyPersisted,
+      data: payloadWithIdempotency,
+      error: locallyPersisted ? undefined : 'Não foi possível preservar esta alteração na fila local.'
+    };
   }
 
   // 2. Try to sync with server
@@ -2643,6 +2657,64 @@ export const dataService = {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(sessionId), ...(payload || {}) });
     const safeSessionId = String(sessionId || '').trim();
     const completionEndpoint = `/api/aba/sessions/${encodeURIComponent(safeSessionId)}/complete`;
+    const completionEntityId = `session-completion:${safeSessionId}`;
+
+    const readSessionQueue = () => getSessionQueuedRecords(safeSessionId);
+    const queueCompletion = async (sessionQueue: any[]) => {
+      const existingCompletion = sessionQueue.find((record) => isSessionCompletionQueueRecord(record));
+      if (existingCompletion) {
+        if (!isDurableDeferredSessionRecord(existingCompletion)) {
+          return {
+            success: false,
+            pending: false,
+            durable: true,
+            status: 409,
+            code: 'SESSION_COMPLETION_QUEUE_REQUIRES_REVIEW',
+            error: existingCompletion.last_error || 'O encerramento local precisa de revisão antes de sincronizar.'
+          };
+        }
+        return {
+          success: true,
+          offline: true,
+          pending: true,
+          durable: true,
+          queued: true,
+          data: existingCompletion.data || payload
+        };
+      }
+
+      const causalAfter = sessionQueue.reduce(
+        (max, record) => Math.max(max, Number(record?.last_updated || 0)),
+        0
+      );
+      return await saveOfflineFirst(
+        completionEntityId,
+        {
+          ...(payload || {}),
+          session_id: safeSessionId,
+          sessionId: safeSessionId
+        },
+        'aba',
+        completionEndpoint,
+        'POST',
+        {
+          queueEntityId: completionEntityId,
+          deferSync: true,
+          idempotencyKey: String(payload?.idempotencyKey || '').trim() || undefined,
+          causalAfter
+        }
+      );
+    };
+
+    const queuedBeforeCompletion = await readSessionQueue();
+    const existingCompletion = queuedBeforeCompletion.find((record) => isSessionCompletionQueueRecord(record));
+    if (existingCompletion) return await queueCompletion(queuedBeforeCompletion);
+
+    const earlierClinicalWrites = queuedBeforeCompletion.filter((record) => !isSessionCompletionQueueRecord(record));
+    if (earlierClinicalWrites.length > 0 || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      return await queueCompletion(queuedBeforeCompletion);
+    }
+
     const requestCompletion = async () => {
       const response = await fetchClinical(
         completionEndpoint,
@@ -2664,81 +2736,99 @@ export const dataService = {
       return { response, result };
     };
 
-    let completionAttempt = await requestCompletion();
-    const missingServerSession =
-      completionAttempt.response.status === 404 &&
-      completionAttempt.result?.code === 'SESSION_COMPLETION_NOT_FOUND' &&
-      completionAttempt.result?.missingResource === 'session' &&
-      completionAttempt.result?.recoverable === true;
+    try {
+      let completionAttempt = await requestCompletion();
+      const missingServerSession =
+        completionAttempt.response.status === 404 &&
+        completionAttempt.result?.code === 'SESSION_COMPLETION_NOT_FOUND' &&
+        completionAttempt.result?.missingResource === 'session' &&
+        completionAttempt.result?.recoverable === true;
 
-    if (missingServerSession) {
-      const recoveryStartedAt = String(
-        payload?.started_at ||
-        payload?.startedAt ||
-        payload?.summary?.startedAt ||
-        ''
-      ).trim();
-      if (!recoveryStartedAt) {
-        return {
-          success: false,
-          status: 409,
-          code: 'SESSION_COMPLETION_SESSION_RECOVERY_CONTEXT_MISSING',
-          error: 'A sessão não foi encontrada no servidor e o horário de início não está disponível para uma recuperação segura.'
-        };
+      if (missingServerSession) {
+        const recoveryStartedAt = String(
+          payload?.started_at ||
+          payload?.startedAt ||
+          payload?.summary?.startedAt ||
+          ''
+        ).trim();
+        if (!recoveryStartedAt) {
+          return {
+            success: false,
+            status: 409,
+            code: 'SESSION_COMPLETION_SESSION_RECOVERY_CONTEXT_MISSING',
+            error: 'A sessão não foi encontrada no servidor e o horário de início não está disponível para uma recuperação segura.'
+          };
+        }
+
+        const recoveryAppointmentId = payload?.appointment_id || payload?.appointmentId || undefined;
+        const recoveryTherapistId = payload?.therapist_id || payload?.therapistId || undefined;
+        const recoveryResult = await dataService.saveAbaSession({
+          id: safeSessionId,
+          patient_id: payload?.patient_id || payload?.patientId,
+          patientId: payload?.patientId || payload?.patient_id,
+          clinic_id: payload?.clinic_id || payload?.clinicId,
+          clinicId: payload?.clinicId || payload?.clinic_id,
+          appointment_id: recoveryAppointmentId,
+          appointmentId: recoveryAppointmentId,
+          therapist_id: recoveryTherapistId,
+          therapistId: recoveryTherapistId,
+          professional_id: recoveryTherapistId,
+          professionalId: recoveryTherapistId,
+          scheduled_start: payload?.scheduled_start || payload?.scheduledStart || payload?.scheduled_start_at || payload?.scheduledStartAt,
+          scheduled_start_at: payload?.scheduled_start_at || payload?.scheduledStartAt || payload?.scheduled_start || payload?.scheduledStart,
+          scheduled_end: payload?.scheduled_end || payload?.scheduledEnd || payload?.scheduled_end_at || payload?.scheduledEndAt,
+          scheduled_end_at: payload?.scheduled_end_at || payload?.scheduledEndAt || payload?.scheduled_end || payload?.scheduledEnd,
+          scheduled_duration_minutes: payload?.scheduled_duration_minutes || payload?.scheduledDurationMinutes,
+          actual_start: recoveryStartedAt,
+          actual_start_at: recoveryStartedAt,
+          started_at: recoveryStartedAt,
+          startedAt: recoveryStartedAt,
+          reference_date: payload?.reference_date || payload?.referenceDate,
+          referenceDate: payload?.referenceDate || payload?.reference_date,
+          status: 'active',
+          source: recoveryAppointmentId ? 'appointment' : 'verto_web',
+          clientSource: recoveryAppointmentId ? 'appointment' : 'verto_web'
+        });
+
+        const recoveryConfirmed =
+          recoveryResult?.success === true &&
+          recoveryResult?.pending !== true &&
+          recoveryResult?.offline !== true;
+        if (!recoveryConfirmed) {
+          return {
+            success: false,
+            status: recoveryResult?.status || 503,
+            code: recoveryResult?.code || 'SESSION_COMPLETION_SESSION_RECOVERY_PENDING',
+            retryable: Boolean(recoveryResult?.pending || recoveryResult?.offline),
+            error: recoveryResult?.error || 'A sessão ainda está sendo sincronizada com o servidor. Tente encerrar novamente em instantes.'
+          };
+        }
+
+        completionAttempt = await requestCompletion();
       }
 
-      const recoveryAppointmentId = payload?.appointment_id || payload?.appointmentId || undefined;
-      const recoveryTherapistId = payload?.therapist_id || payload?.therapistId || undefined;
-      const recoveryResult = await dataService.saveAbaSession({
-        id: safeSessionId,
-        patient_id: payload?.patient_id || payload?.patientId,
-        patientId: payload?.patientId || payload?.patient_id,
-        clinic_id: payload?.clinic_id || payload?.clinicId,
-        clinicId: payload?.clinicId || payload?.clinic_id,
-        appointment_id: recoveryAppointmentId,
-        appointmentId: recoveryAppointmentId,
-        therapist_id: recoveryTherapistId,
-        therapistId: recoveryTherapistId,
-        professional_id: recoveryTherapistId,
-        professionalId: recoveryTherapistId,
-        scheduled_start: payload?.scheduled_start || payload?.scheduledStart || payload?.scheduled_start_at || payload?.scheduledStartAt,
-        scheduled_start_at: payload?.scheduled_start_at || payload?.scheduledStartAt || payload?.scheduled_start || payload?.scheduledStart,
-        scheduled_end: payload?.scheduled_end || payload?.scheduledEnd || payload?.scheduled_end_at || payload?.scheduledEndAt,
-        scheduled_end_at: payload?.scheduled_end_at || payload?.scheduledEndAt || payload?.scheduled_end || payload?.scheduledEnd,
-        scheduled_duration_minutes: payload?.scheduled_duration_minutes || payload?.scheduledDurationMinutes,
-        actual_start: recoveryStartedAt,
-        actual_start_at: recoveryStartedAt,
-        started_at: recoveryStartedAt,
-        startedAt: recoveryStartedAt,
-        reference_date: payload?.reference_date || payload?.referenceDate,
-        referenceDate: payload?.referenceDate || payload?.reference_date,
-        status: 'active',
-        source: recoveryAppointmentId ? 'appointment' : 'verto_web',
-        clientSource: recoveryAppointmentId ? 'appointment' : 'verto_web'
-      });
+      if (completionAttempt.response.ok) return completionAttempt.result;
 
-      const recoveryConfirmed =
-        recoveryResult?.success === true &&
-        recoveryResult?.pending !== true &&
-        recoveryResult?.offline !== true;
-      if (!recoveryConfirmed) {
-        return {
-          success: false,
-          status: recoveryResult?.status || 503,
-          code: recoveryResult?.code || 'SESSION_COMPLETION_SESSION_RECOVERY_PENDING',
-          retryable: Boolean(recoveryResult?.pending || recoveryResult?.offline),
-          error: recoveryResult?.error || 'A sessão ainda está sendo sincronizada com o servidor. Tente encerrar novamente em instantes.'
-        };
+      const retryableCompletion =
+        completionAttempt.response.status === 408 ||
+        completionAttempt.response.status === 429 ||
+        completionAttempt.response.status >= 500;
+      if (retryableCompletion) {
+        return await queueCompletion(await readSessionQueue());
       }
 
-      // Retry exactly once, only after the canonical session-start contract confirms
-      // the same session id on the server. Appointment-not-found errors are never healed here.
-      completionAttempt = await requestCompletion();
+      return { success: false, status: completionAttempt.response.status, ...completionAttempt.result };
+    } catch (error: any) {
+      const queued = await queueCompletion(await readSessionQueue());
+      if (queued?.success) return queued;
+      return {
+        success: false,
+        offline: true,
+        pending: false,
+        durable: false,
+        error: error?.message || queued?.error || 'Não foi possível preservar o encerramento da sessão.'
+      };
     }
-
-    return completionAttempt.response.ok
-      ? completionAttempt.result
-      : { success: false, status: completionAttempt.response.status, ...completionAttempt.result };
   },
 
   async reopenAppointmentNoShow(appointmentId: string, payload: any) {

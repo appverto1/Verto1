@@ -30,7 +30,7 @@ import {
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
 import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../services/localDb';
-import { AUTOMATIC_SESSION_CLOSURE_KEYS, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
+import { AUTOMATIC_SESSION_CLOSURE_KEYS, partitionSessionQueueForClosure, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
 import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
@@ -5870,6 +5870,7 @@ export const SessionMode = ({
       const endedAt = completionRequestRef.current?.payload?.endedAt || new Date().toISOString();
       let records = completionRequestRef.current?.records || recordsRef.current;
       let closureIssues = { blockers: [] as SessionSummaryPendingItem[], warnings: [] as SessionSummaryPendingItem[] };
+      let hasDeferredOfflineWrites = false;
       if (!completionRequestRef.current) {
         const mandatory = buildSessionClosureIssues().blockers.filter((item) => !AUTOMATIC_SESSION_CLOSURE_KEYS.has(item.key));
         if (mandatory.length) throw new Error(mandatory.map((item) => item.label).join('. '));
@@ -5914,21 +5915,45 @@ export const SessionMode = ({
       const entityIds = recordsRef.current.flatMap((record) => [record.id, String(record.rawPayload?.clientEventId || '')]).filter(Boolean);
         await syncOfflineData({ force: true, sessionId, entityIds });
         const queued = await getSessionQueuedRecords(sessionId, entityIds);
-        const unconfirmedIds = new Set(queued.map((record) => String(record.entity_id || record.id)));
+        const { durable: durableQueued, terminal: terminalQueued } = partitionSessionQueueForClosure(queued);
+        if (terminalQueued.length > 0) {
+          throw new Error('Há um registro clínico preservado localmente que precisa de revisão antes da sincronização.');
+        }
+
+        const durableEntityIds = new Set(durableQueued.map((record) => String(record.entity_id || record.id)));
         const refreshedRecords = await Promise.all(recordsRef.current.map(async (record) => {
           if (record.syncStatus === 'synced') return record;
           const entityId = record.measurementModelVersion === 'V3' ? String(record.rawPayload?.clientEventId || record.id) : record.id;
-          if (unconfirmedIds.has(entityId)) return record;
+          if (durableEntityIds.has(entityId)) return record;
           const cached = await getRecordById(entityId);
           return cached?.sync_status === 'synced' ? { ...record, syncStatus: 'synced' as const } : record;
         }));
         setRecords(refreshedRecords);
+
+        const unprotectedUnsynced = recordsRef.current.filter((record) => {
+          if (record.syncStatus === 'synced') return false;
+          const entityId = record.measurementModelVersion === 'V3' ? String(record.rawPayload?.clientEventId || record.id) : record.id;
+          return !durableEntityIds.has(entityId);
+        });
+        if (unprotectedUnsynced.length > 0) {
+          throw new Error('Há um registro ainda não confirmado que não está protegido pela fila local. A sessão permanece aberta para evitar perda de dados.');
+        }
+
+        hasDeferredOfflineWrites = durableQueued.length > 0;
         closureIssues = buildSessionClosureIssues();
-        closureIssues.blockers = closureIssues.blockers.filter((item) => !(
-          (item.key === 'open_duration' && openDurationsRef.current.every((event) => event.measurementModelVersion === 'V3'))
-          || (item.key === 'open_interval_collection' && intervalRunRef.current?.measurementModelVersion === 'V3')
-        ));
-        if (queued.length || closureIssues.blockers.length) throw new Error('Ainda não foi possível confirmar todos os salvamentos. Os dados estão preservados; tente finalizar novamente.');
+        closureIssues.blockers = closureIssues.blockers.filter((item) => {
+          if (item.key === 'open_duration' && openDurationsRef.current.every((event) => event.measurementModelVersion === 'V3')) return false;
+          if (item.key === 'open_interval_collection' && intervalRunRef.current?.measurementModelVersion === 'V3') return false;
+          if (
+            unprotectedUnsynced.length === 0 &&
+            ['unsaved_local_records', 'server_sync_required', 'v3_failed_trials_require_resolution'].includes(item.key)
+          ) return false;
+          return true;
+        });
+        if (closureIssues.blockers.length) {
+          throw new Error(closureIssues.blockers.map((item) => item.label).join('. '));
+        }
+
         records = recordsRef.current.map((record) => {
           const event = openDurationsRef.current.find((item) => item.id === record.id && item.measurementModelVersion === 'V3');
           if (!event) return record;
@@ -5968,7 +5993,7 @@ export const SessionMode = ({
         blockingItems: closureIssues.blockers,
         warningItems: closureIssues.warnings,
         sessionNote,
-        syncStatus: 'synced'
+        syncStatus: hasDeferredOfflineWrites ? 'local' : 'synced'
       });
       const finalMaintenanceSummary = completionRequestRef.current?.payload?.summary?.maintenanceSummary || maintenanceProbeRows;
       const idempotencyKey = completionIdempotencyKeyRef.current || createSessionCompletionKey();
@@ -6024,18 +6049,22 @@ export const SessionMode = ({
         throw new Error(completionResult?.message || completionResult?.error || 'Não foi possível encerrar a sessão.');
       }
 
+      const completionPending = completionResult?.pending === true || completionResult?.offline === true;
       const completionData = completionResult?.data || {};
+      const resolvedOperationalClosure = completionPending
+        ? { status: 'PENDING_SYNC', pendingSync: true, endedAt }
+        : completionData?.closure || null;
       const persistedSummary = {
         ...finalSummary,
         maintenanceSummary: Array.isArray(completionData?.maintenanceSummary)
           ? completionData.maintenanceSummary
           : finalMaintenanceSummary,
         id: String(completionData?.summaryId || finalSummary.id),
-        syncStatus: 'synced',
+        syncStatus: completionPending || hasDeferredOfflineWrites ? 'local' : 'synced',
         createdAt: completionData?.createdAt || finalSummary.createdAt,
         attendanceStatus: completionData?.attendanceStatus || attendanceStatus,
         billingStatus: completionData?.billingStatus || (NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'NOT_BILLABLE' : 'PENDING_REVIEW'),
-        operationalClosure: completionData?.closure || null
+        operationalClosure: resolvedOperationalClosure
       } as SessionSummary & {
         attendanceStatus: SessionAttendanceStatus;
         billingStatus: string;
@@ -6044,7 +6073,7 @@ export const SessionMode = ({
 
       setSessionEndPreviewAt(String(completionData?.endedAt || endedAt));
       setPostClosureSummary(persistedSummary);
-      setOperationalClosure(completionData?.closure || null);
+      setOperationalClosure(resolvedOperationalClosure);
       setSessionCompleted(true);
       setRecords(records);
       setOpenDurations([]);
@@ -6056,12 +6085,12 @@ export const SessionMode = ({
       completionIdempotencyKeyRef.current = '';
       completionRequestRef.current = null;
 
-      if (typeof onSessionSummaryPersisted === 'function') {
+      if (!completionPending && typeof onSessionSummaryPersisted === 'function') {
         void Promise.resolve(onSessionSummaryPersisted(persistedSummary)).catch((error: any) => {
           console.warn('[ABA] Não foi possível aplicar resumo de maestria no PEI local:', error);
         });
       }
-      showClinicalToast(buildClinicalActionToast({ action: 'session_end' }));
+      showClinicalToast(completionPending ? buildClinicalOfflineToast() : buildClinicalActionToast({ action: 'session_end' }));
     } catch (error: any) {
       console.error('Falha ao persistir encerramento atômico da sessão ABA:', error);
       setSessionEndError(error?.message || 'Não foi possível encerrar a sessão. Nenhum dado foi descartado.');
@@ -7851,7 +7880,7 @@ export const SessionMode = ({
       return;
     }
     if (typeof onConfirmEndSession === 'function') {
-      onConfirmEndSession({ alreadyPersisted: true, summary: postClosureSummary });
+      onConfirmEndSession({ alreadyPersisted: true, summary: postClosureSummary?.syncStatus === 'synced' ? postClosureSummary : null, pendingSync: postClosureSummary?.syncStatus !== 'synced' });
       return;
     }
     onClose?.();
