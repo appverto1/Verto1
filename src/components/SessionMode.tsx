@@ -4322,6 +4322,7 @@ export const SessionMode = ({
       const result = await dataService.saveAbaV3TargetExposure({
         patientId, sessionId, targetId, clientEventId: crypto.randomUUID(),
       });
+      if (result?.conflict) throw new Error(result?.error || 'Conflito com coleta clínica já persistida.');
       if (!result?.success) throw new Error(result?.error || 'Não foi possível registrar a ausência de oportunidade.');
       setAbaV3ErrorSelection(null);
       if (result?.pending) {
