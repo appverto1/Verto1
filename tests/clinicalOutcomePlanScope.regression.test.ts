@@ -4,6 +4,7 @@ import {
   buildClinicalOutcomePlanScopeIndex,
   clinicalOutcomeSeriesBelongsToPlanScope,
   clinicalOutcomeSeriesSourceKinds,
+  unscopedBehaviorSeriesBelongsToSpecialty,
 } from '../src/utils/clinicalOutcomePlanScope';
 import type { ClinicalOutcomeSeriesSummary } from '../src/utils/clinicalOutcomeAnalytics';
 
@@ -61,5 +62,48 @@ assert.match(dashboard, /clinicalOutcomeSeriesBelongsToPlanScope/);
 assert.match(dashboard, /for \(const series of ptsPlanSeries\)/, 'PTS deve nascer do read model canônico mesmo sem goals estruturados');
 assert.match(dashboard, /pts-canonical-unstructured-evidence/, 'evidência canônica deve permanecer visível quando common_objectives está vazio');
 assert.match(dashboard, /sem inferir automaticamente uma especialidade/i, 'specialty null não pode ser atribuído silenciosamente a um plano de especialidade');
+
+
+const behavior = (observations: any[]): ClinicalOutcomeSeriesSummary => ({
+  ...summary(observations),
+  metricKey: 'BEHAVIOR_FREQUENCY',
+  metricLabel: 'Frequência de comportamento interferente',
+  specialty: observations[0]?.specialty || 'Sem especialidade',
+});
+const toBehavior = [
+  { planId: null, goalId: null, programId: null, specialty: 'Terapia Ocupacional', metadata: { sourceFamily: 'BEHAVIOR' } },
+  { planId: null, goalId: null, programId: null, specialty: 'Terapeuta Ocupacional', metadata: { source_family: 'BEHAVIOR' } },
+];
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior(toBehavior), 'Terapeuta Ocupacional'), true,
+  'P1-15: comportamento TO sem planId deve integrar o gráfico geral TO');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior(toBehavior), 'Fonoaudiólogo'), false,
+  'comportamento TO não pode aparecer nos gráficos Fono');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior([{ ...toBehavior[0], specialty: '' }]), 'Terapeuta Ocupacional'), false,
+  'ausência de especialidade não deve ser inferida');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior([toBehavior[0], { ...toBehavior[1], specialty: 'Fonoaudiólogo' }]), 'Terapeuta Ocupacional'), false,
+  'série de origem mista não pode ser atribuída à especialidade');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior([{ ...toBehavior[0], planId: 'other-plan' }]), 'Terapeuta Ocupacional'), false,
+  'planId de outro plano impede associação automática');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior([{ ...toBehavior[0], metadata: { plan_id: 'other-plan' } }]), 'Terapeuta Ocupacional'), false,
+  'vínculo de plano em metadata também impede associação automática');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior([{ ...toBehavior[0], goalId: 'other-goal' }]), 'Terapeuta Ocupacional'), false,
+  'objetivo existente não pode ser remapeado para outro plano');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(summary(toBehavior), 'Terapeuta Ocupacional'), true,
+  'source_family BEHAVIOR canônico permite origem comportamental mesmo em outra métrica');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(summary([{ ...toBehavior[0], metadata: {} }]), 'Terapeuta Ocupacional'), false,
+  'métricas não comportamentais ficam fora da recuperação P1-15');
+assert.equal(unscopedBehaviorSeriesBelongsToSpecialty(behavior(toBehavior), 'Especialidade livre desconhecida'), false,
+  'especialidade não canônica nunca pode apropriar evidência');
+
+assert.match(dashboard, /unscopedBehaviorSeriesBelongsToSpecialty\(series, selectedPlan.specialty\)/,
+  'P1-15/16: gráficos gerais de todas especialidades incluem apenas comportamento comprovadamente vinculado');
+assert.match(dashboard, /data-testid="clinical-target-detail"/, 'P1-13: todas especialidades usam o mesmo gráfico detalhado por alvo');
+assert.match(dashboard, /<SeriesChart series=\{series\}/, 'P1-13: evidência por alvo preserva sua unidade clínica');
+assert.match(dashboard, /linkedPlanIds = new Set\(ptsGoalRows/,
+  'P1-14: PTS usa apenas vínculos explícitos para consolidar planos por especialidade');
+assert.match(dashboard, /contribution\.link && contribution\.specialtyPlan\?\.id/,
+  'P1-14: especialidade não vinculada não pode ser incluída por simples igualdade de nome');
+assert.match(dashboard, /unique\.set\(series\.key, series\)/,
+  'P1-14: deduplicação por identidade canônica evita duplicar série clínica no PTS');
 
 console.log('clinicalOutcomePlanScope.regression.test.ts: ok');
