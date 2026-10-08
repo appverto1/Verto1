@@ -3042,6 +3042,7 @@ function normalizeSalesModularProposalRequest(
       sanitizeString(source.commercialCapacityBasis, 40) === "current_patients"
         ? "current_patients"
         : "projected_demand",
+    exactPerPatientBilling: source.exactPerPatientBilling === true,
     // Snapshots anteriores à Fundação não possuem estes campos. Para não
     // recalcular propostas históricas com uma cobrança nova, ausência significa
     // Fundação manual zero. A interface atual envia automatic_target de forma
@@ -22658,7 +22659,7 @@ async function startServer() {
 
     const currentByItem = new Map<
       string,
-      { priceId: string; productId: string; amount: number }
+      { priceId: string; productId: string; amount: number; quantity: number }
     >();
     for (const subscriptionItem of subscription.items.data) {
       const product = subscriptionItem.price.product as Stripe.Product;
@@ -22672,6 +22673,7 @@ async function startServer() {
           priceId: subscriptionItem.price.id,
           productId: sanitizeString(product?.id || subscriptionItem.price.product, 200),
           amount: Number(subscriptionItem.price.unit_amount || 0),
+          quantity: Number(subscriptionItem.quantity || 1),
         });
       }
     }
@@ -22686,7 +22688,7 @@ async function startServer() {
       const itemKey = sanitizeString(item?.itemKey, 80);
       const expectedAmount = Number(item?.unitAmountCents || 0);
       const current = currentByItem.get(itemKey);
-      if (!current || current.amount !== expectedAmount) {
+      if (!current || current.amount !== expectedAmount || current.quantity !== Number(item?.quantity || 1)) {
         throw new Error(`MODULAR_CURRENT_PHASE_RECONCILIATION_FAILED:${itemKey}`);
       }
     }
@@ -22851,7 +22853,7 @@ async function startServer() {
               sanitizeString(item.itemKey, 80),
               Number(item.unitAmountCents || 0),
             ),
-            quantity: 1,
+            quantity: Number(item.quantity || 1),
           }))),
           metadata: {
             flowType: "sales_modular_assisted",
@@ -27623,6 +27625,20 @@ async function startServer() {
         billingAdjustment: "next_cycle",
         blocksClinicalAccess: false,
         blockPricingBasis: sanitizeString(capacity.blockPricingBasis, 80) || "catalog_fixed",
+        billingModelVersion: frozenResults?.input?.exactPerPatientBilling === true
+          ? "modular_exact_per_patient_v1"
+          : "modular_capacity_v1",
+        acceptedPatientQuantity: frozenResults?.input?.exactPerPatientBilling === true
+          ? Number(frozenResults.input.patientQuantity)
+          : null,
+        exactRecurringModuleKeys: frozenResults?.input?.exactPerPatientBilling === true
+          ? (Array.isArray(frozenResults.commercialPhases?.[0]?.lines)
+              ? frozenResults.commercialPhases[0].lines
+              : []).filter((line: any) =>
+                line?.billingInterval === "monthly" &&
+                !isSalesInternalCommercialItemKey(line?.itemKey)
+              ).map((line: any) => sanitizeString(line.itemKey, 80)).filter(Boolean)
+          : [],
         capacityBlockPhases: (Array.isArray(modularSnapshot?.capacityBlockPhases)
           ? modularSnapshot.capacityBlockPhases
           : Array.isArray(frozenResults?.commercialPricing?.capacityBlockPhases)
@@ -99576,11 +99592,15 @@ async function startServer() {
           || snapshot.basePackage?.capacity
           || frozenResults.basePackage?.capacity
           || null;
+        const exactPerPatientBilling = frozenResults?.input?.exactPerPatientBilling === true;
+        const acceptedPatientQuantity = Number(frozenResults?.input?.patientQuantity);
         const checkoutPlan = buildFrozenStripeCheckoutPlan({
           currency: sanitizeString(offer.currency, 12) || "brl",
           phases: checkoutPhases,
           capacity,
           effectiveAt: new Date().toISOString(),
+          exactPerPatientBilling,
+          patientQuantity: acceptedPatientQuantity,
         });
         const requestHash = crypto
           .createHash("sha256")
@@ -99715,6 +99735,7 @@ async function startServer() {
         const origin = salesApplicationOrigin(req);
         const stripeMetadata: Record<string, string> = {
           flowType: "sales_modular_assisted",
+          ...(exactPerPatientBilling ? { billingModel: "modular_exact_per_patient_v1" } : {}),
           offerId,
           leadId: offer.lead_id,
           requestHash,
@@ -99758,7 +99779,7 @@ async function startServer() {
                 : {}),
             },
             line_items: checkoutPlan.initialLineItems.map((line) => ({
-              quantity: 1,
+              quantity: Number(line.quantity || 1),
               price_data: {
                 currency: checkoutPlan.currency,
                 unit_amount: line.unitAmountCents,
