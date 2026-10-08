@@ -516,13 +516,14 @@ export type FrozenStripeCheckoutPlan = {
     itemKey: string;
     description: string;
     unitAmountCents: number;
+    quantity?: number;
     recurring: boolean;
     metadata: Record<string, string>;
   }>;
   schedulePhases: Array<{
     startsAt: string;
     endsAt: string | null;
-    items: Array<{ itemKey: string; unitAmountCents: number }>;
+    items: Array<{ itemKey: string; unitAmountCents: number; quantity?: number }>;
   }>;
   initialAmountCents: number;
   promotionalMonthlyCents: number;
@@ -536,6 +537,8 @@ export function buildFrozenStripeCheckoutPlan(args: {
   phases: OfferCommercialPhase[];
   capacity?: CustomCapacitySnapshot | null;
   effectiveAt?: string;
+  exactPerPatientBilling?: boolean;
+  patientQuantity?: number;
 }): FrozenStripeCheckoutPlan {
   if (args.phases.length < 1) throw new Error('STRIPE_PHASES_REQUIRED');
   const effectiveAt = args.effectiveAt || args.phases[0].startsAt;
@@ -548,6 +551,67 @@ export function buildFrozenStripeCheckoutPlan(args: {
   if (activePhaseIndex < 0) throw new Error('STRIPE_ACTIVE_PHASE_NOT_FOUND');
   const checkoutPhases = args.phases.slice(activePhaseIndex);
   const first = checkoutPhases[0];
+  // P0000: new, explicitly versioned offers use true per-seat Stripe quantities.
+  // Never reinterpret historical modular capacity proposals.
+  if (args.exactPerPatientBilling === true) {
+    const patientQuantity = Number(args.patientQuantity);
+    if (!Number.isSafeInteger(patientQuantity) || patientQuantity < 1 || patientQuantity > 100_000) {
+      throw new Error('EXACT_PER_PATIENT_QUANTITY_INVALID');
+    }
+    const unitPrice = (line: OfferCommercialPhase['lines'][number]) => {
+      const amount = Number(line.activePriceCents);
+      if (!Number.isSafeInteger(amount) || amount < 0 || amount % patientQuantity !== 0) {
+        throw new Error('EXACT_PER_PATIENT_PRICE_NOT_REPRESENTABLE:' + line.itemKey);
+      }
+      return amount / patientQuantity;
+    };
+    const initialLineItems = first.lines.map((line) => {
+      const recurring = line.billingInterval === 'monthly';
+      return {
+        itemKey: line.itemKey,
+        description: line.publicName,
+        unitAmountCents: recurring ? unitPrice(line) : line.activePriceCents,
+        quantity: recurring ? patientQuantity : 1,
+        recurring,
+        metadata: {
+          revenue_line: line.itemKey,
+          ...(recurring ? { billing_model: 'modular_exact_per_patient_v1' } : {})
+        }
+      };
+    });
+    const schedulePhases = checkoutPhases.map((phase) => ({
+      startsAt: phase.startsAt,
+      endsAt: phase.endsAt,
+      items: phase.lines
+        .filter((line) => line.billingInterval === 'monthly')
+        .map((line) => ({
+          itemKey: line.itemKey,
+          unitAmountCents: unitPrice(line),
+          quantity: patientQuantity
+        }))
+    }));
+    const oneTimeCents = initialLineItems
+      .filter((line) => !line.recurring)
+      .reduce((total, line) => total + line.unitAmountCents, 0);
+    const normalized = {
+      currency: (args.currency || 'brl').toLowerCase(),
+      initialLineItems,
+      schedulePhases,
+      billingModel: 'modular_exact_per_patient_v1' as const
+    };
+    return {
+      ...normalized,
+      initialAmountCents: initialLineItems.reduce(
+        (total, line) => total + line.unitAmountCents * Number(line.quantity || 1),
+        0
+      ),
+      promotionalMonthlyCents: first.recurringRevenueCents,
+      futureMonthlyCents:
+        checkoutPhases[checkoutPhases.length - 1].recurringRevenueCents,
+      oneTimeCents,
+      reconciliationHashInput: JSON.stringify(normalized)
+    };
+  }
   const initialLineItems = first.lines.flatMap((line) => {
     if (line.itemKey === 'clinical_core' && args.capacity) {
       const base = {

@@ -1382,6 +1382,236 @@ async function syncModularCapacityStripeAmount(params: {
   };
 }
 
+// P0000: exact, reversible per-patient billing is opt-in on a frozen contract.
+// Existing capacity-block contracts and their live subscription items are unchanged.
+export async function syncExactPerPatientBillingContract(params: {
+  supabase: SupabaseClientLike;
+  stripe: Stripe;
+  contract: ModularCapacityBillingContract;
+  clinicId: string;
+  subscription: Stripe.Subscription;
+  activePatients: number;
+  trigger: string;
+  logger: Pick<Console, 'log' | 'warn' | 'error'>;
+}): Promise<{
+  success: boolean;
+  activePatients: number;
+  billableQuantity: number;
+  synced: boolean;
+  subscriptionId: string;
+  reason: string;
+}> {
+  const { contract, subscription, activePatients } = params;
+  if (contract.sourceSnapshot?.billingModelVersion !== 'modular_exact_per_patient_v1') {
+    throw new Error('EXACT_PER_PATIENT_CONTRACT_VERSION_MISMATCH');
+  }
+  if (
+    toSafeString(subscription.metadata?.flowType, 100) !== 'sales_modular_assisted' ||
+    toSafeString(subscription.metadata?.offerId, 120) !== contract.salesOfferId
+  ) {
+    throw new Error('EXACT_PER_PATIENT_SUBSCRIPTION_SCOPE_INVALID');
+  }
+  if (!Number.isSafeInteger(activePatients) || activePatients < 0 || activePatients > 100_000) {
+    throw new Error('EXACT_PER_PATIENT_QUANTITY_INVALID');
+  }
+  const expectedModuleKeys = Array.isArray(contract.sourceSnapshot?.exactRecurringModuleKeys)
+    ? contract.sourceSnapshot.exactRecurringModuleKeys.map((key: unknown) => toSafeString(key, 80)).filter(Boolean)
+    : [];
+  if (expectedModuleKeys.length < 1 || new Set(expectedModuleKeys).size !== expectedModuleKeys.length) {
+    throw new Error('EXACT_PER_PATIENT_MODULE_SNAPSHOT_INVALID');
+  }
+  const expected = new Set(expectedModuleKeys);
+  const items = subscription.items.data.map((item) => {
+    const product = (item.price as any)?.product;
+    const metadata = product && typeof product === 'object'
+      ? (product.metadata || {})
+      : {};
+    const moduleKey = toSafeString(metadata.revenue_line, 80);
+    return { item, moduleKey, version: toSafeString(metadata.billing_model, 100) };
+  });
+  const managed = items.filter(({ moduleKey, version }) =>
+    version === 'modular_exact_per_patient_v1' && expected.has(moduleKey)
+  );
+  if (
+    managed.length !== expected.size ||
+    new Set(managed.map(({ moduleKey }) => moduleKey)).size !== expected.size ||
+    items.some(({ item, moduleKey, version }) =>
+      (item.price as any)?.recurring &&
+      (version !== 'modular_exact_per_patient_v1' || !expected.has(moduleKey))
+    )
+  ) {
+    throw new Error('EXACT_PER_PATIENT_STRIPE_ITEMS_MISMATCH');
+  }
+  const stripeNeedsUpdate = managed.some(({ item }) => Number(item.quantity ?? -1) !== activePatients);
+  if (stripeNeedsUpdate) {
+    const scheduleId = scheduleIdFromSubscription(subscription); // Retired schedules must not block later seat decreases.
+    if (scheduleId) {
+      const schedule = await params.stripe.subscriptionSchedules.retrieve(
+        scheduleId, { expand: ['phases.items.price.product'] } as any
+      );
+      const scheduleStatus = toSafeString((schedule as any)?.status, 40).toLowerCase();
+      if (
+        ['completed', 'canceled', 'released'].includes(scheduleStatus) ||
+        toSafeString(
+          typeof (schedule as any)?.subscription === 'string'
+            ? (schedule as any).subscription
+            : (schedule as any)?.subscription?.id,
+          200
+        ) !== subscription.id
+      ) {
+        throw new Error('EXACT_PER_PATIENT_SCHEDULE_SCOPE_INVALID');
+      }
+      const currentPhaseStart = Number((schedule as any)?.current_phase?.start_date || 0);
+      const sourcePhases = (Array.isArray((schedule as any)?.phases) ? (schedule as any).phases : [])
+        .filter((phase: any) => {
+          const end = Number(phase?.end_date || 0);
+          // Stripe does not permit editing historical phases.
+          return !(currentPhaseStart > 0 && end > 0 && end <= currentPhaseStart);
+        });
+      if (sourcePhases.length < 1 || sourcePhases.length > 10) {
+        throw new Error('EXACT_PER_PATIENT_SCHEDULE_PHASES_INVALID');
+      }
+      const phases = sourcePhases.map((phase: any) => {
+        if (
+          (Array.isArray(phase?.discounts) && phase.discounts.length > 0) ||
+          (Array.isArray(phase?.add_invoice_items) && phase.add_invoice_items.length > 0)
+        ) {
+          throw new Error('EXACT_PER_PATIENT_SCHEDULE_EXTERNAL_CHANGES_REVIEW');
+        }
+        const phaseItems = (Array.isArray(phase?.items) ? phase.items : []).map((source: any) => {
+          const price = source?.price;
+          const priceId = typeof price === 'string' ? price : toSafeString(price?.id, 200);
+          const product = price && typeof price === 'object' ? price.product : null;
+          const productMetadata = product && typeof product === 'object' ? (product.metadata || {}) : {};
+          const moduleKey = toSafeString(productMetadata.revenue_line, 80);
+          if (
+            !priceId ||
+            toSafeString(productMetadata.billing_model, 100) !== 'modular_exact_per_patient_v1' ||
+            !expected.has(moduleKey) ||
+            (Array.isArray(source?.discounts) && source.discounts.length > 0)
+          ) {
+            throw new Error('EXACT_PER_PATIENT_SCHEDULE_ITEM_REVIEW_REQUIRED');
+          }
+          const taxRates = Array.isArray(source.tax_rates)
+            ? source.tax_rates.map((rate: any) => typeof rate === 'string' ? rate : rate?.id).filter(Boolean)
+            : [];
+          return {
+            price: priceId,
+            quantity: activePatients,
+            ...(taxRates.length > 0 ? { tax_rates: taxRates } : {}),
+            ...(source.metadata && typeof source.metadata === 'object'
+              ? { metadata: source.metadata }
+              : {})
+          };
+        });
+        const phaseModuleKeys = (Array.isArray(phase?.items) ? phase.items : []).map((source: any) => {
+          const product = source?.price && typeof source.price === 'object' ? source.price.product : null;
+          return toSafeString(product && typeof product === 'object' ? product.metadata?.revenue_line : '', 80);
+        });
+        if (
+          phaseItems.length !== expected.size ||
+          new Set(phaseModuleKeys).size !== expected.size
+        ) {
+          throw new Error('EXACT_PER_PATIENT_SCHEDULE_MODULES_MISMATCH');
+        }
+        const start = Number(phase.start_date || 0);
+        const end = Number(phase.end_date || 0);
+        if (!(start > 0)) throw new Error('EXACT_PER_PATIENT_SCHEDULE_START_INVALID');
+        return {
+          start_date: start,
+          ...(end > start ? { end_date: end } : {}),
+          items: phaseItems,
+          ...(phase.metadata && typeof phase.metadata === 'object' ? { metadata: phase.metadata } : {}),
+          ...(Number(phase.trial_end || 0) > 0 ? { trial_end: Number(phase.trial_end) } : {}),
+          ...(phase.proration_behavior ? { proration_behavior: phase.proration_behavior } : {}),
+          ...(phase.collection_method ? { collection_method: phase.collection_method } : {}),
+          ...(phase.default_payment_method ? {
+            default_payment_method: typeof phase.default_payment_method === 'string'
+              ? phase.default_payment_method
+              : phase.default_payment_method.id
+          } : {}),
+          ...(Array.isArray(phase.default_tax_rates) && phase.default_tax_rates.length > 0
+            ? { default_tax_rates: phase.default_tax_rates.map((r: any) => typeof r === 'string' ? r : r.id) }
+            : {}),
+          ...(phase.invoice_settings ? { invoice_settings: phase.invoice_settings } : {}),
+          ...(phase.billing_thresholds ? { billing_thresholds: phase.billing_thresholds } : {})
+        };
+      });
+      await params.stripe.subscriptionSchedules.update(
+        scheduleId,
+        {
+          end_behavior: (schedule as any).end_behavior || 'release',
+          phases,
+          metadata: (schedule as any).metadata || {},
+          proration_behavior: 'none'
+        } as any,
+        { idempotencyKey: buildIdempotencyKey(
+          'p0000-schedule:' + contract.id + ':' + activePatients + ':' + crypto.randomUUID()
+        ) }
+      );
+    } else {
+      await params.stripe.subscriptions.update(
+        subscription.id,
+        {
+          items: managed.map(({ item }) => ({ id: item.id, quantity: activePatients })),
+          proration_behavior: 'none'
+        } as any,
+        { idempotencyKey: buildIdempotencyKey(
+          'p0000-subscription:' + contract.id + ':' + activePatients + ':' + crypto.randomUUID()
+        ) }
+      );
+    }
+    // Verify Stripe's authoritative quantity before writing a success state locally.
+    const verified = await params.stripe.subscriptions.retrieve(
+      subscription.id, { expand: ['items.data.price.product'] } as any
+    );
+    const matching = verified.items.data.filter((item) => {
+      const product = (item.price as any)?.product;
+      const metadata = product && typeof product === 'object' ? product.metadata || {} : {};
+      return metadata.billing_model === 'modular_exact_per_patient_v1' &&
+        expected.has(toSafeString(metadata.revenue_line, 80));
+    });
+    if (
+      matching.length !== expected.size ||
+      matching.some((item) => Number(item.quantity ?? -1) !== activePatients)
+    ) {
+      throw new Error('EXACT_PER_PATIENT_STRIPE_QUANTITY_UNCONFIRMED');
+    }
+  }
+  const now = new Date().toISOString();
+  const limit = commercialPatientLimit(Math.max(1, activePatients));
+  await patchModularCapacityBillingContract(params.supabase, contract.id, {
+    last_active_patient_count: activePatients,
+    last_capacity_sync_at: now,
+    last_capacity_sync_error: null
+  });
+  await patchClinicBillingSafely(params.supabase, params.clinicId, {
+    billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+    stripe_subscription_id: subscription.id,
+    active_patient_count: activePatients,
+    current_active_patient_count: activePatients,
+    current_active_patient_limit: limit,
+    pending_billing_quantity: activePatients,
+    pending_billing_status: 'scheduled_next_cycle',
+    billing_sync_status: 'per_patient_exact_synced',
+    billing_sync_error: null,
+    last_billing_sync_at: now,
+    updated_at: now
+  });
+  params.logger.log('[Stripe Sync] Cobrança exata por paciente conciliada.', {
+    clinicId: params.clinicId,
+    subscriptionId: subscription.id,
+    activePatients,
+    modules: expectedModuleKeys.length,
+    trigger: params.trigger
+  });
+  return {
+    success: true, activePatients, billableQuantity: activePatients,
+    synced: true, subscriptionId: subscription.id,
+    reason: 'per_patient_exact_synced'
+  };
+}
+
 async function syncModularCapacityBillingContract(params: {
   supabase: SupabaseClientLike;
   stripe: Stripe;
@@ -1427,6 +1657,19 @@ async function syncModularCapacityBillingContract(params: {
       subscriptionId: subscription.id,
       reason: 'modular_subscription_not_billable'
     };
+  }
+
+  if (contract.sourceSnapshot?.billingModelVersion === 'modular_exact_per_patient_v1') {
+    return await syncExactPerPatientBillingContract({
+      supabase: params.supabase,
+      stripe: params.stripe,
+      contract,
+      clinicId: params.clinicId,
+      subscription,
+      activePatients,
+      trigger: params.trigger,
+      logger: params.logger
+    });
   }
 
   if (usesFrozenPerPatientCapacityBilling(contract)) {
