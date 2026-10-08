@@ -1444,7 +1444,7 @@ async function syncExactPerPatientBillingContract(params: {
   }
   const stripeNeedsUpdate = managed.some(({ item }) => Number(item.quantity ?? -1) !== activePatients);
   if (stripeNeedsUpdate) {
-    const scheduleId = contract.stripeScheduleId || scheduleIdFromSubscription(subscription);
+    const scheduleId = scheduleIdFromSubscription(subscription); // Retired schedules must not block later seat decreases.
     if (scheduleId) {
       const schedule = await params.stripe.subscriptionSchedules.retrieve(
         scheduleId, { expand: ['phases.items.price.product'] } as any
