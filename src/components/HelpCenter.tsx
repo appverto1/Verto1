@@ -38,7 +38,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
   const [query,setQuery]=useState('');
   const [selected,setSelected]=useState('');
   const [drawer,setDrawer]=useState(false);
-  const [expandedTheme,setExpandedTheme]=useState('');
+  const [expandedThemes,setExpandedThemes]=useState<Record<string,boolean>>({});
   const [topics,setTopics]=React.useState<Topic[]>([]);
   const [loading,setLoading]=React.useState(true);
   const [error,setError]=React.useState('');
@@ -130,11 +130,11 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
   },[filtered]);
   const article=topics.find(t=>t.articleId===selected) || filtered[0];
   React.useEffect(()=>{
-    if(article?.theme)setExpandedTheme(article.theme);
+    if(article?.theme)setExpandedThemes(old=>({...old,[article.theme]:true}));
   },[article?.articleId,article?.theme]);
   const selectTopic=(id:string)=>{
     const chosen=topics.find(t=>t.articleId===id);
-    if(chosen?.theme)setExpandedTheme(chosen.theme);
+    if(chosen?.theme)setExpandedThemes(old=>({...old,[chosen.theme]:true}));
     setSelected(id);setDrawer(false);
     window.history.replaceState(null,'',`/ajuda?topico=${encodeURIComponent(id)}`);
   };
@@ -194,12 +194,12 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
       <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-6">
         <aside ref={drawerRef} className={`${drawer?'block':'hidden'} mb-4 max-h-[75dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 lg:sticky lg:top-24 lg:block lg:max-h-[calc(100dvh-7rem)] lg:self-start`} aria-label="Temas de ajuda">
           {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:groupedTopics.length?groupedTopics.map((group,i)=>{
-            const expanded=expandedTheme===group.theme;
+            const expanded=expandedThemes[group.theme]===true || (expandedThemes[group.theme]===undefined && article?.theme===group.theme);
             const completed=group.items.filter(t=>Boolean(progress[`${t.articleId}:${t.contentRevision}`])).length;
             const groupId=`help-theme-${i}`;
             return <section key={group.theme} className="mb-1" aria-label={group.theme}>
               <h2>
-                <button type="button" aria-expanded={expanded} aria-controls={groupId} onClick={()=>setExpandedTheme(expandedTheme===group.theme?'':group.theme)} className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500">
+                <button type="button" aria-expanded={expanded} aria-controls={groupId} onClick={()=>setExpandedThemes(old=>({...old,[group.theme]:!expanded}))} className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500">
                   {expanded?<ChevronDown size={16} aria-hidden="true" className="shrink-0"/>:<ChevronRight size={16} aria-hidden="true" className="shrink-0"/>}
                   <span className="min-w-0 flex-1 break-words">{group.theme}</span>
                   <span className="shrink-0 text-xs font-normal text-slate-500">{completed}/{group.items.length}</span>
