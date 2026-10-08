@@ -1,4 +1,5 @@
 import express from 'express';
+import { canManageAppointmentActionInClinic, resolveAuthenticatedCalendarScope } from './services/appointmentTenantGuards';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -55590,8 +55591,8 @@ async function startServer() {
   };
 
   const checkScheduleConflicts = async (rawInput: any, user: any): Promise<any> => {
-    const clinicId = sanitizeString(rawInput?.clinic_id || rawInput?.clinicId || currentClinicId(user), 120);
-    const organizationId = sanitizeString(rawInput?.organization_id || rawInput?.organizationId || user?.organizationId || user?.organization_id || clinicId, 120);
+    // Never trust browser-supplied clinic or organization IDs for conflict detection.
+    const { clinicId, organizationId } = resolveAuthenticatedCalendarScope(currentClinicId(user), user?.organizationId || user?.organization_id);
     const parsedDates = normalizeConflictInputDates(rawInput);
     const patientId = sanitizeString(rawInput?.patient_id || rawInput?.patientId, 120);
     const professionalIds = Array.from(new Set([
@@ -58174,20 +58175,44 @@ async function startServer() {
       throw error;
     }
     if (!data?.id) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    const appointmentId = sanitizeString(data.appointment_id, 120);
     const requestOrganizationId = sanitizeString(data.organization_id, 120);
-    const activeClinicId = currentClinicId(user);
-    if (
-      !hasGlobalClinicAccess(user) &&
-      (!isUuid(requestOrganizationId) || !isUuid(activeClinicId) || requestOrganizationId !== activeClinicId)
-    ) {
+    const requestPatientId = sanitizeString(data.patient_id, 120);
+    const activeClinicId = sanitizeString(currentClinicId(user), 120);
+    const globalAccess = hasGlobalClinicAccess(user);
+    if (!isUuid(appointmentId) || !isUuid(requestOrganizationId) || !isUuid(requestPatientId)
+      || (!globalAccess && !isUuid(activeClinicId))) {
       return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
     }
-    const appointmentContext = await fetchPortalAppointmentForUser(data.appointment_id, user, {
-      patientId: data.patient_id,
-      organizationId: requestOrganizationId
-    });
-    if (!appointmentContext.ok) return appointmentContext;
-    return { ok: true, request: data, appointment: (appointmentContext as any).appointment };
+    // Route middleware checks calendar.requests.manage. Scope by persisted clinic;
+    // do not reuse clinical-chart permissions for authorized reception staff.
+    const appointmentResult = await queryPortalAppointmentsWithSchemaFallback(
+      (columns) => {
+        let query = supabase.from('appointments').select(columns).eq('id', appointmentId);
+        if (!globalAccess) query = query.eq('clinic_id', activeClinicId);
+        return query.limit(1).maybeSingle();
+      },
+      'appointment_admin_action_request'
+    );
+    if (appointmentResult.error) {
+      if (hasMissingFinancialSchema(appointmentResult.error)) {
+        return { ok: false, status: 503, error: 'Agenda indisponível.' };
+      }
+      throw appointmentResult.error;
+    }
+    const appointment = appointmentResult.data;
+    if (!appointment?.id || !canManageAppointmentActionInClinic({
+      activeClinicId,
+      appointmentClinicId: appointment.clinic_id,
+      requestOrganizationId,
+      appointmentOrganizationId: appointment.organization_id || appointment.clinic_id,
+      requestPatientId,
+      appointmentPatientId: appointment.patient_id,
+      globalAccess
+    })) {
+      return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    }
+    return { ok: true, request: data, appointment };
   };
 
   const mapAuditLogToHumanHistory = (row: any) => ({
@@ -58612,26 +58637,39 @@ async function startServer() {
       if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.status) !== 'CONFIRMED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
-      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
-        appointment: persistedAppointment,
-        user: req.session.user,
-        action: 'confirmed_by_family',
-        notificationId: req.body?.notificationId || req.body?.notification_id
-      });
-      if (!notificationUpdate.ok) {
-        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      // Confirmation has already been persisted. Secondary effects must not
+      // produce a false HTTP 500/404 after durable confirmation.
+      let notificationIds: string[] = [];
+      try {
+        const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+          appointment: persistedAppointment,
+          user: req.session.user,
+          action: 'confirmed_by_family',
+          notificationId: req.body?.notificationId || req.body?.notification_id
+        });
+        if (notificationUpdate.ok) {
+          notificationIds = notificationUpdate.notificationIds;
+        } else {
+          console.warn('[PortalAppointments] confirmation persisted; notification acknowledgement rejected:', (notificationUpdate as any).status);
+        }
+      } catch (notificationError: any) {
+        console.warn('[PortalAppointments] confirmation persisted; notification acknowledgement failed:', notificationError?.message || String(notificationError));
       }
-      await writeAppointmentStatusAuditLog({
-        organizationId: appointment.organization_id || appointment.clinic_id,
-        appointmentId: appointment.id,
-        patientId: appointment.patient_id,
-        action: 'CONFIRMED_BY_RESPONSIBLE',
-        previousStatus,
-        newStatus: 'CONFIRMED',
-        performedBy: actorId,
-        performedByRole: actorRole,
-        metadata: { source: 'portal' }
-      });
+      try {
+        await writeAppointmentStatusAuditLog({
+          organizationId: appointment.organization_id || appointment.clinic_id,
+          appointmentId: appointment.id,
+          patientId: appointment.patient_id,
+          action: 'CONFIRMED_BY_RESPONSIBLE',
+          previousStatus,
+          newStatus: 'CONFIRMED',
+          performedBy: actorId,
+          performedByRole: actorRole,
+          metadata: { source: 'portal' }
+        });
+      } catch (auditError: any) {
+        console.warn('[PortalAppointments] confirmation persisted; audit log failed:', auditError?.message || String(auditError));
+      }
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_confirmed_by_responsible');
       const serializedAppointment = await serializePortalAppointmentForFamilyView(persistedAppointment);
       return res.json(buildPortalAppointmentActionResult({
@@ -58639,7 +58677,7 @@ async function startServer() {
         appointment: serializedAppointment,
         message: 'Sessão confirmada.',
         user: req.session.user,
-        notificationIds: notificationUpdate.notificationIds
+        notificationIds
       }));
     } catch (error: any) {
       console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
