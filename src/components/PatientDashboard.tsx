@@ -12,7 +12,7 @@ import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { AdultWellbeingTrendChart, type WellbeingPeriod } from './AdultWellbeingTrendChart';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
-import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
+import { clearPushRenewalContext, persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
@@ -1067,6 +1067,45 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       console.warn('Patient notification permission failed:', error);
       setNotificationSubscriptionReady(false);
       setSettingsMessage(error?.message || 'Não foi possível ativar as notificações.');
+      return false;
+    } finally {
+      setIsEnablingNotifications(false);
+    }
+  };
+
+  const disablePatientNotifications = async () => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+      setSettingsMessage('Não foi possível localizar as notificações neste dispositivo.');
+      return false;
+    }
+    setIsEnablingNotifications(true);
+    setSettingsMessage('');
+    try {
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        const response = await fetch('/api/push/subscribe', {
+          method: 'DELETE',
+          headers: await buildPushRequestHeaders(),
+          credentials: 'include',
+          body: JSON.stringify({ subscription: { endpoint: subscription.endpoint } }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result?.success !== true) {
+          setSettingsMessage(result?.error || 'Não foi possível desativar as notificações no servidor.');
+          return false;
+        }
+      }
+      await clearPushRenewalContext();
+      if (subscription && !(await subscription.unsubscribe())) {
+        setSettingsMessage('Servidor desativado. Verifique a inscrição local do navegador e tente novamente.');
+        return false;
+      }
+      setNotificationSubscriptionReady(false);
+      setSettingsMessage('Notificações desativadas neste dispositivo.');
+      return true;
+    } catch {
+      setSettingsMessage('Não foi possível desativar as notificações. Tente novamente.');
       return false;
     } finally {
       setIsEnablingNotifications(false);
@@ -2513,9 +2552,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <input
                 type="checkbox"
                 className="mt-1 h-5 w-5 rounded border-emerald-300 text-emerald-600 accent-emerald-500"
-                checked={notificationStatus === 'granted' && notificationSubscriptionReady}
-                disabled={notificationSubscriptionReady || isEnablingNotifications || notificationStatus === 'unsupported'}
-                onChange={() => void enablePatientNotifications()}
+                checked={notificationSubscriptionReady}
+                disabled={isEnablingNotifications || notificationStatus === 'unsupported'}
+                onChange={(event) => { void (event.currentTarget.checked ? enablePatientNotifications() : disablePatientNotifications()); }}
               />
               <span>
                 <span className="flex items-center gap-2 text-sm font-black text-emerald-800">
