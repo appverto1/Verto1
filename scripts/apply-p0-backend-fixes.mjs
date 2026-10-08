@@ -137,6 +137,6 @@ const newEffects = `      // Confirmation has already been persisted. Secondary 
       }
 `;
 replaceExact(oldEffects, newEffects, 'post-commit notification/audit effects');
-replaceExact("        notificationIds: notificationUpdate.notificationIds", "        notificationIds", 'confirmation response identifiers');
+replaceExact("        message: 'Sessão confirmada.',\n        user: req.session.user,\n        notificationIds: notificationUpdate.notificationIds", "        message: 'Sessão confirmada.',\n        user: req.session.user,\n        notificationIds", 'confirmation response identifiers');
 writeFileSync(file, source, 'utf8');
 console.log('[p0-backend] patched server.ts: authenticated conflicts, admin rescheduling, post-commit confirmation effects');
