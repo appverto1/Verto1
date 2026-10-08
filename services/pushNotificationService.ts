@@ -553,16 +553,25 @@ export async function removePatientPushSubscription(params: {
   supabase: any;
   deploymentEnv: VertoDeploymentEnvironment;
   patientId: string;
+  actorUserId: string;
   endpoint: string;
 }) {
   const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
   const patientId = sanitizeText(params.patientId, 120);
+  const actorUserId = sanitizeText(params.actorUserId, 120);
   const endpoint = sanitizeText(params.endpoint, 2000);
-  if (!endpoint) return { success: true };
+  if (!isUuid(patientId) || !isUuid(actorUserId) || !endpoint) {
+    return { success: false, error: 'PUSH_UNSUBSCRIBE_SCOPE_INVALID' };
+  }
 
-  let query = params.supabase.from('push_subscriptions').delete().eq('endpoint', endpoint).eq('deployment_env', deploymentEnv);
-  if (isUuid(patientId)) query = query.eq('patient_id', patientId);
-  const { error } = await query;
+  // Never delete a subscription from a different login, patient, or staging/production.
+  // One scoped DELETE; no unbounded lookup and no frontend-provided actor IDs.
+  const { error } = await params.supabase
+    .from('push_subscriptions').delete()
+    .eq('endpoint', endpoint)
+    .eq('deployment_env', deploymentEnv)
+    .eq('patient_id', patientId)
+    .eq('user_id', actorUserId);
   return error ? { success: false, error: error.message } : { success: true };
 }
 
