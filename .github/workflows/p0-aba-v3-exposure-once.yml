@@ -27,4 +27,6 @@ jobs:
           test "$(git diff --name-only)" = "server.ts"
           git add server.ts
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "fix(p0-8): mount authorized no-opportunity endpoint into server"
+          git fetch origin fix/p0-08-tutorial-26-28-20261008
+          git rebase origin/fix/p0-08-tutorial-26-28-20261008
           git push origin HEAD:fix/p0-08-tutorial-26-28-20261008
