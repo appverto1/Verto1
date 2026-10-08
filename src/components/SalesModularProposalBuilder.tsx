@@ -148,6 +148,11 @@ const commercialCapacityForDemand = (patientQuantity: number) =>
     (capacity) => patientQuantity <= capacity
   ) ?? null;
 
+// New exact-seat offers use the Essencial 1–50 / Enterprise 50-seat bands.
+// Keep historical block-based offer capacity selection unchanged.
+const commercialCapacityForExactDemand = (patientQuantity: number) =>
+  Math.ceil(Math.max(1, Math.floor(patientQuantity)) / 50) * 50;
+
 const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
   if (marginBasisPoints == null) {
     return {
@@ -531,9 +536,7 @@ export const SalesModularProposalBuilder = ({
           core.tiers.find((tier) => tier.isCustom) ||
           core.tiers.find((tier) => tier.maximumQuantity === null) ||
           null;
-        const initialCapacity =
-          commercialCapacityForDemand(patientQuantity) ||
-          Math.max(51, patientQuantity);
+        const initialCapacity = commercialCapacityForExactDemand(patientQuantity);
         const initialBaseTier = customCapacityTier || recommendedTier;
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
@@ -636,8 +639,9 @@ export const SalesModularProposalBuilder = ({
             );
       const currentLimit = Number(input.customBasePackageLimit || 0);
       if (currentLimit >= demand) return;
-      const nextLimit =
-        commercialCapacityForDemand(demand) || Math.max(51, demand);
+      const nextLimit = input.exactPerPatientBilling === true
+        ? commercialCapacityForExactDemand(demand)
+        : commercialCapacityForDemand(demand) || Math.max(51, demand);
       setInput((current) =>
         current
           ? {
@@ -1277,8 +1281,9 @@ export const SalesModularProposalBuilder = ({
       .find((item) => item.itemKey === 'clinical_core')
       ?.tiers.find((tier) => tier.id === input.basePackageTierId);
     const currentCapacity = Number(input.customBasePackageLimit || 0);
-    const automaticCapacity =
-      commercialCapacityForDemand(safeQuantity) || Math.max(51, safeQuantity);
+    const automaticCapacity = input.exactPerPatientBilling === true
+      ? commercialCapacityForExactDemand(safeQuantity)
+      : commercialCapacityForDemand(safeQuantity) || Math.max(51, safeQuantity);
     updateInput({
       patientQuantity: safeQuantity,
       lines,
@@ -1558,9 +1563,9 @@ export const SalesModularProposalBuilder = ({
       snapshotCoreItem?.tiers.find((tier) => tier.isCustom) ||
       snapshotCoreItem?.tiers.find((tier) => tier.maximumQuantity === null) ||
       null;
-    const modernCapacity =
-      commercialCapacityForDemand(snapshotDemand) ||
-      Math.max(51, snapshotDemand);
+    const modernCapacity = snapshotInput.exactPerPatientBilling === true
+      ? commercialCapacityForExactDemand(snapshotDemand)
+      : commercialCapacityForDemand(snapshotDemand) || Math.max(51, snapshotDemand);
     const inferredMode = snapshotInput.basePackageSelectionMode ||
       (snapshotRecommended?.id === snapshotInput.basePackageTierId
         ? 'automatic'
@@ -2138,8 +2143,9 @@ export const SalesModularProposalBuilder = ({
                 </div>
                 {input.exactPerPatientBilling === true ? (
                   <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-sm text-emerald-950">
-                    <strong>Faixa automática: {input.patientQuantity <= 50 ? 'Essencial · 1 a 50 pacientes' : `Enterprise · até ${Math.ceil(input.patientQuantity / 50) * 50} pacientes`}</strong>
-                    <p className="mt-1 text-xs">Sem seleção de blocos de cobrança. O contrato cobra a quantidade exata de pacientes ativos e os módulos contratados.</p>
+                    <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">Plano de capacidade</p>
+                    <strong className="mt-1 block">{input.patientQuantity <= 50 ? 'Plano Essencial · 1 a 50 pacientes' : `Plano Enterprise · até ${commercialCapacityForExactDemand(input.patientQuantity)} pacientes`}</strong>
+                    <p className="mt-2 text-xs">Sem seleção de blocos de cobrança. A mensalidade considera somente os pacientes ativos e os módulos contratados; a faixa de capacidade não multiplica os valores.</p>
                   </div>
                 ) : (
                   <>
