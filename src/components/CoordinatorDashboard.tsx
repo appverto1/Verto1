@@ -917,7 +917,8 @@ export function CoordinatorDashboard({
     if (!userId) return null;
     return `verto:dashboard:resume:${userId}:${workspaceId}`;
   }, [user?.id, user?.activeWorkspaceId, user?.clinicId]);
-  const hasRestoredDashboardStateRef = useRef(false);
+  const hasRestoredDashboardStateRef = useRef('');
+  const skipDashboardResumeSaveRef = useRef(false);
 
   const legacyCapabilityRequirements: Record<string, readonly string[]> = {
     "medical-records": ["clinical.record.view"],
@@ -2039,11 +2040,20 @@ export function CoordinatorDashboard({
     return { period, firstName };
   }, [user?.name]);
   useEffect(() => {
-    if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
-    hasRestoredDashboardStateRef.current = true;
+    // Authorization must be hydrated before validating the previously saved tab.
+    // A-B-A clinic switches must independently restore their own scoped state.
+    if (!dashboardResumeKey || !authorizationHydrated || hasRestoredDashboardStateRef.current === dashboardResumeKey) return;
+    hasRestoredDashboardStateRef.current = dashboardResumeKey;
+    skipDashboardResumeSaveRef.current = true;
     try {
       const raw = localStorage.getItem(dashboardResumeKey);
-      if (!raw) return;
+      if (!raw) {
+        setActiveTab("dashboard");
+        setTabHistory(["dashboard"]);
+        setSelectedPatientId(null);
+        setView("home");
+        return;
+      }
       const state = JSON.parse(raw || "{}");
       const nextTab = String(state?.activeTab || "dashboard") as typeof activeTab;
       const nextView = String(state?.view || "home");
@@ -2088,10 +2098,15 @@ export function CoordinatorDashboard({
     } catch (error) {
       console.warn("Falha ao restaurar contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab]);
+  }, [dashboardResumeKey, authorizationHydrated]);
 
   useEffect(() => {
-    if (!dashboardResumeKey) return;
+    if (!dashboardResumeKey || !authorizationHydrated || hasRestoredDashboardStateRef.current !== dashboardResumeKey) return;
+    // The first effect pass still closes over the old dashboard state.
+    if (skipDashboardResumeSaveRef.current) {
+      skipDashboardResumeSaveRef.current = false;
+      return;
+    }
     try {
       localStorage.setItem(
         dashboardResumeKey,
@@ -2108,7 +2123,7 @@ export function CoordinatorDashboard({
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId, patientReturnTab]);
+  }, [dashboardResumeKey, authorizationHydrated, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId, patientReturnTab]);
 
   useEffect(() => {
     if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
