@@ -33,6 +33,13 @@ jobs:
       - run: node tests/salesExactPatientCheckoutUiP0000.regression.test.mjs
       - run: npx tsx tests/salesExactPerPatientBillingP0000.test.ts
       - run: npx tsx tests/salesExactPerPatientStripeQuantityP0000.test.ts
+      - name: Baseline-only legacy capacity diagnosis
+        continue-on-error: true
+        run: |
+          git fetch --depth=1 origin main
+          git worktree add --detach /tmp/verto-p0000-baseline FETCH_HEAD
+          ln -s "$PWD/node_modules" /tmp/verto-p0000-baseline/node_modules
+          (cd /tmp/verto-p0000-baseline && npx --no-install tsx tests/salesModularCapacityBlockPricing.test.ts)
       - run: npx tsx tests/salesModularCapacityBlockPricing.test.ts
       - run: npx tsx tests/salesModularProposal.test.ts
       - run: npm run build
