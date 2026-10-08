@@ -7322,6 +7322,14 @@ export default function App() {
       sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionStartedAt.slice(0, 10),
       targetId: sessionTargetKey || null,
       target_id: sessionTargetKey || null,
+      protocol_id: matchedProtocol?.category === 'evaluation' ? (matchedProtocol?.id || null) : null,
+      protocol_title: matchedProtocol?.category === 'evaluation' ? (matchedProtocol?.title || matchedProtocol?.name || null) : null,
+      domain_id: matchedProtocol?.category === 'evaluation' ? (matchedDomain?.id || null) : null,
+      domain_name: matchedProtocol?.category === 'evaluation' ? (matchedDomain?.name || matchedDomain?.title || null) : null,
+      skill_id: matchedProtocol?.category === 'evaluation' ? (matchedSkill?.id || null) : null,
+      skill_name: matchedProtocol?.category === 'evaluation' ? (matchedSkill?.name || title || null) : null,
+      max_score: matchedProtocol?.category === 'evaluation' ? Math.max(1, Number(matchedSkill?.maxScore ?? matchedSkill?.max_score ?? skillMaxScore ?? 1) || 1) : null,
+      task_data: matchedProtocol?.category === 'evaluation' ? { evidence_kind: 'protocol_assessment' } : undefined,
       collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       created_at: recordedAt
@@ -7339,6 +7347,19 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
+    const assessmentProtocol = matchedProtocol?.category === 'evaluation' ? matchedProtocol : null;
+    const assessmentEvidence = assessmentProtocol
+      ? {
+          evidence_kind: 'protocol_assessment',
+          protocol_id: String(assessmentProtocol?.id || '').trim() || null,
+          protocol_title: String(assessmentProtocol?.title || assessmentProtocol?.name || '').trim() || null,
+          domain_id: String(matchedDomain?.id || '').trim() || null,
+          domain_name: String(matchedDomain?.name || matchedDomain?.title || '').trim() || null,
+          skill_id: String(matchedSkill?.id || '').trim() || null,
+          skill_name: String(matchedSkill?.name || title || '').trim() || null,
+          max_score: Math.max(1, Number(matchedSkill?.maxScore ?? matchedSkill?.max_score ?? skillMaxScore ?? 1) || 1)
+        }
+      : null;
     let sourceHistoryId: any = newId;
     try {
       const historyResult = await dataService.addHistoryItem({
@@ -7351,6 +7372,16 @@ export default function App() {
         icon: "🎯",
         collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
         collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
+        ...(assessmentEvidence ? {
+          protocol_id: assessmentEvidence.protocol_id,
+          protocol_title: assessmentEvidence.protocol_title,
+          domain_id: assessmentEvidence.domain_id,
+          domain_name: assessmentEvidence.domain_name,
+          skill_id: assessmentEvidence.skill_id,
+          skill_name: assessmentEvidence.skill_name,
+          max_score: assessmentEvidence.max_score,
+          task_data: assessmentEvidence
+        } : {}),
         created_at: recordedAt
       });
       sourceHistoryId = historyResult?.data?.id || newId;
