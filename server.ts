@@ -58563,14 +58563,26 @@ async function startServer() {
       if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.status) !== 'CONFIRMED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
-      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
-        appointment: persistedAppointment,
-        user: req.session.user,
-        action: 'confirmed_by_family',
-        notificationId: req.body?.notificationId || req.body?.notification_id
-      });
-      if (!notificationUpdate.ok) {
-        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      let notificationIds: string[] = [];
+      try {
+        const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+          appointment: persistedAppointment,
+          user: req.session.user,
+          action: 'confirmed_by_family',
+          notificationId: req.body?.notificationId || req.body?.notification_id
+        });
+        if (notificationUpdate.ok) {
+          notificationIds = notificationUpdate.notificationIds;
+        } else {
+          console.warn('[PortalAppointments] confirmation persisted but notification acknowledgement was skipped.', {
+            status: (notificationUpdate as any).status || null,
+            error: (notificationUpdate as any).error || null
+          });
+        }
+      } catch (notificationError: any) {
+        console.warn('[PortalAppointments] confirmation persisted but notification acknowledgement failed.', {
+          message: sanitizeString(notificationError?.message || String(notificationError), 300)
+        });
       }
       await writeAppointmentStatusAuditLog({
         organizationId: appointment.organization_id || appointment.clinic_id,
@@ -58590,7 +58602,7 @@ async function startServer() {
         appointment: serializedAppointment,
         message: 'Sessão confirmada.',
         user: req.session.user,
-        notificationIds: notificationUpdate.notificationIds
+        notificationIds
       }));
     } catch (error: any) {
       console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
@@ -58692,14 +58704,26 @@ async function startServer() {
       if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.patient_confirmation_status || persistedAppointment.patient_response) !== 'RESCHEDULE_REQUESTED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
-      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
-        appointment: persistedAppointment,
-        user: req.session.user,
-        action: 'reschedule_requested_by_family',
-        notificationId: req.body?.notificationId || req.body?.notification_id
-      });
-      if (!notificationUpdate.ok) {
-        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      let notificationIds: string[] = [];
+      try {
+        const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+          appointment: persistedAppointment,
+          user: req.session.user,
+          action: 'reschedule_requested_by_family',
+          notificationId: req.body?.notificationId || req.body?.notification_id
+        });
+        if (notificationUpdate.ok) {
+          notificationIds = notificationUpdate.notificationIds;
+        } else {
+          console.warn('[PortalAppointments] reschedule request persisted but notification acknowledgement was skipped.', {
+            status: (notificationUpdate as any).status || null,
+            error: (notificationUpdate as any).error || null
+          });
+        }
+      } catch (notificationError: any) {
+        console.warn('[PortalAppointments] reschedule request persisted but notification acknowledgement failed.', {
+          message: sanitizeString(notificationError?.message || String(notificationError), 300)
+        });
       }
       await writeAppointmentStatusAuditLog({
         organizationId: appointment.organization_id || appointment.clinic_id,
@@ -58719,7 +58743,7 @@ async function startServer() {
         appointment: serializedAppointment,
         message: 'Solicitação de remarcação registrada.',
         user: req.session.user,
-        notificationIds: notificationUpdate.notificationIds,
+        notificationIds,
         actionRequest: requestRow ? serializeAppointmentActionRequestForResponse(requestRow) : null
       }));
     } catch (error: any) {
@@ -58765,14 +58789,26 @@ async function startServer() {
       if (!persistedAppointment || persistedCancelStatus === 'CANCELLED' || persistedCancelResponse !== 'CANCEL_REQUESTED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
-      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
-        appointment: persistedAppointment,
-        user: req.session.user,
-        action: 'cancel_requested_by_family',
-        notificationId: req.body?.notificationId || req.body?.notification_id
-      });
-      if (!notificationUpdate.ok) {
-        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      let notificationIds: string[] = [];
+      try {
+        const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+          appointment: persistedAppointment,
+          user: req.session.user,
+          action: 'cancel_requested_by_family',
+          notificationId: req.body?.notificationId || req.body?.notification_id
+        });
+        if (notificationUpdate.ok) {
+          notificationIds = notificationUpdate.notificationIds;
+        } else {
+          console.warn('[PortalAppointments] cancellation request persisted but notification acknowledgement was skipped.', {
+            status: (notificationUpdate as any).status || null,
+            error: (notificationUpdate as any).error || null
+          });
+        }
+      } catch (notificationError: any) {
+        console.warn('[PortalAppointments] cancellation request persisted but notification acknowledgement failed.', {
+          message: sanitizeString(notificationError?.message || String(notificationError), 300)
+        });
       }
       await writeAppointmentStatusAuditLog({
         organizationId: appointment.organization_id || appointment.clinic_id,
