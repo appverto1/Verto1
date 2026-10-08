@@ -50,8 +50,8 @@ assert.match(
 );
 assert.match(
   planReadRoute,
-  /\.eq\('status', 'active'\)/,
-  'somente vínculos clínicos ativos podem alimentar a equipe do caso',
+  /planEligible =[\s\S]*?hasActiveClinicalMembership[\s\S]*?Boolean\(membershipSpecialty\)[\s\S]*?canWritePlan/,
+  'somente membros clínicos ativos e elegíveis devem alimentar o planejamento',
 );
 assert.match(
   ptsDashboard,
