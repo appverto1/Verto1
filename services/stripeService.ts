@@ -1452,7 +1452,12 @@ async function syncExactPerPatientBillingContract(params: {
       const scheduleStatus = toSafeString((schedule as any)?.status, 40).toLowerCase();
       if (
         ['completed', 'canceled', 'released'].includes(scheduleStatus) ||
-        toSafeString(String((schedule as any)?.subscription || ''), 200) !== subscription.id
+        toSafeString(
+          typeof (schedule as any)?.subscription === 'string'
+            ? (schedule as any).subscription
+            : (schedule as any)?.subscription?.id,
+          200
+        ) !== subscription.id
       ) {
         throw new Error('EXACT_PER_PATIENT_SCHEDULE_SCOPE_INVALID');
       }
