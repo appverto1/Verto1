@@ -73,13 +73,14 @@ export function hasUnresolvedSessionPredecessor(
 ): boolean {
   if (!isSessionCompletionQueueRecord(completion)) return false;
   const sessionId = queuedSessionId(completion);
-  const completionOrder = Number(completion?.last_updated || 0);
   if (!sessionId) return true;
   return (records || []).some((candidate) => {
     if (!candidate || candidate.id === completion.id || isSessionCompletionQueueRecord(candidate)) return false;
     if (queuedSessionId(candidate) !== sessionId) return false;
-    const candidateOrder = Number(candidate.last_updated || 0);
-    return candidateOrder <= completionOrder && candidate.sync_status !== 'synced';
+    // Close is the final causal barrier for the session. Even a clinical write
+    // persisted a few milliseconds later (clock drift / pending callbacks)
+    // must be replayed before completion, or the server will reject it as closed.
+    return candidate.sync_status !== 'synced';
   });
 }
 
