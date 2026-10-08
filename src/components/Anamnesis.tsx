@@ -262,6 +262,7 @@ export const AnamnesisModal = ({
   maxSavedTemplates = 5
 }: AnamnesisModalProps) => {
   const [profileType, setProfileType] = useState<AnamnesisProfileType>('adult');
+  const isTemplateManager = initialData?.manageTemplate === true;
   const [view, setView] = useState<ModalView>('fill');
   const [templateState, setTemplateState] = useState<AnamnesisTemplate>(getDefaultAnamnesisTemplate());
   const [formData, setFormData] = useState<Record<string, any>>({});
@@ -334,7 +335,7 @@ export const AnamnesisModal = ({
       initialData?.formType === 'child' || (typeof initialData?.idade === 'number' && initialData.idade <= 12) ? 'child' : 'adult';
     setProfileType(inferredProfile);
 
-    const nextView: ModalView = canEditTemplate && (initialData?.manageTemplate === true || initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional') ? 'template' : 'fill';
+    const nextView: ModalView = isTemplateManager || (canEditTemplate && (initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional')) ? 'template' : 'fill';
     setView(nextView);
 
     const normalizedSource = normalizeAnamnesisTemplate(sourceTemplate);
@@ -501,6 +502,8 @@ export const AnamnesisModal = ({
   };
 
   const handleSubmitForm = () => {
+    // O editor de modelos nunca constitui preenchimento associado a um paciente.
+    if (isTemplateManager) return;
     const profileQuestions = profileTemplate.questions.filter((question) => question.active);
     for (const question of profileQuestions) {
       if (!question.required) continue;
@@ -903,8 +906,8 @@ export const AnamnesisModal = ({
       <div className="w-full max-w-6xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-3rem)] overflow-y-auto rounded-3xl bg-white shadow-2xl">
         <div className="sticky top-0 z-20 bg-white border-b border-slate-200 px-5 sm:px-8 py-4 flex items-center justify-between">
           <div>
-            <h2 className="text-xl sm:text-3xl font-bold text-slate-900">Ficha de Anamnese</h2>
-            <p className="text-sm text-slate-500">Modelo editável por perfil com versionamento.</p>
+            <h2 className="text-xl sm:text-3xl font-bold text-slate-900">{isTemplateManager ? 'Modelos de anamnese' : 'Ficha de Anamnese'}</h2>
+            <p className="text-sm text-slate-500">{isTemplateManager ? 'Configure o modelo aqui. O preenchimento acontece exclusivamente no prontuário de um paciente.' : 'Modelo editável por perfil com versionamento.'}</p>
           </div>
           <button onClick={handleCloseModal} className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:text-slate-700">
             <X size={20} />
@@ -1080,7 +1083,7 @@ export const AnamnesisModal = ({
             >
               Criança
             </button>
-            {canEditTemplate && (
+            {canEditTemplate && !isTemplateManager && (
               <>
                 <div className="mx-1 h-6 w-px bg-slate-200" />
                 <button
@@ -1099,7 +1102,9 @@ export const AnamnesisModal = ({
             )}
           </div>
 
-          {view === 'template' && canEditTemplate ? (
+          {isTemplateManager && !canEditTemplate ? (
+            <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">Sem permissão para editar modelos de anamnese.</p>
+          ) : view === 'template' && canEditTemplate ? (
             <div className="space-y-4">
               <div className="flex justify-end">
                 <button

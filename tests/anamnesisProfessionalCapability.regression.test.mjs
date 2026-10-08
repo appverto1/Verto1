@@ -9,7 +9,7 @@ const therapistStart = authorization.indexOf('therapist: internal(');
 const therapistEnd = authorization.indexOf('receptionist: internal(', therapistStart);
 assert.ok(therapistStart >= 0 && therapistEnd > therapistStart, 'therapist defaults must exist');
 const therapistDefaults = authorization.slice(therapistStart, therapistEnd);
-assert.match(therapistDefaults, /'clinical\.anamnesis\.view'/);
+assert.doesNotMatch(therapistDefaults, /'clinical\.anamnesis\.view'/, 'terapeuta comum não recebe leitura de anamnese por padrão');
 assert.doesNotMatch(
   therapistDefaults,
   /'clinical\.anamnesis\.edit'/,
@@ -21,7 +21,7 @@ const overlayEnd = authorization.indexOf('const COORDINATOR_DEFAULTS', overlaySt
 assert.ok(overlayStart >= 0 && overlayEnd > overlayStart, 'supervision overlay must exist');
 assert.match(
   authorization.slice(overlayStart, overlayEnd),
-  /'clinical\.anamnesis\.edit'/,
+  /'clinical\.anamnesis\.(?:view|edit)'/,
   'profissional autorizado a supervisionar deve recuperar a capability operacional',
 );
 
