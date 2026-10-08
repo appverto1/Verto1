@@ -510,7 +510,7 @@ function SeriesChart({ series, isDark, axis, compact = false }: { series: Clinic
             }}
           />
           {!categoricalMode && reference.targetMin !== null && reference.targetMax !== null && (
-            <ReferenceArea y1={reference.targetMin} y2={reference.targetMax} fill={isDark ? '#8B5CF6' : '#7C3AED'} fillOpacity={isDark ? 0.08 : 0.06} label={{ value: 'Faixa-alvo', fontSize: 9 }} />
+            <ReferenceArea y1={reference.targetMin} y2={reference.targetMax} fillOpacity={isDark ? 0.08 : 0.06} label={{ value: 'Faixa-alvo', fontSize: 9 }} />
           )}
           {!categoricalMode && reference.targetValue !== null && (
             <ReferenceLine y={reference.targetValue} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="6 4" label={{ value: reference.criterionLabel || 'Meta', fontSize: 9, position: 'insideTopRight' }} />
