@@ -45,8 +45,8 @@ check('completed appointment does not generate reminder', job, { ...appointment,
 check('cancelled appointment does not generate reminder', job, { ...appointment, status: 'cancelled' }, patient);
 check('inactive patient cannot receive reminder', job, appointment, { ...patient, is_active: false });
 check('deleted appointment cannot generate reminder', job, { ...appointment, deleted_at: nowIso }, patient);
-check('already-sent 24h job suppressed', job, { ...appointment, notification_24h_sent_at: nowIso }, patient);
-check('already-sent 12h supersedes older 24h', job, { ...appointment, notification_12h_sent_at: nowIso }, patient);
+check('old 24h marker cannot suppress newly scheduled reminder', job, { ...appointment, notification_24h_sent_at: nowIso }, patient, nowIso, true);
+check('old 12h marker cannot suppress next schedule cycle', job, { ...appointment, notification_12h_sent_at: nowIso }, patient, nowIso, true);
 check('late 24h cannot collide with 12h after outage', job, appointment, patient, '2026-10-09T07:00:00Z');
 
 const followup = {
