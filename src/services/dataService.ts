@@ -2925,7 +2925,7 @@ export const dataService = {
       { method: 'GET', credentials: 'include' },
       {
         helperName: 'getActiveConventionalSession',
-        operation: 'read',
+        operation: 'detail',
         table: 'appointments,notes',
         hasExplicitColumns: true,
         requiresPatientOrSession: true
@@ -3526,7 +3526,7 @@ export const dataService = {
         cache: 'no-store'
       }, {
         helperName: 'consumePortalMilestoneCelebration',
-        operation: 'update',
+        operation: 'write',
         table: 'patient_milestone_celebration_receipts,notes',
         hasExplicitColumns: true,
         requiresPatientOrSession: false

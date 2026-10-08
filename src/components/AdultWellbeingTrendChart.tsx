@@ -186,7 +186,7 @@ export const AdultWellbeingTrendChart = ({
           aggregateKind: 'raw' as const,
         };
       })
-      .filter((row): row is ChartPoint => Boolean(row && row.timestamp >= cutoff))
+      .filter((row): row is NonNullable<typeof row> => Boolean(row && row.timestamp >= cutoff))
       .sort((a, b) => a.timestamp - b.timestamp);
 
     if (activePeriod === 'day') {

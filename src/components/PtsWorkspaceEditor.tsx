@@ -106,6 +106,7 @@ export function PtsWorkspaceEditor({
   saving = false,
   onSave,
 }: {
+  key?: React.Key;
   scope: any;
   draftVersion?: any;
   professionals: any[];
