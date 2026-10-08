@@ -1658,11 +1658,23 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
   }
 
   if (portalPersisted) {
-    const sentAt = new Date().toISOString();
-    const sent24Ids = prepared.filter((entry: any) => entry.kind === '24h').map((entry: any) => String(entry.appointment?.id || '')).filter(isUuid);
-    const sent12Ids = prepared.filter((entry: any) => entry.kind === '12h').map((entry: any) => String(entry.appointment?.id || '')).filter(isUuid);
-    if (sent24Ids.length > 0) await options.supabase.from('appointments').update({ notification_24h_sent_at: sentAt }).in('id', sent24Ids);
-    if (sent12Ids.length > 0) await options.supabase.from('appointments').update({ notification_12h_sent_at: sentAt }).in('id', sent12Ids);
+    const appointmentJobIds = prepared
+      .filter((entry: any) => Boolean(entry.appointment))
+      .map((entry: any) => sanitizeText(entry.job?.id, 120))
+      .filter(isUuid);
+    if (appointmentJobIds.length > 0) {
+      // Atomic schedule/tenant compare in PostgreSQL prevents a raced reschedule
+      // from receiving the old appointment reminder's sent marker.
+      const { error: markerError } = await options.supabase.rpc('mark_sent_appointment_notification_jobs_v1', {
+        p_deployment_env: options.deploymentEnv,
+        p_job_ids: appointmentJobIds,
+      });
+      if (markerError) {
+        options.logger.warn('[Notification Jobs] Marcadores de lembrete nao confirmados.', {
+          code: markerError.code || 'REMINDER_MARKER_FAILED',
+        });
+      }
+    }
   }
 
   if (finalResults.length > 0) await options.supabase.rpc('finalize_notification_jobs_v1', { p_deployment_env: options.deploymentEnv, p_results: finalResults });
