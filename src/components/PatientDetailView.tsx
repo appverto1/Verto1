@@ -69,6 +69,7 @@ import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { appointmentClinicalSpecialtyKey, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
+import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -2813,13 +2814,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           clientSource: 'appointment'
         }).then((saveResult: any) => {
           const savedSession = saveResult?.session || saveResult?.data;
-          const serverLinkConfirmed =
-            saveResult?.success === true &&
-            saveResult?.offline !== true &&
-            saveResult?.pending !== true &&
-            String(savedSession?.id || '') === String(linkedSession.id) &&
-            String(savedSession?.patient_id || savedSession?.patientId || '') === String(patient.id) &&
-            String(savedSession?.appointment_id || savedSession?.appointmentId || '') === String(scheduledAppointmentId);
+          const serverLinkConfirmed = isConfirmedAbaSessionAppointmentLink(saveResult, {
+            sessionId: String(linkedSession.id),
+            patientId: String(patient.id),
+            appointmentId: String(scheduledAppointmentId),
+          });
           if (!serverLinkConfirmed) {
             consumedScheduledSessionStartKeyRef.current = '';
             alert(String(saveResult?.error || saveResult?.message || '').trim() ||
