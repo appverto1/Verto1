@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { validateClaimedAppointmentReminder } from '../services/appointmentReminderJobGuards';
 
 const appointmentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
@@ -67,5 +68,21 @@ check('same occurrence next cycle remains eligible with a fresh job', {
   payload: { scheduledAt: '2026-10-10T18:00:00Z' },
   scheduled_for: '2026-10-09T11:59:00Z',
 }, { ...appointment, scheduled_at: '2026-10-10T18:00:00Z' }, patient, '2026-10-09T12:00:00Z', true);
+
+const sql = readFileSync(new URL('../supabase/migrations/20261008194000_claimed_reminder_marker_guard_v1.sql', import.meta.url), 'utf8');
+const cron = readFileSync(new URL('../services/cronService.ts', import.meta.url), 'utf8');
+assert.match(sql, /j\.deployment_env = v_env/);
+assert.match(sql, /j\.status = 'CLAIMED'/);
+assert.match(sql, /j\.clinic_id = a\.clinic_id/);
+assert.match(sql, /j\.patient_id = a\.patient_id/);
+assert.match(sql, /a\.scheduled_at = nullif\(j\.payload->>'scheduledAt', ''\)::timestamptz/);
+assert.match(sql, /a\.scheduled_at = e\.scheduled_at/);
+assert.match(sql, /revoke all on function public\.mark_sent_appointment_notification_jobs_v1/);
+assert.match(sql, /grant execute on function public\.mark_sent_appointment_notification_jobs_v1[\s\S]*to service_role/);
+const worker = cron.slice(cron.indexOf('async function runNotificationJobQueue('), cron.indexOf('export function triggerAppointmentReminderScan('));
+assert.match(worker, /validateClaimedAppointmentReminder\(job, appointment, patient,/);
+assert.match(worker, /rpc\('mark_sent_appointment_notification_jobs_v1'/);
+assert.doesNotMatch(worker, /\.update\(\{ notification_24h_sent_at: sentAt \}\)\.in\('id', sent24Ids\)/);
+assert.doesNotMatch(worker, /\.update\(\{ notification_12h_sent_at: sentAt \}\)\.in\('id', sent12Ids\)/);
 
 console.log('PASS P0 appointment reminders: reschedule, cross-clinic, stale claims, recurrence and dedupe');
