@@ -47,4 +47,11 @@ assert.ok(updateIndex >= 0 && submissionIndex > updateIndex, 'ordem deve confirm
 assert.ok(closeIndex > submissionIndex, 'a ficha só pode fechar depois da confirmação da submissão');
 assert.ok(fileModalIndex > submissionIndex, 'o fluxo de PDF só pode abrir depois da confirmação da submissão');
 
+assert.match(saveFlow, /if \(!onUpdatePatient\)[\s\S]*?return;/,
+  'ausência de writer de paciente não pode produzir falso sucesso');
+assert.match(saveFlow, /patientUpdateResult\?\.pending === true[\s\S]*?patientUpdateResult\?\.offline === true[\s\S]*?patientUpdateResult\?\.queued === true/,
+  'a ficha só pode encerrar após ACK de paciente, não fila offline');
+assert.match(saveFlow, /submissionResult\?\.pending === true[\s\S]*?submissionResult\?\.offline === true[\s\S]*?submissionResult\?\.queued === true/,
+  'a submissão deve receber ACK definitivo antes de fechar');
+
 console.log('anamnesisSavePersistenceConfirmation.regression.test.mjs: ok');
