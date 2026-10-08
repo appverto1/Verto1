@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 
 const detail = readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const agenda = readFileSync('src/components/Calendar.tsx', 'utf8');
-const portal = readFileSync('src/utils/patientPortalKind.ts', 'utf8');
 
 // P1-18: both adult models use an existing per-protocol clinical assessment,
 // not synthetic ABA skill counts. The comparison is bounded to chosen protocol
