@@ -13,8 +13,33 @@ const resilience={exports:{},Date,Number,Math,JSON};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../src/utils/offlineSyncResilience.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,resilience);
 const helper={exports:{},setTimeout,Date,Set,Number,Error,require:id=>{if(id==='./offlineSyncResilience')return resilience.exports;throw new Error('unexpected require '+id);}};
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(new URL('../src/utils/sessionAutoFinalization.ts',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,helper);
-const {therapeuticTimerCompletion,isQueuedRecordForSession,waitForSessionWrites,AUTOMATIC_SESSION_CLOSURE_KEYS,partitionSessionQueueForClosure,hasUnresolvedSessionPredecessor}=helper.exports;
+const {therapeuticTimerCompletion,isQueuedRecordForSession,waitForSessionWrites,AUTOMATIC_SESSION_CLOSURE_KEYS,partitionSessionQueueForClosure,hasUnresolvedSessionPredecessor,isConfirmedAbaSessionAppointmentLink}=helper.exports;
 let checks=0;async function test(name,fn){await fn();checks++;console.log('PASS '+name);}
+await test('reopened ABA session waits for server-confirmed patient and appointment linkage',()=>{
+ const expected={sessionId:'session-synthetic',patientId:'patient-a',appointmentId:'appointment-a'};
+ const confirmed={success:true,data:{id:expected.sessionId,patient_id:expected.patientId,appointment_id:expected.appointmentId}};
+ assert.equal(isConfirmedAbaSessionAppointmentLink(confirmed,expected),true);
+ for(const response of [
+   {success:true,pending:true,data:confirmed.data},
+   {success:true,offline:true,data:confirmed.data},
+   {success:false,data:confirmed.data},
+   {success:true,data:{...confirmed.data,id:'other-session'}},
+   {success:true,data:{...confirmed.data,patient_id:'patient-b'}},
+   {success:true,data:{...confirmed.data,appointment_id:'appointment-b'}},
+   {success:true,data:{...confirmed.data,appointment_id:null}},
+   {success:true,data:{id:expected.sessionId}},
+ ]) assert.equal(isConfirmedAbaSessionAppointmentLink(response,expected),false);
+ const patientDetail=fs.readFileSync(new URL('../src/components/PatientDetailView.tsx',import.meta.url),'utf8');
+ const effectStart=patientDetail.indexOf('if (scheduledAppointmentId && !sessionAppointmentId) {');
+ const effectEnd=patientDetail.indexOf('} else if (persistedSession && !activeSession) {',effectStart);
+ assert.ok(effectStart>0&&effectEnd>effectStart,'scheduled appointment recovery branch exists');
+ const linkBranch=patientDetail.slice(effectStart,effectEnd);
+ assert.doesNotMatch(linkBranch,/persistActiveSession\(linkedSession\)/,'no optimistic local linkage before server confirmation');
+ assert.match(linkBranch,/isConfirmedAbaSessionAppointmentLink\(saveResult/);
+ assert.ok(linkBranch.indexOf('isConfirmedAbaSessionAppointmentLink(saveResult')<linkBranch.indexOf('persistActiveSession({'),'persist only after server check');
+ assert.ok(linkBranch.indexOf('persistActiveSession({')<linkBranch.indexOf('setIsSessionModeOpen(true)'),'open only after canonical link persistence');
+ assert.match(linkBranch,/consumedScheduledSessionStartKeyRef\.current = ''/);
+});
 await test('paused time is excluded; milliseconds preserved; invalid timestamp rejected',()=>{
  const r=therapeuticTimerCompletion({startedAt:'2026-10-01T10:00:00Z',runningSince:'2026-10-01T10:01:30Z',accumulatedMs:5250},'2026-10-01T10:02:00Z');assert.equal(r.totalMs,35250);assert.equal(r.seconds,35.25);assert.equal(r.effectiveStartedAt,'2026-10-01T10:01:24.750Z');assert.throws(()=>therapeuticTimerCompletion({startedAt:'bad',runningSince:null,accumulatedMs:10},'2026-10-01T10:02:00Z'));
 });
