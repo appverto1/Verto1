@@ -64,4 +64,23 @@ assert.doesNotMatch(
   'lista não deve manter gate legado por role',
 );
 
+// P0: opening the patient's anamnesis is read-only and cannot demote a submitted/reviewed form.
+const portal = fs.readFileSync('src/components/PatientDashboard.tsx', 'utf8');
+const loadStart = portal.indexOf('const loadPortalAnamnesis = async');
+const loadEnd = portal.indexOf('useEffect(() => {\n    portalAnamnesisRequestRef.current += 1;', loadStart);
+assert.ok(loadStart > 0 && loadEnd > loadStart, 'leitura de anamnese do portal deve existir');
+const portalRead = portal.slice(loadStart, loadEnd);
+assert.match(portalRead, /dataService\.getPortalPatientAnamnesis\(portalPatientId\)/);
+assert.doesNotMatch(portalRead, /dataService\.(?:save|submit|update|create).*Anamnesis/);
+const statusStart = portal.indexOf('const portalAnamnesisLocked =');
+const statusEnd = portal.indexOf('const portalAnamnesisNeedsAction =', statusStart);
+const statusDisplay = portal.slice(statusStart, statusEnd);
+assert.match(statusDisplay, /portalAnamnesisRequestStatus === 'REVIEWED'/);
+assert.match(statusDisplay, /portalAnamnesisResponseStatus === 'REVIEWED'/);
+assert.match(statusDisplay, /portalAnamnesisRequestStatus === 'SUBMITTED'/);
+assert.ok(statusDisplay.indexOf("=== 'REVIEWED'") < statusDisplay.indexOf("=== 'SUBMITTED'") || statusDisplay.includes("? 'Revisada'"), 'estado revisado prevalece no rótulo');
+
+const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
+assert.match(patientDetail, /const canEditAnamnesis =[\s\S]{0,120}hasCapability\('clinical\.anamnesis\.edit'\)/);
+
 console.log('patientCapabilityRoutes.test.ts: ok');
