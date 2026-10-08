@@ -29,12 +29,16 @@ assert.equal(
 // P0: anamnesis operational changes require clinic manager or verified supervision.
 // A stale or forged allow override must not upgrade an ordinary therapist.
 const commonTherapist = resolveEffectiveClinicCapabilities('therapist');
-assert.equal(commonTherapist?.capabilities.has('clinical.anamnesis.view'), true);
+assert.equal(commonTherapist?.capabilities.has('clinical.anamnesis.view'), false);
 assert.equal(commonTherapist?.capabilities.has('clinical.anamnesis.edit'), false);
 const therapistWithUnsafeAnamnesisGrant = resolveEffectiveClinicCapabilities('therapist', [
   { permission_key: 'clinical.anamnesis.edit', effect: 'allow' },
 ]);
 assert.equal(therapistWithUnsafeAnamnesisGrant?.capabilities.has('clinical.anamnesis.edit'), false);
+const therapistWithUnsafeViewGrant = resolveEffectiveClinicCapabilities('therapist', [
+  { permission_key: 'clinical.anamnesis.view', effect: 'allow' },
+]);
+assert.equal(therapistWithUnsafeViewGrant?.capabilities.has('clinical.anamnesis.view'), false);
 for (const role of ['director', 'coordinator', 'supervisor'] as const) {
   assert.equal(
     resolveEffectiveClinicCapabilities(role)?.capabilities.has('clinical.anamnesis.edit'),
