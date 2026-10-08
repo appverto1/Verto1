@@ -22,9 +22,19 @@ assert.ok(first401Index >= 0 && retryFetchIndex > first401Index && notifyIndex >
 assert.match(retry, /if \(response\.status === 401\) \{[\s\S]*?notifyServerSessionExpiredIfNeeded/);
 
 assert.match(app, /window\.addEventListener\('verto:server-session-expired', handleServerSessionExpired\)/);
-assert.match(app, /manualLogoutInProgressRef\.current\) return;[\s\S]*?void handleLogout\(\)/);
+assert.match(app, /manualLogoutInProgressRef\.current\) return;[\s\S]*?void handleLogout\('expired'\)/);
 assert.match(app, /window\.removeEventListener\('verto:server-session-expired', handleServerSessionExpired\)/);
-assert.match(app, /const handleLogout = async \(\) => \{[\s\S]*?resetWorkspaceScopedState\(\)[\s\S]*?setUser\(null\)/,
+assert.match(app, /const handleLogout = async \(reason: 'manual' \| 'expired' = 'manual'\) => \{[\s\S]*?resetWorkspaceScopedState\(\)[\s\S]*?setUser\(null\)/,
   'expired server sessions must reuse the canonical logout cleanup instead of leaving stale workspace state');
+
+// Expired sessions must immediately hide protected data and must never attempt
+// unauthorized offline replay or activity-log writes before logout.
+const expiredStart = app.indexOf("const handleLogout = async (reason: 'manual' | 'expired'");
+const expiredEnd = app.indexOf("window.addEventListener('verto:server-session-expired'", expiredStart);
+const expiredLogout = app.slice(expiredStart, expiredEnd);
+assert.match(expiredLogout, /reason === 'expired'[\s\S]*?setUser\(null\)[\s\S]*?resetWorkspaceScopedState\(\)/);
+assert.match(expiredLogout, /if \(reason !== 'expired'\) \{[\s\S]*?syncOfflineData\(\)/);
+assert.match(expiredLogout, /reason === 'expired'[\s\S]*?window\.history\.replaceState\(\{\}, document\.title, '\/'\)/);
+assert.match(expiredLogout, /clearSensitiveOfflineCacheForUser\(signingOutUserId\)/);
 
 console.log('sessionExpiredCleanLogout.regression.test.mjs: ok');

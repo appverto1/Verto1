@@ -8035,15 +8035,24 @@ export default function App() {
     return { success: true, pending: false, data: historySaveResult?.data || newHistoryItem };
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (reason: 'manual' | 'expired' = 'manual') => {
     manualLogoutInProgressRef.current = true;
+    if (reason === 'expired') {
+      // An expired server session cannot authorize uploads or activity logs.
+      // Hide the protected UI immediately; encrypted pending mutations remain durable.
+      setUser(null);
+      setClinicStateHydrated(false);
+      resetWorkspaceScopedState();
+    }
     const signingOutUserId = String(user?.id || '').trim();
     try {
-      await onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
-      await Promise.race([
-        syncOfflineData(),
-        new Promise((resolve) => setTimeout(resolve, 2500))
-      ]);
+      if (reason !== 'expired') {
+        await onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
+        await Promise.race([
+          syncOfflineData(),
+          new Promise((resolve) => setTimeout(resolve, 2500))
+        ]);
+      }
 
       const supabase = await getSupabase();
       const { data: { session } } = await supabase.auth.getSession();
@@ -8087,6 +8096,8 @@ export default function App() {
     setProfilePicture(null);
     if (isRunningStandalone()) {
       window.history.replaceState({}, document.title, '/entrar');
+    } else if (reason === 'expired') {
+      window.history.replaceState({}, document.title, '/');
     }
     setUser(null);
     setShowWorkspacePicker(false);
@@ -8100,7 +8111,7 @@ export default function App() {
 
     const handleServerSessionExpired = () => {
       if (manualLogoutInProgressRef.current) return;
-      void handleLogout();
+      void handleLogout('expired');
     };
 
     window.addEventListener('verto:server-session-expired', handleServerSessionExpired);

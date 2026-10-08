@@ -213,6 +213,8 @@ const formatTimeLabel = (value: Date) => new Intl.DateTimeFormat('pt-BR', {
 const statusBlocksAvailability = (status: unknown) => {
   const normalized = String(status || '').trim().toLowerCase();
   if (!normalized) return true;
+  // A request for cancellation does not free the patient's, professional's or room's slot.
+  if (/(cancel|desmarc)/i.test(normalized) && /(request|solicit|pending)/i.test(normalized)) return true;
   return !/(cancel|desmarc|no_show|missed|deleted|archived|rejected|recus|invalid)/i.test(normalized);
 };
 

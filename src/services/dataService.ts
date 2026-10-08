@@ -3604,9 +3604,36 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      if (result?.success || response.status < 500) return result;
+      // A 5xx can happen after the status was committed (e.g. notification
+      // acknowledgement). One read-back avoids a duplicate POST and false failure.
+      const persisted = await dataService.getPortalAppointmentDetail(appointmentId);
+      const appointment = persisted?.data?.appointment || persisted?.data?.item;
+      const status = String(appointment?.status || '').trim().toUpperCase();
+      const patientResponse = String(
+        appointment?.patient_confirmation_status || appointment?.patientConfirmationStatus ||
+        appointment?.patient_response || appointment?.patientResponse || ''
+      ).trim().toUpperCase();
+      if (persisted?.success && (status === 'CONFIRMED' || patientResponse === 'CONFIRMED')) {
+        return { success: true, appointment, item: appointment, message: 'Sessão confirmada.', recoveredFromReadback: true };
+      }
+      return { ...result, error: 'Não foi possível confirmar a sessão agora. Verifique o estado antes de tentar novamente.' };
     } catch {
-      return { success: false, error: 'Não foi possível confirmar a sessão agora.' };
+      // Do not retry the write: the server may have persisted the confirmation.
+      try {
+        const persisted = await dataService.getPortalAppointmentDetail(appointmentId);
+        const appointment = persisted?.data?.appointment || persisted?.data?.item;
+        const status = String(appointment?.status || '').trim().toUpperCase();
+        const patientResponse = String(
+          appointment?.patient_confirmation_status || appointment?.patientConfirmationStatus ||
+          appointment?.patient_response || appointment?.patientResponse || ''
+        ).trim().toUpperCase();
+        if (persisted?.success && (status === 'CONFIRMED' || patientResponse === 'CONFIRMED')) {
+          return { success: true, appointment, item: appointment, message: 'Sessão confirmada.', recoveredFromReadback: true };
+        }
+      } catch { /* read-back may also be unavailable */ }
+      return { success: false, error: 'Não foi possível verificar a confirmação agora. Atualize a sessão antes de tentar novamente.' };
     }
   },
 
