@@ -32,7 +32,7 @@ await test('durable reinforcers allow local closure; terminal failure is not hid
 });
 await test('reconnect retries clinical event, then closes only after reinforcer RPC and event ACK',async()=>{
  const original=getInitializer('src/services/localDb.ts','runOfflineSync');
- const prepared=original.replace("await import('./abaReinforcers')",'await Promise.resolve({flushReinforcerDeliveries})');
+ const prepared=original.replace("await import('./abaReinforcers')",'await Promise.resolve({flushReinforcerDeliveries: mockFlushReinforcerDeliveries})');
  assert.notEqual(prepared,original);
  const rows=[
  {id:'t',entity_id:'trial',type:'aba_v3',method:'POST',sync_status:'pending',last_updated:10,endpoint:'/api/aba/v3/trials',data:{sessionId:'s1'}},
@@ -51,7 +51,7 @@ await test('reconnect retries clinical event, then closes only after reinforcer 
  markRecordSyncStatus:async(id,status)=>{byId(id).sync_status=status;},
  markRecordSyncFailure:async(id)=>{byId(id).sync_status='pending';return{sync_status:'pending',retry_count:1};},
  isIdempotentConflictPayload:()=>false,
- flushReinforcerDeliveries:async()=>{event.push('reinforcer');byId('r').sync_status='synced';return{ok:true,pending:0,terminal:0};},
+ mockFlushReinforcerDeliveries:async()=>{event.push('reinforcer');byId('r').sync_status='synced';return{ok:true,pending:0,terminal:0};},
  fetch:async(url,opts)=>{if(url.includes('/trials')&&failFirst){failFirst=false;throw new TypeError('Failed to fetch');}
  event.push(url.includes('/complete')?'end':'trial');
  if(url.includes('/complete'))assert.equal(opts.headers['X-Idempotency-Key'],'stable');
