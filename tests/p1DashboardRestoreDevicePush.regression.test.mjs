@@ -16,6 +16,8 @@ assert.match(dashboard,/if \(skipDashboardResumeSaveRef\.current\)/);
 assert.match(dashboard,/!authorizationHydrated \|\| hasRestoredDashboardStateRef\.current !== dashboardResumeKey/);
 assert.match(dashboard,/filter\(\(tab: any\) => tab && canAccessTab\(tab as DashboardTab\)\)/);
 assert.match(dashboard,/setSelectedPatientId\(null\);[\s\S]{0,120}setView\("home"\)/);
+assert.match(dashboard,/nextView === "patient" && nextPatientId && canAccessTab\("patients"\)/);
+assert.match(dashboard,/Invalid persisted state must not leak a previous clinic patient view/);
 assert.match(dashboard,/verto:dashboard:resume:\$\{userId\}:\$\{workspaceId\}/);
 
 // Device push OFF must revoke on the server before unsubscribing browser SW.
