@@ -39,10 +39,10 @@ await test('reconnect retries clinical event, then closes only after reinforcer 
  {id:'r',entity_id:'reinforcer',type:'aba',method:'POST',sync_status:'pending',last_updated:11,endpoint:'supabase-rpc:record_aba_reinforcer_delivery_authenticated_v1',data:{sessionId:'s1'}},
  {id:'c',entity_id:'end',type:'aba',method:'POST',sync_status:'pending',last_updated:12,endpoint:'/api/aba/sessions/s1/complete',data:{sessionId:'s1',idempotencyKey:'stable'}},
  ];
- const event=[];let failFirst=true;
+ const event=[],debug=[];let failFirst=true;
  const byId=id=>rows.find(r=>r.id===id);
  const ctx={
- Date,Set,JSON,console:{log(){},warn(){},error(){}},
+ Date,Set,JSON,lastSyncAttempt:0,console:{log:(...a)=>debug.push(a.map(String).join(' ')),warn:(...a)=>debug.push('WARN '+a.map(String).join(' ')),error:(...a)=>debug.push('ERROR '+a.map(String).join(' '))},
  getPendingRecords:async()=>rows.filter(r=>r.sync_status==='pending').map(r=>({...r,data:{...r.data}})),
  getSessionQueuedRecords:async(id)=>rows.filter(r=>r.sync_status!=='synced'&&queuedSessionId(r)===id).map(r=>({...r,data:{...r.data}})),
  isSessionCompletionQueueRecord,queuedSessionId,hasUnresolvedSessionPredecessor,
@@ -58,7 +58,7 @@ await test('reconnect retries clinical event, then closes only after reinforcer 
  return{ok:true,status:200,json:async()=>({success:true})};}
  };
  const run=vm.runInNewContext(compile('const run = '+prepared+';\nrun;'),ctx);
- await run({force:true});assert.equal(byId('c').sync_status,'pending');assert.deepEqual(event,['reinforcer']);
+ await run({force:true});assert.equal(byId('c').sync_status,'pending');assert.deepEqual(event,['reinforcer'],JSON.stringify({events:event,debug,rows}));
  await run({force:true});assert.deepEqual(event,['reinforcer','trial','end']);assert.equal(rows.every(r=>r.sync_status==='synced'),true);
  await run({force:true});assert.deepEqual(event,['reinforcer','trial','end']);
 });
