@@ -193,6 +193,8 @@ export const isActiveAppointmentStatus = (status: unknown) => {
     'cancelled',
     'canceled',
     'completed',
+    'no_show',
+    'missed',
     'rescheduled',
     'reschedule',
     'deleted',
