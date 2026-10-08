@@ -7066,6 +7066,25 @@ export const dataService = {
     return result;
   },
 
+  async saveAbaV3TargetExposure(input: any) {
+    // NO_OPPORTUNITY is a target exposure, not an incorrect/zero-scored trial.
+    // Reuse the same durable ABA V3 outbox so temporary offline state can replay.
+    const clientEventId = String(input?.clientEventId || crypto.randomUUID()).trim();
+    const data = {
+      patient_id: input?.patientId,
+      session_id: input?.sessionId,
+      target_id: input?.targetId,
+      status: 'NO_OPPORTUNITY',
+      client_event_id: clientEventId,
+    };
+    const result = await saveOfflineFirst(
+      clientEventId, data, 'aba_v3', '/api/aba/v3/target-exposures', 'POST',
+      { queueEntityId: String(input?.sessionId || '') + ':' + String(input?.targetId || '') }
+    );
+    if (result?.success && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
+  },
+
   async saveAbaV3TrialRevision(input: any) {
     const originalTrialId = String(input?.original_trial_id || input?.originalTrialId || '').trim();
     const originalClientEventId = String(input?.original_client_event_id || input?.originalClientEventId || '').trim();
