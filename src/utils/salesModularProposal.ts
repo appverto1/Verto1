@@ -596,6 +596,7 @@ export function allocateSalesCents(
 export function deriveSalesCapacityBlockPhases(args: {
   phases: OfferCommercialPhase[];
   capacity: CustomCapacitySnapshot;
+  exactPerPatientBilling?: boolean;
   recurringLines: Array<{
     itemKey: string;
     publicName: string;
@@ -607,7 +608,9 @@ export function deriveSalesCapacityBlockPhases(args: {
 }): SalesCapacityBlockPhasePricing[] {
   const contractedCapacityPatients =
     args.capacity.totalContractedLimitPatients;
-  const billingQuantityPatients = args.capacity.demandPatients;
+  const billingQuantityPatients = args.exactPerPatientBilling === true
+    ? args.capacity.demandPatients
+    : contractedCapacityPatients;
   const blockSizePatients = args.capacity.policy.blockSizePatients;
   if (
     !Number.isSafeInteger(contractedCapacityPatients) ||
@@ -755,7 +758,7 @@ export function deriveSalesCapacityBlockPhases(args: {
       0
     );
     const contractedMonthlyRevenueCents =
-      effectivePricePerPatientCents * contractedCapacityPatients;
+      effectivePricePerPatientCents * billingQuantityPatients;
     const phaseModuleRecurringRevenueCents = recurringPhaseLines.reduce(
       (sum, line) => sum + line.activePriceCents,
       0
@@ -3885,7 +3888,8 @@ export function calculateSalesModularProposal(
         (sum, line) =>
           sum +
           roundSalesMoneyCents(
-            line.activePriceCents / basePackageContractedLimit
+            line.activePriceCents /
+              (exactPerPatientBilling ? input.patientQuantity : basePackageContractedLimit)
           ),
         0
       );
@@ -4933,6 +4937,7 @@ export function calculateSalesModularProposal(
       ? deriveSalesCapacityBlockPhases({
           phases: commercialPhases,
           capacity,
+          exactPerPatientBilling,
           recurringLines: finalizedLines
             .filter(
               (line) =>
