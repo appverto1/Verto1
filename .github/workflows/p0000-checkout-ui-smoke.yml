@@ -1,0 +1,36 @@
+name: P0000 Checkout UI Smoke
+
+on:
+  push:
+    branches:
+      - release/p0000-exact-seat-checkout-ui-20261007
+  pull_request:
+    branches:
+      - main
+    paths:
+      - src/components/SalesModularProposalBuilder.tsx
+      - src/utils/salesModularProposal.ts
+      - src/utils/salesCommercialEvolution.ts
+      - tests/salesExactPatientCheckoutUiP0000.regression.test.mjs
+      - tests/salesExactPerPatientBillingP0000.test.ts
+      - tests/salesExactPerPatientStripeQuantityP0000.test.ts
+      - .github/workflows/p0000-checkout-ui-smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  checkout-ui-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node tests/salesExactPatientCheckoutUiP0000.regression.test.mjs
+      - run: npx tsx tests/salesExactPerPatientBillingP0000.test.ts
+      - run: npx tsx tests/salesExactPerPatientStripeQuantityP0000.test.ts
+      - run: npm run build
