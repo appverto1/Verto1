@@ -80831,7 +80831,7 @@ async function startServer() {
 
   const handleAbaV3CollectionRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 700);
-    if (hasMissingFinancialSchema(error) || /record_aba_trial_action_v3|record_aba_trial_revision_v3|record_aba_trial_correction_v3|resolve_aba_session_target_measurement_binding_v1|resolve_aba_behavior_collection_v3|record_aba_behavior_action_v3|start_aba_interval_run_action_v3|record_aba_interval_observation_action_v3|finalize_aba_interval_run_action_v3|get_aba_task_analysis_definition_for_session_v3|record_aba_task_analysis_action_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /record_aba_trial_action_v3|record_aba_trial_revision_v3|record_aba_trial_correction_v3|resolve_aba_session_target_measurement_binding_v1|set_aba_session_target_exposure_v3|resolve_aba_behavior_collection_v3|record_aba_behavior_action_v3|start_aba_interval_run_action_v3|record_aba_interval_observation_action_v3|finalize_aba_interval_run_action_v3|get_aba_task_analysis_definition_for_session_v3|record_aba_task_analysis_action_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema de coleta ABA V3 ainda não aplicado.' });
     }
     if (/CROSS_TENANT|SCOPE_MISMATCH|_SCOPE_INVALID|ACCESS_DENIED/i.test(message)) {
@@ -80866,6 +80866,9 @@ async function startServer() {
     }
     if (/ABA_V3_REVISION_(VOID_TRANSITION_INVALID|RESTORE_REQUIRES_VOID|SUPERSEDE_TRANSITION_INVALID|REPLACEMENT_SELF_REFERENCE|REPLACEMENT_SCOPE_INVALID|REPLACEMENT_NOT_ALLOWED)|ABA_V3_ATOMIC_CORRECTION_/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_REVISION_CONFLICT', error: 'Este registro clínico já possui uma revisão incompatível com a operação solicitada.' });
+    }
+    if (/ABA_V3_EXPOSURE_CONFLICTS_WITH_COLLECTED_TRIALS|ABA_V3_EXPOSURE_REQUIRES_V3_BINDING/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_EXPOSURE_CONFLICT', conflict: true, error: 'Já existem tentativas para este alvo ou a sessão não usa coleta V3.' });
     }
     if (/IDEMPOTENCY.*CONFLICT|ABA_V3_REVISION_IDEMPOTENCY_CONFLICT/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_IDEMPOTENCY_CONFLICT', conflict: true, error: 'A mesma operação foi reenviada com conteúdo diferente.' });
