@@ -1384,7 +1384,7 @@ async function syncModularCapacityStripeAmount(params: {
 
 // P0000: exact, reversible per-patient billing is opt-in on a frozen contract.
 // Existing capacity-block contracts and their live subscription items are unchanged.
-async function syncExactPerPatientBillingContract(params: {
+export async function syncExactPerPatientBillingContract(params: {
   supabase: SupabaseClientLike;
   stripe: Stripe;
   contract: ModularCapacityBillingContract;
