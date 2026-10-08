@@ -639,6 +639,7 @@ interface CoordinatorDashboardProps {
     txt: string,
     visibility: string,
     subject?: string,
+    options?: { mentionUserIds?: string[] },
   ) => void;
   onUpdateProfile: (updates: any) => Promise<any> | void;
   onUpdatePatient?: (patient: any) => Promise<any> | any;
@@ -9232,7 +9233,7 @@ export function CoordinatorDashboard({
   const financialDashboard = useMemo(() => {
     const clinicPatientIds = new Set((allPatients || []).map((patient: any) => String(patient?.id)));
     const patientById = new Map((allPatients || []).map((patient: any) => [String(patient?.id), patient]));
-    const chargeReadModelById = new Map(patientFinanceChargeRows.map((charge: any) => [String(charge?.id || ''), charge]));
+    const chargeReadModelById = new Map<string, any>(patientFinanceChargeRows.map((charge: any): [string, any] => [String(charge?.id || ''), charge]));
     const ledgerItemsByPaymentId = new Map<string, any[]>();
     (patientFinanceLedger?.items || []).forEach((item: any) => {
       if (item?.active === false) return;
