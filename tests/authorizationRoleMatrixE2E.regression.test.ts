@@ -61,12 +61,12 @@ const coordinatorDenied = resolveEffectiveClinicCapabilities('coordinator', [
 ]);
 assert.equal(coordinatorDenied?.capabilities.has('clinical.anamnesis.edit'), false);
 
-// Explicit clinical grant may authorize a case-scoped therapist, but still
-// remains subject to patient/case scope checks at the route/resource layer.
+// An ordinary therapist cannot gain supervisory anamnesis editing authority
+// from an allow override (including a stale historical grant).
 const therapistAuthorized = resolveEffectiveClinicCapabilities('therapist', [
   { permission_key: 'clinical.anamnesis.edit', effect: 'allow' },
 ]);
-assert.equal(therapistAuthorized?.capabilities.has('clinical.anamnesis.edit'), true);
+assert.equal(therapistAuthorized?.capabilities.has('clinical.anamnesis.edit'), false);
 
 // Structural ceilings always win over stale/broad overrides.
 const receptionistClinicalOverride = resolveEffectiveClinicCapabilities('receptionist', [
