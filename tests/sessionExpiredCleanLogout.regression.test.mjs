@@ -32,9 +32,9 @@ assert.match(app, /const handleLogout = async \(reason: 'manual' \| 'expired' = 
 const expiredStart = app.indexOf("const handleLogout = async (reason: 'manual' | 'expired'");
 const expiredEnd = app.indexOf("window.addEventListener('verto:server-session-expired'", expiredStart);
 const expiredLogout = app.slice(expiredStart, expiredEnd);
-assert.match(expiredLogout, /reason === 'expired'[\\s\\S]*?setUser\\(null\\)[\\s\\S]*?resetWorkspaceScopedState\\(\\)/);
-assert.match(expiredLogout, /if \\(reason !== 'expired'\\) \\{[\\s\\S]*?syncOfflineData\\(\\)/);
-assert.match(expiredLogout, /reason === 'expired'[\\s\\S]*?window\\.history\\.replaceState\\(\\{\\}, document\\.title, '\\/'\\)/);
-assert.match(expiredLogout, /clearSensitiveOfflineCacheForUser\\(signingOutUserId\\)/);
+assert.match(expiredLogout, /reason === 'expired'[\s\S]*?setUser\(null\)[\s\S]*?resetWorkspaceScopedState\(\)/);
+assert.match(expiredLogout, /if \(reason !== 'expired'\) \{[\s\S]*?syncOfflineData\(\)/);
+assert.match(expiredLogout, /reason === 'expired'[\s\S]*?window\.history\.replaceState\(\{\}, document\.title, '\/'\)/);
+assert.match(expiredLogout, /clearSensitiveOfflineCacheForUser\(signingOutUserId\)/);
 
 console.log('sessionExpiredCleanLogout.regression.test.mjs: ok');
