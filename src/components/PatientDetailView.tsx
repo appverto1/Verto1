@@ -12936,7 +12936,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
               </section>
             )}
-            <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+            {isKidsProfile ? (
+              <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+            ) : hasAbaClinicalProfile ? (
+              <details className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700" data-testid="adult-aba-intervention-charts-optional">
+                <summary className="cursor-pointer text-sm font-medium">Gráficos de intervenção ABA (complementares à avaliação)</summary>
+                <div className="mt-4">
+                  <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={abaV2Enabled} showAbaV3Details={abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+                </div>
+              </details>
+            ) : null}
           </div> : (
             <p role="status" className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-600">
               Gráficos clínicos indisponíveis para as permissões atuais. Aguarde a atualização do seu acesso ou consulte a administração da clínica.
