@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { calculateSalesModularProposal } from '../src/utils/salesModularProposal';
 import { buildFrozenStripeCheckoutPlan, DEFAULT_CUSTOM_CAPACITY_POLICY } from '../src/utils/salesCommercialEvolution';
 import { modularAssumptionsFixture, modularCatalogFixture, proposalInputFixture, PACKAGE_TIERS } from './fixtures/salesModularFixture';
+import { DEFAULT_SALES_PROFITABILITY_POLICY } from '../src/utils/salesModularEconomics';
 
 const rates = [
   ['clinical_core', 1000],
@@ -26,9 +27,11 @@ const catalog = {
   ...structuredClone(modularCatalogFixture),
   customCapacityPolicy: structuredClone(DEFAULT_CUSTOM_CAPACITY_POLICY),
   hasVersionedCustomCapacityPolicy: true,
+  profitabilityPolicy: structuredClone(DEFAULT_SALES_PROFITABILITY_POLICY),
+  hasVersionedProfitabilityPolicy: true,
   items: [core, ...modules]
 };
-for (const patients of [1, 10, 40, 50, 51, 100, 101, 150, 151]) {
+for (const patients of [1, 2, 10, 40, 49, 50, 51, 100, 101, 150, 151]) {
   const capacity = Math.ceil(patients / 50) * 50;
   const input = {
     ...proposalInputFixture(patients, PACKAGE_TIERS.custom.id, capacity, null),
@@ -51,6 +54,9 @@ for (const patients of [1, 10, 40, 50, 51, 100, 101, 150, 151]) {
   const result = calculateSalesModularProposal(input, catalog, modularAssumptionsFixture);
   assert.equal(result.commercialPricing.totalProposedPricePerPatientCents, 3000);
   assert.equal(result.promotionalRecurringRevenueCents, patients * 3000, 'monthly exact total at ' + patients);
+  assert.ok(result.commercialPricing.capacityBlockPhases.length > 0, 'commercial phases must calculate at ' + patients);
+  assert.equal(result.commercialPricing.capacityBlockPhases[0].contractedCapacityPatients, capacity, 'technical capacity at ' + patients);
+  assert.equal(result.commercialPricing.capacityBlockPhases[0].contractedMonthlyRevenueCents, patients * 3000, 'phase revenue bills active patients, not technical capacity at ' + patients);
   for (const [itemKey, unit] of rates) {
     const line = result.lines.find((line) => line.itemKey === itemKey);
     assert.ok(line, itemKey);
