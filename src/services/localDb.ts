@@ -703,8 +703,26 @@ const runOfflineSync = async (options: SessionSyncOptions) => {
     const blockedEntities = new Set<string>();
 
     for (const record of pending) {
-      // Dedicated authenticated Supabase RPC intents share the durable outbox,
-      // but are drained by their feature adapter rather than the generic HTTP sync.
+      // Reinforcer events are also durable clinical writes. Replay their
+      // authenticated RPC before sending a queued session completion; otherwise
+      // the server would reject them as SESSION_CLOSED. Other RPC intents remain
+      // under their own feature adapters, never forwarded as generic HTTP.
+      if (record.endpoint === 'supabase-rpc:record_aba_reinforcer_delivery_authenticated_v1') {
+        try {
+          const sessionId = String(record.data?.sessionId || '').trim();
+          if (sessionId) {
+            const { flushReinforcerDeliveries } = await import('./abaReinforcers');
+            await flushReinforcerDeliveries(sessionId);
+          }
+        } catch (error) {
+          // The encrypted outbox row remains pending; completion is held by
+          // hasUnresolvedSessionPredecessor until this write is confirmed.
+          console.warn('Reforçador pendente de sincronização; encerramento preservado na fila.', error);
+        } finally {
+          (record as any).data = null;
+        }
+        continue;
+      }
       if (record.endpoint.startsWith('supabase-rpc:')) {
         (record as any).data = null;
         continue;

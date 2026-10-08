@@ -201,6 +201,7 @@ const criticalTests = [
   'tests/sessionCompletionMissingSessionRecovery.regression.test.mjs',
   'tests/sessionLifecycleRecovery.regression.test.mjs',
   'tests/sessionAutoFinalization.regression.test.mjs',
+  'tests/sessionOfflineLifecycleP0.regression.test.mjs',
   'tests/clinicalMeasurementV3RouteModularization.regression.test.mjs',
   'tests/patientDirectoryOrdering.regression.test.mjs',
   'tests/progressReportFilters.regression.test.mjs',

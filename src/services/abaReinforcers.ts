@@ -143,7 +143,11 @@ export async function flushReinforcerDeliveries(sessionId: string) {
   );
 
   if (typeof navigator !== 'undefined' && !navigator.onLine && rows.length) {
-    return { ok: false, pending: rows.length, terminal: 0 };
+    // These events already have encrypted, durable, per-user outbox records.
+    // Allow the clinical session to close locally, but never defer terminal
+    // failures: those must remain visible for human review.
+    const terminal = rows.filter((row) => row.sync_status === 'failed' || row.sync_status === 'conflict').length;
+    return { ok: terminal === 0, pending: rows.length - terminal, terminal, deferred: terminal === 0 };
   }
 
   let pending = 0;
