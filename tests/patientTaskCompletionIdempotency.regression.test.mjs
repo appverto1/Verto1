@@ -7,7 +7,10 @@ const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20261007193000_assigned_task_completion_idempotency_p0.sql', 'utf8');
 
 assert.match(dashboard, /const \[isTaskSaving, setIsTaskSaving\] = useState\(false\)/);
-assert.match(dashboard, /if \(isReadOnlyMode \|\| !selectedTask \|\| isTaskSaving\) return;/);
+assert.match(dashboard, /if \(isReadOnlyMode \|\| !selectedTask \|\| isTaskSaving \|\| taskSubmitInFlightRef\.current\) return;/);
+assert.match(dashboard, /taskSubmitInFlightRef = useRef\(false\)/);
+assert.match(dashboard, /taskSubmitInFlightRef\.current = true;/);
+assert.match(dashboard, /taskSubmitInFlightRef\.current = false;/);
 assert.match(dashboard, /setIsTaskSaving\(true\)[\s\S]*finally \{[\s\S]*setIsTaskSaving\(false\)/);
 assert.match(dashboard, /disabled=\{isTaskSaving \|\| showTaskSuccess/);
 assert.match(dashboard, /isTaskSaving \?[\s\S]*Salvando\.\.\.|isTaskSaving \?[\s\S]*Enviando\.\.\./);

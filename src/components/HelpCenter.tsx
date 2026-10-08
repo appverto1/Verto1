@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowUpRight, BookOpen, Menu, Search, X } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight, BookOpen, ChevronDown, ChevronRight, Menu, Search, X } from 'lucide-react';
 import type { HelpArticle } from '../help/helpManifest';
 import { HelpSupportChat } from './HelpSupportChat';
 import { HelpTutorialArticle } from './HelpTutorialArticle';
@@ -38,6 +38,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
   const [query,setQuery]=useState('');
   const [selected,setSelected]=useState('');
   const [drawer,setDrawer]=useState(false);
+  const [expandedThemes,setExpandedThemes]=useState<Record<string,boolean>>({});
   const [topics,setTopics]=React.useState<Topic[]>([]);
   const [loading,setLoading]=React.useState(true);
   const [error,setError]=React.useState('');
@@ -118,8 +119,25 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
       .map(x=>x.topic),
     [query,topics],
   );
+  const groupedTopics=useMemo(()=>{
+    const groups=new Map<string,Topic[]>();
+    for(const topic of filtered){
+      const theme=topic.theme||'Outros';
+      if(!groups.has(theme))groups.set(theme,[]);
+      groups.get(theme)!.push(topic);
+    }
+    return Array.from(groups,([theme,items])=>({theme,items}));
+  },[filtered]);
   const article=topics.find(t=>t.articleId===selected) || filtered[0];
-  const selectTopic=(id:string)=>{setSelected(id);setDrawer(false);window.history.replaceState(null,'',`/ajuda?topico=${encodeURIComponent(id)}`);};
+  React.useEffect(()=>{
+    if(article?.theme)setExpandedThemes(old=>({...old,[article.theme]:true}));
+  },[article?.articleId,article?.theme]);
+  const selectTopic=(id:string)=>{
+    const chosen=topics.find(t=>t.articleId===id);
+    if(chosen?.theme)setExpandedThemes(old=>({...old,[chosen.theme]:true}));
+    setSelected(id);setDrawer(false);
+    window.history.replaceState(null,'',`/ajuda?topico=${encodeURIComponent(id)}`);
+  };
   const related=(article?.relatedArticleIds||[])
     .map(id=>topics.find(topic=>topic.articleId===id))
     .filter((topic):topic is Topic=>Boolean(topic));
@@ -174,8 +192,27 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">{resultAnnouncement}</p>
       </div>
       <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-6">
-        <aside ref={drawerRef} className={`${drawer?'block':'hidden'} mb-4 rounded-2xl border border-slate-200 bg-white p-2 lg:sticky lg:top-24 lg:block lg:self-start`} aria-label="Temas de ajuda">
-          {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:filtered.length?filtered.map(t=><button key={t.articleId} type="button" onClick={()=>selectTopic(t.articleId)} className={`mb-1 min-h-11 w-full rounded-xl px-3 py-2 text-left text-sm ${article?.articleId===t.articleId?'bg-violet-50 font-semibold text-violet-700':'text-slate-700 hover:bg-slate-50'}`}><span className="block text-xs text-slate-400">{t.theme}</span><span className="block">{t.title}{progress[`${t.articleId}:${t.contentRevision}`]&&<span className="ml-1 text-xs text-emerald-700">✓ Concluído</span>}</span><span className="mt-1 block text-xs font-normal leading-4 text-slate-500">{excerpt(t.summary)}</span></button>):<p className="p-3 text-sm text-slate-500" role="status">Nenhum tutorial encontrado. Tente outro termo.</p>}
+        <aside ref={drawerRef} className={`${drawer?'block':'hidden'} mb-4 max-h-[75dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 lg:sticky lg:top-24 lg:block lg:max-h-[calc(100dvh-7rem)] lg:self-start`} aria-label="Temas de ajuda">
+          {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:groupedTopics.length?groupedTopics.map((group,i)=>{
+            const expanded=expandedThemes[group.theme]===true || (expandedThemes[group.theme]===undefined && article?.theme===group.theme);
+            const completed=group.items.filter(t=>Boolean(progress[`${t.articleId}:${t.contentRevision}`])).length;
+            const groupId=`help-theme-${i}`;
+            return <section key={group.theme} className="mb-1" aria-label={group.theme}>
+              <h2>
+                <button type="button" aria-expanded={expanded} aria-controls={groupId} onClick={()=>setExpandedThemes(old=>({...old,[group.theme]:!expanded}))} className="flex min-h-11 w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-800 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500">
+                  {expanded?<ChevronDown size={16} aria-hidden="true" className="shrink-0"/>:<ChevronRight size={16} aria-hidden="true" className="shrink-0"/>}
+                  <span className="min-w-0 flex-1 break-words">{group.theme}</span>
+                  <span className="shrink-0 text-xs font-normal text-slate-500">{completed}/{group.items.length}</span>
+                </button>
+              </h2>
+              <div id={groupId} hidden={!expanded} className="ml-4 border-l border-violet-100 pl-2">
+                {group.items.map(t=><button key={t.articleId} type="button" aria-current={article?.articleId===t.articleId?'page':undefined} onClick={()=>selectTopic(t.articleId)} className={`mb-1 min-h-11 w-full rounded-xl px-3 py-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${article?.articleId===t.articleId?'bg-violet-50 font-semibold text-violet-700':'text-slate-700 hover:bg-slate-50'}`}>
+                  <span className="block break-words">{t.title}{progress[`${t.articleId}:${t.contentRevision}`]&&<span className="ml-1 text-xs text-emerald-700">✓ Concluído</span>}</span>
+                  <span className="mt-1 block text-xs font-normal leading-4 text-slate-500">{excerpt(t.summary)}</span>
+                </button>)}
+              </div>
+            </section>;
+          }):<p className="p-3 text-sm text-slate-500" role="status">Nenhum tutorial encontrado. Tente outro termo.</p>}
         </aside>
         <article className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
           {article?<>

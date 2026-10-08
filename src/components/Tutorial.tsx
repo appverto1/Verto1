@@ -65,15 +65,28 @@ export const TutorialOverlay = ({
   const step = steps[currentStepIndex];
   if (!step) return null;
   const isLast = currentStepIndex === steps.length - 1;
-  let cardStyle: any = {};
-  if (step.placement === 'bottom') {
-    cardStyle = { top: coords.top + coords.height + 20, left: coords.left + coords.width / 2 - 150 };
-  } else {
-    cardStyle = { top: coords.top - 200, left: coords.left + coords.width / 2 - 150 };
-  }
-  if (cardStyle.left < 10) cardStyle.left = 10;
-  if (window.innerWidth - cardStyle.left < 310) cardStyle.left = window.innerWidth - 320;
-  if (cardStyle.top < 10) cardStyle.top = 10;
+  // Keep the entire card inside the *visible* viewport, including zoom/mobile.
+  // The old fixed 320px assumption produced a negative left on small screens.
+  const viewportWidth = Math.max(1, window.visualViewport?.width || window.innerWidth);
+  const viewportHeight = Math.max(1, window.visualViewport?.height || window.innerHeight);
+  const edge = 12;
+  const cardWidth = Math.max(1, Math.min(320, viewportWidth - edge * 2));
+  const cardHeight = Math.min(300, viewportHeight - edge * 2);
+  const suggestedLeft = coords.left + coords.width / 2 - cardWidth / 2;
+  const left = Math.max(edge, Math.min(suggestedLeft, viewportWidth - cardWidth - edge));
+  const spaceBelow = viewportHeight - (coords.top + coords.height);
+  const placeBelow = step.placement === 'bottom'
+    ? spaceBelow >= cardHeight + edge || spaceBelow >= coords.top
+    : !(coords.top >= cardHeight + edge || coords.top > spaceBelow);
+  const suggestedTop = placeBelow
+    ? coords.top + coords.height + edge
+    : coords.top - cardHeight - edge;
+  const top = Math.max(edge, Math.min(suggestedTop, viewportHeight - cardHeight - edge));
+  const cardStyle: React.CSSProperties = {
+    top, left, width: cardWidth, maxWidth: 'calc(100vw - 24px)',
+    maxHeight: 'calc(100dvh - 24px)', overflowY: 'auto',
+    position: 'absolute', zIndex: 142,
+  };
 
   return (
     <div className="fixed inset-0 z-[140] overflow-hidden" role="dialog" aria-modal="true" aria-label="Tutorial guiado da Verto">
@@ -93,8 +106,8 @@ export const TutorialOverlay = ({
         }}
       />
       <div className="tutorial-card" style={{ ...cardStyle, zIndex: 142 }}>
-        {step.placement === 'bottom' && <div className="tutorial-arrow arrow-top" />}
-        {step.placement === 'top' && <div className="tutorial-arrow arrow-bottom" />}
+        {placeBelow && <div className="tutorial-arrow arrow-top" />}
+        {!placeBelow && <div className="tutorial-arrow arrow-bottom" />}
         <div className="flex justify-between items-center mb-2">
           <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
             Passo {currentStepIndex + 1} de {steps.length}

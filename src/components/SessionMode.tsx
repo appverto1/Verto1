@@ -1281,6 +1281,7 @@ export const SessionMode = ({
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
   const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
+  const abaV3ExposureSavingRef = useRef(false);
   const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
   const abaV3BindingInflightRef = useRef<Map<string, Promise<AbaV3BindingDecision | null>>>(new Map());
   const abaV3BehaviorBindingCacheRef = useRef<Map<string, AbaV3BehaviorDecision>>(new Map());
@@ -4307,6 +4308,42 @@ export const SessionMode = ({
       binding,
       v3ActionKey
     });
+  };
+
+  const saveAbaV3NoOpportunity = async () => {
+    const selection = abaV3ErrorSelection;
+    if (!selection || abaV3ExposureSavingRef.current) return;
+    abaV3ExposureSavingRef.current = true;
+    try {
+      const targetId = String(selection.activeMaintenanceProbe?.targetId || goalTargetId(selection.goal) || '').trim();
+      if (!patientId || !sessionId || sessionId.startsWith('draft-') || !targetId) {
+        throw new Error('A ausência de oportunidade exige uma sessão V3 persistida e um target válido.');
+      }
+      const result = await dataService.saveAbaV3TargetExposure({
+        patientId, sessionId, targetId, clientEventId: crypto.randomUUID(),
+      });
+      if (result?.conflict) throw new Error(result?.error || 'Conflito com coleta clínica já persistida.');
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível registrar a ausência de oportunidade.');
+      setAbaV3ErrorSelection(null);
+      if (result?.pending) {
+        showClinicalToast({
+          variant: 'info', title: 'Registro aguardando sincronização',
+          subtitle: 'A ausência de oportunidade foi preservada localmente e ainda não está confirmada no servidor.'
+        }, 'none');
+      } else {
+        showClinicalToast({
+          variant: 'success', title: 'Ausência de oportunidade registrada',
+          subtitle: 'Estado clínico persistido sem criar ou contabilizar uma tentativa.'
+        }, 'none');
+      }
+    } catch (error: any) {
+      showClinicalToast({
+        variant: 'error', title: 'Não foi possível registrar',
+        subtitle: error?.message || 'Tente novamente sem criar uma tentativa fictícia.'
+      }, 'error');
+    } finally {
+      abaV3ExposureSavingRef.current = false;
+    }
   };
 
   const saveAbaV3ErrorOutcome = async (actionKey: 'INDEPENDENT_INCORRECT' | 'NO_RESPONSE') => {
@@ -11507,16 +11544,7 @@ export const SessionMode = ({
             </div>
             <button
               type="button"
-              onClick={() => {
-                // NO_OPPORTUNITY is an exposure state, never a NO_RESPONSE
-                // clinical trial or a zero score. Do not invent a trial locally.
-                setAbaV3ErrorSelection(null);
-                showClinicalToast({
-                  variant: 'info',
-                  title: 'Não houve oportunidade de tentativa',
-                  subtitle: 'Nenhuma tentativa foi registrada ou contabilizada. Use esta opção somente quando a oportunidade realmente não ocorreu.'
-                }, 'none');
-              }}
+              onClick={() => { void saveAbaV3NoOpportunity(); }}
               className="mt-3 w-full min-h-[48px] rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-semibold text-blue-800"
             >
               Não houve oportunidade — não contabilizar tentativa
