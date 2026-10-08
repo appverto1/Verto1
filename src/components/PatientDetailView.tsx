@@ -68,7 +68,7 @@ import html2canvas from 'html2canvas';
 import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
-import { appointmentClinicalSpecialtyKey, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
+import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
 import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
@@ -2109,28 +2109,47 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     let requestedPlanId = String(planContext?.therapeuticPlanId || '').trim();
     let requestedPlanSpecialty = String(planContext?.specialty || '').trim() || null;
 
-    // Sessions opened from Agenda must inherit the appointment specialty rather
-    // than falling back to every plan visible for the patient.
-    if (!requestedPlanId && scheduledSessionForPatient && appointmentClinicalSpecialtyKey(scheduledSessionForPatient)) {
-      const planResult = await dataService.getPatientTherapeuticPlan(String(patient?.id || ''), { force: false });
+    // Even a plan selected directly from the Plan panel can become paused or
+    // inaccessible before session start. Revalidate it against the server scope.
+    // Without an explicit plan, Agenda may choose only an active, matching
+    // specialty plan; otherwise the shared/legacy PEI stays unbound.
+    if (requestedPlanId || (scheduledSessionForPatient && appointmentClinicalSpecialtyKey(scheduledSessionForPatient))) {
+      const planResult = await dataService.getPatientTherapeuticPlan(String(patient?.id || ''), { force: true });
       if (planResult?.success === false) {
-        alert(planResult?.message || planResult?.error || 'Não foi possível confirmar o plano desta especialidade.');
+        alert(planResult?.message || planResult?.error || 'Não foi possível validar o plano clínico no servidor. Tente novamente.');
         return;
       }
-      const scopes = Array.isArray(planResult?.data?.planScopes) ? planResult.data.planScopes : [];
-      const candidates = sessionSpecialtyPlanCandidates(scopes, scheduledSessionForPatient)
-        .filter((scope: any) => scope?.canEdit === true);
-      if (candidates.length > 1) {
-        alert('Existe mais de um plano ativo para a especialidade deste atendimento. Inicie a sessão pelo plano correto.');
-        return;
+      const hasServerScopes = Array.isArray(planResult?.data?.planScopes);
+      const scopes = hasServerScopes ? planResult.data.planScopes : [];
+      if (requestedPlanId) {
+        if (!hasServerScopes) {
+          alert('Não foi possível confirmar se o plano selecionado continua ativo. Nenhuma sessão foi iniciada.');
+          return;
+        }
+        const chosen = scopes.find((scope: any) => String(scope?.id || '').trim() === requestedPlanId);
+        if (
+          !chosen ||
+          String(chosen.status || '').toLowerCase() !== 'active' ||
+          chosen.canEdit !== true ||
+          (scheduledSessionForPatient && !sessionPlanMatchesAppointmentSpecialty(chosen, scheduledSessionForPatient))
+        ) {
+          alert('O plano selecionado está pausado, sem permissão ou não corresponde à especialidade deste atendimento. Nenhuma sessão foi iniciada.');
+          return;
+        }
+        requestedPlanSpecialty = String(chosen.specialty || '').trim() || null;
+      } else {
+        const candidates = sessionSpecialtyPlanCandidates(scopes, scheduledSessionForPatient)
+          .filter((scope: any) => scope?.canEdit === true);
+        if (candidates.length > 1) {
+          alert('Existe mais de um plano ativo para a especialidade deste atendimento. Inicie a sessão pelo plano correto.');
+          return;
+        }
+        if (candidates.length === 1) {
+          requestedPlanId = String(candidates[0]?.id || '').trim();
+          requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
+        }
       }
-      if (candidates.length === 1) {
-        requestedPlanId = String(candidates[0]?.id || '').trim();
-        requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
-      }
-      // Zero active specialty plans is valid: keep the session unbound so the
-      // shared/legacy PEI can remain available without importing a paused or
-      // different-specialty therapeutic plan.
+      // Zero active specialty plans means PEI-only: never bind a paused plan.
     }
 
     setPendingSessionAction(resolvedAction);
@@ -6525,7 +6544,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }
         : null;
       const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
-      if (onUpdatePatient) {
+      if (!onUpdatePatient) {
+        alert('Não há um serviço disponível para confirmar o salvamento. A ficha permanece aberta.');
+        return;
+      }
+      {
         const patientUpdateResult = await onUpdatePatient({
           id: patient.id,
           name: String(updatedData?.nome || '').trim() || patient?.name,
@@ -6547,7 +6570,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           anamnesisPending: false,
           lastAnamnesisAt: new Date().toISOString()
         });
-        if (!patientUpdateResult?.success) {
+        if (patientUpdateResult?.success !== true || patientUpdateResult?.pending === true || patientUpdateResult?.offline === true || patientUpdateResult?.queued === true) {
           if (!patientUpdateResult?.error) {
             alert('Não foi possível confirmar a persistência da anamnese. A ficha permanece aberta para nova tentativa.');
           }
@@ -6560,8 +6583,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         updatedData,
         anamnesisFlow?.request?.id || null
       );
-      if (!submissionResult?.success) {
-        alert(submissionResult?.error || 'Não foi possível confirmar a submissão da anamnese. A ficha permanece aberta para nova tentativa.');
+      if (submissionResult?.success !== true || submissionResult?.pending === true || submissionResult?.offline === true || submissionResult?.queued === true) {
+        alert(submissionResult?.error || 'A anamnese ainda não foi confirmada no servidor. A ficha permanece aberta até o salvamento definitivo.');
         return;
       }
 

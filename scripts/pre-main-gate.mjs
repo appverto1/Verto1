@@ -188,6 +188,7 @@ const criticalTests = [
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',
   'tests/therapeuticPlanSessionContext.regression.test.mjs',
   'tests/sessionSpecialtyIsolation.test.ts',
+  'tests/abaMeasurementV3CollectionUi.test.mjs',
   'tests/patientCaseTeamCoordinatorAuthority.regression.test.mjs',
   'tests/patientCaseTeamManagerRemoval.regression.test.mjs',
   'tests/patientCaseTeamPrimaryPointerNullable.regression.test.mjs',

@@ -15,7 +15,7 @@ assert.match(
 );
 assert.match(
   saveFlow,
-  /if \(!patientUpdateResult\?\.success\)[\s\S]*?return;/,
+  /if \(patientUpdateResult\?\.success !== true[\s\S]*?return;/,
   'falha da persistência do paciente deve interromper o fluxo',
 );
 assert.match(
@@ -25,7 +25,7 @@ assert.match(
 );
 assert.match(
   saveFlow,
-  /if \(!submissionResult\?\.success\)[\s\S]*?return;/,
+  /if \(submissionResult\?\.success !== true[\s\S]*?return;/,
   'falha da submissão deve manter a ficha no fluxo de edição',
 );
 assert.doesNotMatch(
@@ -46,5 +46,12 @@ const fileModalIndex = saveFlow.indexOf('setShowAnamnesisFileModal(true)');
 assert.ok(updateIndex >= 0 && submissionIndex > updateIndex, 'ordem deve confirmar paciente antes da submissão');
 assert.ok(closeIndex > submissionIndex, 'a ficha só pode fechar depois da confirmação da submissão');
 assert.ok(fileModalIndex > submissionIndex, 'o fluxo de PDF só pode abrir depois da confirmação da submissão');
+
+assert.match(saveFlow, /if \(!onUpdatePatient\)[\s\S]*?return;/,
+  'ausência de writer de paciente não pode produzir falso sucesso');
+assert.match(saveFlow, /patientUpdateResult\?\.pending === true[\s\S]*?patientUpdateResult\?\.offline === true[\s\S]*?patientUpdateResult\?\.queued === true/,
+  'a ficha só pode encerrar após ACK de paciente, não fila offline');
+assert.match(saveFlow, /submissionResult\?\.pending === true[\s\S]*?submissionResult\?\.offline === true[\s\S]*?submissionResult\?\.queued === true/,
+  'a submissão deve receber ACK definitivo antes de fechar');
 
 console.log('anamnesisSavePersistenceConfirmation.regression.test.mjs: ok');

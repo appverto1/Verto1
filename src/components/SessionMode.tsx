@@ -11505,7 +11505,23 @@ export const SessionMode = ({
                 <span className="mt-1 block text-xs font-semibold text-slate-500">A oportunidade ocorreu, mas não houve resposta observável.</span>
               </button>
             </div>
-            <button type="button" onClick={() => setAbaV3ErrorSelection(null)} className="mt-5 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">
+            <button
+              type="button"
+              onClick={() => {
+                // NO_OPPORTUNITY is an exposure state, never a NO_RESPONSE
+                // clinical trial or a zero score. Do not invent a trial locally.
+                setAbaV3ErrorSelection(null);
+                showClinicalToast({
+                  variant: 'info',
+                  title: 'Não houve oportunidade de tentativa',
+                  subtitle: 'Nenhuma tentativa foi registrada ou contabilizada. Use esta opção somente quando a oportunidade realmente não ocorreu.'
+                }, 'none');
+              }}
+              className="mt-3 w-full min-h-[48px] rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-semibold text-blue-800"
+            >
+              Não houve oportunidade — não contabilizar tentativa
+            </button>
+            <button type="button" onClick={() => setAbaV3ErrorSelection(null)} className="mt-3 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">
               Cancelar
             </button>
           </div>

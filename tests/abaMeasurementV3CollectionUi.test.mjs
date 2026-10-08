@@ -165,4 +165,13 @@ assert.match(adr, /Não existe fallback silencioso dessas famílias para V2/i);
 assert.match(adr, /Não existe fallback silencioso de V3 para V2/i);
 assert.match(adr, /replay após o fechamento da sessão/i);
 
+// Explicitly distinguish no-opportunity from a wrong or missing response.
+// The no-opportunity action must not create a fictitious zero-score trial.
+const noOpportunityIndex = sessionMode.indexOf('Não houve oportunidade — não contabilizar tentativa');
+assert.ok(noOpportunityIndex > 0);
+const noOpportunityBranch = sessionMode.slice(noOpportunityIndex - 520, noOpportunityIndex + 160);
+assert.match(noOpportunityBranch, /setAbaV3ErrorSelection\(null\)/);
+assert.doesNotMatch(noOpportunityBranch, /saveAbaV3TrialAction|persistV3TrialRecord|continueResolvedTrial|setTrialCount/);
+assert.match(sessionMode, /saveAbaV3ErrorOutcome\('INDEPENDENT_INCORRECT'\)[\s\S]*?saveAbaV3ErrorOutcome\('NO_RESPONSE'\)/);
+
 console.log('ABA Measurement V3 PR9A trial collection/UI contracts: OK');
