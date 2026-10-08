@@ -33,7 +33,7 @@ assert.match(dataService, /completionAttempt = await requestCompletion\(\);/);
 
 // The close command carries the original start context required to safely recover
 // an offline-first session without inventing patient, clinic or appointment scope.
-assert.match(sessionMode, /completeAbaSession\(sessionId,[\s\S]*started_at:[\s\S]*scheduled_start:[\s\S]*reference_date:/);
+assert.match(sessionMode, /const completionPayload = \{[\s\S]*started_at:[\s\S]*scheduled_start:[\s\S]*reference_date:[\s\S]*completionRequestRef\.current \|\|= \{ payload: completionPayload, records \};[\s\S]*completeAbaSession\(sessionId, completionRequestRef\.current\.payload\)/);
 
 // Missing ABC fields are no longer synthesized as post-closure pending work.
 assert.doesNotMatch(summary, /abcMissingFromRecords/);
