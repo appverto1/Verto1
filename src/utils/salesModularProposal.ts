@@ -185,6 +185,7 @@ export type SalesModularLineSelection = {
 export type SalesModularProposalInput = {
   commercialPricingMode?: 'catalog' | 'manual_module_prices';
   commercialCapacityBasis?: 'current_patients' | 'projected_demand';
+  exactPerPatientBilling?: boolean;
   platformFoundationPricingMode?: SalesPlatformFoundationPricingMode;
   platformFoundationMonthlyAmountCents?: number | null;
   patientQuantity: number;
@@ -2631,6 +2632,19 @@ export function calculateSalesModularProposal(
         String(selection.pricingEditMode || '')
       )
     );
+  const exactPerPatientBilling = input.exactPerPatientBilling === true;
+  if (exactPerPatientBilling && (
+    !manualModulePricingEnabled ||
+    input.commercialCapacityBasis !== 'current_patients' ||
+    !perPatientPricingEnabled ||
+    recurringSelections.some((selection) =>
+      selection.pricingEditMode !== 'per_patient' ||
+      !Number.isSafeInteger(selection.proposedPricePerPatientCents) ||
+      Number(selection.proposedPricePerPatientCents) < 0
+    )
+  )) {
+    throw new Error('EXACT_PER_PATIENT_CONTRACT_INVALID');
+  }
   if (
     isCustomBaseTier &&
     (!Number.isInteger(input.customBasePackageLimit) ||
@@ -2723,7 +2737,9 @@ export function calculateSalesModularProposal(
             tierId: baseTier.id,
             quantity: input.patientQuantity
           }
-        : selection;
+        : exactPerPatientBilling && item.billingInterval === 'monthly'
+          ? { ...selection, quantity: input.patientQuantity }
+          : selection;
     const tier = resolveItemTier(item, effectiveSelection);
     if (
       ['package_limit', 'usage_tier', 'storage_block'].includes(
@@ -2756,7 +2772,7 @@ export function calculateSalesModularProposal(
       effectiveSelection,
       {
         perPatientPricingEnabled,
-        contractedCapacityPatients: basePackageContractedLimit
+        contractedCapacityPatients: exactPerPatientBilling ? input.patientQuantity : basePackageContractedLimit
       }
     );
     const amounts = {
