@@ -4829,7 +4829,10 @@ export const SalesModularProposalBuilder = ({
                           A capacidade Essencial/Enterprise não multiplica os valores.</p>
                         <div className="mt-2 space-y-1">
                           {summaryPreview.lines
-                            .filter((line) => line.billingInterval === 'monthly' && isSalesFunctionalModuleItemKey(line.itemKey))
+                            .filter((line) =>
+                              isSalesFunctionalModuleItemKey(line.itemKey) &&
+                              catalog.items.some((item) => item.itemKey === line.itemKey && item.billingInterval === 'monthly')
+                            )
                             .map((line) => (
                               <div key={line.lineKey} className="flex justify-between gap-3">
                                 <span>{line.publicName}: {currency(line.commercialPricing.proposedPricePerPatientCents)} × {summaryInput.patientQuantity}</span>
