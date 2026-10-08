@@ -1,0 +1,38 @@
+name: Temporary P0 Agenda Server Patch
+
+on:
+  push:
+    branches:
+      - fix/p0-agenda-postwrite-reminders-20261007
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/p0-agenda-postwrite-reminders-20261007
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Apply guarded server patch
+        run: node scripts/apply-p0-agenda-postwrite-fix.mjs
+
+      - name: Commit server patch
+        run: |
+          if git diff --quiet -- server.ts; then
+            echo "server.ts already patched"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts
+          git commit -m "fix(p0): keep persisted portal appointment actions successful"
+          git push origin HEAD:fix/p0-agenda-postwrite-reminders-20261007
