@@ -34,13 +34,14 @@ assert.deepEqual(getDefaultScopesForRole('supervisor'), ['SUPERVISED_CASES', 'OW
 const therapist = resolveEffectiveClinicCapabilities('therapist');
 assert.ok(therapist);
 assert.equal(therapist.capabilities.has('clinical.record.view'), true);
-assert.equal(therapist.capabilities.has('clinical.anamnesis.view'), true);
+assert.equal(therapist.capabilities.has('clinical.anamnesis.view'), false);
 assert.equal(therapist.capabilities.has('clinical.anamnesis.edit'), false);
 assert.equal(therapist.capabilities.has('team.permissions.manage'), false);
 assert.deepEqual(getDefaultScopesForRole('therapist'), ['ASSIGNED_PATIENTS', 'OWN_RESOURCES']);
 
 const supervisedTherapist = resolveEffectiveClinicCapabilities('therapist', [], { canSupervise: true });
 assert.ok(supervisedTherapist);
+assert.equal(supervisedTherapist.capabilities.has('clinical.anamnesis.view'), true);
 assert.equal(supervisedTherapist.capabilities.has('clinical.anamnesis.edit'), true);
 assert.equal(supervisedTherapist.capabilities.has('treatment_plan.approve'), true);
 assert.equal(supervisedTherapist.capabilities.has('calendar.team.view'), true);
