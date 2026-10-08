@@ -191,4 +191,14 @@ assert.doesNotMatch(
 );
 assert.doesNotMatch(unlinkRoute, /auth\.admin\.deleteUser|deleteUser\(/);
 
+// P0: admitir conta profissional preexistente em B não remove vínculos de A.
+assert.match(migration, /insert into public\.clinic_memberships[\s\S]*?on conflict \(user_id, clinic_id\)/i);
+assert.doesNotMatch(
+  migration,
+  /delete from public\.clinic_memberships[\s\S]*?v_actor_user_id/i,
+  'aceite do convite não pode apagar memberships de outras clínicas',
+);
+assert.match(accessContextRoute, /ACCESS_CONTEXT_NOT_AUTHORIZED/);
+assert.doesNotMatch(acceptRoute, /req\.body\?\.(?:clinicId|clinic_id|role|professionalId)/);
+
 console.log('clinicReinviteAccess.test.ts: ok');
