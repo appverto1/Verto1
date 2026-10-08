@@ -45,7 +45,7 @@ import {
   type ClinicalOutcomeSeriesSummary,
 } from '../utils/clinicalOutcomeAnalytics';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
-import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope } from '../utils/clinicalOutcomePlanScope';
+import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope, unscopedBehaviorSeriesBelongsToSpecialty } from '../utils/clinicalOutcomePlanScope';
 import { ClinicalPlanAnalyticsShell, type AnalyticsAxis } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
@@ -646,7 +646,10 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
   const planScopeIndex = useMemo(() => buildClinicalOutcomePlanScopeIndex(data.programs || []), [data.programs]);
   const selectedPlan = specialtyPlans.find((plan) => String(plan.id) === scopeId) || null;
   const selectedPlanSeries = useMemo(() => selectedPlan
-    ? summaries.filter((series) => clinicalOutcomeSeriesBelongsToPlanScope(series, selectedPlan.id, planScopeIndex))
+    ? summaries.filter((series) =>
+      clinicalOutcomeSeriesBelongsToPlanScope(series, selectedPlan.id, planScopeIndex)
+      || unscopedBehaviorSeriesBelongsToSpecialty(series, selectedPlan.specialty)
+    )
     : [], [planScopeIndex, selectedPlan, summaries]);
   const ptsPlanSeries = useMemo(() => activePts
     ? summaries.filter((series) => clinicalOutcomeSeriesBelongsToPlanScope(series, activePts.id, planScopeIndex))
@@ -727,6 +730,21 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
         }
       }
     }
+    // A PTS goal may explicitly link a specialty plan even when historical
+    // observations reference only that plan (without the PTS goal id).
+    // Reuse the already authorized canonical series; never infer links from
+    // a matching specialty name or read another patient's/clinic's data.
+    const linkedPlanIds = new Set(ptsGoalRows.flatMap((row) => row.contributions
+      .filter((contribution) => Boolean(contribution.link && contribution.specialtyPlan?.id))
+      .map((contribution) => String(contribution.specialtyPlan.id))));
+    if (linkedPlanIds.size > 0) {
+      for (const series of summaries) {
+        if (isHistoricalOnlySeries(series)) continue;
+        if (Array.from(linkedPlanIds).some((id) => clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex))) {
+          unique.set(series.key, series);
+        }
+      }
+    }
     // Comportamentos interferentes são evidência longitudinal do paciente e não
     // pertencem semanticamente a uma especialidade. Na visão multidisciplinar do PTS,
     // preserve-os mesmo quando o legado ainda não carrega planId/goalId/programId.
@@ -735,7 +753,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
       if (isClinicalOutcomeInterferingBehaviorSeries(series)) unique.set(series.key, series);
     }
     return Array.from(unique.values());
-  }, [ptsGoalRows, ptsPlanSeries, summaries]);
+  }, [planScopeIndex, ptsGoalRows, ptsPlanSeries, summaries]);
   const ptsUnstructuredTargetGroups = useMemo(() => (
     buildClinicalTargetGroups(ptsAnalyticsSeries).filter((group) => group.clinicalSeries.length > 0)
   ), [ptsAnalyticsSeries]);
