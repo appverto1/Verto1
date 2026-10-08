@@ -37,3 +37,13 @@ export const persistPushRenewalContext = async (
   });
   return true;
 };
+
+/** Drop the durable service-worker renewal token when this device opts out. */
+export const clearPushRenewalContext = async (): Promise<boolean> => {
+  try {
+    if (typeof window === 'undefined' || !('caches' in window)) return false;
+    return await window.caches.delete('verto-push-renewal-v1');
+  } catch {
+    return false;
+  }
+};
