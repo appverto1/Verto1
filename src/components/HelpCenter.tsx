@@ -194,7 +194,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
       <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-6">
         <aside ref={drawerRef} className={`${drawer?'block':'hidden'} mb-4 max-h-[75dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 lg:sticky lg:top-24 lg:block lg:max-h-[calc(100dvh-7rem)] lg:self-start`} aria-label="Temas de ajuda">
           {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:groupedTopics.length?groupedTopics.map((group,i)=>{
-            const expanded=(expandedTheme===group.theme)||Boolean(query.trim());
+            const expanded=expandedTheme===group.theme;
             const completed=group.items.filter(t=>Boolean(progress[`${t.articleId}:${t.contentRevision}`])).length;
             const groupId=`help-theme-${i}`;
             return <section key={group.theme} className="mb-1" aria-label={group.theme}>
