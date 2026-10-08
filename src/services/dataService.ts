@@ -7039,6 +7039,25 @@ export const dataService = {
     return result;
   },
 
+  async saveAbaV3NoOpportunity(input: { patientId: string; sessionId: string; targetId: string }) {
+    const patientId = String(input?.patientId || '').trim();
+    const sessionId = String(input?.sessionId || '').trim();
+    const targetId = String(input?.targetId || '').trim();
+    if (!patientId || !sessionId || !targetId) {
+      return { success: false, error: 'O escopo da oportunidade ABA V3 é obrigatório.' };
+    }
+    // NO_OPPORTUNITY is a target exposure, never a trial with score zero.
+    // Preserve the intent in the encrypted offline outbox until the server ACKs.
+    const data = { patient_id: patientId, session_id: sessionId, target_id: targetId, status: 'NO_OPPORTUNITY' };
+    const result = await saveOfflineFirst(
+      `exposure:${sessionId}:${targetId}:NO_OPPORTUNITY`,
+      data, 'aba_v3', '/api/aba/v3/target-exposures', 'POST',
+      { queueEntityId: `exposure:${sessionId}:${targetId}` }
+    );
+    if (result?.success === true && result?.pending !== true) notifyClinicalOutcomesChanged(patientId);
+    return result;
+  },
+
   async saveAbaV3TrialRevision(input: any) {
     const originalTrialId = String(input?.original_trial_id || input?.originalTrialId || '').trim();
     const originalClientEventId = String(input?.original_client_event_id || input?.originalClientEventId || '').trim();
