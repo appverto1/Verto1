@@ -151,7 +151,7 @@ const commercialCapacityForDemand = (patientQuantity: number) =>
 // New exact-seat offers use the Essencial 1–50 / Enterprise 50-seat bands.
 // Keep historical block-based offer capacity selection unchanged.
 const commercialCapacityForExactDemand = (patientQuantity: number) =>
-  Math.ceil(Math.max(1, Math.floor(patientQuantity)) / 50) * 50;
+  Math.ceil(Math.max(1, Math.floor(Number(patientQuantity) || 1)) / 50) * 50;
 
 const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
   if (marginBasisPoints == null) {
