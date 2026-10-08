@@ -793,6 +793,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const canEditAnamnesis =
     canViewAnamnesis &&
     hasCapability('clinical.anamnesis.edit');
+  // During F5 the coordinator may render before server-backed capabilities
+  // have hydrated. Do not fire clinical chart requests from that transient
+  // empty capability set. Backend authorization remains authoritative.
+  const hasClinicalChartCapabilityContext = capabilities instanceof Set
+    || Array.isArray(capabilities)
+    || (capabilities && typeof capabilities.has === 'function');
+  const canRequestClinicalCharts = !hasClinicalChartCapabilityContext
+    || (hasCapability('clinical.record.view')
+      && (hasCapability('treatment_plan.view') || hasCapability('aba.analytics.view')));
   const getSessionFallbackTab = () =>
     allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
 
@@ -12885,7 +12894,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+          canRequestClinicalCharts ? <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} /> : (
+            <p role="status" className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-600">
+              Gráficos clínicos indisponíveis para as permissões atuais. Aguarde a atualização do seu acesso ou consulte a administração da clínica.
+            </p>
+          )
         ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
         ) : activeTab === 'session' && hasConventionalSessionSurface ? (
