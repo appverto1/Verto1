@@ -2298,6 +2298,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       room_name: scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomDisplayName || null,
       locationType: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
       location_type: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
+      locationContextSnapshot: scheduledSessionForPatient?.locationContextSnapshot || scheduledSessionForPatient?.location_context_snapshot || null,
+      location_context_snapshot: scheduledSessionForPatient?.location_context_snapshot || scheduledSessionForPatient?.locationContextSnapshot || null,
       startedAt: startedAt.toISOString(),
       endsAt: endsAt.toISOString(),
       referenceDate: formatDateInAppointmentTimezone(startedAt) || startedAt.toISOString().slice(0, 10),
@@ -6028,7 +6030,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               category: String(targetProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase() === 'intervention' ? 'intervention' : 'evaluation',
               protocolId: String(targetProtocolId),
               domainId: String(targetDomainId),
-              skill: finalSkill,
+              skill: { ...finalSkill, id: String(finalSkill.id) },
               idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${String(targetProtocolId)}:${String(targetDomainId)}:${String(finalSkill.id)}`
             });
             if (!persisted?.success || !persisted?.data?.protocol) {
@@ -6078,7 +6080,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               domainId: reusableDomainId,
               domainName: newDomainName,
               ageGroup: patientAgeYears !== null && patientAgeYears >= 60 ? 'senior' : 'adult',
-              skill: finalSkill,
+              skill: { ...finalSkill, id: String(finalSkill.id) },
               idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${reusableProtocolId}:${reusableDomainId}:${String(finalSkill.id)}`
             });
             if (!persisted?.success || !persisted?.data?.protocol) {
