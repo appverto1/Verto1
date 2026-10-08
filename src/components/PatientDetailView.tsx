@@ -2115,12 +2115,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     // specialty plan; otherwise the shared/legacy PEI stays unbound.
     if (requestedPlanId || (scheduledSessionForPatient && appointmentClinicalSpecialtyKey(scheduledSessionForPatient))) {
       const planResult = await dataService.getPatientTherapeuticPlan(String(patient?.id || ''), { force: true });
-      if (planResult?.success !== true || !Array.isArray(planResult?.data?.planScopes)) {
+      if (planResult?.success === false) {
         alert(planResult?.message || planResult?.error || 'Não foi possível validar o plano clínico no servidor. Tente novamente.');
         return;
       }
-      const scopes = planResult.data.planScopes;
+      const hasServerScopes = Array.isArray(planResult?.data?.planScopes);
+      const scopes = hasServerScopes ? planResult.data.planScopes : [];
       if (requestedPlanId) {
+        if (!hasServerScopes) {
+          alert('Não foi possível confirmar se o plano selecionado continua ativo. Nenhuma sessão foi iniciada.');
+          return;
+        }
         const chosen = scopes.find((scope: any) => String(scope?.id || '').trim() === requestedPlanId);
         if (
           !chosen ||
