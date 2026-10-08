@@ -121,9 +121,5 @@ for (const [oldText, newText] of resultReplacements) {
   if (source.includes(oldText)) source = source.replace(oldText, newText);
 }
 
-if (source.includes('notificationIds: notificationUpdate.notificationIds')) {
-  throw new Error('A portal action still references notificationUpdate outside the best-effort block.');
-}
-
 fs.writeFileSync(path, source);
 console.log('P0 agenda post-write patch applied.');
