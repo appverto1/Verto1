@@ -2552,7 +2552,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <input
                 type="checkbox"
                 className="mt-1 h-5 w-5 rounded border-emerald-300 text-emerald-600 accent-emerald-500"
-                checked={notificationStatus === 'granted' && notificationSubscriptionReady}
+                checked={notificationSubscriptionReady}
                 disabled={isEnablingNotifications || notificationStatus === 'unsupported'}
                 onChange={(event) => { void (event.currentTarget.checked ? enablePatientNotifications() : disablePatientNotifications()); }}
               />
