@@ -35,6 +35,7 @@ import {
   resolvePatientPortalKind,
 } from './utils/patientProfileType';
 import { normalizePatientInsuranceEligibility } from './utils/patientInsuranceEligibility';
+import { hasExplicitPatientTissOperationalPatch, omitImplicitPatientTissOperationalFields } from './utils/patientInsuranceCorePatch';
 import {
   getPeiHistoryProgressMarker,
   getPeiProgressResetMarker,
@@ -6184,6 +6185,7 @@ export default function App() {
       'convenioTitularRelacao',
       'convenioElegibilidadeObs',
     ].some((key) => Object.prototype.hasOwnProperty.call(updatedData || {}, key));
+    const hasExplicitTissOperationalPatch = hasExplicitPatientTissOperationalPatch(updatedData);
     const patientPhotoPatchKeys = [
       'profilePicture',
       'profile_picture',
@@ -6291,6 +6293,11 @@ export default function App() {
           ...buildPatientAnamnesisSnapshot(mergedIdentityPatient, syncedAnamnesisData),
           anamnese: syncedAnamnesisData || {},
         });
+      }
+      // A finance-only save must not echo legacy insurance-card/TISS fields
+      // from the previously loaded anamnesis into a new protected mutation.
+      if (!hasExplicitTissOperationalPatch) {
+        recordPayloadForAtomicSave = omitImplicitPatientTissOperationalFields(recordPayloadForAtomicSave);
       }
     }
 
