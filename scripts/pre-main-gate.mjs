@@ -221,6 +221,7 @@ const criticalTests = [
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
   'tests/clinicalPlanAnalyticsSessionNavigation.regression.test.mjs',
   'tests/planPtsSessionGraphIntegrationP0.regression.test.mjs',
+  'tests/contextualGuidedTutorialP0.regression.test.mjs',
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',

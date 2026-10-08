@@ -55,6 +55,7 @@ import {
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
+import { TutorialOverlay } from "./Tutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
 import { BillingCommunicationNotifications } from "./BillingCommunicationNotifications";
@@ -258,6 +259,7 @@ const SESSION_SPECIALTY_OPTIONS = [
 ] as const;
 
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
+const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
 
 const createWeeklyScheduleSlotId = () =>
   `weekly-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1032,6 +1034,9 @@ export function CoordinatorDashboard({
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
+  const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
+  const guidedTutorialLoadedKeyRef = useRef("");
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
     "care-root": true,
     "tiss-root": true,
@@ -10930,6 +10935,139 @@ export function CoordinatorDashboard({
     .map((group) => group.map(filterNavigationNode).filter(Boolean) as NavigationNode[])
     .filter((group) => group.length > 0);
 
+  const guidedTutorialModuleSignature = Array.from(organizationModules).sort().join(",");
+  const guidedTutorialContextKey = [
+    "verto:guided-tutorial",
+    GUIDED_TUTORIAL_REVISION,
+    String(user?.id || "").trim(),
+    workspaceScopeKey || "global",
+    normalizedRole || "unknown",
+    moduleAccessMode,
+    guidedTutorialModuleSignature || "baseline",
+  ].join(":");
+
+  const guidedTutorialSteps = [
+    {
+      targetId: "help-center",
+      title: "Ajuda e tutoriais",
+      content: "A Central de Ajuda mostra apenas conteúdos permitidos para o seu papel e para os módulos ativos desta clínica.",
+      placement: "bottom" as const,
+    },
+    ...(canAccessTab("dashboard") ? [{
+      targetId: "nav-dashboard",
+      title: "Visão geral",
+      content: "Use a visão geral para acompanhar o que está disponível no seu contexto atual sem sair da clínica selecionada.",
+      placement: "bottom" as const,
+    }] : []),
+    ...(canAccessTab("patients") ? [{
+      targetId: "nav-patients",
+      title: isReceptionist ? "Pacientes" : "Prontuários e pacientes",
+      content: isReceptionist
+        ? "Acesse somente as rotinas de pacientes liberadas para Recepção/Assistência."
+        : "Abra os pacientes em que seu papel possui acesso. Os dados clínicos continuam protegidos pela equipe do caso e pela especialidade.",
+      placement: "bottom" as const,
+    }] : []),
+    ...(canAccessTab("agenda") ? [{
+      targetId: "nav-agenda",
+      title: "Agenda",
+      content: "A Agenda respeita seu escopo de visualização e os módulos ativos da clínica.",
+      placement: "bottom" as const,
+    }] : []),
+    ...(canAccessTab("protocols") ? [{
+      targetId: "nav-protocols",
+      title: "Protocolos",
+      content: "Acesse protocolos e avaliações somente quando o módulo clínico e suas permissões autorizarem.",
+      placement: "bottom" as const,
+    }] : []),
+    ...(canAccessTab("team") ? [{
+      targetId: "nav-team",
+      title: "Gestão da equipe",
+      content: "Este item aparece apenas para papéis autorizados a gerenciar acessos e equipe.",
+      placement: "bottom" as const,
+    }] : []),
+    {
+      targetId: "account-menu",
+      title: "Conta e contexto",
+      content: "Aqui você confere seu perfil e, quando autorizado, pode trocar de clínica, abrir configurações e reiniciar este tutorial.",
+      placement: "bottom" as const,
+    },
+  ];
+
+  const persistGuidedTutorial = useCallback((status: "active" | "skipped" | "completed", step: number) => {
+    try {
+      window.localStorage.setItem(guidedTutorialContextKey, JSON.stringify({
+        revision: GUIDED_TUTORIAL_REVISION,
+        status,
+        step,
+        updatedAt: new Date().toISOString(),
+      }));
+    } catch {
+      // Local persistence is best-effort; live tutorial behavior still works.
+    }
+  }, [guidedTutorialContextKey]);
+
+  const startGuidedTutorial = useCallback(() => {
+    if (!authorizationHydrated || guidedTutorialSteps.length === 0) return;
+    setGuidedTutorialStep(0);
+    persistGuidedTutorial("active", 0);
+    setRunGuidedTutorial(true);
+  }, [authorizationHydrated, guidedTutorialSteps.length, persistGuidedTutorial]);
+
+  const handleGuidedTutorialStepChange = useCallback((nextStep: number) => {
+    const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, nextStep));
+    setGuidedTutorialStep(safeStep);
+    persistGuidedTutorial("active", safeStep);
+  }, [guidedTutorialSteps.length, persistGuidedTutorial]);
+
+  const handleGuidedTutorialClose = useCallback((reason: "pause" | "skip" | "complete" = "pause") => {
+    const status = reason === "skip" ? "skipped" : reason === "complete" ? "completed" : "active";
+    persistGuidedTutorial(status, guidedTutorialStep);
+    setRunGuidedTutorial(false);
+    setIsMobileMenuOpen(false);
+  }, [guidedTutorialStep, persistGuidedTutorial]);
+
+  useEffect(() => {
+    if (!authorizationHydrated || !String(user?.id || "").trim() || guidedTutorialSteps.length === 0) return;
+    if (guidedTutorialLoadedKeyRef.current === guidedTutorialContextKey) return;
+    guidedTutorialLoadedKeyRef.current = guidedTutorialContextKey;
+
+    let stored: any = null;
+    try {
+      const raw = window.localStorage.getItem(guidedTutorialContextKey);
+      stored = raw ? JSON.parse(raw) : null;
+    } catch {
+      stored = null;
+    }
+
+    if (stored?.revision === GUIDED_TUTORIAL_REVISION) {
+      if (stored.status === "active") {
+        const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0)));
+        setGuidedTutorialStep(safeStep);
+        setRunGuidedTutorial(true);
+      }
+      return;
+    }
+
+    setGuidedTutorialStep(0);
+    persistGuidedTutorial("active", 0);
+    setRunGuidedTutorial(true);
+  }, [
+    authorizationHydrated,
+    guidedTutorialContextKey,
+    guidedTutorialSteps.length,
+    persistGuidedTutorial,
+    user?.id,
+  ]);
+
+  useEffect(() => {
+    if (!runGuidedTutorial) return;
+    const step = guidedTutorialSteps[guidedTutorialStep];
+    if (!step) return;
+    const mobile = typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches;
+    if (!mobile) return;
+    setIsMobileMenuOpen(step.targetId.startsWith("nav-"));
+  }, [guidedTutorialStep, guidedTutorialSteps, runGuidedTutorial]);
+
   const isFinancialBreadcrumbActive = (breadcrumb?: string[]) =>
     Boolean(
       breadcrumb?.length &&
@@ -11000,6 +11138,7 @@ export function CoordinatorDashboard({
         <div key={item.id} className={depth === 0 ? "space-y-1" : "space-y-1"}>
           <button
             type="button"
+            data-tutorial-anchor={`nav-${item.id}`}
             onClick={() => {
               const collapsedLeaf = !expanded && hasChildren ? findFirstNavigationLeaf(item) : null;
               const navigated = collapsedLeaf ? handleNavigationNodeSelect(collapsedLeaf) : handleNavigationNodeSelect(item);
@@ -11338,7 +11477,16 @@ export function CoordinatorDashboard({
                   setView("home");
                 }}
                 onOpenOnboarding={onOpenOnboarding}
+                onOpenGuidedTutorial={startGuidedTutorial}
               />
+              {runGuidedTutorial && (
+                <TutorialOverlay
+                  steps={guidedTutorialSteps}
+                  onClose={handleGuidedTutorialClose}
+                  currentStepIndex={guidedTutorialStep}
+                  onStepChange={handleGuidedTutorialStepChange}
+                />
+              )}
 
               <button
                 onClick={() => setIsMobileMenuOpen(true)}
@@ -11661,7 +11809,16 @@ export function CoordinatorDashboard({
               onViewClinicSettings={() => navigateToTab("settings")}
               onViewBilling={() => navigateToTab("billing")}
               onOpenOnboarding={onOpenOnboarding}
+              onOpenGuidedTutorial={startGuidedTutorial}
             />
+            {runGuidedTutorial && (
+              <TutorialOverlay
+                steps={guidedTutorialSteps}
+                onClose={handleGuidedTutorialClose}
+                currentStepIndex={guidedTutorialStep}
+                onStepChange={handleGuidedTutorialStepChange}
+              />
+            )}
           </div>
         </header>
 
