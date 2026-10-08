@@ -6539,7 +6539,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }
         : null;
       const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
-      if (onUpdatePatient) {
+      if (!onUpdatePatient) {
+        alert('Não há um serviço disponível para confirmar o salvamento. A ficha permanece aberta.');
+        return;
+      }
+      {
         const patientUpdateResult = await onUpdatePatient({
           id: patient.id,
           name: String(updatedData?.nome || '').trim() || patient?.name,
@@ -6561,7 +6565,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           anamnesisPending: false,
           lastAnamnesisAt: new Date().toISOString()
         });
-        if (!patientUpdateResult?.success) {
+        if (patientUpdateResult?.success !== true || patientUpdateResult?.pending === true || patientUpdateResult?.offline === true || patientUpdateResult?.queued === true) {
           if (!patientUpdateResult?.error) {
             alert('Não foi possível confirmar a persistência da anamnese. A ficha permanece aberta para nova tentativa.');
           }
@@ -6574,8 +6578,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         updatedData,
         anamnesisFlow?.request?.id || null
       );
-      if (!submissionResult?.success) {
-        alert(submissionResult?.error || 'Não foi possível confirmar a submissão da anamnese. A ficha permanece aberta para nova tentativa.');
+      if (submissionResult?.success !== true || submissionResult?.pending === true || submissionResult?.offline === true || submissionResult?.queued === true) {
+        alert(submissionResult?.error || 'A anamnese ainda não foi confirmada no servidor. A ficha permanece aberta até o salvamento definitivo.');
         return;
       }
 
