@@ -1,0 +1,28 @@
+name: P0000 Server Patch (temporary)
+on:
+  push:
+    branches: [feat/p0000-exact-patient-billing-20261007]
+    paths:
+      - scripts/p0000-patch-server.mjs
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/p0000-exact-patient-billing-20261007
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node scripts/p0000-patch-server.mjs
+      - name: Commit server patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts
+          git diff --cached --quiet && exit 1
+          git commit -m "feat(p0000): bind frozen contract to exact Stripe quantities"
+          git push origin HEAD:feat/p0000-exact-patient-billing-20261007
