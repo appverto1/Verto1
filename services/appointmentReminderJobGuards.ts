@@ -64,15 +64,17 @@ export function validateClaimedAppointmentReminder(
   if (job?.notification_kind === 'APPOINTMENT_REMINDER_24H') {
     // When both reminders became due during an outage, only the newer 12h
     // reminder should be delivered, even if the old 24h job was claimed.
-    if (appointment?.notification_24h_sent_at || appointment?.notification_12h_sent_at
-      || now >= persistedStart - 12 * 60 * 60 * 1000) {
+    // Sent markers are legacy flags without a schedule-cycle ID. A legitimate
+    // reschedule may keep an old marker; the claimed queue row is the durable
+    // per-cycle idempotency authority. Only suppress the older overdue step.
+    if (now >= persistedStart - 12 * 60 * 60 * 1000) {
       return deny('APPOINTMENT_REMINDER_SUPERSEDED');
     }
     return { allowed: true, reason: '' };
   }
   if (job?.notification_kind === 'APPOINTMENT_REMINDER_12H') {
     const response = String(appointment?.patient_response || appointment?.patient_confirmation_status || '').trim().toLowerCase();
-    if (appointment?.notification_12h_sent_at || responded.has(response)) return deny('APPOINTMENT_REMINDER_SUPERSEDED');
+    if (responded.has(response)) return deny('APPOINTMENT_REMINDER_SUPERSEDED');
     return { allowed: true, reason: '' };
   }
   return deny('APPOINTMENT_REMINDER_INVALID_KIND');
