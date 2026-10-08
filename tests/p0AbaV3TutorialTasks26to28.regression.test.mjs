@@ -50,6 +50,9 @@ assert.match(dataService, /saveOfflineFirst\([\s\S]*?'\/api\/aba\/v3\/target-exp
 assert.match(session, /abaV3ExposureSavingRef\.current/);
 assert.match(session, /void saveAbaV3NoOpportunity\(\)/);
 assert.match(session, /Registro aguardando sincronização/);
+assert.match(session, /if \(result\?\.conflict\) throw new Error/);
+assert.match(server, /ABA_V3_EXPOSURE_CONFLICTS_WITH_COLLECTED_TRIALS\|ABA_V3_EXPOSURE_REQUIRES_V3_BINDING/);
+assert.match(server, /code: 'ABA_V3_EXPOSURE_CONFLICT', conflict: true/);
 assert.match(session, /Estado clínico persistido sem criar ou contabilizar uma tentativa/);
 
 // P0 26: React state + synchronous ref lock suppress double taps before render.
