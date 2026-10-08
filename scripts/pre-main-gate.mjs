@@ -198,6 +198,8 @@ const criticalTests = [
   'tests/clinicCanonicalTimeZone.regression.test.mjs',
   'tests/abaSessionClinicalDateTimezone.regression.test.mjs',
   'tests/abaReinforcersRuntime.regression.test.mjs',
+  'tests/sessionCompletionMissingSessionRecovery.regression.test.mjs',
+  'tests/sessionLifecycleRecovery.regression.test.mjs',
   'tests/sessionAutoFinalization.regression.test.mjs',
   'tests/clinicalMeasurementV3RouteModularization.regression.test.mjs',
   'tests/patientDirectoryOrdering.regression.test.mjs',
