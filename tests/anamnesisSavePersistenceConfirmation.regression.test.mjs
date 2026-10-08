@@ -15,7 +15,7 @@ assert.match(
 );
 assert.match(
   saveFlow,
-  /if \(!patientUpdateResult\?\.success\)[\s\S]*?return;/,
+  /if \(patientUpdateResult\?\.success !== true[\s\S]*?return;/,
   'falha da persistência do paciente deve interromper o fluxo',
 );
 assert.match(
@@ -25,7 +25,7 @@ assert.match(
 );
 assert.match(
   saveFlow,
-  /if \(!submissionResult\?\.success\)[\s\S]*?return;/,
+  /if \(submissionResult\?\.success !== true[\s\S]*?return;/,
   'falha da submissão deve manter a ficha no fluxo de edição',
 );
 assert.doesNotMatch(
