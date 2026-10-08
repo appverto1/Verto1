@@ -218,7 +218,8 @@ const selectionForItem = (
   item: SalesPricingCatalogItem,
   patientQuantity: number,
   baseTier: SalesPricingCatalogTier,
-  perPatientPricing = false
+  perPatientPricing = false,
+  exactPerPatientBilling = false
 ): SalesModularLineSelection => {
   const quantity =
     item.itemKey === 'insurance_tiss'
@@ -248,14 +249,18 @@ const selectionForItem = (
     quantity,
     itemDiscountBasisPoints: 0,
     customRecurringAmountCents:
-      perPatientPricing && item.billingInterval !== 'one_time'
-        ? catalogMonthlyAmountCents
+      exactPerPatientBilling && item.billingInterval === 'monthly'
+        ? null
+        : perPatientPricing && item.billingInterval !== 'one_time'
+          ? catalogMonthlyAmountCents
         : linkedTier?.isCustom
           ? 0
           : null,
     pricingEditMode:
-      perPatientPricing && item.billingInterval !== 'one_time'
-        ? 'monthly_total'
+      exactPerPatientBilling && item.billingInterval === 'monthly'
+        ? 'per_patient'
+        : perPatientPricing && item.billingInterval !== 'one_time'
+          ? 'monthly_total'
         : undefined,
     proposedPricePerPatientCents:
       perPatientPricing && item.billingInterval !== 'one_time'
@@ -699,6 +704,7 @@ export const SalesModularProposalBuilder = ({
         const initialInput: SalesModularProposalInput = {
           commercialPricingMode: 'manual_module_prices',
           commercialCapacityBasis: 'current_patients',
+          exactPerPatientBilling: true,
           platformFoundationPricingMode: 'manual',
           platformFoundationMonthlyAmountCents: 0,
           patientQuantity,
@@ -718,6 +724,7 @@ export const SalesModularProposalBuilder = ({
               core,
               patientQuantity,
               initialBaseTier,
+              true,
               true
             )
           ],
@@ -1522,7 +1529,8 @@ export const SalesModularProposalBuilder = ({
       item,
       input.patientQuantity,
       baseTier,
-      true
+      true,
+      input.exactPerPatientBilling === true
     );
     updateInput({ lines: [...input.lines, newSelection] });
   };
