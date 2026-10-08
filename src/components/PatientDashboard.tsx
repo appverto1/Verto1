@@ -86,6 +86,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [taskStep, setTaskStep] = useState(1);
   const [showTaskSuccess, setShowTaskSuccess] = useState(false);
   const [isTaskSaving, setIsTaskSaving] = useState(false);
+  const taskSubmitInFlightRef = useRef(false);
   const [selectedMood, setSelectedMood] = useState<any>(null);
   const [hoveredMood, setHoveredMood] = useState<any>(null);
   const [isMoodModalOpen, setIsMoodModalOpen] = useState(false);
@@ -4034,8 +4035,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setTaskStep(2);
   };
   const handleConfirmTask = async () => {
-    if (isReadOnlyMode || !selectedTask || isTaskSaving) return;
+    if (isReadOnlyMode || !selectedTask || isTaskSaving || taskSubmitInFlightRef.current) return;
     if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
+    taskSubmitInFlightRef.current = true;
     setIsTaskSaving(true);
     try {
       const interventionDetails = [
@@ -4056,6 +4058,7 @@ ${interventionImages.join('\n')}` : ''
       setInterventionImages([]);
       setTaskStep(1);
     } finally {
+      taskSubmitInFlightRef.current = false;
       setIsTaskSaving(false);
     }
   };
