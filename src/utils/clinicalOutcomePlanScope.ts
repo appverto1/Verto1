@@ -1,4 +1,6 @@
 import type { ClinicalOutcomeSeriesSummary } from './clinicalOutcomeAnalytics';
+import { isClinicalOutcomeInterferingBehaviorSeries } from './clinicalOutcomeAnalytics';
+import { clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey } from './clinicalSpecialties';
 
 const clean = (value: unknown) => String(value ?? '').trim();
 
@@ -89,4 +91,30 @@ export const clinicalOutcomeSeriesBelongsToPlanScope = (
   if (sourceKinds.includes('ABA_TARGET')) return programMatches || goalMatches;
   if (sourceKinds.includes('PLAN_GOAL') || sourceKinds.includes('THERAPEUTIC_OBJECTIVE')) return goalMatches || programMatches;
   return programMatches || goalMatches;
+};
+
+/**
+ * P1-15: behavioral evidence may be collected without a therapeutic-plan id.
+ * Attribute it to a specialty chart only when every persisted observation
+ * identifies that same known specialty and contains no other plan/program/goal
+ * relationship. Unknown or mixed-origin evidence stays in the patient PTS view.
+ * This is presentation filtering after the server's patient/tenant authorization,
+ * never a substitute for that authorization.
+ */
+export const unscopedBehaviorSeriesBelongsToSpecialty = (
+  series: ClinicalOutcomeSeriesSummary,
+  specialty: unknown,
+): boolean => {
+  if (!clinicalSpecialtyScopeKey(specialty) || !isClinicalOutcomeInterferingBehaviorSeries(series)) return false;
+  const rows = Array.isArray(series.observations) ? series.observations : [];
+  return rows.length > 0 && rows.every((row) => {
+    if (!clinicalSpecialtiesMatch(row.specialty, specialty)) return false;
+    return ![
+      row.planId, row.programId, row.goalId,
+      row.metadata?.planId, row.metadata?.plan_id,
+      row.metadata?.programId, row.metadata?.program_id,
+      row.metadata?.goalId, row.metadata?.goal_id,
+      row.metadata?.therapeuticObjectiveId, row.metadata?.therapeutic_objective_id,
+    ].some((value) => clean(value));
+  });
 };
