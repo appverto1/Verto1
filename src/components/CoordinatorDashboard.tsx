@@ -2051,6 +2051,9 @@ export function CoordinatorDashboard({
         setActiveTab("dashboard");
         setTabHistory(["dashboard"]);
         setSelectedPatientId(null);
+        setPatientSessionReportId("");
+        setPatientOpenTab("history");
+        setPatientReturnTab("patients");
         setView("home");
         return;
       }
@@ -2093,6 +2096,10 @@ export function CoordinatorDashboard({
         setPatientSessionReportId(nextSessionReportId);
         setView("patient");
       } else {
+        setSelectedPatientId(null);
+        setPatientSessionReportId("");
+        setPatientOpenTab("history");
+        setPatientReturnTab("patients");
         setView("home");
       }
     } catch (error) {
@@ -2101,6 +2108,9 @@ export function CoordinatorDashboard({
       setActiveTab("dashboard");
       setTabHistory(["dashboard"]);
       setSelectedPatientId(null);
+      setPatientSessionReportId("");
+      setPatientOpenTab("history");
+      setPatientReturnTab("patients");
       setView("home");
     }
   }, [dashboardResumeKey, authorizationHydrated]);
