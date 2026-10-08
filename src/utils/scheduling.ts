@@ -24,6 +24,10 @@ export const DEFAULT_APPOINTMENT_TIMEZONE = 'America/Sao_Paulo';
 export const BLOCKING_APPOINTMENT_STATUSES = [
   'pending',
   'pendente',
+  'cancel_requested',
+  'cancelamento_solicitado',
+  'reschedule_requested',
+  'remarcacao_solicitada',
   'scheduled',
   'agendada',
   'agendado',
@@ -588,6 +592,7 @@ export function getAppointmentEndDateTime(appointment: any): Date | null {
 export function appointmentBlocksConflict(appointment: any): boolean {
   const normalized = normalizeAppointmentStatus(appointment?.status || 'scheduled');
   if (NON_BLOCKING_APPOINTMENT_STATUSES.includes(normalized)) return false;
+  if (['cancel_requested', 'cancelamento_solicitado', 'reschedule_requested', 'remarcacao_solicitada'].includes(normalized)) return true;
   if (/cancel|deleted|archived|inactive|no_show|missed|falt/.test(normalized)) return false;
   if (/^(rescheduled|remarcad)/.test(normalized)) {
     return /active|ativ/.test(normalized);
