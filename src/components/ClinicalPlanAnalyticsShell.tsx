@@ -27,6 +27,7 @@ type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'mainte
 export type AnalyticsAxis = 'date' | 'session';
 
 type ClinicalPlanAnalyticsShellProps = {
+  key?: React.Key;
   scopeLabel: string;
   series: ClinicalOutcomeSeriesSummary[];
   previousSeriesByKey: Map<string, ClinicalOutcomeSeriesSummary>;
@@ -539,7 +540,7 @@ function ProgramChangesView({
     onOpenSessionReport(sessionId);
   };
 
-  const HighlightCard = ({ target, tone }: { target: ClinicalTargetChange; tone: 'improving' | 'attention' }) => {
+  const HighlightCard = ({ target, tone }: { key?: React.Key; target: ClinicalTargetChange; tone: 'improving' | 'attention' }) => {
     const canOpen = clean(target.latestSessionId).startsWith('session-') && Boolean(onOpenSessionReport);
     const favorable = tone === 'improving';
     const sustained = target.movement === 'criterion_sustained';
