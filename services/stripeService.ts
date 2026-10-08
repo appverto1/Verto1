@@ -1461,7 +1461,13 @@ async function syncExactPerPatientBillingContract(params: {
       ) {
         throw new Error('EXACT_PER_PATIENT_SCHEDULE_SCOPE_INVALID');
       }
-      const sourcePhases = Array.isArray((schedule as any)?.phases) ? (schedule as any).phases : [];
+      const currentPhaseStart = Number((schedule as any)?.current_phase?.start_date || 0);
+      const sourcePhases = (Array.isArray((schedule as any)?.phases) ? (schedule as any).phases : [])
+        .filter((phase: any) => {
+          const end = Number(phase?.end_date || 0);
+          // Stripe does not permit editing historical phases.
+          return !(currentPhaseStart > 0 && end > 0 && end <= currentPhaseStart);
+        });
       if (sourcePhases.length < 1 || sourcePhases.length > 10) {
         throw new Error('EXACT_PER_PATIENT_SCHEDULE_PHASES_INVALID');
       }
@@ -1498,7 +1504,14 @@ async function syncExactPerPatientBillingContract(params: {
               : {})
           };
         });
-        if (phaseItems.length !== expected.size) {
+        const phaseModuleKeys = (Array.isArray(phase?.items) ? phase.items : []).map((source: any) => {
+          const product = source?.price && typeof source.price === 'object' ? source.price.product : null;
+          return toSafeString(product && typeof product === 'object' ? product.metadata?.revenue_line : '', 80);
+        });
+        if (
+          phaseItems.length !== expected.size ||
+          new Set(phaseModuleKeys).size !== expected.size
+        ) {
           throw new Error('EXACT_PER_PATIENT_SCHEDULE_MODULES_MISMATCH');
         }
         const start = Number(phase.start_date || 0);
