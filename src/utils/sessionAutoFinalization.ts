@@ -1,5 +1,22 @@
 import { isRecoverableFailedOfflineSyncRecord, type OfflineSyncStatus } from './offlineSyncResilience';
 
+/**
+ * Appointment recovery must be server-authoritative. A queued/optimistic write,
+ * another patient's session or a different appointment cannot open SessionMode.
+ */
+export function isConfirmedAbaSessionAppointmentLink(
+  result: any,
+  expected: { sessionId: string; patientId: string; appointmentId: string }
+): boolean {
+  const saved = result?.session || result?.data;
+  return result?.success === true
+    && result?.pending !== true
+    && result?.offline !== true
+    && String(saved?.id || '') === expected.sessionId
+    && String(saved?.patient_id || saved?.patientId || '') === expected.patientId
+    && String(saved?.appointment_id || saved?.appointmentId || '') === expected.appointmentId;
+}
+
 export const AUTOMATIC_SESSION_CLOSURE_KEYS = new Set([
   'open_duration', 'open_interval_collection', 'therapeutic_measurement_timer_open',
   'unsaved_local_records', 'server_sync_required', 'v3_failed_trials_require_resolution'
