@@ -21,6 +21,7 @@ import {
 import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 import { createClinicAnnouncementCronService } from './clinicAnnouncementCronService';
 import { createAppointmentReminderBrandingService } from './appointmentReminderBranding';
+import { validateClaimedAppointmentReminder } from './appointmentReminderJobGuards';
 export type { ClinicAnnouncementDispatchSummary } from './clinicAnnouncementCronService';
 
 dayjs.extend(utc);
@@ -1503,6 +1504,13 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
         finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'APPOINTMENT_INACTIVE' });
         continue;
       }
+      // A claimed job can become obsolete while a reschedule is committed.
+      // Validate the actual persisted schedule and tenant before portal/push effects.
+      const reminderGuard = validateClaimedAppointmentReminder(job, appointment, patient, new Date().toISOString());
+      if (!reminderGuard.allowed) {
+        finalResults.push({ id: job.id, outcome: 'CANCELED', error: reminderGuard.reason });
+        continue;
+      }
       if (job?.notification_kind === 'APPOINTMENT_REMINDER_12H') {
         const response = sanitizeText(appointment?.patient_response || appointment?.patient_confirmation_status, 40).toLowerCase();
         if (['confirmed','confirmado','accepted','cancelled','canceled','reschedule_requested'].includes(response)) {
@@ -1650,11 +1658,23 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
   }
 
   if (portalPersisted) {
-    const sentAt = new Date().toISOString();
-    const sent24Ids = prepared.filter((entry: any) => entry.kind === '24h').map((entry: any) => String(entry.appointment?.id || '')).filter(isUuid);
-    const sent12Ids = prepared.filter((entry: any) => entry.kind === '12h').map((entry: any) => String(entry.appointment?.id || '')).filter(isUuid);
-    if (sent24Ids.length > 0) await options.supabase.from('appointments').update({ notification_24h_sent_at: sentAt }).in('id', sent24Ids);
-    if (sent12Ids.length > 0) await options.supabase.from('appointments').update({ notification_12h_sent_at: sentAt }).in('id', sent12Ids);
+    const appointmentJobIds = prepared
+      .filter((entry: any) => Boolean(entry.appointment))
+      .map((entry: any) => sanitizeText(entry.job?.id, 120))
+      .filter(isUuid);
+    if (appointmentJobIds.length > 0) {
+      // Atomic schedule/tenant compare in PostgreSQL prevents a raced reschedule
+      // from receiving the old appointment reminder's sent marker.
+      const { error: markerError } = await options.supabase.rpc('mark_sent_appointment_notification_jobs_v1', {
+        p_deployment_env: options.deploymentEnv,
+        p_job_ids: appointmentJobIds,
+      });
+      if (markerError) {
+        options.logger.warn('[Notification Jobs] Marcadores de lembrete nao confirmados.', {
+          code: markerError.code || 'REMINDER_MARKER_FAILED',
+        });
+      }
+    }
   }
 
   if (finalResults.length > 0) await options.supabase.rpc('finalize_notification_jobs_v1', { p_deployment_env: options.deploymentEnv, p_results: finalResults });
