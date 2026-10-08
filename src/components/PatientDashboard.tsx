@@ -380,6 +380,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
     let cancelled = false;
     const checkSubscription = async () => {
+      const permission = Notification.permission;
+      if (!cancelled) setNotificationStatus(permission);
+      // An installed subscription is NOT usable after a browser-level revoke.
+      if (permission !== 'granted') {
+        if (!cancelled) setNotificationSubscriptionReady(false);
+        return;
+      }
       try {
         const registration = await navigator.serviceWorker.getRegistration('/sw.js');
         const subscription = await registration?.pushManager.getSubscription();
@@ -389,9 +396,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }
     };
 
+    const refreshOnFocus = () => { void checkSubscription(); };
+    const refreshOnVisibility = () => {
+      if (document.visibilityState === 'visible') void checkSubscription();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnVisibility);
     void checkSubscription();
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnVisibility);
     };
   }, [notificationStatus, isSettingsOpen]);
 
@@ -982,6 +997,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return false;
     }
 
+    if (Notification.permission === 'denied') {
+      setNotificationStatus('denied');
+      setNotificationSubscriptionReady(false);
+      setSettingsMessage('O navegador bloqueou as notificações. Clique no ícone de cadeado ao lado do endereço, abra as permissões do site, permita Notificações e volte à Verto.');
+      return false;
+    }
     setIsEnablingNotifications(true);
     setSettingsMessage('');
     try {
@@ -1000,7 +1021,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setNotificationStatus(permission);
       if (permission !== 'granted') {
         setNotificationSubscriptionReady(false);
-        setSettingsMessage('As notificações não foram liberadas. Se você bloqueou antes, habilite nas configurações do navegador.');
+        setSettingsMessage(permission === 'denied'
+          ? 'Notificações bloqueadas no navegador. Nas configurações do site (ícone de cadeado), permita Notificações e volte para ativá-las.'
+          : 'Permissão não concedida. As notificações não foram ativadas neste dispositivo.');
         return false;
       }
 
@@ -2552,8 +2575,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               <input
                 type="checkbox"
                 className="mt-1 h-5 w-5 rounded border-emerald-300 text-emerald-600 accent-emerald-500"
-                checked={notificationSubscriptionReady}
-                disabled={isEnablingNotifications || notificationStatus === 'unsupported'}
+                checked={notificationStatus === 'granted' && notificationSubscriptionReady}
+                disabled={isEnablingNotifications || notificationStatus === 'unsupported' || (notificationStatus === 'denied' && !notificationSubscriptionReady)}
                 onChange={(event) => { void (event.currentTarget.checked ? enablePatientNotifications() : disablePatientNotifications()); }}
               />
               <span>
@@ -2563,6 +2586,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <span className="mt-1 block text-xs font-medium leading-relaxed text-emerald-700">
                   Use esta opção se você pulou ou não aprovou o aviso inicial. Se o navegador bloqueou, libere nas configurações do site.
                 </span>
+                {notificationStatus === 'denied' && (
+                  <span role="alert" className="mt-2 block text-xs font-semibold text-red-700">
+                    Bloqueadas pelo navegador: abra o ícone de cadeado ao lado do endereço, permita Notificações e retorne à Verto. Nenhum aviso push será recebido até essa alteração.
+                  </span>
+                )}
               </span>
             </label>
           </div>
@@ -2774,7 +2802,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       type="button"
       onClick={() => {
         if (notificationStatus === 'denied') {
-          setSettingsMessage('As notificações estão bloqueadas neste aparelho. Libere a permissão do site/app nas configurações do navegador.');
+          setSettingsMessage('As notificações estão bloqueadas neste navegador. Abra as permissões do site pelo ícone de cadeado, permita Notificações e depois retorne à Verto.');
           setIsSettingsOpen(true);
           return;
         }
