@@ -85,4 +85,9 @@ assert.match(
   'as listagens de terapeuta/recepção devem reutilizar a mesma busca e ordenação canônicas',
 );
 
+const aflsProtocol = fs.readFileSync('src/constants/aflsProtocol.ts','utf8');
+assert.match(aflsProtocol, /"maxScore": 4/, 'AFLS contains items scoring through four points');
+assert.match(detail, /const score = isVbMappProtocol[\s\S]*?Math\.max\(0, rawScore\)/, 'AFLS 0–4 must be preserved in staff report');
+assert.match(patientDashboard, /const score = isVbMappProtocol[\s\S]*?Math\.max\(0, rawScore\)/, 'AFLS 0–4 must be preserved in family portal');
+
 console.log('progressReportFilters.regression.test.mjs: ok');
