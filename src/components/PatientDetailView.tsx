@@ -2776,7 +2776,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           roomName: sessionToOpen?.roomName || scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || null,
           room_name: sessionToOpen?.room_name || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomName || null
         };
-        persistActiveSession(linkedSession);
+        // Recover an existing session's appointment link only after the server
+        // confirms the original session, patient and appointment scope.
+        // Do not overwrite the local session or open SessionMode optimistically.
+        if (!isUuidLike(scheduledAppointmentId)) {
+          alert('Este agendamento ainda não está salvo no servidor. Atualize a Agenda e tente novamente.');
+          return;
+        }
         void dataService.saveAbaSession({
           id: linkedSession.id,
           patient_id: patient.id,
@@ -2807,7 +2813,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           clientSource: 'appointment'
         }).then((saveResult: any) => {
           const savedSession = saveResult?.session || saveResult?.data;
-          if (saveResult?.success && savedSession?.id) {
+          const serverLinkConfirmed =
+            saveResult?.success === true &&
+            saveResult?.offline !== true &&
+            saveResult?.pending !== true &&
+            String(savedSession?.id || '') === String(linkedSession.id) &&
+            String(savedSession?.patient_id || savedSession?.patientId || '') === String(patient.id) &&
+            String(savedSession?.appointment_id || savedSession?.appointmentId || '') === String(scheduledAppointmentId);
+          if (!serverLinkConfirmed) {
+            consumedScheduledSessionStartKeyRef.current = '';
+            alert(String(saveResult?.error || saveResult?.message || '').trim() ||
+              'Não foi possível confirmar o vínculo da sessão com este agendamento no servidor. Seus registros foram preservados; atualize a Agenda e tente novamente.');
+            return;
+          }
+          {
             const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || linkedSession.referenceDate;
             persistActiveSession({
               ...linkedSession,
@@ -2820,10 +2839,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               locationContextSnapshot: savedSession.location_context_snapshot || linkedSession.locationContextSnapshot,
               location_context_snapshot: savedSession.location_context_snapshot || linkedSession.location_context_snapshot
             });
+            setIsSessionModeOpen(true);
           }
         }).catch((error: any) => {
+          consumedScheduledSessionStartKeyRef.current = '';
           console.warn('[ABA] Não foi possível vincular a Sessão ABA ativa ao agendamento clínico:', error?.message || String(error));
+          alert('Não foi possível confirmar o vínculo da sessão com o agendamento no servidor. Seus registros foram preservados; tente novamente.');
         });
+        return;
       } else if (persistedSession && !activeSession) {
         persistActiveSession(persistedSession);
       }
