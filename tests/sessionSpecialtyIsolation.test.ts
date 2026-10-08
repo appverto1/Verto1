@@ -131,4 +131,15 @@ assert.doesNotMatch(
   'nem o caminho canônico nem o legado podem inventar vínculo de plano em nome do usuário',
 );
 
+assert.match(
+  patientDetail,
+  /if \(requestedPlanId\) \{[\s\S]*?chosen\.status[\s\S]*?chosen\.canEdit[\s\S]*?sessionPlanMatchesAppointmentSpecialty/,
+  'sessão iniciada pelo painel do plano também deve revalidar estado ativo, permissão e especialidade no servidor',
+);
+assert.match(
+  patientDetail,
+  /getPatientTherapeuticPlan\(String\(patient\?\.id \|\| ''\), \{ force: true \}\)/,
+  'início de sessão deve validar estado atualizado do plano e não confiar em cache pausado',
+);
+
 console.log('sessionSpecialtyIsolation.test.ts: ok');
