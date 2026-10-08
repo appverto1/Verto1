@@ -1220,6 +1220,10 @@ export const SalesModularProposalBuilder = ({
   const summaryPreview = selectedSimulation?.results_snapshot || preview;
   const summaryInput =
     selectedSimulation?.modular_input_snapshot || calculationInput;
+  const selectedLegacyBilling = Boolean(
+    selectedSimulation &&
+    selectedSimulation.modular_input_snapshot?.exactPerPatientBilling !== true
+  );
   const summaryAssumptions = selectedSimulation
     ? selectedSimulation.assumptions_snapshot || null
     : assumptions;
@@ -1485,9 +1489,11 @@ export const SalesModularProposalBuilder = ({
       ...(selectedTier?.isCustom || selectedTier?.maximumQuantity === null
         ? {
             customBasePackageLimit:
-              currentCapacity >= safeQuantity
-                ? currentCapacity
-                : automaticCapacity,
+              input.exactPerPatientBilling === true
+                ? automaticCapacity
+                : currentCapacity >= safeQuantity
+                  ? currentCapacity
+                  : automaticCapacity,
             customCapacityBlocks: null,
             customCapacitySelectionMode: 'automatic' as const
           }
@@ -2196,8 +2202,9 @@ export const SalesModularProposalBuilder = ({
                       Capacidade contratada
                     </h2>
                     <p className="mt-1 text-sm font-normal text-slate-500">
-                      Escolha o bloco comercial de pacientes. Acima de 50,
-                      a contratação passa a ser Enterprise e fica sob consulta.
+                      A faixa comercial é automática: Essencial de 1 a 50 pacientes;
+                      Enterprise acima de 50. Em propostas de cobrança exata,
+                      o valor mensal depende apenas dos pacientes ativos e dos módulos contratados.
                       Custos compartilhados continuam apenas no cálculo interno.
                     </p>
                   </div>
@@ -2408,7 +2415,7 @@ export const SalesModularProposalBuilder = ({
                 (selectedBaseTier.isCustom ||
                   selectedBaseTier.maximumQuantity === null) ? (
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    {Number(input.customBasePackageLimit || 0) > 50 ? (
+                    {Number(input.customBasePackageLimit || 0) > 50 && input.exactPerPatientBilling !== true ? (
                       <label className={`text-sm font-medium text-slate-700 ${
                         coreSelection ? '' : 'sm:col-span-2'
                       }`}>
@@ -2449,8 +2456,8 @@ export const SalesModularProposalBuilder = ({
                           coreSelection ? '' : 'sm:col-span-2'
                         }`}
                       >
-                        O limite contratado está congelado pelo bloco selecionado.
-                        Para alterar, escolha 10, 20, 30, 40, 50 ou Enterprise acima.
+                        Faixa comercial automática, sem seleção de blocos de cobrança.
+                        A quantidade faturada é a de pacientes ativos informada acima.
                       </div>
                     )}
                     {coreSelection ? (
@@ -2461,6 +2468,7 @@ export const SalesModularProposalBuilder = ({
                         </p>
                         <select
                           aria-label="Modo de edição do preço do módulo clínico"
+                          disabled={input.exactPerPatientBilling === true}
                           value={coreSelection?.pricingEditMode || 'per_patient'}
                           onChange={(event) => {
                             const pricingEditMode = event.target.value as
@@ -2636,7 +2644,7 @@ export const SalesModularProposalBuilder = ({
                         ))}
                       </dl>
                     ) : null}
-                    {hasVersionedCustomCapacityPolicy ? (
+                    {hasVersionedCustomCapacityPolicy && input.exactPerPatientBilling !== true ? (
                     <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-3 sm:col-span-2">
                       <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,0.45fr)] sm:items-end">
                         <div>
@@ -4791,7 +4799,7 @@ export const SalesModularProposalBuilder = ({
                           {selectedCommercialModuleNames.join(' · ') || 'Nenhum módulo selecionado'}
                         </dd>
                       </div>
-                      {nextStandardCommercialCapacity ? (
+                      {input.exactPerPatientBilling !== true && nextStandardCommercialCapacity ? (
                         <div className="col-span-2 rounded-xl border border-violet-200 bg-violet-50/60 p-3">
                           <dt className="font-normal text-violet-700">Próximo upgrade automático</dt>
                           <dd className="mt-1 font-medium leading-5 text-violet-950">
@@ -4814,6 +4822,29 @@ export const SalesModularProposalBuilder = ({
                         </div>
                       ) : null}
                     </dl>
+                    {summaryInput?.exactPerPatientBilling === true && summaryPreview ? (
+                      <section className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3 text-xs text-slate-800">
+                        <h3 className="font-semibold text-emerald-900">Cobrança exata por paciente ativo</h3>
+                        <p className="mt-1">Pacientes faturados: <strong>{summaryInput.patientQuantity}</strong>.
+                          A capacidade Essencial/Enterprise não multiplica os valores.</p>
+                        <div className="mt-2 space-y-1">
+                          {summaryPreview.lines
+                            .filter((line) =>
+                              isSalesFunctionalModuleItemKey(line.itemKey) &&
+                              catalog.items.some((item) => item.itemKey === line.itemKey && item.billingInterval === 'monthly')
+                            )
+                            .map((line) => (
+                              <div key={line.lineKey} className="flex justify-between gap-3">
+                                <span>{line.publicName}: {currency(line.commercialPricing.proposedPricePerPatientCents)} × {summaryInput.patientQuantity}</span>
+                                <strong>{currency(line.postPromotionRecurringRevenueCents)}/mês</strong>
+                              </div>
+                            ))}
+                        </div>
+                        <div className="mt-2 border-t border-emerald-200 pt-2 font-semibold">
+                          Total mensal pactuado: {currency(summaryPreview.postPromotionRecurringRevenueCents)}
+                        </div>
+                      </section>
+                    ) : null}
                     {promotionalMoneyFlow ? (
                       <details className="mt-4 rounded-xl border border-slate-200 bg-white">
                         <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-slate-900">
@@ -5665,6 +5696,14 @@ export const SalesModularProposalBuilder = ({
                   {notice}
                 </p>
               ) : null}
+              {selectedLegacyBilling ? (
+                <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                  <strong>Proposta anterior — cobrança por capacidade.</strong>{' '}
+                  Este cenário foi salvo antes do modelo de cobrança exata por paciente.
+                  Ele não foi convertido automaticamente. Para enviar uma oferta no novo modelo,
+                  crie e salve um cenário novo. Não use o link antigo como se fosse por paciente ativo.
+                </div>
+              ) : null}
               {preparedOffer?.publicUrl ? (
                 <a
                   href={preparedOffer.publicUrl}
@@ -5677,6 +5716,11 @@ export const SalesModularProposalBuilder = ({
               ) : null}
               {activeOfferId ? (
                 <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
+                  <p className={`mb-3 rounded-lg px-3 py-2 text-xs font-semibold ${selectedLegacyBilling ? 'bg-amber-50 text-amber-900' : 'bg-emerald-50 text-emerald-900'}`}>
+                    {selectedLegacyBilling
+                      ? 'Modelo anterior: faturamento por capacidade do contrato congelado.'
+                      : 'Modelo exato: módulos por paciente ativo, conforme proposta congelada.'}
+                  </p>
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs font-medium text-violet-700">Cobrança assistida</p>
@@ -5713,7 +5757,7 @@ export const SalesModularProposalBuilder = ({
                         <Check size={15} /> Registrar aceite comercial
                       </button>
                     ) : !checkoutLink || checkoutLink.status === 'expired' ? (
-                      <button type="button" onClick={() => void generateCheckoutLink(Boolean(checkoutLink))} disabled={Boolean(busy)} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-violet-600 px-3 text-xs font-medium text-white disabled:opacity-50">
+                      <button type="button" onClick={() => void generateCheckoutLink(Boolean(checkoutLink))} disabled={Boolean(busy) || selectedLegacyBilling} className="inline-flex min-h-10 items-center gap-2 rounded-xl bg-violet-600 px-3 text-xs font-medium text-white disabled:opacity-50">
                         {busy.startsWith('checkout-') ? <Loader2 size={15} className="animate-spin" /> : <Link2 size={15} />}
                         {checkoutLink ? 'Gerar novo link' : 'Gerar link de pagamento'}
                       </button>
@@ -5735,7 +5779,7 @@ export const SalesModularProposalBuilder = ({
                         <button type="button" onClick={() => void expireCheckoutLink()} disabled={Boolean(busy)} className="min-h-10 rounded-xl border border-rose-200 bg-white px-3 text-xs font-medium text-rose-700 disabled:opacity-50">
                           Expirar link
                         </button>
-                        <button type="button" onClick={() => void generateCheckoutLink(true)} disabled={Boolean(busy)} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 disabled:opacity-50">
+                        <button type="button" onClick={() => void generateCheckoutLink(true)} disabled={Boolean(busy) || selectedLegacyBilling} className="min-h-10 rounded-xl border border-violet-200 bg-white px-3 text-xs font-medium text-violet-700 disabled:opacity-50">
                           Gerar novo link
                         </button>
                       </>
