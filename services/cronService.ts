@@ -21,6 +21,7 @@ import {
 import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 import { createClinicAnnouncementCronService } from './clinicAnnouncementCronService';
 import { createAppointmentReminderBrandingService } from './appointmentReminderBranding';
+import { validateClaimedAppointmentReminder } from './appointmentReminderJobGuards';
 export type { ClinicAnnouncementDispatchSummary } from './clinicAnnouncementCronService';
 
 dayjs.extend(utc);
@@ -1501,6 +1502,13 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
       const status = sanitizeText(appointment?.status, 40).toLowerCase();
       if (!appointment || appointment?.is_active === false || appointment?.deleted_at || ['cancelled','canceled','no_show','missed','completed'].includes(status)) {
         finalResults.push({ id: job.id, outcome: 'CANCELED', error: 'APPOINTMENT_INACTIVE' });
+        continue;
+      }
+      // A claimed job can become obsolete while a reschedule is committed.
+      // Validate the actual persisted schedule and tenant before portal/push effects.
+      const reminderGuard = validateClaimedAppointmentReminder(job, appointment, patient, new Date().toISOString());
+      if (!reminderGuard.allowed) {
+        finalResults.push({ id: job.id, outcome: 'CANCELED', error: reminderGuard.reason });
         continue;
       }
       if (job?.notification_kind === 'APPOINTMENT_REMINDER_12H') {
