@@ -768,6 +768,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     'school',
     'files',
   ];
+  // Adult evaluation charts are common to ABA and conventional profiles.
+  // Receptionists must never inherit clinical charts through the generic tab list.
+  const canViewAdultEvaluationCharts = !isKidsProfile
+    && !['receptionist', 'reception'].includes(String(userRole || '').trim().toLowerCase())
+    && (!(capabilities instanceof Set || Array.isArray(capabilities))
+      || hasCapability('clinical.history.view')
+      || hasCapability('treatment_plan.view')
+      || hasCapability('aba.analytics.view'));
   const allowedTabsSet = useMemo(() => {
     const tabsFromProps =
       !Array.isArray(allowedTabs) || allowedTabs.length === 0
@@ -778,12 +786,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     const filteredByProfile = tabsFromProps.filter((tab: string) => {
       if (tab === 'session') return hasAnySessionSurface;
-      if (tab === 'aba-charts') return hasAbaSessionSurface;
+      if (tab === 'aba-charts') return hasAbaSessionSurface || canViewAdultEvaluationCharts;
       return true;
     });
 
     return new Set(filteredByProfile as PatientDetailTab[]);
-  }, [allowedTabs, hasAbaSessionSurface, hasAnySessionSurface]);
+  }, [allowedTabs, canViewAdultEvaluationCharts, hasAbaSessionSurface, hasAnySessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
   const canViewAnamnesis =
@@ -11312,7 +11320,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <h2 id="patient-session-reports-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Relatórios de sessão</h2>
+                      <h2 id="patient-session-reports-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>{isKidsProfile ? 'Relatórios de sessão' : 'Linha do tempo — sessões realizadas'}</h2>
                       <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Abra sessões finalizadas para revisar tentativas, retificações e complementos clínicos.</p>
                     </div>
                     {completedSessionReports.length > 0 && (
@@ -11325,18 +11333,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className={`rounded-xl border px-4 py-3 text-sm ${isPanelDark ? 'border-amber-400/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{completedSessionReportsError}</div>
                   ) : completedSessionReports.length > 0 ? (
                     <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-                      {completedSessionReports.slice(0, 6).map((session: any) => {
+                      {completedSessionReports.map((session: any) => {
                         const endedAt = session?.ended_at || session?.actual_end_at || session?.updated_at || session?.started_at || session?.created_at;
                         const endedDate = endedAt ? new Date(endedAt) : null;
                         const dateLabel = endedDate && !Number.isNaN(endedDate.getTime())
                           ? endedDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
                           : 'Data não informada';
                         const duration = Number(session?.duration_minutes ?? session?.actual_duration_minutes ?? (Number(session?.duration_seconds || 0) / 60));
+                        const professionalName = String(session?.professional_name || session?.professionalName || session?.therapist_name || session?.therapistName || session?.professional?.name || '').trim();
+                        const evolutionText = [session?.evolution_note, session?.evolutionNote, session?.clinical_note, session?.clinicalNote, session?.note, session?.notes]
+                          .find((value) => typeof value === 'string' && value.trim()) || '';
                         return (
-                          <div key={`session-report-${session.id}`} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50/70'}`}>
+                          <div key={`session-report-${session.id}`} data-testid="adult-completed-session-timeline-row" className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50/70'}`}>
                             <div className="min-w-0">
                               <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{dateLabel}</p>
-                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} min` : 'Sessão finalizada'}{session?.room_name ? ` · ${session.room_name}` : ''}</p>
+                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Concluída · {Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} min` : 'Duração não informada'}{session?.room_name ? ` · ${session.room_name}` : ''}</p>
+                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Profissional: {professionalName || 'Não informado'}</p>
+                              {evolutionText && <p className={`mt-2 whitespace-pre-wrap text-xs leading-5 ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>Evolução: {evolutionText}</p>}
                             </div>
                             <button type="button" onClick={() => openCompletedSessionReport(session.id)} className="min-h-10 shrink-0 rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Abrir relatório</button>
                           </div>
@@ -12894,7 +12907,37 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          canRequestClinicalCharts ? <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} /> : (
+          canRequestClinicalCharts ? <div className="space-y-5">
+            {!isKidsProfile && (
+              <section data-testid="adult-protocol-evaluation-charts" className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                <h2 className="text-base font-semibold">Avaliação por protocolo — adulto</h2>
+                <p className="mt-1 text-xs text-slate-500">Comparativo por domínio e por aplicação; não mistura pontuações de protocolos diferentes.</p>
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label className="text-xs font-semibold">Protocolo
+                    <select className="mt-1 w-full rounded-xl border p-2 text-sm" value={selectedChartProtocolId} onChange={(event) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(event.target.value); }}>
+                      {planProtocolCatalog.map((protocol: any) => <option key={protocol.id} value={protocol.id}>{protocol.title}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold">Data base
+                    <select className="mt-1 w-full rounded-xl border p-2 text-sm" value={comparisonDate1} onChange={(event) => setComparisonDate1(event.target.value)}>
+                      <option value="">Selecione...</option>
+                      {adultProtocolSnapshotDates.map((date: any) => <option key={date.key} value={date.key}>{date.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold">Data de comparação
+                    <select className="mt-1 w-full rounded-xl border p-2 text-sm" value={comparisonDate2} onChange={(event) => setComparisonDate2(event.target.value)}>
+                      <option value="">Selecione...</option>
+                      {adultProtocolSnapshotDates.map((date: any) => <option key={date.key} value={date.key}>{date.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-4 min-w-0">
+                  <ComparisonBarChart data={adultDomainComparisonData} title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`} maxScore={100} />
+                </div>
+              </section>
+            )}
+            <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+          </div> : (
             <p role="status" className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-600">
               Gráficos clínicos indisponíveis para as permissões atuais. Aguarde a atualização do seu acesso ou consulte a administração da clínica.
             </p>

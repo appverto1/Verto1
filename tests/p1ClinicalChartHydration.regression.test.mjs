@@ -11,7 +11,8 @@ const scopes = readFileSync('src/utils/clinicalOutcomePlanScope.ts', 'utf8');
 assert.match(detail, /const hasClinicalChartCapabilityContext = capabilities instanceof Set/);
 assert.match(detail, /const canRequestClinicalCharts = !hasClinicalChartCapabilityContext\s*\|\| \(hasCapability\('clinical\.record\.view'\)/);
 assert.match(detail, /hasCapability\('treatment_plan\.view'\) \|\| hasCapability\('aba\.analytics\.view'\)/);
-assert.match(detail, /activeTab === 'aba-charts' \? \(\s*canRequestClinicalCharts \? <ClinicalChartsWorkspace/);
+assert.match(detail, /activeTab === 'aba-charts' \? \(\s*canRequestClinicalCharts \? <div/);
+assert.match(detail, /<ClinicalChartsWorkspace patientId=/, 'chart loading stays under the F5 capability gate');
 assert.match(detail, /Gráficos clínicos indisponíveis para as permissões atuais/);
 
 // P1 13-16: every specialty plan reuses the same detail + overview read model.

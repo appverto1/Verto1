@@ -1453,6 +1453,14 @@ export const ClinicalAgendaBoard = ({
 }: any) => {
   const isDark = theme === 'dark';
   const activeDate = currentDate instanceof Date ? currentDate : new Date(currentDate || Date.now());
+  // Server-filtered actor capabilities determine whether TISS is subscribed and authorized.
+  // Never infer module access from payer values on an existing appointment.
+  const hasAgendaCapability = (key: string) => capabilities instanceof Set
+    ? capabilities.has(key)
+    : Array.isArray(capabilities) ? capabilities.includes(key) : false;
+  const canUseTissBilling = hasAgendaCapability('patient.insurance.view')
+    || hasAgendaCapability('billing.preguide.view')
+    || hasAgendaCapability('billing.context.view');
   const canViewAbaSessionReport = capabilities instanceof Set
     ? capabilities.has('aba.analytics.view')
     : Array.isArray(capabilities)
@@ -1576,7 +1584,8 @@ export const ClinicalAgendaBoard = ({
   const pendingVisibilityRefreshRef = useRef(false);
   const rescheduleAvailabilityLastRequestedAtRef = useRef(0);
   const localAgendaIdsRef = useRef(new Set<string>());
-  const canEditBillingContext = ['director', 'coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
+  const canEditBillingContext = canUseTissBilling
+    && ['director', 'coordinator', 'admin', 'owner'].includes(String(currentUser?.role || '').toLowerCase());
   const roomLookup = useMemo(() => {
     const map = new Map<string, any>();
     (rooms || []).forEach((room: any) => {
@@ -2449,7 +2458,7 @@ export const ClinicalAgendaBoard = ({
     setQuickPayerForm({ open: false, saving: false, error: '', name: '', payerType: 'INSURANCE' });
     setBillingEditorOpen(true);
     setBillingEditorState({ loading: false, saving: false, error: '', success: '' });
-    void loadBillingPayers();
+    if (canUseTissBilling) void loadBillingPayers();
   };
 
   useEffect(() => {
@@ -3422,10 +3431,18 @@ export const ClinicalAgendaBoard = ({
   const monthlySessionPatient = (patients || []).find((patient: any) =>
     String(patient?.id || '') === String(detailEvent?.patient_id || detailEvent?.patientId || '')
   );
-  const monthlySessionPlans = normalizePatientFinancialPlans(
+  const patientFinancialPlans = normalizePatientFinancialPlans(
     monthlySessionPatient?.financialPlans || monthlySessionPatient?.financial_plans || [],
     monthlySessionPatient || {},
-  ).filter(isMonthlySessionBillingPlan);
+  );
+  const monthlySessionPlans = patientFinancialPlans.filter(isMonthlySessionBillingPlan);
+  const simplePatientFinancialPlans = patientFinancialPlans.filter((plan: any) =>
+    String(plan?.billingMode || '').toUpperCase() !== 'INSURANCE');
+  const simplePatientFinancialPlan = simplePatientFinancialPlans.find((plan: any) => {
+    const appointmentService = String(detailEvent?.service_type || detailEvent?.type || '').trim().toLowerCase();
+    const planService = String(plan?.serviceType || plan?.customServiceName || plan?.specialty || '').trim().toLowerCase();
+    return Boolean(appointmentService && planService && appointmentService === planService);
+  }) || (simplePatientFinancialPlans.length === 1 ? simplePatientFinancialPlans[0] : null);
   const monthlySessionPlan = monthlySessionPlans.length === 1
     ? monthlySessionPlans[0]
     : monthlySessionPlans.find((plan: any) => {
@@ -3480,7 +3497,11 @@ export const ClinicalAgendaBoard = ({
         billingContext.payer_type ||
         (billingContext.payerId || billingContext.payer_id ? 'INSURANCE' : '')
     ) || '';
-  const billingDetailIsNonInsuranceContext = Boolean(billingFinancialContextType && billingFinancialContextType !== 'INSURANCE');
+  const billingDisplayFinancialContextType = canUseTissBilling
+    ? billingFinancialContextType
+    : normalizeAppointmentFinancialContextType(simplePatientFinancialPlan?.billingMode) || '';
+  const billingDetailIsNonInsuranceContext = !canUseTissBilling
+    || Boolean(billingFinancialContextType && billingFinancialContextType !== 'INSURANCE');
   const billingFormFinancialContextType = normalizeAppointmentFinancialContextType(billingForm.financialContextType) || 'INSURANCE';
   const billingFormUsesInsurance = appointmentFinancialContextRequiresPayer(billingFormFinancialContextType);
   const matchedBillingPayerByName =
@@ -3800,7 +3821,7 @@ export const ClinicalAgendaBoard = ({
         </div>
       )}
 
-      {billingEditorOpen && (
+      {canUseTissBilling && billingEditorOpen && (
         <div className="fixed inset-0 z-[170] flex items-end justify-center bg-black/40 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => !billingEditorState.saving && setBillingEditorOpen(false)}>
           <div className={`max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-t-[28px] p-5 shadow-2xl sm:rounded-[28px] ${isDark ? 'bg-[#101827] text-slate-100' : 'bg-white text-slate-900'}`} onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
@@ -3829,7 +3850,7 @@ export const ClinicalAgendaBoard = ({
                 {billingEditorBadge}
               </div>
             )}
-            {billingFormUsesInsurance && billingSuggestedTissAuthorization && (
+            {canUseTissBilling && billingFormUsesInsurance && billingSuggestedTissAuthorization && (
               <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-100' : 'border-emerald-200 bg-emerald-50 text-emerald-900'}`}>
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em]">Autorização TISS sugerida</p>
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
@@ -3864,13 +3885,13 @@ export const ClinicalAgendaBoard = ({
                 </button>
               </div>
             )}
-            {billingFormUsesInsurance && !billingSuggestedTissAuthorization && (billingEditorSuggestion?.payerName || billingPayerResolution.searched) && (
+            {canUseTissBilling && billingFormUsesInsurance && !billingSuggestedTissAuthorization && (billingEditorSuggestion?.payerName || billingPayerResolution.searched) && (
               <div className={`mt-4 rounded-2xl border px-4 py-3 text-xs font-semibold ${isDark ? 'border-slate-700 bg-slate-900 text-slate-300' : 'border-slate-100 bg-slate-50 text-slate-500'}`}>
                 Nenhuma autorizacao TISS vigente encontrada para este paciente, convenio e servico.
               </div>
             )}
 
-            {billingFormUsesInsurance && billingAvailableTissAuthorizations.length > 0 && (
+            {canUseTissBilling && billingFormUsesInsurance && billingAvailableTissAuthorizations.length > 0 && (
               <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/40'}`}>
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -3959,7 +3980,7 @@ export const ClinicalAgendaBoard = ({
                     }));
                   }}
                 >
-                  {APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.map((option) => (
+                  {APPOINTMENT_FINANCIAL_CONTEXT_OPTIONS.filter((option) => canUseTissBilling || option.value !== 'INSURANCE').map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -4442,15 +4463,26 @@ export const ClinicalAgendaBoard = ({
             <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Pagador e conferência</p>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">{canUseTissBilling ? 'Pagador e conferência' : 'Plano Financeiro do paciente'}</p>
                   <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
                     <p>
                       <span className="font-semibold">
                         {billingDetailIsNonInsuranceContext ? 'Contexto:' : hasSavedBillingContext ? 'Pagador:' : billingSuggestion?.payerName ? 'Sugestao do paciente:' : 'Pagador:'}
                       </span>{' '}
-                      {billingDetailIsNonInsuranceContext ? getAppointmentFinancialContextLabel(billingFinancialContextType) : billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
+                      {billingDetailIsNonInsuranceContext ? getAppointmentFinancialContextLabel(billingDisplayFinancialContextType) || 'Não definido' : billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
                     </p>
-                    <p><span className="font-semibold">Serviço:</span> {billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'ABA'}</p>
+                    <p><span className="font-semibold">Serviço:</span> {canUseTissBilling ? billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'Não informado' : simplePatientFinancialPlan?.customServiceName || simplePatientFinancialPlan?.serviceType || detailEvent.service_type || detailEvent.type || 'Não informado'}</p>
+                    {!canUseTissBilling && simplePatientFinancialPlan && (
+                      <>
+                        <p><span className="font-semibold">Valor:</span> {Number(simplePatientFinancialPlan.amountCents || 0) > 0 ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(simplePatientFinancialPlan.amountCents) / 100) : 'Não informado'}</p>
+                        <p><span className="font-semibold">Faturamento:</span> {simplePatientFinancialPlan.billingFrequency === 'MONTHLY' ? 'Mensal' : 'Por sessão'}</p>
+                        {simplePatientFinancialPlan.dueDay && <p><span className="font-semibold">Vencimento:</span> dia {simplePatientFinancialPlan.dueDay}</p>}
+                        {simplePatientFinancialPlan.paymentMethod && <p><span className="font-semibold">Pagamento:</span> {String(simplePatientFinancialPlan.paymentMethod).toUpperCase()}</p>}
+                      </>
+                    )}
+                    {!canUseTissBilling && !simplePatientFinancialPlan && (
+                      <p className="sm:col-span-2 text-xs text-amber-700">Nenhum plano financeiro simples inequívoco foi encontrado para este atendimento. Consulte o cadastro financeiro do paciente.</p>
+                    )}
                     {!billingDetailIsNonInsuranceContext && (
                       <>
                         <p><span className="font-semibold">Carteirinha:</span> {billingContext.insuranceCardNumber || detailEvent.insurance_card_number || 'pendente'}</p>
@@ -4876,7 +4908,7 @@ export const ClinicalAgendaBoard = ({
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {!detailCancellationState.isCancelled && !billingDetailIsNonInsuranceContext && [
+                    {canUseTissBilling && !detailCancellationState.isCancelled && !billingDetailIsNonInsuranceContext && [
                       'completed_pending_closure',
                       'closed_ready_for_prefacturing',
                       'prefacturing_ready',
