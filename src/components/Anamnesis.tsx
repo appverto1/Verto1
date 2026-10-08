@@ -680,7 +680,7 @@ export const AnamnesisModal = ({
       focusQuestionEditor(sectionId);
       return;
     }
-    if (isChoiceType && options.length < 2) {
+    if (isChoiceType && new Set(options.map((value) => value.trim().toLocaleLowerCase('pt-BR'))).size < 2) {
       setQuestionErrors((prev) => ({ ...prev, [sectionId]: 'Informe pelo menos duas opções diferentes, separadas por vírgula.' }));
       showFeedback('error', 'Perguntas de múltipla escolha exigem pelo menos duas opções.');
       focusQuestionEditor(sectionId);
@@ -1236,8 +1236,14 @@ export const AnamnesisModal = ({
                                   rows={2}
                                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-none bg-white text-slate-900"
                                   placeholder="Opções separadas por vírgula"
+                                  aria-label="Opções da pergunta"
+                                  aria-invalid={Boolean(questionErrors[section.id] && draftQuestion.label.trim())}
+                                  aria-describedby={questionErrors[section.id] ? `question-error-${section.id}` : undefined}
                                   value={draftQuestion.optionsText}
-                                  onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, optionsText: event.target.value }))}
+                                  onChange={(event) => {
+                                    setQuestionErrors((prev) => ({ ...prev, [section.id]: '' }));
+                                    updateQuestionDraft(section.id, (prev) => ({ ...prev, optionsText: event.target.value }));
+                                  }}
                                 />
                               )}
                               <div className="flex items-center gap-2">
