@@ -2077,7 +2077,7 @@ export function CoordinatorDashboard({
         setTabHistory(["dashboard"]);
       }
 
-      if (nextView === "patient" && nextPatientId) {
+      if (nextView === "patient" && nextPatientId && canAccessTab("patients")) {
         setSelectedPatientId(nextPatientId);
         setPatientReturnTab(canAccessTab(nextPatientReturnTab) ? nextPatientReturnTab : "patients");
         if (
@@ -2097,6 +2097,11 @@ export function CoordinatorDashboard({
       }
     } catch (error) {
       console.warn("Falha ao restaurar contexto do painel:", error);
+      // Invalid persisted state must not leak a previous clinic patient view.
+      setActiveTab("dashboard");
+      setTabHistory(["dashboard"]);
+      setSelectedPatientId(null);
+      setView("home");
     }
   }, [dashboardResumeKey, authorizationHydrated]);
 
