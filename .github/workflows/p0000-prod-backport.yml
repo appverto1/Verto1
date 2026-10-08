@@ -1,0 +1,57 @@
+name: P0000 Production Backport Gate (temporary)
+on:
+  push:
+    branches: [release/p0000-exact-patient-billing-20261007]
+    paths: [release/p0000-backport-trigger.txt]
+permissions:
+  contents: write
+jobs:
+  backport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/p0000-exact-patient-billing-20261007
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Isolated backport
+        run: |
+          git fetch origin staging main
+          git cherry-pick -n c206f86f4d25f914c08f6c445a22f9dc4b9422b3
+          git diff --name-only HEAD | tee /tmp/p0000-scope.txt
+          node - <<'NODE'
+          const fs=require('fs');
+          const allowed=new Set([
+           'server.ts',
+           'services/stripeService.ts',
+           'src/utils/salesCommercialEvolution.ts',
+           'src/utils/salesModularProposal.ts',
+           'src/components/SalesModularProposalBuilder.tsx',
+           'tests/salesExactPerPatientBillingP0000.test.ts',
+           'tests/salesExactPerPatientStripeQuantityP0000.test.ts',
+           'scripts/pre-main-gate.mjs'
+          ]);
+          const changed=fs.readFileSync('/tmp/p0000-scope.txt','utf8').trim().split('\n').filter(Boolean);
+          const unexpected=changed.filter(x=>!allowed.has(x));
+          if(changed.length!==8||unexpected.length)throw new Error('P0000_SCOPE_INVALID: '+changed.join(','));
+          console.log('P0000 isolated 8-file release scope verified');
+          NODE
+      - name: Deterministic install
+        run: npm ci
+      - name: P0000 financial regression
+        run: |
+          npx tsx tests/salesExactPerPatientBillingP0000.test.ts
+          npx tsx tests/salesExactPerPatientStripeQuantityP0000.test.ts
+          npx tsx tests/salesPersonalizedPerPatientPricing.test.ts
+          npx tsx tests/salesModularStripeAssisted.test.ts
+      - name: Production build
+        run: npm run build
+      - name: Commit only validated product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.ts services/stripeService.ts src/utils/salesCommercialEvolution.ts src/utils/salesModularProposal.ts src/components/SalesModularProposalBuilder.tsx tests/salesExactPerPatientBillingP0000.test.ts tests/salesExactPerPatientStripeQuantityP0000.test.ts scripts/pre-main-gate.mjs
+          git commit -m "release(p0000): exact per-patient modular billing"
+          git push origin HEAD:release/p0000-exact-patient-billing-20261007
