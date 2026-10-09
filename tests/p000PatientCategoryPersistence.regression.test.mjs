@@ -25,7 +25,7 @@ const { resolvePatientRegistrationCategory, resolvePatientProfileTypeForCategory
 for (const group of ['infantil', 'adolescente', 'adulto', 'idoso']) {
   assert.equal(resolvePatientRegistrationCategory({ patient_group: group }), group);
 }
-assert.equal(resolvePatientRegistrationCategory({ group: 'infantil', patient_group: 'adulto' }), 'infantil');
+assert.equal(resolvePatientRegistrationCategory({ group: 'adulto', patient_group: 'infantil' }), 'infantil', 'banco prevalece sobre alias local antigo');
 assert.equal(resolvePatientRegistrationCategory({ patient_profile_type: 'KIDS' }), 'infantil');
 assert.equal(resolvePatientRegistrationCategory({ patient_profile_type: 'ABA' }), 'adulto');
 
@@ -43,6 +43,12 @@ assert.equal(resolvePatientPortalKind({
   patient_profile_type: 'ADULT',
   age: null,
 }), 'KIDS', 'registro legado infantil não pode iniciar sessão adulta');
+assert.equal(resolvePatientPortalKind({
+  group: 'adulto',
+  patient_group: 'infantil',
+  patient_profile_type: 'ADULT',
+  age: null,
+}), 'KIDS', 'categoria canônica prevalece sobre estado local obsoleto');
 assert.equal(resolvePatientPortalKind({
   patient_group: 'adolescente',
   patient_profile_type: 'ADULT',
