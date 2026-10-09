@@ -26,7 +26,7 @@ assert.match(coordinator, /sessionRoomsError && <p role="alert"/);
 // direct medical-record navigation are inaccessible in reception's session card.
 assert.match(calendar, /const isReceptionistActor = \['receptionist', 'reception'\]/);
 assert.match(calendar, /!isReceptionistActor && detailPrimaryAction\.kind !== 'none'/);
-assert.match(calendar, /!isReceptionistActor && \(<>[\s\S]*?Ver prontuário[\s\S]*?Ver gráficos[\s\S]*?<\/ >\)\}/.source.replace('<\\/ >','<\\/>'));
+assert.match(calendar, /!isReceptionistActor && \(<>[\s\S]*?Ver prontuário[\s\S]*?Ver gráficos[\s\S]*?<\/>\)\}/);
 assert.match(calendar, /Ações de status/);
 assert.match(calendar, /!isReceptionistActor && \(detailEvent\.closure_readiness_status \|\| detailCancellationState\.isCancelled\)/);
 assert.match(calendar, /!isReceptionistActor && \(\s*<div className=\{`mt-5 rounded-3xl/);
