@@ -273,6 +273,8 @@ import {
   getPatientProfileTypeLabel,
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
+  resolvePatientProfileTypeForCategory,
+  resolvePatientRegistrationCategory,
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
@@ -2604,6 +2606,7 @@ export function CoordinatorDashboard({
     insuranceHolderSuggestedFromResponsible: false,
   });
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+  const patientRegistrationSaveInFlightRef = useRef(false);
   const defaultPatientTissAuthorizationForm = {
     id: "",
     payerId: "",
@@ -6544,6 +6547,14 @@ export function CoordinatorDashboard({
   };
 
   const handlePatientFormChange = (field: string, value: any) => {
+    if (field === 'grupo') {
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        grupo: value,
+        patientProfileType: resolvePatientProfileTypeForCategory(value, prev.patientProfileType),
+      }));
+      return;
+    }
     if (field === "cpf" || field === "responsavelCpf" || field === "convenioTitularCpf") {
       setNewPatientForm((prev: any) => ({
         ...prev,
@@ -6835,6 +6846,7 @@ export function CoordinatorDashboard({
   };
 
   const handleCreatePatientFromFullForm = async () => {
+    if (patientRegistrationSaveInFlightRef.current) return;
     if (!canCreatePatients) {
       showToast("A criação de pacientes é exclusiva da recepção e coordenação.", "error");
       return;
@@ -6904,7 +6916,10 @@ export function CoordinatorDashboard({
       0,
     );
     const primaryBillingPlan = financialPlans.find((plan: any) => getFinancialPlanPrimaryBillingMethod(plan));
-    const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
+    const canonicalProfileType = resolvePatientProfileTypeForCategory(
+      newPatientForm.grupo,
+      newPatientForm.patientProfileType,
+    );
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
     const canPersistPatientTissOperationalFields =
@@ -7015,11 +7030,12 @@ export function CoordinatorDashboard({
       createdAt: new Date().toISOString(),
     };
 
+    patientRegistrationSaveInFlightRef.current = true;
     try {
       if (editingPatientId && onUpdatePatient) {
         const updateResult = await onUpdatePatient(newPatient);
-        if (updateResult?.success === false) {
-          showToast(String(updateResult?.error || "Não foi possível salvar alterações do paciente."), "error");
+        if (updateResult?.success !== true) {
+          showToast(String(updateResult?.error || "Não foi possível confirmar as alterações do paciente no servidor."), "error");
           return;
         }
         onAddActivityLog(
@@ -7083,6 +7099,7 @@ export function CoordinatorDashboard({
       setIsPatientRegistrationModalOpen(false);
       resetPatientForm();
     } finally {
+      patientRegistrationSaveInFlightRef.current = false;
       hideProcessing();
     }
   };
@@ -7169,7 +7186,7 @@ export function CoordinatorDashboard({
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao || "",
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs || "",
       insuranceHolderSuggestedFromResponsible: insuranceEligibility.holderPrefilledFromResponsible,
-      grupo: patient.group || "adulto",
+      grupo: resolvePatientRegistrationCategory(patient),
       comoConheceu: patient.source || "",
       rg: patient.rg || "",
       cpf: formatCpf(patient.cpf || patient.anamnesisData?.cpf || ""),
@@ -7192,8 +7209,10 @@ export function CoordinatorDashboard({
         patient.responsible_relationship ||
         patient.metadata?.responsibleRelationship ||
         "",
-      patientProfileType: normalizePatientProfileType(
-        patient.patientProfileType || patient.panelType || patient.profile_type || patient.type,
+      patientProfileType: resolvePatientProfileTypeForCategory(
+        resolvePatientRegistrationCategory(patient),
+        patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type ||
+          patient.profileType || patient.profile_type || patient.type,
       ),
       financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
         ...patient,
