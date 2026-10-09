@@ -43,6 +43,7 @@ BEGIN
     WHERE caller.clinic_id = p_clinic_id
       AND caller.user_id = auth.uid()
       AND caller.status = 'active'
+      AND caller.role IN ('director','coordinator','therapist','receptionist','supervisor','billing')
   ) THEN
     RAISE EXCEPTION 'CLINIC_SPECIALTIES_ACCESS_DENIED' USING ERRCODE = '42501';
   END IF;
@@ -71,6 +72,7 @@ BEGIN
     AND OLD.clinic_id IS NOT DISTINCT FROM NEW.clinic_id
     AND OLD.therapist_id IS NOT DISTINCT FROM NEW.therapist_id
     AND OLD.service_type IS NOT DISTINCT FROM NEW.service_type
+    AND OLD.approach IS NOT DISTINCT FROM NEW.approach
     AND OLD.scheduled_at IS NOT DISTINCT FROM NEW.scheduled_at
   THEN RETURN NEW; END IF;
 
@@ -90,6 +92,8 @@ BEGIN
   IF v_membership_specialty IS NULL
     OR v_appointment_key IS NULL
     OR public.appointment_clinical_specialty_key_v1(v_membership_specialty) IS DISTINCT FROM v_appointment_key
+    OR (public.appointment_clinical_specialty_key_v1(NEW.approach) IS NOT NULL
+        AND public.appointment_clinical_specialty_key_v1(NEW.approach) IS DISTINCT FROM v_appointment_key)
   THEN
     RAISE EXCEPTION 'APPOINTMENT_CLINIC_SPECIALTY_NOT_AVAILABLE' USING ERRCODE = '23514';
   END IF;
@@ -98,7 +102,7 @@ END;
 $fn$;
 DROP TRIGGER IF EXISTS appointments_active_specialty_guard_v1 ON public.appointments;
 CREATE TRIGGER appointments_active_specialty_guard_v1
-BEFORE INSERT OR UPDATE OF clinic_id, therapist_id, service_type, scheduled_at
+BEFORE INSERT OR UPDATE OF clinic_id, therapist_id, service_type, approach, scheduled_at
 ON public.appointments FOR EACH ROW
 EXECUTE FUNCTION public.guard_appointment_active_specialty_v1();
 COMMIT;
