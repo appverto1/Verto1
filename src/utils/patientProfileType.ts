@@ -113,6 +113,9 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
   });
   if (hasExplicitKids && isPediatric) return 'KIDS';
   if (pediatricGroup && isPediatric) return 'KIDS';
+  // This product defines ADULT as an adult workflow: stale ADULT defaults on
+  // a child under 13 must not open conventional/adult collection.
+  if (age !== null && age <= 12) return 'KIDS';
 
   for (const candidate of explicitCandidates) {
     const raw = String(candidate ?? '').trim();
