@@ -33,6 +33,10 @@ Ciclo completo: `00 -> 01 -> 02 -> 00`.
 Máximo: 2 ciclos completos, de dia ou à noite.
 Se houver consenso antes, encerrar antes. Persistindo divergência após o segundo ciclo, 00 decide tecnicamente, registra racional e libera o fluxo.
 
+## Inventário oficial de prioridades (09/10/2026)
+
+**Caminho único:** `docs/operations/VERTO_INVENTARIO_OFICIAL.md`. Todos os papéis 00–14 devem consultá-lo junto à Issue antes de selecionar uma tarefa e, **após cada entrega**, registrar imediatamente o status/evidências/owner na Issue e preparar a atualização correspondente do inventário no GitHub. Usar atualização mínima por número de tarefa em branch/PR para `staging`, com controle de SHA/diff/CI e merge pelo gate autorizado; atualizações posteriores de deploy/smoke são PRs documentais, sem escrita direta em `staging`. A Issue continua **canônica** para `FACTORY_STATE`, contrato, claims, locks, gates e aceite; o inventário é a visão oficial consolidada. Nunca marcar 100% sem smoke no SHA publicado, não repetir tarefas concluídas e não sobrepor alterações concorrentes. Sem dados pessoais, credenciais ou mudanças de produção.
+
 ## Fonte de verdade
 Toda execução relevante exige GitHub Issue compreensível sem a conversa original. A Issue deve registrar, quando aplicável: objetivo, contexto, comportamento atual/esperado, classificação, arquitetura, critérios de aceite, fora de escopo, riscos, preservações, módulos, banco, segurança, UX, testes, branch/base SHA, writer, write_lock, current_agent, state, active_handoff, attempt e next_gate.
 
