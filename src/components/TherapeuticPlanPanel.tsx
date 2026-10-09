@@ -399,6 +399,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [workspaceScopeId, setWorkspaceScopeId] = useState('');
   const [showPlanManager, setShowPlanManager] = useState(true);
   const [ptsDraftOverride, setPtsDraftOverride] = useState<{ planId: string; version: any } | null>(null);
+  const [ptsDraftConflict, setPtsDraftConflict] = useState<{ planId: string; version: any; revision: number } | null>(null);
+  const [approvedPtsRebaseRevision, setApprovedPtsRebaseRevision] = useState<number | null>(null);
+  const [ptsEditorReloadKey, setPtsEditorReloadKey] = useState(0);
+  const ptsDraftWriteInFlightRef = useRef(false);
   const [ptsEventKind, setPtsEventKind] = useState<'review' | 'risk' | null>(null);
   const [ptsEventSaving, setPtsEventSaving] = useState(false);
   const [scopeEditDraft, setScopeEditDraft] = useState<any>({ commonObjectives: '', specialtyObjectives: {}, status: 'draft', expectedVersion: 1 });
@@ -711,6 +715,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setShowPlanManager(true);
     setEditingScopeId('');
     setPtsDraftOverride(null);
+    setPtsDraftConflict(null);
+    setApprovedPtsRebaseRevision(null);
     setActivationWarning('');
     setPtsEventKind(null);
     setPtsEventSaving(false);
@@ -1428,13 +1434,15 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     await loadPlan(true);
   };
 
-  const savePtsScope = async (scopeId: string, payload: any) => {
-    if (!scopeId || scopeSaving) return;
+  const savePtsScope = async (scopeId: string, payload: any): Promise<{
+    success: boolean; draftRevision?: number; draftPreserved?: boolean;
+  }> => {
+    if (!scopeId || scopeSaving || ptsDraftWriteInFlightRef.current) return { success: false };
     const versionId = String(payload?.versionId || '');
     const expectedDraftRevision = Number(payload?.expectedDraftRevision || 0);
     if (!versionId || !Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 1) {
       setError('O rascunho do PTS não está disponível. Reabra a edição e tente novamente.');
-      return;
+      return { success: false };
     }
     const requestPayload = {
       expectedDraftRevision,
@@ -1443,47 +1451,92 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       specialtyObjectives: payload?.specialtyObjectives,
       reviewDueDate: payload?.reviewDueDate || null,
     };
+    ptsDraftWriteInFlightRef.current = true;
     setError('');
     setScopeSaving(true);
-    const response = payload?.action === 'activate'
-      ? await dataService.activatePtsDraftVersion(patientId, scopeId, versionId, requestPayload)
-      : await dataService.savePtsDraftVersion(patientId, scopeId, versionId, requestPayload);
-    setScopeSaving(false);
-    if (response?.success === false) {
-      if (
-        payload?.action === 'activate'
-        && String(response?.error || '') === 'PTS_DRAFT_VALIDATION_FAILED'
-      ) {
-        setError('');
-        if (response?.draftPreserved === true && response?.data?.id) {
-          setPtsDraftOverride({ planId: scopeId, version: response.data });
+    try {
+      const activate = payload?.action === 'activate';
+      const send = (body: typeof requestPayload) => activate
+        ? dataService.activatePtsDraftVersion(patientId, scopeId, versionId, body)
+        : dataService.savePtsDraftVersion(patientId, scopeId, versionId, body);
+      let response = await send(requestPayload);
+      if (response?.success === false && response?.error === 'PTS_DRAFT_VERSION_CONFLICT') {
+        // Revalidate only this patient's authorized PTS. Do not silently overwrite
+        // a different revision, clinic, plan or another professional's edits.
+        const fresh = await dataService.getPatientTherapeuticPlan(patientId, { force: true });
+        const latestScope = fresh?.success === true && Array.isArray(fresh?.data?.planScopes)
+          ? fresh.data.planScopes.find((scope: any) => String(scope?.id) === scopeId)
+          : null;
+        const latestDraft = latestScope?.pts_lineage?.draftVersion;
+        const freshRevision = Number(latestDraft?.draft_revision ?? latestDraft?.draftRevision ?? 0);
+        const sameVersion = String(latestDraft?.id || '') === versionId;
+        if (sameVersion && Number.isSafeInteger(freshRevision) && freshRevision > expectedDraftRevision) {
+          // The only automatic retry permitted is for semantically identical
+          // snapshots, e.g. the first Save succeeded but its ACK arrived late.
+          const serverSnapshot = latestDraft?.snapshot || {};
+          const stable = (value: any): string => {
+            if (Array.isArray(value)) return '[' + value.map(stable).join(',') + ']';
+            if (value && typeof value === 'object') return '{' + Object.keys(value).sort()
+              .map((key) => JSON.stringify(key) + ':' + stable(value[key])).join(',') + '}';
+            return JSON.stringify(value) || 'null';
+          };
+          const sameContent =
+            stable(serverSnapshot.pts_payload) === stable(requestPayload.ptsPayload)
+            && stable(serverSnapshot.common_objectives) === stable(requestPayload.commonObjectives)
+            && stable(serverSnapshot.specialty_objectives) === stable(requestPayload.specialtyObjectives)
+            && String(serverSnapshot.review_due_date || '') === String(requestPayload.reviewDueDate || '');
+          if (sameContent) {
+            response = await send({ ...requestPayload, expectedDraftRevision: freshRevision });
+          } else {
+            setPtsDraftConflict({ planId: scopeId, version: latestDraft, revision: freshRevision });
+          }
         }
-        setActivationWarning(
-          response?.message
-          || 'O rascunho foi salvo. Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente.',
-        );
-        if (response?.draftPreserved === true) {
-          setNotice('Rascunho salvo. Nenhuma informação preenchida foi descartada.');
+        if (response?.success === false && response?.error === 'PTS_DRAFT_VERSION_CONFLICT') {
+          setActivationWarning('');
+          setError(sameVersion && freshRevision > 0
+            ? 'Conflito de edição: outro salvamento alterou o PTS. Seus campos nesta janela foram mantidos. Escolha como reconciliar as versões antes de tentar novamente.'
+            : 'Não foi possível confirmar a revisão atual deste PTS. Seus campos foram mantidos; verifique a conexão e reabra a edição antes de tentar novamente.');
+          return { success: false };
         }
-        return;
       }
+      if (response?.success === false) {
+        if (activate && response?.error === 'PTS_DRAFT_VALIDATION_FAILED') {
+          setError('');
+          if (response?.draftPreserved === true && response?.data?.id) {
+            setPtsDraftOverride({ planId: scopeId, version: response.data });
+          }
+          setActivationWarning(response?.message || 'Rascunho preservado; tente novamente quando o ambiente estiver atualizado.');
+          return {
+            success: false,
+            draftPreserved: response?.draftPreserved === true,
+            draftRevision: Number(response?.data?.draft_revision ?? response?.data?.draftRevision ?? 0),
+          };
+        }
+        setActivationWarning('');
+        setError(response?.message || response?.error || (activate
+          ? 'Não foi possível ativar o Projeto Terapêutico Singular.'
+          : 'Não foi possível salvar o rascunho do Projeto Terapêutico Singular.'));
+        return { success: false };
+      }
+      setPtsDraftConflict(null);
+      setApprovedPtsRebaseRevision(null);
       setActivationWarning('');
-      setError(response?.message || response?.error || (payload?.action === 'activate'
-        ? 'Não foi possível ativar o Projeto Terapêutico Singular.'
-        : 'Não foi possível salvar o rascunho do Projeto Terapêutico Singular.'));
-      return;
-    }
-    setActivationWarning('');
-    if (payload?.action === 'activate') {
-      setPtsDraftOverride(null);
-      setEditingScopeId('');
-      setNotice('PTS ativado. A versão anterior e os eventos clínicos foram preservados integralmente.');
+      if (activate) {
+        setPtsDraftOverride(null);
+        setEditingScopeId('');
+        setNotice('PTS ativado. A versão anterior e os eventos clínicos foram preservados integralmente.');
+        await loadPlan(true);
+        return { success: true, draftRevision: Number(response?.data?.version?.draft_revision || 0) };
+      }
+      if (response?.data?.id) setPtsDraftOverride({ planId: scopeId, version: response.data });
+      setNotice('Rascunho salvo. A versão vigente continua somente leitura e não foi alterada.');
+      const acknowledgedRevision = Number(response?.data?.draft_revision ?? response?.data?.draftRevision ?? 0);
       await loadPlan(true);
-      return;
+      return { success: true, draftRevision: acknowledgedRevision };
+    } finally {
+      ptsDraftWriteInFlightRef.current = false;
+      setScopeSaving(false);
     }
-    if (response?.data?.id) setPtsDraftOverride({ planId: scopeId, version: response.data });
-    setNotice('Rascunho salvo. A versão vigente continua somente leitura e não foi alterada.');
-    await loadPlan(true);
   };
 
   const savePtsEvent = async (eventPayload: any) => {
@@ -3112,6 +3165,29 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <button type="button" aria-label="Fechar aviso" onClick={() => setActivationWarning('')}><X size={15} /></button>
         </div>
       )}
+      {ptsDraftConflict && ptsDraftConflict.planId === editingScopeId && (
+        <div role="alert" className={`rounded-2xl border p-4 text-sm ${isDark ? 'border-amber-400/40 bg-amber-950/40 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+          <p className="font-semibold">Rascunho alterado em outra edição · revisão {ptsDraftConflict.revision}</p>
+          <p className="mt-1">O preenchimento desta janela está preservado, mas sua revisão está desatualizada. Nenhuma alteração será sobrescrita sem sua decisão.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" disabled={scopeSaving} className="rounded-lg border border-current px-3 py-2 text-xs font-semibold" onClick={() => {
+              if (!window.confirm('Carregar o rascunho atual do servidor? As alterações ainda não salvas desta janela serão descartadas.')) return;
+              setPtsDraftOverride({ planId: ptsDraftConflict.planId, version: ptsDraftConflict.version });
+              setPtsEditorReloadKey((value) => value + 1);
+              setApprovedPtsRebaseRevision(null);
+              setPtsDraftConflict(null);
+              setError('');
+            }}>Carregar versão do servidor</button>
+            <button type="button" disabled={scopeSaving} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white" onClick={() => {
+              if (!window.confirm('Aplicar seu preenchimento atual sobre a revisão mais recente? Isso substituirá alterações realizadas por outra pessoa neste rascunho.')) return;
+              setApprovedPtsRebaseRevision(ptsDraftConflict.revision);
+              setPtsDraftConflict(null);
+              setError('');
+              setActivationWarning('Revisão atual autorizada para esta edição. Clique em Salvar ou Ativar para confirmar sua escolha.');
+            }}>Manter meu preenchimento e revisar</button>
+          </div>
+        </div>
+      )}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
       {showPlanManager || !workspaceScope ? (
@@ -3153,7 +3229,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           isDark={isDark}
         >
           <PtsWorkspaceEditor
-            key={`${selectedPtsScope.id}:${String(draftVersionForScope(selectedPtsScope)?.id || 'draft')}`}
+            key={`${selectedPtsScope.id}:${String(draftVersionForScope(selectedPtsScope)?.id || 'draft')}:${ptsEditorReloadKey}`}
             scope={selectedPtsScope}
             draftVersion={draftVersionForScope(selectedPtsScope)}
             professionals={linkedProfessionals}
@@ -3161,6 +3237,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             clinicTimeZone={clinicTimeZone}
             isDark={isDark}
             saving={scopeSaving}
+            approvedConflictRevision={approvedPtsRebaseRevision}
             onSave={(payload) => savePtsScope(String(selectedPtsScope.id), payload)}
           />
         </ResponsiveDrawer>
