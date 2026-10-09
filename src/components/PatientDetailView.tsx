@@ -2873,7 +2873,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             appointmentId: String(scheduledAppointmentId),
           });
           if (!serverLinkConfirmed) {
-            consumedScheduledSessionStartKeyRef.current = '';
+            // Keep this start key consumed after a server denial. Replaying the
+            // same Agenda event must never create an endless blocking alert.
+            // A new user click creates a fresh start key for an explicit retry.
             alert(String(saveResult?.error || saveResult?.message || '').trim() ||
               'Não foi possível confirmar o vínculo da sessão com este agendamento no servidor. Seus registros foram preservados; atualize a Agenda e tente novamente.');
             return;
@@ -2894,7 +2896,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             setIsSessionModeOpen(true);
           }
         }).catch((error: any) => {
-          consumedScheduledSessionStartKeyRef.current = '';
+          // Do not re-arm the rejected start key on a failed request.
           console.warn('[ABA] Não foi possível vincular a Sessão ABA ativa ao agendamento clínico:', error?.message || String(error));
           alert('Não foi possível confirmar o vínculo da sessão com o agendamento no servidor. Seus registros foram preservados; tente novamente.');
         });
