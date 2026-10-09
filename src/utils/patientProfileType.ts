@@ -61,7 +61,7 @@ export const resolvePatientProfileTypeForCategory = (
 };
 
 export const resolvePatientRegistrationCategory = (patient: any): string => {
-  const stored = cleanProfileKey(patient?.group || patient?.patient_group || patient?.grupo);
+  const stored = cleanProfileKey(patient?.patient_group || patient?.group || patient?.grupo);
   if (['infantil', 'adolescente', 'adulto', 'idoso'].includes(stored)) return stored;
   const storedProfile = patient?.patientProfileType || patient?.patient_profile_type ||
     patient?.panelType || patient?.panel_type || patient?.profileType || patient?.profile_type || patient?.type;
@@ -123,7 +123,7 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
     ageFromBirthDate(patient?.birthDate) ??
     ageFromBirthDate(patient?.dataNascimento) ??
     ageFromBirthDate(patient?.anamnesisData?.dataNascimento);
-  const group = cleanProfileKey(patient?.group || patient?.patient_group || patient?.grupo || patient?.patientGroup || '');
+  const group = cleanProfileKey(patient?.patient_group || patient?.group || patient?.grupo || patient?.patientGroup || '');
   const pediatricGroup = ['infantil', 'crianca', 'criancas', 'kids', 'child', 'adolescente', 'teen'].includes(group);
   const isPediatric = (age !== null && age < 18) || (age === null && pediatricGroup);
 
