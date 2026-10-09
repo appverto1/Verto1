@@ -14134,7 +14134,7 @@ export function CoordinatorDashboard({
                         </div>
                         <div className="mt-4 flex items-center justify-between gap-3">
                           <span className="rounded-xl bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
-                            {getPatientProfileTypeLabel(patient.patientProfileType || patient.panelType || patient.type)}
+                            {getPatientProfileTypeLabel(resolvePatientPortalKind(patient) === "KIDS" ? "KIDS" : patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type || patient.type)}
                           </span>
                           <button
                             type="button"
@@ -14508,7 +14508,7 @@ export function CoordinatorDashboard({
                             compact
                           />
                           <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
-                            {getPatientProfileTypeLabel(patient.patientProfileType || patient.panelType || patient.type)}
+                            {getPatientProfileTypeLabel(resolvePatientPortalKind(patient) === "KIDS" ? "KIDS" : patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type || patient.type)}
                           </div>
                         </div>
                       </div>
