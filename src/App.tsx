@@ -32,6 +32,7 @@ import {
 import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
+  profileTypeForPatientGroup,
   resolvePatientPortalKind,
 } from './utils/patientProfileType';
 import { normalizePatientInsuranceEligibility } from './utils/patientInsuranceEligibility';
@@ -1108,7 +1109,7 @@ export default function App() {
           : existing?.monthlyTreatmentValue || 0,
       billingDueDay: coalescePatientText(source?.billingDueDay, existing?.billingDueDay),
       billingMethod: coalescePatientText(source?.billingMethod, existing?.billingMethod),
-      grupo: coalescePatientText(source?.grupo, source?.group, existing?.grupo),
+      grupo: coalescePatientText(source?.grupo, source?.group, source?.patient_group, existing?.grupo),
       comoConheceu: coalescePatientText(source?.comoConheceu, source?.source, existing?.comoConheceu),
       rg: coalescePatientText(source?.rg, existing?.rg),
       cep: coalescePatientText(source?.cep, existing?.cep),
@@ -1134,11 +1135,13 @@ export default function App() {
       responsavelTelefone,
       responsavelEmail,
       responsavelRelacao,
-      patientProfileType: normalizePatientProfileType(
-        source?.patientProfileType || source?.panelType || source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType,
+      patientProfileType: profileTypeForPatientGroup(
+        source?.group || source?.grupo || source?.patient_group || existing?.grupo,
+        source?.patientProfileType || source?.patient_profile_type || source?.panelType || source?.panel_type || source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType,
       ),
-      panelType: normalizePatientProfileType(
-        source?.panelType || source?.patientProfileType || source?.profileType || source?.profile_type || source?.type || existing?.panelType,
+      panelType: profileTypeForPatientGroup(
+        source?.group || source?.grupo || source?.patient_group || existing?.grupo,
+        source?.panelType || source?.panel_type || source?.patientProfileType || source?.patient_profile_type || source?.profileType || source?.profile_type || source?.type || existing?.panelType,
       ),
       idade:
         typeof derivedAgeFromBirthDate === 'number'
@@ -6200,14 +6203,19 @@ export default function App() {
       Object.keys(updatedData || {}).every((key) =>
         key === 'id' || patientPhotoPatchKeys.includes(key as (typeof patientPhotoPatchKeys)[number])
       );
-    const updatedProfileType = normalizePatientProfileType(
+    const updatedProfileType = profileTypeForPatientGroup(
+      updatedData?.group || updatedData?.patient_group || updatedData?.grupo || currentPatient?.group || currentPatient?.patient_group,
       updatedData?.patientProfileType ||
+        updatedData?.patient_profile_type ||
         updatedData?.panelType ||
+        updatedData?.panel_type ||
         updatedData?.profileType ||
         updatedData?.profile_type ||
         updatedData?.type ||
         currentPatient?.patientProfileType ||
+        currentPatient?.patient_profile_type ||
         currentPatient?.panelType ||
+        currentPatient?.panel_type ||
         currentPatient?.type,
     );
     const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
@@ -6327,6 +6335,9 @@ export default function App() {
         setAllPatients(prev => prev.map(p => p.id === updatedData.id ? {
           ...p,
           ...safeIdentityData,
+          ...(updatedData?.patientProfileType !== undefined || updatedData?.group !== undefined
+            ? { patientProfileType: updatedProfileType, panelType: updatedProfileType, type: updatedPortalType }
+            : {}),
           ...(hasInsuranceEligibilityPatch
             ? {
                 insuranceType: updatedInsuranceEligibility.insuranceType,

@@ -273,6 +273,9 @@ import {
   getPatientProfileTypeLabel,
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
+  isPediatricPatientGroup,
+  profileTypeForPatientGroup,
+  resolvePatientPortalKind,
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
@@ -6544,6 +6547,30 @@ export function CoordinatorDashboard({
   };
 
   const handlePatientFormChange = (field: string, value: any) => {
+    if (field === "grupo") {
+      // Demographic classification is also a clinical collection routing rule.
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        grupo: value,
+        patientProfileType: isPediatricPatientGroup(value)
+          ? "KIDS"
+          : normalizePatientProfileType(prev.patientProfileType) === "KIDS"
+            ? "ADULT"
+            : prev.patientProfileType,
+      }));
+      return;
+    }
+    if (field === "patientProfileType") {
+      const selectedProfile = normalizePatientProfileType(value);
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        patientProfileType: selectedProfile,
+        grupo: selectedProfile === "KIDS"
+          ? (isPediatricPatientGroup(prev.grupo) ? prev.grupo : "infantil")
+          : isPediatricPatientGroup(prev.grupo) ? "adulto" : prev.grupo,
+      }));
+      return;
+    }
     if (field === "cpf" || field === "responsavelCpf" || field === "convenioTitularCpf") {
       setNewPatientForm((prev: any) => ({
         ...prev,
@@ -6904,7 +6931,7 @@ export function CoordinatorDashboard({
       0,
     );
     const primaryBillingPlan = financialPlans.find((plan: any) => getFinancialPlanPrimaryBillingMethod(plan));
-    const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
+    const canonicalProfileType = profileTypeForPatientGroup(newPatientForm.grupo, newPatientForm.patientProfileType);
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
     const canPersistPatientTissOperationalFields =
@@ -7169,7 +7196,7 @@ export function CoordinatorDashboard({
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao || "",
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs || "",
       insuranceHolderSuggestedFromResponsible: insuranceEligibility.holderPrefilledFromResponsible,
-      grupo: patient.group || "adulto",
+      grupo: patient.group || patient.patient_group || patient.grupo || (resolvePatientPortalKind(patient) === "KIDS" ? "infantil" : "adulto"),
       comoConheceu: patient.source || "",
       rg: patient.rg || "",
       cpf: formatCpf(patient.cpf || patient.anamnesisData?.cpf || ""),
@@ -7192,9 +7219,11 @@ export function CoordinatorDashboard({
         patient.responsible_relationship ||
         patient.metadata?.responsibleRelationship ||
         "",
-      patientProfileType: normalizePatientProfileType(
-        patient.patientProfileType || patient.panelType || patient.profile_type || patient.type,
-      ),
+      patientProfileType: resolvePatientPortalKind(patient) === "KIDS"
+        ? "KIDS"
+        : normalizePatientProfileType(
+            patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type || patient.profile_type || patient.type,
+          ),
       financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
         ...patient,
         convenioTipo: insuranceEligibility.convenioTipo === "convenio" ? "convenio" : "particular",
@@ -14105,7 +14134,7 @@ export function CoordinatorDashboard({
                         </div>
                         <div className="mt-4 flex items-center justify-between gap-3">
                           <span className="rounded-xl bg-white px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-slate-500">
-                            {getPatientProfileTypeLabel(patient.patientProfileType || patient.panelType || patient.type)}
+                            {getPatientProfileTypeLabel(resolvePatientPortalKind(patient) === "KIDS" ? "KIDS" : patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type || patient.type)}
                           </span>
                           <button
                             type="button"
@@ -14479,7 +14508,7 @@ export function CoordinatorDashboard({
                             compact
                           />
                           <div className="px-2 py-1 bg-slate-100 text-slate-500 rounded-lg text-[8px] font-bold uppercase">
-                            {getPatientProfileTypeLabel(patient.patientProfileType || patient.panelType || patient.type)}
+                            {getPatientProfileTypeLabel(resolvePatientPortalKind(patient) === "KIDS" ? "KIDS" : patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type || patient.type)}
                           </div>
                         </div>
                       </div>
@@ -17565,7 +17594,7 @@ export function CoordinatorDashboard({
                       <option value="prefiro_nao_informar">Prefiro não informar</option>
                     </select>
                   </FormField>
-                  <FormField label="Faixa etária / categoria">
+                  <FormField label="Faixa etária / categoria" helperText="Infantil e Adolescente usam a coleta interativa Kids, inclusive após F5.">
                     <select className={patientFormInputClass} value={newPatientForm.grupo} onChange={(e) => handlePatientFormChange("grupo", e.target.value)}>
                       <option value="infantil">Infantil</option>
                       <option value="adolescente">Adolescente</option>
@@ -17615,7 +17644,7 @@ export function CoordinatorDashboard({
                   </FormField>
                   <FormField
                     label="Tipo de portal do paciente"
-                    helperText="Define a área de acesso do paciente no aplicativo."
+                    helperText="Vinculado à categoria: Infantil/Adolescente → Kids; Adulto/Idoso → ABA ou convencional."
                   >
                     <select className={patientFormInputClass} value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
                       {PATIENT_PROFILE_TYPE_OPTIONS.map((option) => (

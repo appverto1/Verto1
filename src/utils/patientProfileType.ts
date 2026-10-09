@@ -58,6 +58,25 @@ export const mapPatientProfileTypeToLegacyPortalType = (value: any) => {
 };
 
 
+// The age-band selector in patient registration is clinical routing input, not
+// merely a visual label. A previous edit could persist group=infantil while
+// leaving patient_profile_type=ADULT, opening the adult collection by mistake.
+export const isPediatricPatientGroup = (group: unknown): boolean => {
+  const key = String(group ?? '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return ['infantil', 'crianca', 'adolescente', 'child', 'teen', 'adolescent'].includes(key);
+};
+
+export const profileTypeForPatientGroup = (
+  group: unknown,
+  selectedProfile: unknown,
+): PatientProfileType => isPediatricPatientGroup(group)
+  ? 'KIDS'
+  : normalizePatientProfileType(selectedProfile);
+
 export type PatientPortalKind = 'KIDS' | 'ADULT_ABA' | 'ADULT_CONVENTIONAL';
 
 const parseAgeValue = (value: any): number | null => {
@@ -77,6 +96,13 @@ const ageFromBirthDate = (value: any): number | null => {
 };
 
 export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
+  // Fail closed for pediatric sessions. The persisted demographic age band
+  // outranks conflicting legacy ADULT defaults until both fields are repaired.
+  if (isPediatricPatientGroup(
+    patient?.group || patient?.patient_group || patient?.grupo ||
+    patient?.anamnesisData?.grupo || patient?.anamnese?.grupo
+  )) return 'KIDS';
+
   const explicitCandidates = [
     patient?.patientProfileType,
     patient?.patient_profile_type,
