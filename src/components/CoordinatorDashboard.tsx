@@ -115,7 +115,7 @@ import {
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { NewBadge } from "./NewBadge";
 import { dataService } from "../services/dataService";
-import { CLINICAL_SPECIALTY_OPTIONS, clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey } from "../utils/clinicalSpecialties";
+import { CLINICAL_SPECIALTY_OPTIONS, activeClinicAppointmentSpecialty, clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey } from "../utils/clinicalSpecialties";
 import {
   getActiveNewFeatureKeys,
   isFeatureWithinNewWindow,
@@ -1344,6 +1344,9 @@ export function CoordinatorDashboard({
           matchIds,
           label: formatProfessionalDisplayLabel(member, String(member?.email || optionId).trim() || "Profissional"),
           specialty,
+          clinicSpecialty: activeClinicAppointmentSpecialty(member),
+          role: member?.role,
+          status: member?.status,
           profilePicture:
             member?.profilePicture ||
             member?.profile_picture ||
@@ -1371,6 +1374,11 @@ export function CoordinatorDashboard({
     return uniqueEntries;
   }, [therapistMembersById]);
 
+  const appointmentProfessionalOptions = useMemo(
+    () => therapistFilterOptions.filter((member) => Boolean(activeClinicAppointmentSpecialty(member))),
+    [therapistFilterOptions],
+  );
+
   // P1-23: derive appointment specialties only from authorized, current-clinic
   // professional memberships. ABA and non-clinical events are not specialties.
   const clinicSessionSpecialtyOptions = useMemo(() => {
@@ -1381,14 +1389,8 @@ export function CoordinatorDashboard({
       if (id && !uniqueMembers.has(id)) uniqueMembers.set(id, member);
     });
     uniqueMembers.forEach((member) => {
-      const raw = Array.isArray(member?.specialties)
-        ? member.specialties
-        : String(member?.specialties || member?.specialty || member?.professionalSpecialty || "").split(/[,;|]/);
-      raw.forEach((specialty: unknown) => {
-        if (!clinicalSpecialtyScopeKey(specialty)) return;
-        const canonical = CLINICAL_SPECIALTY_OPTIONS.find((option) => clinicalSpecialtiesMatch(option, specialty));
-        if (canonical) available.add(canonical);
-      });
+      const specialty = activeClinicAppointmentSpecialty(member);
+      if (specialty) available.add(specialty);
     });
     return Array.from(available).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [therapistMembersById]);
@@ -4356,15 +4358,15 @@ export function CoordinatorDashboard({
     const targetId = String(professionalId || "").trim();
     if (!targetId) return null;
     return (
-      therapistFilterOptions.find((member) => String(member.id || "") === targetId) ||
-      therapistFilterOptions.find(
+      appointmentProfessionalOptions.find((member) => String(member.id || "") === targetId) ||
+      appointmentProfessionalOptions.find(
         (member) =>
           Array.isArray((member as any).matchIds) &&
           (member as any).matchIds.some((candidateId: any) => String(candidateId || "").trim() === targetId),
       ) ||
       null
     );
-  }, [therapistFilterOptions]);
+  }, [appointmentProfessionalOptions]);
 
   const selectPatientForSession = (name: string) => {
     const patient = findSessionPatientByName(name);
@@ -4515,11 +4517,11 @@ export function CoordinatorDashboard({
     const normalizedName = normalizeUtf8Text(sessionProfessional).trim();
     return (
       findProfessionalOptionById(sessionProfessionalId) ||
-      therapistFilterOptions.find((member) => String(member.id || "") === normalizedName) ||
-      therapistFilterOptions.find((member) => member.label === normalizedName) ||
+      appointmentProfessionalOptions.find((member) => String(member.id || "") === normalizedName) ||
+      appointmentProfessionalOptions.find((member) => member.label === normalizedName) ||
       null
     );
-  }, [findProfessionalOptionById, sessionProfessional, sessionProfessionalId, therapistFilterOptions]);
+  }, [appointmentProfessionalOptions, findProfessionalOptionById, sessionProfessional, sessionProfessionalId]);
 
   useEffect(() => {
     if (!isAddSessionModalOpen || editingAppointmentId || !selectedSessionPatient) return;
@@ -5750,6 +5752,11 @@ export function CoordinatorDashboard({
   const handleSessionSubmit = async () => {
     if (sessionUsesWeeklyAgenda && sessionWeeklyValidationError) {
       showToast(sessionWeeklyValidationError, "error");
+      return;
+    }
+    if ((!editingAppointmentId && !sessionUsesWeeklyAgenda && !clinicalSpecialtiesMatch(selectedSessionProfessional?.clinicSpecialty, sessionApproach))
+      || (sessionUsesWeeklyAgenda && sessionWeeklySlots.some((slot) => !clinicalSpecialtiesMatch(findProfessionalOptionById(slot.professionalId)?.clinicSpecialty, slot.specialty)))) {
+      showToast("Selecione um profissional ativo da clínica com a especialidade correspondente.", "error");
       return;
     }
     if (!requiredSessionFieldsReady) {
@@ -15906,9 +15913,11 @@ export function CoordinatorDashboard({
                     {sessionApproach && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, sessionApproach)) && (
                       <option value={sessionApproach} disabled>{sessionApproach} (histórico; não disponível na equipe atual)</option>
                     )}
-                    {clinicSessionSpecialtyOptions.map((specialty) => (
-                      <option key={specialty} value={specialty}>{specialty}</option>
-                    ))}
+                    {clinicSessionSpecialtyOptions
+                      .filter((specialty) => !selectedSessionProfessional?.clinicSpecialty || clinicalSpecialtiesMatch(specialty, selectedSessionProfessional.clinicSpecialty))
+                      .map((specialty) => (
+                        <option key={specialty} value={specialty}>{specialty}</option>
+                      ))}
                   </select>
                 </div>
                 <div>
@@ -16199,10 +16208,19 @@ export function CoordinatorDashboard({
                     setSessionProfessionalManuallySelected(Boolean(nextId));
                     setSessionProfessionalId(nextId);
                     setSessionProfessional(nextProfessional?.label || "");
+                    if (nextProfessional?.clinicSpecialty && !clinicalSpecialtiesMatch(sessionApproach, nextProfessional.clinicSpecialty)) {
+                      setSessionApproach(nextProfessional.clinicSpecialty);
+                      setSessionInsuranceServiceCatalogId("");
+                      setSessionPatientTissAuthorizationId("");
+                      setSessionGuideNumber("");
+                      setSessionAuthorizationCode("");
+                    }
                   }}
                 >
                   <option value="">Selecione...</option>
-                  {therapistFilterOptions.map((member) => (
+                  {appointmentProfessionalOptions
+                    .filter((member) => !sessionApproach || clinicalSpecialtiesMatch(member.clinicSpecialty, sessionApproach))
+                    .map((member) => (
                     <option key={member.id} value={member.id}>
                       {member.label}
                     </option>
@@ -16784,9 +16802,11 @@ export function CoordinatorDashboard({
                                             {slot.specialty && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, slot.specialty)) && (
                                               <option value={String(slot.specialty)} disabled>{String(slot.specialty)} (histórico)</option>
                                             )}
-                                            {clinicSessionSpecialtyOptions.map((specialty) => (
-                                              <option key={specialty} value={specialty}>{specialty}</option>
-                                            ))}
+                                            {clinicSessionSpecialtyOptions
+                                              .filter((specialty) => !slot.professionalId || !findProfessionalOptionById(slot.professionalId)?.clinicSpecialty || clinicalSpecialtiesMatch(specialty, findProfessionalOptionById(slot.professionalId)?.clinicSpecialty))
+                                              .map((specialty) => (
+                                                <option key={specialty} value={specialty}>{specialty}</option>
+                                              ))}
                                           </select>
                                         </div>
                                         <div>
@@ -16799,11 +16819,16 @@ export function CoordinatorDashboard({
                                               updateSessionWeeklySlot(slotId, {
                                                 professionalId: event.target.value,
                                                 professionalName: professional?.label || "",
+                                                specialty: professional?.clinicSpecialty && !clinicalSpecialtiesMatch(slot.specialty, professional.clinicSpecialty)
+                                                  ? professional.clinicSpecialty
+                                                  : slot.specialty,
                                               });
                                             }}
                                           >
                                             <option value="">Selecione...</option>
-                                            {therapistFilterOptions.map((member) => (
+                                            {appointmentProfessionalOptions
+                                              .filter((member) => !slot.specialty || clinicalSpecialtiesMatch(member.clinicSpecialty, slot.specialty))
+                                              .map((member) => (
                                               <option key={member.id} value={member.id}>{member.label}</option>
                                             ))}
                                           </select>
