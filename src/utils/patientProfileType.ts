@@ -45,6 +45,29 @@ export const normalizePatientProfileType = (value: any, fallback: PatientProfile
   return PROFILE_TYPE_ALIASES[cleanProfileKey(raw)] || fallback;
 };
 
+// A categoria do cadastro e o perfil da coleta devem ser coerentes. A escolha
+// explícita do formulário só é persistida ao clicar em Salvar; não inferir a
+// categoria de um paciente adulto a partir de defaults antigos de KIDS.
+export const resolvePatientProfileTypeForCategory = (
+  category: any,
+  currentProfileType: any,
+): PatientProfileType => {
+  const key = cleanProfileKey(category);
+  if (key === 'infantil' || key === 'adolescente') return 'KIDS';
+  if (key === 'adulto' || key === 'idoso') {
+    return normalizePatientProfileType(currentProfileType) === 'ABA' ? 'ABA' : 'ADULT';
+  }
+  return normalizePatientProfileType(currentProfileType);
+};
+
+export const resolvePatientRegistrationCategory = (patient: any): string => {
+  const stored = cleanProfileKey(patient?.patient_group || patient?.group || patient?.grupo);
+  if (['infantil', 'adolescente', 'adulto', 'idoso'].includes(stored)) return stored;
+  const storedProfile = patient?.patientProfileType || patient?.patient_profile_type ||
+    patient?.panelType || patient?.panel_type || patient?.profileType || patient?.profile_type || patient?.type;
+  return normalizePatientProfileType(storedProfile) === 'KIDS' ? 'infantil' : 'adulto';
+};
+
 export const getPatientProfileTypeLabel = (value: any) => {
   const normalized = normalizePatientProfileType(value);
   return PATIENT_PROFILE_TYPE_OPTIONS.find((option) => option.value === normalized)?.label || 'Adulto convencional (adulto neurotípico)';
@@ -100,7 +123,7 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
     ageFromBirthDate(patient?.birthDate) ??
     ageFromBirthDate(patient?.dataNascimento) ??
     ageFromBirthDate(patient?.anamnesisData?.dataNascimento);
-  const group = cleanProfileKey(patient?.group || patient?.grupo || patient?.patientGroup || '');
+  const group = cleanProfileKey(patient?.patient_group || patient?.group || patient?.grupo || patient?.patientGroup || '');
   const pediatricGroup = ['infantil', 'crianca', 'criancas', 'kids', 'child', 'adolescente', 'teen'].includes(group);
   const isPediatric = (age !== null && age < 18) || (age === null && pediatricGroup);
 

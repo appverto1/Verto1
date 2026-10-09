@@ -6211,6 +6211,8 @@ export default function App() {
         currentPatient?.type,
     );
     const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
+    const requestedPatientCategory = String(updatedData?.group ?? updatedData?.grupo ?? '').trim().toLowerCase();
+    const mustConfirmPatientCategory = ['infantil', 'adolescente', 'adulto', 'idoso'].includes(requestedPatientCategory);
     const syncedAnamnesisData =
       isPatientPhotoOnlyPatch
         ? undefined
@@ -6494,13 +6496,30 @@ export default function App() {
         const updateResult = await dataService.updatePatient(
           String(updatedData.id),
           patientUpdatePayload,
-          { recordPayload: recordPayloadForAtomicSave || undefined },
+          {
+            recordPayload: recordPayloadForAtomicSave || undefined,
+            requireServerAck: mustConfirmPatientCategory,
+          },
         );
-        if (!updateResult?.success) {
+        if (!updateResult?.success || (mustConfirmPatientCategory && updateResult?.pending === true)) {
           rollbackOptimisticPatientState();
           const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
           alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
           return { success: false, error: errorMessage };
+        }
+        if (mustConfirmPatientCategory) {
+          const confirmation = await dataService.confirmPatientCategoryOnServer(
+            String(updatedData.id),
+            String(user?.activeWorkspaceId || user?.clinicId || '').trim(),
+          );
+          const confirmedCategory = String(confirmation?.data?.group || '').trim().toLowerCase();
+          const confirmedProfileType = normalizePatientProfileType(confirmation?.data?.patientProfileType);
+          if (!confirmation?.success || confirmedCategory !== requestedPatientCategory || confirmedProfileType !== updatedProfileType) {
+            rollbackOptimisticPatientState();
+            const errorMessage = confirmation?.error || 'Categoria ou perfil clínico divergente no banco. Atualize o cadastro e tente novamente.';
+            alert(`Não foi possível confirmar a categoria salva no servidor: ${errorMessage}`);
+            return { success: false, error: errorMessage };
+          }
         }
         billingSync = updateResult?.billing || updateResult?.data?.billing || null;
         void onAddActivityLog(
