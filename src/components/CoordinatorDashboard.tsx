@@ -11031,49 +11031,13 @@ export function CoordinatorDashboard({
     guidedTutorialModuleSignature || "baseline",
   ].join(":");
 
+  // The onboarding tutorial points only to the help icon. Navigation between
+  // modules lives in the Help Center, not in a device-dependent guided tour.
   const guidedTutorialSteps = [
     {
       targetId: "help-center",
       title: "Ajuda e tutoriais",
-      content: "A Central de Ajuda mostra apenas conteúdos permitidos para o seu papel e para os módulos ativos desta clínica.",
-      placement: "bottom" as const,
-    },
-    ...(canAccessTab("dashboard") ? [{
-      targetId: "nav-dashboard",
-      title: "Visão geral",
-      content: "Use a visão geral para acompanhar o que está disponível no seu contexto atual sem sair da clínica selecionada.",
-      placement: "bottom" as const,
-    }] : []),
-    ...(canAccessTab("patients") ? [{
-      targetId: "nav-patients",
-      title: isReceptionist ? "Pacientes" : "Prontuários e pacientes",
-      content: isReceptionist
-        ? "Acesse somente as rotinas de pacientes liberadas para Recepção/Assistência."
-        : "Abra os pacientes em que seu papel possui acesso. Os dados clínicos continuam protegidos pela equipe do caso e pela especialidade.",
-      placement: "bottom" as const,
-    }] : []),
-    ...(canAccessTab("agenda") ? [{
-      targetId: "nav-agenda",
-      title: "Agenda",
-      content: "A Agenda respeita seu escopo de visualização e os módulos ativos da clínica.",
-      placement: "bottom" as const,
-    }] : []),
-    ...(canAccessTab("protocols") ? [{
-      targetId: "nav-protocols",
-      title: "Protocolos",
-      content: "Acesse protocolos e avaliações somente quando o módulo clínico e suas permissões autorizarem.",
-      placement: "bottom" as const,
-    }] : []),
-    ...(canAccessTab("team") ? [{
-      targetId: "nav-team",
-      title: "Gestão da equipe",
-      content: "Este item aparece apenas para papéis autorizados a gerenciar acessos e equipe.",
-      placement: "bottom" as const,
-    }] : []),
-    {
-      targetId: "account-menu",
-      title: "Conta e contexto",
-      content: "Aqui você confere seu perfil e, quando autorizado, pode trocar de clínica, abrir configurações e reiniciar este tutorial.",
+      content: "Toque no botão de interrogação (?) para abrir a Central de Ajuda e aprender a utilizar a Verto sempre que precisar.",
       placement: "bottom" as const,
     },
   ];

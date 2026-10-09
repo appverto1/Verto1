@@ -9,13 +9,35 @@ const help = fs.readFileSync('src/components/HelpButton.tsx', 'utf8');
 assert.match(coordinator, /GUIDED_TUTORIAL_REVISION = "p0-contextual-v1"/);
 assert.match(coordinator, /guidedTutorialContextKey = \[[\s\S]*user\?\.id[\s\S]*workspaceScopeKey[\s\S]*normalizedRole[\s\S]*moduleAccessMode[\s\S]*guidedTutorialModuleSignature/);
 assert.match(coordinator, /Array\.from\(organizationModules\)\.sort\(\)\.join\(","\)/);
-assert.match(coordinator, /canAccessTab\("patients"\)/);
-assert.match(coordinator, /canAccessTab\("agenda"\)/);
-assert.match(coordinator, /canAccessTab\("protocols"\)/);
-assert.match(coordinator, /canAccessTab\("team"\)/);
 assert.doesNotMatch(coordinator, /guidedTutorialSteps[\s\S]{0,6000}requiredModules/, 'guided tour must reuse canonical tab authorization rather than inventing a second module policy');
 
 assert.match(coordinator, /data-tutorial-anchor=\{`nav-\$\{item\.id\}`\}/);
+// Only one onboarding balloon is permitted. Menu items differ between mobile
+// drawer and desktop sidebar, so none of them may become a guided-tour step.
+const tutorialStart = coordinator.indexOf('  const guidedTutorialSteps = [');
+const tutorialEnd = coordinator.indexOf('  const persistGuidedTutorial =', tutorialStart);
+assert.ok(tutorialStart > 0 && tutorialEnd > tutorialStart, 'tutorial source located');
+const tutorialSteps = coordinator.slice(tutorialStart, tutorialEnd);
+assert.equal((tutorialSteps.match(/targetId:/g) || []).length, 1, 'exactly one tutorial step');
+assert.match(tutorialSteps, /targetId: "help-center"/);
+assert.ok(tutorialSteps.includes('interrogação (?)'), 'the balloon explains the help button');
+assert.ok(!tutorialSteps.includes('targetId: "nav-')
+  && !tutorialSteps.includes('targetId: "account-menu"')
+  && !tutorialSteps.includes('canAccessTab('),
+  'no sidebar, navigation or account menu steps on desktop/mobile');
+assert.ok(coordinator.includes('Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0))'),
+  'old active multistep state must safely resume on the only help step');
+assert.ok(coordinator.includes('setIsMobileMenuOpen(step.targetId.startsWith("nav-"))'),
+  'resuming the help step closes a previously open mobile drawer');
+assert.ok(tutorial.includes('steps.length > 1 && (')
+  && tutorial.includes('Passo {currentStepIndex + 1} de {steps.length}'),
+  'one-step help must not show a meaningless step counter');
+assert.ok(tutorial.includes('steps.length > 1 && (')
+  && tutorial.includes('Pular tutorial'),
+  'one-step help must not offer a skip action');
+assert.ok(tutorial.includes("steps.length === 1 ? 'Entendi' : 'Concluir'"));
+assert.ok(tutorial.includes("onClose('complete')"));
+
 assert.match(help, /data-tutorial-anchor="help-center"/);
 assert.match(settings, /data-tutorial-anchor="account-menu"/);
 assert.match(settings, /Reiniciar tutorial guiado/);
