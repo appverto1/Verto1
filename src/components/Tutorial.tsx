@@ -113,9 +113,11 @@ export const TutorialOverlay = ({
         {placeBelow && <div className="tutorial-arrow arrow-top" />}
         {!placeBelow && <div className="tutorial-arrow arrow-bottom" />}
         <div className="flex justify-between items-center mb-2">
-          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
-            Passo {currentStepIndex + 1} de {steps.length}
-          </span>
+          {steps.length > 1 && (
+            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">
+              Passo {currentStepIndex + 1} de {steps.length}
+            </span>
+          )}
           <button type="button" onClick={() => onClose('pause')} aria-label="Pausar tutorial" title="Pausar e retomar depois">
             <X size={16} className="text-gray-400 hover:text-gray-600" />
           </button>
@@ -123,13 +125,15 @@ export const TutorialOverlay = ({
         <h3 className="font-bold text-gray-800 text-lg mb-1">{step.title}</h3>
         <p className="text-gray-600 text-sm mb-4 leading-relaxed">{step.content}</p>
         <div className="flex flex-wrap justify-between items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onClose('skip')}
-            className="text-xs font-bold text-gray-400 hover:text-rose-600"
-          >
-            Pular tutorial
-          </button>
+          {steps.length > 1 && (
+            <button
+              type="button"
+              onClick={() => onClose('skip')}
+              className="text-xs font-bold text-gray-400 hover:text-rose-600"
+            >
+              Pular tutorial
+            </button>
+          )}
           <div className="ml-auto flex items-center gap-3">
             {currentStepIndex > 0 && (
               <button
@@ -145,7 +149,7 @@ export const TutorialOverlay = ({
               onClick={() => (isLast ? onClose('complete') : onStepChange(currentStepIndex + 1))}
               className="bg-[#4318FF] text-white px-4 py-2 rounded-xl text-xs font-bold shadow-lg shadow-[#4318FF]/30 hover:opacity-90 transition-all flex items-center gap-2"
             >
-              {isLast ? 'Concluir' : 'Próximo'} <ChevronRight size={14} />
+              {isLast ? (steps.length === 1 ? 'Entendi' : 'Concluir') : 'Próximo'} <ChevronRight size={14} />
             </button>
           </div>
         </div>
