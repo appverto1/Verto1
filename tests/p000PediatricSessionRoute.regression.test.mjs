@@ -47,4 +47,18 @@ assert.doesNotMatch(detailSource, /void handleConfirmSessionStart\(\{ durationMi
 assert.match(detailSource, /\{hasAbaSessionSurface && isSessionModeOpen && \([\s\S]*?<SessionMode/);
 assert.match(detailSource, /activeTab === 'session' && hasConventionalSessionSurface/);
 
+// P000 #350: an authorization refusal while linking an existing session must
+// be terminal for that Agenda click, not a self-triggered alert/request loop.
+const agendaStartEffectStart = detailSource.indexOf('const startKey = String(startScheduledSessionKey || \'\').trim();');
+const agendaLinkStart = detailSource.indexOf('const serverLinkConfirmed = isConfirmedAbaSessionAppointmentLink', agendaStartEffectStart);
+const agendaLinkEnd = detailSource.indexOf("void requestSessionStart('fullscreen');", agendaLinkStart);
+assert.ok(agendaStartEffectStart >= 0 && agendaLinkStart > agendaStartEffectStart && agendaLinkEnd > agendaLinkStart,
+  'Agenda must keep its existing server-authoritative link/start gate');
+assert.match(detailSource.slice(agendaStartEffectStart, agendaLinkStart), /consumedScheduledSessionStartKeyRef\.current = startKey/,
+  'one explicit Agenda click must consume its start key before asynchronous linking');
+assert.match(detailSource.slice(agendaLinkStart, agendaLinkEnd), /if \(!serverLinkConfirmed\)/,
+  'denied session links must still be rejected by the backend confirmation guard');
+assert.doesNotMatch(detailSource.slice(agendaLinkStart, agendaLinkEnd), /consumedScheduledSessionStartKeyRef\.current = ''/,
+  'failed server authorization or request must not re-arm the same start key automatically');
+
 console.log('p000PediatricSessionRoute.regression.test.mjs: ok (12 profile scenarios + session contracts)');
