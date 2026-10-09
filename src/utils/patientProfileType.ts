@@ -61,6 +61,8 @@ export const mapPatientProfileTypeToLegacyPortalType = (value: any) => {
 export type PatientPortalKind = 'KIDS' | 'ADULT_ABA' | 'ADULT_CONVENTIONAL';
 
 const parseAgeValue = (value: any): number | null => {
+  // Number(null) and Number('') are zero: missing ages must not become babies.
+  if (value === null || value === undefined || String(value).trim() === '') return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
 };
@@ -80,6 +82,8 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
   const explicitCandidates = [
     patient?.patientProfileType,
     patient?.patient_profile_type,
+    patient?.panelType,
+    patient?.panel_type,
     patient?.profileType,
     patient?.profile_type,
     patient?.type,
@@ -89,6 +93,26 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
     patient?.anamnesisData?.profileType,
     patient?.anamnesisData?.formType,
   ];
+
+  const age =
+    parseAgeValue(patient?.age) ??
+    ageFromBirthDate(patient?.birth_date) ??
+    ageFromBirthDate(patient?.birthDate) ??
+    ageFromBirthDate(patient?.dataNascimento) ??
+    ageFromBirthDate(patient?.anamnesisData?.dataNascimento);
+  const group = cleanProfileKey(patient?.group || patient?.grupo || patient?.patientGroup || '');
+  const pediatricGroup = ['infantil', 'crianca', 'criancas', 'kids', 'child', 'adolescente', 'teen'].includes(group);
+  const isPediatric = (age !== null && age < 18) || (age === null && pediatricGroup);
+
+  // Older records can carry a generic ADULT default alongside a persisted
+  // KIDS portal/panel field. Never route a confirmed pediatric patient into
+  // the adult collection screen because of that stale generic default.
+  const hasExplicitKids = explicitCandidates.some((candidate) => {
+    const key = cleanProfileKey(candidate);
+    return ['kids_tea', 'kids', 'kid', 'child', 'infantil', 'crianca', 'crianca_tea', 'teen', 'adolescente', 'adolescent'].includes(key);
+  });
+  if (hasExplicitKids && isPediatric) return 'KIDS';
+  if (pediatricGroup && isPediatric) return 'KIDS';
 
   for (const candidate of explicitCandidates) {
     const raw = String(candidate ?? '').trim();
@@ -105,13 +129,6 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
     }
     if (raw.toUpperCase() === 'KIDS') return 'KIDS';
   }
-
-  const age =
-    parseAgeValue(patient?.age) ??
-    ageFromBirthDate(patient?.birth_date) ??
-    ageFromBirthDate(patient?.birthDate) ??
-    ageFromBirthDate(patient?.dataNascimento) ??
-    ageFromBirthDate(patient?.anamnesisData?.dataNascimento);
 
   return age !== null && age <= 12 ? 'KIDS' : 'ADULT_CONVENTIONAL';
 };
