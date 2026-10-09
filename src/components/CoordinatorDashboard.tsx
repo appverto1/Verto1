@@ -1050,6 +1050,7 @@ export function CoordinatorDashboard({
     action?: "charge" | "payment" | "partial_payment" | "discount" | "courtesy" | "refund" | "receipt" | "due_date" | "cancel" | "history";
   } | null>(null);
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
+  const [clinicSpecialtiesError, setClinicSpecialtiesError] = useState("");
   const [therapistMembersLoading, setTherapistMembersLoading] = useState(false);
   const therapistMembersRequestSeqRef = useRef(0);
   const therapistMembersWorkspaceRef = useRef("");
@@ -1289,6 +1290,7 @@ export function CoordinatorDashboard({
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
+    setClinicSpecialtiesError("");
     if (!workspaceId) {
       setTherapistMembersLoading(false);
       return;
@@ -1296,19 +1298,41 @@ export function CoordinatorDashboard({
     setTherapistMembersLoading(true);
     const loadTherapistMembers = async () => {
       try {
-        const result = await dataService.getClinicMembers();
+        const [result, clinicSpecialtiesResult] = await Promise.all([
+          dataService.getClinicMembers(),
+          dataService.getClinicSchedulingSpecialties(workspaceId),
+        ]);
         if (
           therapistMembersRequestSeqRef.current !== requestSeq ||
-          therapistMembersWorkspaceRef.current !== workspaceId ||
-          !result?.success ||
-          !Array.isArray(result?.data)
+          therapistMembersWorkspaceRef.current !== workspaceId
         ) return;
+        if (!result?.success || !Array.isArray(result?.data)) {
+          setClinicSpecialtiesError("Não foi possível carregar a equipe clínica.");
+          return;
+        }
+        const activeSpecialtiesById = new Map<string, string>();
+        if (clinicSpecialtiesResult?.success && Array.isArray(clinicSpecialtiesResult.data)) {
+          clinicSpecialtiesResult.data.forEach((row: any) => {
+            const id = String(row?.user_id || "").trim();
+            const specialty = String(row?.specialty || "").trim();
+            if (id && specialty) activeSpecialtiesById.set(id, specialty);
+          });
+        } else {
+          setClinicSpecialtiesError(clinicSpecialtiesResult?.error || "Especialidades indisponíveis.");
+        }
         const byId: Record<string, any> = {};
         result.data.forEach((member: any) => {
           const ids = collectProfessionalIdentifierCandidates(member);
           const id = ids[0] || "";
           if (isPatientCareProfessionalMember(member) && id) {
-            const normalizedMember = { ...member, id, matchIds: ids };
+            const normalizedMember = {
+              ...member,
+              id,
+              matchIds: ids,
+              // Never use a global profile or a pending invitation as the
+              // authority for clinic availability.
+              clinicSpecialty: activeSpecialtiesById.get(String(member?.id || member?.user_id || id)) || null,
+            };
             ids.forEach((candidateId) => {
               byId[candidateId] = normalizedMember;
             });
@@ -15919,6 +15943,10 @@ export function CoordinatorDashboard({
                         <option key={specialty} value={specialty}>{specialty}</option>
                       ))}
                   </select>
+                  {clinicSpecialtiesError && <p role="alert" className="mt-1 text-xs text-rose-700">{clinicSpecialtiesError}</p>}
+                  {!therapistMembersLoading && !clinicSpecialtiesError && clinicSessionSpecialtyOptions.length === 0 && (
+                    <p className="mt-1 text-xs text-amber-700">Cadastre ou vincule um profissional ativo para disponibilizar especialidades nesta clínica.</p>
+                  )}
                 </div>
                 <div>
                   <label className={sessionModalLabelClass}>
