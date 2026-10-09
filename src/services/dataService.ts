@@ -2402,11 +2402,44 @@ export const dataService = {
     }
   },
 
-  async updatePatient(id: string, updates: any, options: { recordPayload?: any } = {}) {
+  async updatePatient(id: string, updates: any, options: { recordPayload?: any; requireServerAck?: boolean } = {}) {
     const aggregatePayload = options?.recordPayload && typeof options.recordPayload === 'object'
       ? { ...(updates || {}), recordPayload: options.recordPayload }
       : updates;
-    return await saveOfflineFirst(id, aggregatePayload, 'patient', `/api/patients/${id}`, 'PATCH');
+    return await saveOfflineFirst(id, aggregatePayload, 'patient', `/api/patients/${id}`, 'PATCH', {
+      requireServerAck: options?.requireServerAck === true,
+    });
+  },
+
+  // Verificação pós-Salvar: nunca comparar com IndexedDB/outbox, que pode conter
+  // uma escolha ainda não confirmada. Apenas o GET autenticado do banco vale.
+  async confirmPatientCategoryOnServer(id: string, workspaceId?: string) {
+    const patientId = String(id || '').trim();
+    if (!patientId) return { success: false, error: 'Paciente inválido para confirmação.' };
+    const endpoint = endpointWithQuery('/api/patients', { limit: 1, patientId });
+    try {
+      const headers: Record<string, string> = await getNoStoreAuthHeaders(false);
+      if (workspaceId) headers['X-Workspace-Id'] = workspaceId;
+      const result = await fetchNoStoreJsonWithRetry(endpoint, {
+        credentials: 'include',
+        headers,
+      }, {
+        helperName: 'confirmPatientCategoryOnServer', operation: 'detail',
+        table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: true,
+      }, 'Não foi possível confirmar a categoria no servidor.');
+      if (result?.success !== true || !Array.isArray(result?.data)) {
+        return { success: false, error: result?.error || 'Leitura do cadastro não confirmada.' };
+      }
+      const persisted = result.data.find((row: any) => String(row?.id || '') === patientId);
+      if (!persisted) return { success: false, error: 'Paciente não encontrado no escopo da clínica.' };
+      return { success: true, data: {
+        group: persisted.patient_group ?? persisted.group ?? persisted.grupo,
+        patientProfileType: persisted.patient_profile_type ?? persisted.patientProfileType ??
+          persisted.panel_type ?? persisted.panelType,
+      } };
+    } catch {
+      return { success: false, error: 'A leitura de confirmação do cadastro falhou.' };
+    }
   },
 
   async deletePatient(id: string) {
