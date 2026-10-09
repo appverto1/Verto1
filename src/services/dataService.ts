@@ -2406,7 +2406,22 @@ export const dataService = {
     const aggregatePayload = options?.recordPayload && typeof options.recordPayload === 'object'
       ? { ...(updates || {}), recordPayload: options.recordPayload }
       : updates;
-    return await saveOfflineFirst(id, aggregatePayload, 'patient', `/api/patients/${id}`, 'PATCH');
+    // P000: a clinical profile determines the entire collection interface.
+    // Never report a locally queued KIDS/ADULT switch as successfully saved:
+    // F5 could reload ADULT from the server while the clinic expects Kids.
+    const mustConfirmClinicalProfile = [
+      'group', 'patient_group', 'grupo', 'patientProfileType',
+      'patient_profile_type', 'panelType', 'panel_type',
+      'profileType', 'profile_type', 'type'
+    ].some((key) => Object.prototype.hasOwnProperty.call(updates || {}, key));
+    return await saveOfflineFirst(
+      id,
+      aggregatePayload,
+      'patient',
+      `/api/patients/${id}`,
+      'PATCH',
+      { requireServerAck: mustConfirmClinicalProfile },
+    );
   },
 
   async deletePatient(id: string) {
