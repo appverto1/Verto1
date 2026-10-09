@@ -21,6 +21,8 @@ assert.equal(resolvePatientPortalKind({ patientProfileType: 'ADULT', portal_type
   'legacy pediatric portal plus stale adult default must not enter adult collection');
 assert.equal(resolvePatientPortalKind({ patientProfileType: 'ADULT', group: 'infantil', age: 6 }), 'KIDS',
   'pediatric age and pediatric clinic category defeat stale adult default');
+assert.equal(resolvePatientPortalKind({ patientProfileType: 'ADULT', age: 7 }), 'KIDS',
+  'age-confirmed child must not enter adult collector even with legacy ADULT default');
 assert.equal(resolvePatientPortalKind({ type: 'adult_conventional', age: 35 }), 'ADULT_CONVENTIONAL');
 assert.equal(resolvePatientPortalKind({ patientProfileType: 'ABA', age: 29 }), 'ADULT_ABA');
 assert.equal(resolvePatientPortalKind({ panelType: 'ADULT', age: 35, portal_type: 'kids_tea' }), 'ADULT_CONVENTIONAL',
