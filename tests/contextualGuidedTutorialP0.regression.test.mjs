@@ -16,6 +16,28 @@ assert.match(coordinator, /canAccessTab\("team"\)/);
 assert.doesNotMatch(coordinator, /guidedTutorialSteps[\s\S]{0,6000}requiredModules/, 'guided tour must reuse canonical tab authorization rather than inventing a second module policy');
 
 assert.match(coordinator, /data-tutorial-anchor=\{`nav-\$\{item\.id\}`\}/);
+// Only one onboarding balloon is permitted. Menu items differ between mobile
+// drawer and desktop sidebar, so none of them may become a guided-tour step.
+const tutorialStart = coordinator.indexOf('  const guidedTutorialSteps = [');
+const tutorialEnd = coordinator.indexOf('  const persistGuidedTutorial =', tutorialStart);
+assert.ok(tutorialStart > 0 && tutorialEnd > tutorialStart, 'tutorial source located');
+const tutorialSteps = coordinator.slice(tutorialStart, tutorialEnd);
+assert.equal((tutorialSteps.match(/targetId:/g) || []).length, 1, 'exactly one tutorial step');
+assert.match(tutorialSteps, /targetId: "help-center"/);
+assert.match(tutorialSteps, /interrogação \\(\\?\\)/);
+assert.doesNotMatch(tutorialSteps, /targetId: "nav-|targetId: "account-menu"|canAccessTab\\(/,
+  'no sidebar, navigation or account menu steps on desktop/mobile');
+assert.match(coordinator, /Math\\.min\\(guidedTutorialSteps\\.length - 1, Number\\(stored\\.step \\|\\| 0\\)\\)/,
+  'old active multistep state must safely resume on the only help step');
+assert.match(coordinator, /setIsMobileMenuOpen\\(step\\.targetId\\.startsWith\\("nav-"\\)\\)/,
+  'resuming the help step closes a previously open mobile drawer');
+assert.match(tutorial, /steps\\.length > 1 && \\(\\s*<span[^>]*>[\\s\\S]*?Passo/,
+  'one-step help must not show a meaningless step counter');
+assert.match(tutorial, /steps\\.length > 1 && \\(\\s*<button[\\s\\S]*?Pular tutorial/,
+  'one-step help must not offer a skip action');
+assert.match(tutorial, /steps\\.length === 1 \\? 'Entendi' : 'Concluir'/);
+assert.match(tutorial, /onClose\\('complete'\\)/);
+
 assert.match(help, /data-tutorial-anchor="help-center"/);
 assert.match(settings, /data-tutorial-anchor="account-menu"/);
 assert.match(settings, /Reiniciar tutorial guiado/);
