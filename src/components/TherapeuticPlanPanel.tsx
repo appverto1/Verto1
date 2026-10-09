@@ -3165,29 +3165,6 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <button type="button" aria-label="Fechar aviso" onClick={() => setActivationWarning('')}><X size={15} /></button>
         </div>
       )}
-      {ptsDraftConflict && ptsDraftConflict.planId === editingScopeId && (
-        <div role="alert" className={`rounded-2xl border p-4 text-sm ${isDark ? 'border-amber-400/40 bg-amber-950/40 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
-          <p className="font-semibold">Rascunho alterado em outra edição · revisão {ptsDraftConflict.revision}</p>
-          <p className="mt-1">O preenchimento desta janela está preservado, mas sua revisão está desatualizada. Nenhuma alteração será sobrescrita sem sua decisão.</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" disabled={scopeSaving} className="rounded-lg border border-current px-3 py-2 text-xs font-semibold" onClick={() => {
-              if (!window.confirm('Carregar o rascunho atual do servidor? As alterações ainda não salvas desta janela serão descartadas.')) return;
-              setPtsDraftOverride({ planId: ptsDraftConflict.planId, version: ptsDraftConflict.version });
-              setPtsEditorReloadKey((value) => value + 1);
-              setApprovedPtsRebaseRevision(null);
-              setPtsDraftConflict(null);
-              setError('');
-            }}>Carregar versão do servidor</button>
-            <button type="button" disabled={scopeSaving} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white" onClick={() => {
-              if (!window.confirm('Aplicar seu preenchimento atual sobre a revisão mais recente? Isso substituirá alterações realizadas por outra pessoa neste rascunho.')) return;
-              setApprovedPtsRebaseRevision(ptsDraftConflict.revision);
-              setPtsDraftConflict(null);
-              setError('');
-              setActivationWarning('Revisão atual autorizada para esta edição. Clique em Salvar ou Ativar para confirmar sua escolha.');
-            }}>Manter meu preenchimento e revisar</button>
-          </div>
-        </div>
-      )}
       {error && <div className={`rounded-2xl border px-4 py-3 text-sm ${isDark ? 'border-rose-400/25 bg-rose-500/10 text-rose-100' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}<button type="button" className="ml-2 underline" onClick={() => void loadPlan(true)}>Tentar novamente</button></div>}
 
       {showPlanManager || !workspaceScope ? (
@@ -3228,6 +3205,30 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           onRequestClose={() => setEditingScopeId('')}
           isDark={isDark}
         >
+      {ptsDraftConflict && ptsDraftConflict.planId === editingScopeId && (
+        <div role="alert" className={`rounded-2xl border p-4 text-sm ${isDark ? 'border-amber-400/40 bg-amber-950/40 text-amber-100' : 'border-amber-300 bg-amber-50 text-amber-900'}`}>
+          <p className="font-semibold">Rascunho alterado em outra edição · revisão {ptsDraftConflict.revision}</p>
+          <p className="mt-1">O preenchimento desta janela está preservado, mas sua revisão está desatualizada. Nenhuma alteração será sobrescrita sem sua decisão.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" disabled={scopeSaving} className="rounded-lg border border-current px-3 py-2 text-xs font-semibold" onClick={() => {
+              if (!window.confirm('Carregar o rascunho atual do servidor? As alterações ainda não salvas desta janela serão descartadas.')) return;
+              setPtsDraftOverride({ planId: ptsDraftConflict.planId, version: ptsDraftConflict.version });
+              setPtsEditorReloadKey((value) => value + 1);
+              setApprovedPtsRebaseRevision(null);
+              setPtsDraftConflict(null);
+              setError('');
+            }}>Carregar versão do servidor</button>
+            <button type="button" disabled={scopeSaving} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-semibold text-white" onClick={() => {
+              if (!window.confirm('Aplicar seu preenchimento atual sobre a revisão mais recente? Isso substituirá alterações realizadas por outra pessoa neste rascunho.')) return;
+              setApprovedPtsRebaseRevision(ptsDraftConflict.revision);
+              setPtsDraftConflict(null);
+              setError('');
+              setActivationWarning('Revisão atual autorizada para esta edição. Clique em Salvar ou Ativar para confirmar sua escolha.');
+            }}>Manter meu preenchimento e revisar</button>
+          </div>
+        </div>
+      )}
+          {error && <p role="alert" className="mb-3 rounded-xl border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>}
           <PtsWorkspaceEditor
             key={`${selectedPtsScope.id}:${String(draftVersionForScope(selectedPtsScope)?.id || 'draft')}:${ptsEditorReloadKey}`}
             scope={selectedPtsScope}
