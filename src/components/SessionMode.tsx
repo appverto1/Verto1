@@ -8029,6 +8029,16 @@ export const SessionMode = ({
                     : 'Esta sessão não possui PTS de especialidade vinculado e nenhum alvo ativo foi encontrado no PEI. Confira o plano e inicie a coleta a partir do contexto clínico correto.'}
               </p>
               <p className="mt-3 text-sm text-slate-600">A sessão e seus registros existentes foram preservados. Nenhum alvo de outra especialidade será adicionado automaticamente.</p>
+              <label className="mt-5 block text-xs font-medium text-slate-600">
+                Evolução e observações da sessão infantil (opcional)
+                <textarea value={sessionNote} onChange={(event) => setSessionNote(event.target.value)}
+                  maxLength={4000} placeholder="Observações do atendimento; os alvos serão disponibilizados após ativação no PTS."
+                  className="mt-2 min-h-32 w-full resize-y rounded-xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-slate-700 outline-none focus:border-violet-400" />
+              </label>
+              {activeSession && <button type="button" onClick={requestEndSession}
+                className="mt-4 w-full rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-700">
+                Revisar e encerrar atendimento sem coleta de alvos
+              </button>}
               <div className="mt-6 flex flex-col gap-3 sm:flex-row">
                 {activeTherapeuticPlanId && <button type="button" onClick={() => setTherapeuticPlanReloadKey((value) => value + 1)} className="flex-1 rounded-xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white hover:bg-[#6425df]">Recarregar alvos do PTS</button>}
                 <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Voltar ao prontuário e revisar o plano</button>
