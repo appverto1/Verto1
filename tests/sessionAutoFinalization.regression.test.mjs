@@ -38,7 +38,8 @@ await test('reopened ABA session waits for server-confirmed patient and appointm
  assert.match(linkBranch,/isConfirmedAbaSessionAppointmentLink\(saveResult/);
  assert.ok(linkBranch.indexOf('isConfirmedAbaSessionAppointmentLink(saveResult')<linkBranch.indexOf('persistActiveSession({'),'persist only after server check');
  assert.ok(linkBranch.indexOf('persistActiveSession({')<linkBranch.indexOf('setIsSessionModeOpen(true)'),'open only after canonical link persistence');
- assert.match(linkBranch,/consumedScheduledSessionStartKeyRef\.current = ''/);
+ assert.doesNotMatch(linkBranch,/consumedScheduledSessionStartKeyRef\.current = ''/,'server-denied or failed appointment linkage must not re-arm the same Agenda start key');
+ assert.match(patientDetail,/consumedScheduledSessionStartKeyRef\.current = startKey/,'Agenda consumes the start key before asynchronous server validation');
 });
 await test('paused time is excluded; milliseconds preserved; invalid timestamp rejected',()=>{
  const r=therapeuticTimerCompletion({startedAt:'2026-10-01T10:00:00Z',runningSince:'2026-10-01T10:01:30Z',accumulatedMs:5250},'2026-10-01T10:02:00Z');assert.equal(r.totalMs,35250);assert.equal(r.seconds,35.25);assert.equal(r.effectiveStartedAt,'2026-10-01T10:01:24.750Z');assert.throws(()=>therapeuticTimerCompletion({startedAt:'bad',runningSince:null,accumulatedMs:10},'2026-10-01T10:02:00Z'));
