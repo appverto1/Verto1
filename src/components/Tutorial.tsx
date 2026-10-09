@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ChevronRight } from 'lucide-react';
 
 type TutorialCloseReason = 'pause' | 'skip' | 'complete';
@@ -61,7 +62,7 @@ export const TutorialOverlay = ({
     };
   }, [updatePosition, currentStepIndex, steps]);
 
-  if (!coords) return null;
+  if (!coords || typeof document === 'undefined') return null;
   const step = steps[currentStepIndex];
   if (!step) return null;
   const isLast = currentStepIndex === steps.length - 1;
@@ -88,8 +89,11 @@ export const TutorialOverlay = ({
     position: 'absolute', zIndex: 142,
   };
 
-  return (
-    <div className="fixed inset-0 z-[140] overflow-hidden" role="dialog" aria-modal="true" aria-label="Tutorial guiado da Verto">
+  // The tutorial may be mounted inside a sticky/animated header. A local
+  // z-index cannot escape that stacking context and its card falls behind
+  // patient drawers/modals. Portal the entire layer above clinical surfaces.
+  return createPortal(
+    <div className="fixed inset-0 z-[1000] overflow-hidden" role="dialog" aria-modal="true" aria-label="Tutorial guiado da Verto">
       <div
         aria-hidden="true"
         style={{
@@ -146,6 +150,7 @@ export const TutorialOverlay = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
