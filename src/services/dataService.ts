@@ -22,7 +22,7 @@ import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
 import { isDurableDeferredSessionRecord, isSessionCompletionQueueRecord } from '../utils/sessionAutoFinalization';
-import { normalizePatientProfileType } from '../utils/patientProfileType';
+import { normalizePatientProfileType, profileTypeForPatientGroup } from '../utils/patientProfileType';
 import {
   mirrorPatientInsuranceEligibilityAliases,
   normalizePatientInsuranceEligibility,
@@ -1686,7 +1686,9 @@ export const dataService = {
       convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
-      group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
+      // Canonical identity in patients wins over potentially stale encrypted
+      // anamnesis payload after F5 or clinic switching.
+      group: patient?.patient_group || patient?.group || recordPayload?.grupo || null,
       source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
       rg: recordPayload?.rg || patient?.rg || null,
       cep: recordPayload?.cep || patient?.cep || null,
@@ -1726,21 +1728,23 @@ export const dataService = {
           patient?.guardian?.relacao ||
           null,
       },
-      patientProfileType: normalizePatientProfileType(
-        recordPayload?.patientProfileType ||
-          recordPayload?.panelType ||
-          patient?.patient_profile_type ||
+      patientProfileType: profileTypeForPatientGroup(
+        patient?.patient_group || patient?.group || recordPayload?.grupo,
+        patient?.patient_profile_type ||
           patient?.panel_type ||
           patient?.profile_type ||
-          patient?.type,
-      ),
-      panelType: normalizePatientProfileType(
-        recordPayload?.panelType ||
+          patient?.type ||
           recordPayload?.patientProfileType ||
-          patient?.panel_type ||
+          recordPayload?.panelType,
+      ),
+      panelType: profileTypeForPatientGroup(
+        patient?.patient_group || patient?.group || recordPayload?.grupo,
+        patient?.panel_type ||
           patient?.patient_profile_type ||
           patient?.profile_type ||
-          patient?.type,
+          patient?.type ||
+          recordPayload?.panelType ||
+          recordPayload?.patientProfileType,
       ),
       anamnesisData,
       pei: normalizePeiGoals(recordPayload, patient),
