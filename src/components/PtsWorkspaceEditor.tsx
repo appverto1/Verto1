@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -105,6 +105,7 @@ export function PtsWorkspaceEditor({
   isDark = false,
   saving = false,
   onSave,
+  approvedConflictRevision,
 }: {
   key?: React.Key;
   scope: any;
@@ -114,6 +115,7 @@ export function PtsWorkspaceEditor({
   clinicTimeZone?: string;
   isDark?: boolean;
   saving?: boolean;
+  approvedConflictRevision?: number | null;
   onSave: (payload: {
     action: 'save' | 'activate';
     versionId: string;
@@ -122,7 +124,7 @@ export function PtsWorkspaceEditor({
     commonObjectives: string[];
     specialtyObjectives: Record<string, string[]>;
     reviewDueDate: string | null;
-  }) => Promise<void> | void;
+  }) => Promise<{ success: boolean; draftRevision?: number; draftPreserved?: boolean } | void> | void;
 }) {
   const participantIds = useMemo<string[]>(() => Array.from(new Set<string>([
     String(scope?.responsible_professional_id || ''),
@@ -176,6 +178,8 @@ export function PtsWorkspaceEditor({
   const draftVersionNumber = Number(draftVersion?.version_number || draftVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || 1);
   const draftRevision = Number(draftVersion?.draft_revision || draftVersion?.draftRevision || scope?.pts_lineage?.draftVersion?.draftRevision || scope?.edit_version || 1);
   const draftVersionId = String(draftVersion?.id || scope?.pts_lineage?.draftVersion?.id || '');
+  const confirmedRevisionRef = useRef(draftRevision);
+  const persistInFlightRef = useRef(false);
 
   const setList = <K extends keyof PtsClinicalPayload>(key: K, value: PtsClinicalPayload[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
@@ -223,36 +227,41 @@ export function PtsWorkspaceEditor({
     id: makeId('risk'), title: '', description: '', severity: 'medium', responsePlan: '', status: 'active',
   } as PtsRisk]);
   const persist = async (action: 'save' | 'activate') => {
-    if (action === 'activate') {
-      setValidationVisible(true);
-      if (!activationValidation.valid) {
-        const sections = Object.keys(activationValidation.sectionErrors).filter((section) => section !== 'overview');
-        setOpenSections((current) => ({ ...current, ...Object.fromEntries(sections.map((section) => [section, true])) }));
-        window.requestAnimationFrame(() => {
-          const target = activationValidation.firstFieldId ? document.getElementById(activationValidation.firstFieldId) : null;
-          target?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          if (target instanceof HTMLElement) target.focus({ preventScroll: true });
-        });
-        // Activation may be blocked, but the current form must still reach the
-        // server so the draft is persisted. The activation RPC commits the
-        // draft first and returns an activation-only validation outcome.
-      }
+    if (saving || persistInFlightRef.current) return;
+    // An explicit user decision after a real 409 can rebase the local form.
+    // Merely receiving newer props never authorizes overwriting concurrent work.
+    if (approvedConflictRevision && Number.isSafeInteger(approvedConflictRevision)
+        && approvedConflictRevision > confirmedRevisionRef.current) {
+      confirmedRevisionRef.current = approvedConflictRevision;
     }
-    const normalized = stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(draft, {
-      participantIds,
-      specialties,
-      defaultCaseManagerId: String(scope?.responsible_professional_id || ''),
-      defaultStartedAt: String(scope?.created_at || '').slice(0, 10),
-    }));
-    await onSave({
-      action,
-      versionId: draftVersionId,
-      expectedDraftRevision: draftRevision,
-      ptsPayload: normalized,
-      commonObjectives: ptsCommonObjectives(normalized),
-      specialtyObjectives: ptsSpecialtyObjectives(normalized),
-      reviewDueDate: normalized.nextReviewDate || null,
-    });
+    persistInFlightRef.current = true;
+    try {
+      const normalized = stripPtsTrackingFieldsForDraft(normalizePtsClinicalPayload(draft, {
+        participantIds,
+        specialties,
+        defaultCaseManagerId: String(scope?.responsible_professional_id || ''),
+        defaultStartedAt: String(scope?.created_at || '').slice(0, 10),
+      }));
+      const outcome = await onSave({
+        action,
+        versionId: draftVersionId,
+        // The ACK revision is updated synchronously, even before React can
+        // rerender with refreshed props after "Salvar rascunho".
+        expectedDraftRevision: confirmedRevisionRef.current,
+        ptsPayload: normalized,
+        commonObjectives: ptsCommonObjectives(normalized),
+        specialtyObjectives: ptsSpecialtyObjectives(normalized),
+        reviewDueDate: normalized.nextReviewDate || null,
+      });
+      const nextRevision = Number(outcome?.draftRevision || 0);
+      if ((outcome?.success || outcome?.draftPreserved)
+          && Number.isSafeInteger(nextRevision)
+          && nextRevision > confirmedRevisionRef.current) {
+        confirmedRevisionRef.current = nextRevision;
+      }
+    } finally {
+      persistInFlightRef.current = false;
+    }
   };
 
   return (
@@ -443,7 +452,7 @@ export function PtsWorkspaceEditor({
       </section>
 
       <div className={`sticky bottom-3 z-10 flex flex-col gap-3 rounded-2xl border p-4 shadow-lg sm:flex-row sm:items-center sm:justify-between sm:p-5 ${surface}`}>
-        <div className="flex items-start gap-2"><CheckCircle2 className="mt-0.5 text-emerald-500" size={18} /><p className={`text-xs leading-5 ${subtle}`}>O rascunho pode ser salvo incompleto. Ao ativar, esta versão se torna imutável e passa a ser a referência apenas para novos contextos clínicos.</p></div>
+        <div className="flex items-start gap-2"><CheckCircle2 className="mt-0.5 text-emerald-500" size={18} /><p className={`text-xs leading-5 ${subtle}`}>Preenchimentos clínicos são opcionais para criar e ativar o PTS. Após ativar, esta versão fica imutável; novas informações podem ser registradas em outra versão.</p></div>
         <div className="flex flex-col gap-2 sm:flex-row">
           <button type="button" disabled={saving} onClick={() => void persist('save')} className={secondaryButton}>{saving ? <><Loader2 size={16} className="animate-spin" /> Salvando...</> : 'Salvar rascunho'}</button>
           <button type="button" disabled={saving || !draftVersionId} onClick={() => void persist('activate')} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:opacity-50 sm:w-auto">{saving ? <><Loader2 size={16} className="animate-spin" /> Processando...</> : `Ativar PTS · v${draftVersionNumber}`}</button>
