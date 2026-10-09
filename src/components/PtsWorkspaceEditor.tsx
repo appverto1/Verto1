@@ -148,7 +148,6 @@ export function PtsWorkspaceEditor({
     return snapshot ? { ...scope, ...snapshot, pts_payload: snapshot.pts_payload || {} } : scope;
   }, [draftVersion, scope]);
   const [draft, setDraft] = useState<PtsClinicalPayload>(() => stripPtsTrackingFieldsForDraft(hydratePtsClinicalPayloadFromPlan(draftScope)));
-  const [validationVisible, setValidationVisible] = useState(false);
   const [openSections, setOpenSections] = useState<Record<string, boolean>>({
     context: true,
     goals: true,
@@ -174,7 +173,7 @@ export function PtsWorkspaceEditor({
   }`;
 
   const activationValidation = useMemo(() => validatePtsDraftForActivation(draft), [draft]);
-  const sectionErrors = validationVisible ? activationValidation.sectionErrors : {};
+  const sectionErrors = activationValidation.sectionErrors;
   const draftVersionNumber = Number(draftVersion?.version_number || draftVersion?.versionNumber || scope?.pts_lineage?.draftVersion?.versionNumber || 1);
   const draftRevision = Number(draftVersion?.draft_revision || draftVersion?.draftRevision || scope?.pts_lineage?.draftVersion?.draftRevision || scope?.edit_version || 1);
   const draftVersionId = String(draftVersion?.id || scope?.pts_lineage?.draftVersion?.id || '');
