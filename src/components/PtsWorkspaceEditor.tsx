@@ -124,7 +124,7 @@ export function PtsWorkspaceEditor({
     commonObjectives: string[];
     specialtyObjectives: Record<string, string[]>;
     reviewDueDate: string | null;
-  }) => Promise<{ success: boolean; draftRevision?: number; draftPreserved?: boolean } | void> | void;
+  }) => Promise<{ success: boolean; draftRevision?: number; draftPreserved?: boolean }>;
 }) {
   const participantIds = useMemo<string[]>(() => Array.from(new Set<string>([
     String(scope?.responsible_professional_id || ''),
