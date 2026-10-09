@@ -2130,7 +2130,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     // inaccessible before session start. Revalidate it against the server scope.
     // Without an explicit plan, Agenda may choose only an active, matching
     // specialty plan; otherwise the shared/legacy PEI stays unbound.
-    if (requestedPlanId || (scheduledSessionForPatient && appointmentClinicalSpecialtyKey(scheduledSessionForPatient))) {
+    if (requestedPlanId || (scheduledSessionForPatient && (isKidsProfile || appointmentClinicalSpecialtyKey(scheduledSessionForPatient)))) {
       const planResult = await dataService.getPatientTherapeuticPlan(String(patient?.id || ''), { force: true });
       if (planResult?.success === false) {
         alert(planResult?.message || planResult?.error || 'Não foi possível validar o plano clínico no servidor. Tente novamente.');
@@ -2138,6 +2138,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
       const hasServerScopes = Array.isArray(planResult?.data?.planScopes);
       const scopes = hasServerScopes ? planResult.data.planScopes : [];
+      if (scheduledSessionForPatient && isKidsProfile && !hasServerScopes) {
+        alert('Não foi possível carregar os planos clínicos infantis do servidor. A sessão não foi iniciada para evitar uma coleta sem o PTS e os planos por especialidade.');
+        return;
+      }
       if (requestedPlanId) {
         if (!hasServerScopes) {
           alert('Não foi possível confirmar se o plano selecionado continua ativo. Nenhuma sessão foi iniciada.');
@@ -2165,8 +2169,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           requestedPlanId = String(candidates[0]?.id || '').trim();
           requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
         }
+        if (candidates.length === 0 && scheduledSessionForPatient && isKidsProfile) {
+          const activeSpecialtyPlans = scopes.filter((scope: any) =>
+            String(scope?.mode || '').toLowerCase() === 'specialty'
+            && String(scope?.status || '').toLowerCase() === 'active'
+          );
+          if (activeSpecialtyPlans.length > 0) {
+            alert('Há planos por especialidade ativos, mas nenhum corresponde à especialidade do agendamento. Abra o plano infantil correto e inicie a sessão por ele. Nenhum registro foi alterado.');
+            return;
+          }
+        }
       }
-      // Zero active specialty plans means PEI-only: never bind a paused plan.
+      // PEI-only is allowed solely when there is no matching, active specialty plan.
     }
 
     setPendingSessionAction(resolvedAction);
@@ -2889,7 +2903,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
 
-    void handleConfirmSessionStart({ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true });
+    // Route Agenda through the same server-authoritative PTS/specialty
+    // preflight as the Plan tab. Direct start here silently discarded the
+    // plan and opened an unscoped legacy/adult-looking collection.
+    void requestSessionStart('fullscreen');
   }, [
     hasAbaSessionSurface,
     activeSession,
