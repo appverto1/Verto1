@@ -69,7 +69,6 @@ import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
-import { normalizeTherapeuticPrograms, therapeuticProgramsToSessionGoals } from '../utils/therapeuticPlan';
 import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
@@ -2181,17 +2180,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }
         }
       }
-      // Uma sessão infantil vinculada ao PTS exige pelo menos um alvo apto
-      // à coleta nesse mesmo plano. Não usar metas de outra especialidade ou
-      // converter o atendimento para evolução genérica quando não há alvos.
-      if (isKidsProfile && requestedPlanId) {
-        const scopedPrograms = normalizeTherapeuticPrograms(planResult?.data || planResult)
-          .filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === requestedPlanId);
-        if (therapeuticProgramsToSessionGoals(scopedPrograms).length === 0) {
-          alert('O PTS selecionado não possui alvos ativos em ensino/manutenção disponíveis para coleta. Ative os alvos no plano correto antes de iniciar esta sessão infantil. Nenhum registro foi alterado.');
-          return;
-        }
-      }
+      // A ausência de alvos ativos não impede o atendimento infantil:
+      // a sessão mantém o escopo do PTS, e a coleta mostra seu estado vazio
+      // com orientações para ativar alvos, sem criar dados fictícios.
       // PEI-only is allowed solely when there is no matching, active specialty plan.
     }
 
