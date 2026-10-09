@@ -63,6 +63,10 @@ assert.match(app, /const updatedProfileType = profileTypeForPatientGroup\(/);
 assert.match(app, /patientProfileType: updatedProfileType, panelType: updatedProfileType, type: updatedPortalType/);
 assert.match(service, /const mustConfirmClinicalProfile = \[/);
 assert.match(service, /requireServerAck: mustConfirmClinicalProfile/);
+assert.match(service, /group: patient\?\.patient_group \|\| patient\?\.group \|\| recordPayload\?\.grupo/);
+assert.match(service, /patientProfileType: profileTypeForPatientGroup\([\s\S]*?patient\?\.patient_profile_type/);
+assert.match(coordinator, /getPatientProfileTypeLabel\(resolvePatientPortalKind\(patient\) === "KIDS"/);
+
 assert.match(detail, /const isKidsProfile = patientPortalKind === 'KIDS'/);
 assert.match(detail, /const hasConventionalSessionSurface = !hasAbaClinicalProfile/);
 assert.match(detail, /\{hasAbaSessionSurface && isSessionModeOpen && \([\s\S]*?<SessionMode/);
