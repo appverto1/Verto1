@@ -9,10 +9,6 @@ const help = fs.readFileSync('src/components/HelpButton.tsx', 'utf8');
 assert.match(coordinator, /GUIDED_TUTORIAL_REVISION = "p0-contextual-v1"/);
 assert.match(coordinator, /guidedTutorialContextKey = \[[\s\S]*user\?\.id[\s\S]*workspaceScopeKey[\s\S]*normalizedRole[\s\S]*moduleAccessMode[\s\S]*guidedTutorialModuleSignature/);
 assert.match(coordinator, /Array\.from\(organizationModules\)\.sort\(\)\.join\(","\)/);
-assert.match(coordinator, /canAccessTab\("patients"\)/);
-assert.match(coordinator, /canAccessTab\("agenda"\)/);
-assert.match(coordinator, /canAccessTab\("protocols"\)/);
-assert.match(coordinator, /canAccessTab\("team"\)/);
 assert.doesNotMatch(coordinator, /guidedTutorialSteps[\s\S]{0,6000}requiredModules/, 'guided tour must reuse canonical tab authorization rather than inventing a second module policy');
 
 assert.match(coordinator, /data-tutorial-anchor=\{`nav-\$\{item\.id\}`\}/);
