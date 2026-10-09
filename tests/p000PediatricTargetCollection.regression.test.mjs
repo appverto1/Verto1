@@ -67,10 +67,12 @@ assert.match(sessionMode, /A sessão e seus registros existentes foram preservad
 assert.ok(sessionMode.indexOf('if (isPediatricSession && !isCompletedSessionReview)') <
   sessionMode.indexOf('const emptyStateContent = ('),
   'o guard pediátrico precede o fallback de evolução genérica');
-assert.match(detail, /if \(isKidsProfile && requestedPlanId\) \{[\s\S]{0,560}therapeuticProgramsToSessionGoals\(scopedPrograms\)\.length === 0/);
-assert.match(detail, /scopedPrograms = normalizeTherapeuticPrograms\(planResult\?\.data \|\| planResult\)/);
-assert.match(detail, /program\?\.therapeutic_plan_id \|\| program\?\.therapeuticPlanId/);
-assert.match(detail, /Nenhum registro foi alterado/);
+assert.doesNotMatch(detail, /if \(isKidsProfile && requestedPlanId\) \{[\s\S]{0,560}therapeuticProgramsToSessionGoals\(scopedPrograms\)\.length === 0/,
+  'campos vazios ou ausencia de alvos nao podem bloquear o inicio da sessao infantil');
+assert.match(sessionMode, /Evolução e observações da sessão infantil \(opcional\)/);
+assert.match(sessionMode, /Revisar e encerrar atendimento sem coleta de alvos/);
+assert.match(detail, /a sessão mantém o escopo do PTS/);
+assert.match(sessionMode, /Nenhum alvo de outra especialidade será adicionado automaticamente/);
 assert.match(detail, /confirmedPlanId !== expectedPlanId/, 'não permitir substituir o PTS do servidor');
 
 console.log('p000PediatricTargetCollection.regression.test.mjs: ok (real target normalization, scope isolation, blocked generic fallback, retry)');
