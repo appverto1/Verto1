@@ -234,6 +234,8 @@ const criticalTests = [
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/p000PatientCategoryPersistence.regression.test.mjs',
+  'tests/p000PediatricTargetCollection.regression.test.mjs',
+  'tests/p000PtsActivationOptionalAndCas.regression.test.mjs',
   'tests/p1AdultClinicalFinancialScopes.regression.test.mjs',
   'tests/clinicalPlanAnalyticsSessionNavigation.regression.test.mjs',
   'tests/planPtsSessionGraphIntegrationP0.regression.test.mjs',

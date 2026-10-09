@@ -2180,6 +2180,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           }
         }
       }
+      // A ausência de alvos ativos não impede o atendimento infantil:
+      // a sessão mantém o escopo do PTS, e a coleta mostra seu estado vazio
+      // com orientações para ativar alvos, sem criar dados fictícios.
       // PEI-only is allowed solely when there is no matching, active specialty plan.
     }
 

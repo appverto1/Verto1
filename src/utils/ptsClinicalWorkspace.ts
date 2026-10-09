@@ -391,55 +391,12 @@ export type PtsActivationValidation = {
 };
 
 /**
- * Activation is deliberately stricter than draft persistence. Drafts may be
- * incomplete; publication may not. This validator works on the in-memory form
- * before normalization so a visible but incomplete row cannot disappear during
- * sanitization and silently bypass UX feedback.
+ * Content is optional when publishing a PTS. The authenticated server keeps
+ * ownership, scope, revision (CAS) and JSON-shape checks as hard invariants.
+ * Clinical information can be added in a later version without blocking care.
  */
-export function validatePtsDraftForActivation(payload: PtsClinicalPayload): PtsActivationValidation {
-  const sectionErrors: Record<string, string[]> = {};
-  let firstFieldId: string | null = null;
-  const add = (section: string, message: string, fieldId: string) => {
-    sectionErrors[section] = [...(sectionErrors[section] || []), message];
-    if (!firstFieldId) firstFieldId = fieldId;
-  };
-
-  if (!String(payload.caseManagerId || '').trim()) {
-    add('overview', 'Defina o técnico de referência.', 'pts-case-manager');
-  }
-  if (!DATE.test(String(payload.startedAt || ''))) {
-    add('overview', 'Informe a data de início do PTS.', 'pts-started-at');
-  }
-
-  payload.needs.forEach((item, index) => {
-    if (!String(item.title || '').trim()) {
-      add('context', `Necessidade ${index + 1}: informe a necessidade ou problema ativo.`, `pts-need-${index}-title`);
-    }
-    if (!String(item.domain || '').trim()) {
-      add('context', `Necessidade ${index + 1}: informe o domínio.`, `pts-need-${index}-domain`);
-    }
-  });
-
-  if (payload.goals.length === 0) {
-    add('goals', 'Crie ao menos uma meta compartilhada antes de ativar o PTS.', 'pts-add-goal');
-  }
-  payload.goals.forEach((goal, index) => {
-    if (!String(goal.title || '').trim()) {
-      add('goals', `Meta ${index + 1}: informe o resultado que se deseja alcançar.`, `pts-goal-${index}-title`);
-    }
-    if (!String(goal.target || '').trim()) {
-      add('goals', `Meta ${index + 1}: defina o resultado esperado ou critério de sucesso.`, `pts-goal-${index}-target`);
-    }
-    if (!Array.isArray(goal.responsibleProfessionalIds) || goal.responsibleProfessionalIds.length === 0) {
-      add('goals', `Meta ${index + 1}: selecione ao menos um profissional responsável.`, `pts-goal-${index}-responsible`);
-    }
-  });
-
-  return {
-    valid: Object.keys(sectionErrors).length === 0,
-    sectionErrors,
-    firstFieldId,
-  };
+export function validatePtsDraftForActivation(_payload: PtsClinicalPayload): PtsActivationValidation {
+  return { valid: true, sectionErrors: {}, firstFieldId: null };
 }
 
 /**
