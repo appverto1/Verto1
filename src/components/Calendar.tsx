@@ -742,11 +742,14 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     ['in_progress', 'active'].includes(status)
   );
   const cancellationState = resolveAppointmentCancellationState(event);
+  const pendingConfirmation = canonicalAppointmentStatus(event?.status || event?.appointment_status) === 'PENDING_CONFIRMATION';
   const cancelled = cancellationState.isCancelled || ['no_show', 'missed', 'falta', 'faltou'].includes(status);
   const phase =
     cancelled
       ? 'cancelled'
-      : explicitPhase ||
+      : pendingConfirmation
+        ? 'scheduled_pre_session'
+        : explicitPhase ||
       (
         concluded
           ? closureReadinessStatus === 'READY'
@@ -792,7 +795,7 @@ export const getAppointmentClosureOperationalView = (event: any, detail: any = n
     phase,
     phaseSummary: {
       ...(fallbackSummary[phase] || fallbackSummary.scheduled_pre_session),
-      ...(cancelled ? {} : detail?.phaseSummary || {}),
+      ...(cancelled || pendingConfirmation ? {} : detail?.phaseSummary || {}),
       actionableCount: cancelled ? 0 : actionableCount
     },
     sections
@@ -1452,6 +1455,7 @@ export const ClinicalAgendaBoard = ({
   theme = 'light'
 }: any) => {
   const isDark = theme === 'dark';
+  const isReceptionistActor = ['receptionist', 'reception'].includes(String(currentUser?.role || '').trim().toLowerCase());
   const activeDate = currentDate instanceof Date ? currentDate : new Date(currentDate || Date.now());
   // Server-filtered actor capabilities determine whether TISS is subscribed and authorized.
   // Never infer module access from payer values on an existing appointment.
@@ -4460,6 +4464,7 @@ export const ClinicalAgendaBoard = ({
               })}
             </div>
 
+            {!isReceptionistActor && (
             <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -4553,7 +4558,8 @@ export const ClinicalAgendaBoard = ({
               )}
             </div>
 
-            {(billingFinancialContextType === 'PRIVATE' || isMonthlySessionFinance) && (
+            )}
+            {!isReceptionistActor && (billingFinancialContextType === 'PRIVATE' || isMonthlySessionFinance) && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`} data-appointment-patient-finance>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -4867,7 +4873,7 @@ export const ClinicalAgendaBoard = ({
               </div>
             )}
 
-            {(detailEvent.closure_readiness_status || detailCancellationState.isCancelled) && (
+            {!isReceptionistActor && (detailEvent.closure_readiness_status || detailCancellationState.isCancelled) && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50/70'}`}>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -4983,7 +4989,7 @@ export const ClinicalAgendaBoard = ({
             )}
 
             <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {detailPrimaryAction.kind !== 'none' && (
+              {!isReceptionistActor && detailPrimaryAction.kind !== 'none' && (
                 <button
                   type="button"
                   onClick={() => {
@@ -5003,6 +5009,7 @@ export const ClinicalAgendaBoard = ({
                 <CheckCircle2 size={16} />
                 Ações de status
               </button>
+              {!isReceptionistActor && (<>
               <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <FileText size={16} />
                 Ver prontuário
@@ -5031,6 +5038,7 @@ export const ClinicalAgendaBoard = ({
                 <BarChart3 size={16} />
                 Ver gráficos
               </button>
+              </>)}
               <button type="button" onClick={() => openAppointmentEditor(detailEvent)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <RefreshCcw size={16} />
                 Remarcar
@@ -5047,14 +5055,14 @@ export const ClinicalAgendaBoard = ({
               </button>
             </div>
 
-            {detailEvent.has_session_record && !detailCancellationState.isCancelled && (
+            {!isReceptionistActor && detailEvent.has_session_record && !detailCancellationState.isCancelled && (
               <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
                 {canViewAbaSessionReport ? 'Sessão registrada. Use os botões acima para abrir relatório e gráficos.' : 'Sessão registrada.'}
               </div>
             )}
 
             <div className="mt-5 space-y-3">
-              {planItems.length > 0 && (
+              {!isReceptionistActor && planItems.length > 0 && (
                 <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
                   <h4 className="flex items-center gap-2 text-sm font-bold">
                     <Zap size={16} className="text-violet-600" />
@@ -5071,7 +5079,7 @@ export const ClinicalAgendaBoard = ({
                 </div>
               )}
 
-              {maintenanceProbes.length > 0 && (
+              {!isReceptionistActor && maintenanceProbes.length > 0 && (
                 <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-amber-100 bg-amber-50/70'}`}>
                   <h4 className="flex items-center gap-2 text-sm font-bold">
                     <AlertCircle size={16} className="text-amber-600" />
@@ -5157,7 +5165,7 @@ export const ClinicalAgendaBoard = ({
                 </div>
               )}
 
-              {recommendations.length > 0 && (
+              {!isReceptionistActor && recommendations.length > 0 && (
                 <div className={`rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-slate-50'}`}>
                   <h4 className="flex items-center gap-2 text-sm font-bold">
                     <ClipboardCheck size={16} className="text-slate-600" />
