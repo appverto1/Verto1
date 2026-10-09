@@ -22,7 +22,7 @@ import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
 import { isDurableDeferredSessionRecord, isSessionCompletionQueueRecord } from '../utils/sessionAutoFinalization';
-import { normalizePatientProfileType, profileTypeForPatientGroup } from '../utils/patientProfileType';
+import { profileTypeForPatientGroup } from '../utils/patientProfileType';
 import {
   mirrorPatientInsuranceEligibilityAliases,
   normalizePatientInsuranceEligibility,
