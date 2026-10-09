@@ -46,6 +46,8 @@ assert.match(migration,/BEFORE INSERT OR UPDATE OF clinic_id, therapist_id, serv
 assert.match(migration,/appointment_clinical_specialty_key_v1\(NEW\.approach\) IS DISTINCT FROM v_appointment_key/);
 assert.match(migration,/caller\.role IN \('director'/);
 assert.match(migration,/LIMIT 1 FOR SHARE/);
+assert.match(migration,/NEW\.service_type IS NULL AND NEW\.approach IS NULL/);
+assert.match(migration,/c\.id = NEW\.clinic_id AND c\.is_demo IS TRUE/);
 assert.match(migration,/OLD\.service_type IS NOT DISTINCT FROM NEW\.service_type/);
 assert.doesNotMatch(migration,/\bUPDATE public\.appointments\s+SET\b|\bDELETE FROM public\.appointments\b/i);
 console.log('clinicSchedulingActiveMembership.regression.test.mjs: PASS');
