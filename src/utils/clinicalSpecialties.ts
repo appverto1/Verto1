@@ -80,6 +80,17 @@ export function clinicalSpecialtiesMatch(left: unknown, right: unknown): boolean
   return Boolean(leftKey && rightKey && leftKey === rightKey);
 }
 
+/**
+ * Scheduling authority: only an accepted, active therapist membership in the
+ * current clinic makes a specialty available. A global professional profile is
+ * intentionally not consulted here (it may belong to another clinic).
+ */
+export function activeClinicAppointmentSpecialty(member: any): ClinicalSpecialty | null {
+  if (String(member?.role || '').trim().toLowerCase() !== 'therapist') return null;
+  if (String(member?.status || '').trim().toLowerCase() !== 'active') return null;
+  return normalizeClinicalSpecialty(member?.clinicSpecialty);
+}
+
 export const DEFAULT_CLINICAL_SPECIALTY: ClinicalSpecialty =
   CLINICAL_SPECIALTY_OPTIONS[0];
 
