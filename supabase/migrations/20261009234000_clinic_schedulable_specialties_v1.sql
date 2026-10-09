@@ -76,6 +76,14 @@ BEGIN
     AND OLD.scheduled_at IS NOT DISTINCT FROM NEW.scheduled_at
   THEN RETURN NEW; END IF;
 
+  -- Preserve the existing synthetic ABA demonstration seed, which stores
+  -- neither a clinical specialty nor a therapist membership. This exception
+  -- is limited to demo clinics and cannot authorize any clinical specialty.
+  IF NEW.service_type IS NULL AND NEW.approach IS NULL
+     AND EXISTS (SELECT 1 FROM public.clinics c
+                 WHERE c.id = NEW.clinic_id AND c.is_demo IS TRUE)
+  THEN RETURN NEW; END IF;
+
   IF NEW.clinic_id IS NULL OR NEW.therapist_id IS NULL THEN
     RAISE EXCEPTION 'APPOINTMENT_ACTIVE_PROFESSIONAL_REQUIRED' USING ERRCODE = '23514';
   END IF;
