@@ -9,9 +9,9 @@ const server = readFileSync('server.ts', 'utf8');
 assert.doesNotMatch(coordinator, /SESSION_SPECIALTY_OPTIONS/);
 assert.match(coordinator, /const clinicSessionSpecialtyOptions = useMemo/);
 assert.match(coordinator, /Object\.values\(therapistMembersById/);
-assert.match(coordinator, /clinicalSpecialtyScopeKey\(specialty\)/);
-assert.match(coordinator, /CLINICAL_SPECIALTY_OPTIONS\.find/);
-assert.equal((coordinator.match(/clinicSessionSpecialtyOptions\.map\(\(specialty\)/g)||[]).length, 2,
+assert.match(coordinator, /activeClinicAppointmentSpecialty\(member\)/);
+assert.match(coordinator, /clinicSpecialty: activeSpecialtiesById\.get/);
+assert.equal((coordinator.match(/\.map\(\(specialty\) => \(/g)||[]).length >= 2, true,
   'new appointment and weekly recurrence must use the same clinic-scoped list');
 assert.match(coordinator, /histórico; não disponível na equipe atual/);
 

@@ -9046,6 +9046,23 @@ export const dataService = {
     }
   },
 
+  async getClinicSchedulingSpecialties(clinicId: string) {
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(clinicId || ''))) {
+      return { success: false, error: 'Clínica inválida.' };
+    }
+    try {
+      const client = await getSupabase();
+      if (!client) return { success: false, error: 'Sessão de autenticação indisponível.' };
+      const { data, error } = await client.rpc('clinic_scheduling_specialties_v1', { p_clinic_id: clinicId });
+      if (error || !Array.isArray(data)) {
+        return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
+      }
+      return { success: true, data };
+    } catch {
+      return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
+    }
+  },
+
   async getClinicMemberAuthorization(memberId: string) {
     try {
       const response = await fetch(`/api/clinic/members/${encodeURIComponent(String(memberId))}/authorization`, {
