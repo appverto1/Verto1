@@ -115,6 +115,7 @@ import {
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { NewBadge } from "./NewBadge";
 import { dataService } from "../services/dataService";
+import { CLINICAL_SPECIALTY_OPTIONS, clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey } from "../utils/clinicalSpecialties";
 import {
   getActiveNewFeatureKeys,
   isFeatureWithinNewWindow,
@@ -244,19 +245,6 @@ type NavigationNode = {
   requiredModule?: OrganizationModuleKey;
   newFeatureKey?: NewFeatureKey;
 };
-
-const SESSION_SPECIALTY_OPTIONS = [
-  "ABA",
-  "Fonoaudiologia",
-  "Terapia Ocupacional",
-  "Psicologia",
-  "Psicopedagogia",
-  "Avaliação",
-  "Supervisão",
-  "Reunião interdisciplinar",
-  "Orientação familiar",
-  "Outro",
-] as const;
 
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
 const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
@@ -1379,6 +1367,28 @@ export function CoordinatorDashboard({
       uniqueEntries.push(entry);
     });
     return uniqueEntries;
+  }, [therapistMembersById]);
+
+  // P1-23: derive appointment specialties only from authorized, current-clinic
+  // professional memberships. ABA and non-clinical events are not specialties.
+  const clinicSessionSpecialtyOptions = useMemo(() => {
+    const available = new Set<string>();
+    const uniqueMembers = new Map<string, any>();
+    Object.values(therapistMembersById as Record<string, any>).forEach((member: any) => {
+      const id = String(member?.id || "").trim();
+      if (id && !uniqueMembers.has(id)) uniqueMembers.set(id, member);
+    });
+    uniqueMembers.forEach((member) => {
+      const raw = Array.isArray(member?.specialties)
+        ? member.specialties
+        : String(member?.specialties || member?.specialty || member?.professionalSpecialty || "").split(/[,;|]/);
+      raw.forEach((specialty: unknown) => {
+        if (!clinicalSpecialtyScopeKey(specialty)) return;
+        const canonical = CLINICAL_SPECIALTY_OPTIONS.find((option) => clinicalSpecialtiesMatch(option, specialty));
+        if (canonical) available.add(canonical);
+      });
+    });
+    return Array.from(available).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [therapistMembersById]);
 
   const patientCareProfessionals = useMemo(() => {
@@ -4399,6 +4409,31 @@ export function CoordinatorDashboard({
     () => (rooms || []).filter((room: any) => room?.is_active !== false && room?.isActive !== false),
     [rooms],
   );
+
+  const [sessionRoomsLoading, setSessionRoomsLoading] = useState(false);
+  const [sessionRoomsError, setSessionRoomsError] = useState("");
+  useEffect(() => {
+    if (!isAddSessionModalOpen || !workspaceScopeKey) return;
+    const requestSeq = ++roomCanonicalRequestSeqRef.current;
+    let cancelled = false;
+    setSessionRoomsLoading(true);
+    setSessionRoomsError("");
+    // P1-25: reopening Agenda must not require visiting Rooms configuration
+    // before the canonical clinic_rooms list is read.
+    void dataService.getClinicRooms().then((result: any) => {
+      if (cancelled || roomCanonicalRequestSeqRef.current !== requestSeq) return;
+      if (!result?.success || !Array.isArray(result.data)) {
+        setSessionRoomsError("Não foi possível atualizar as salas cadastradas da clínica.");
+        return;
+      }
+      setRooms(result.data);
+    }).catch(() => {
+      if (!cancelled) setSessionRoomsError("Não foi possível atualizar as salas cadastradas da clínica.");
+    }).finally(() => {
+      if (!cancelled && roomCanonicalRequestSeqRef.current === requestSeq) setSessionRoomsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [isAddSessionModalOpen, workspaceScopeKey, setRooms]);
 
   const sessionDurationMinutes = useMemo(
     () =>
@@ -15885,7 +15920,10 @@ export function CoordinatorDashboard({
                     }}
                   >
                     <option value="">Selecione...</option>
-                    {SESSION_SPECIALTY_OPTIONS.map((specialty) => (
+                    {sessionApproach && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, sessionApproach)) && (
+                      <option value={sessionApproach} disabled>{sessionApproach} (histórico; não disponível na equipe atual)</option>
+                    )}
+                    {clinicSessionSpecialtyOptions.map((specialty) => (
                       <option key={specialty} value={specialty}>{specialty}</option>
                     ))}
                   </select>
@@ -15927,6 +15965,7 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionRoom(e.target.value)}
                   >
                     <option value="">Selecione...</option>
+                    {sessionRoomsLoading && <option value="" disabled>Atualizando salas da clínica...</option>}
                     {activeClinicRooms.map((room: any) => {
                       const roomSpecialties = Array.isArray(room.specialties)
                         ? room.specialties.join(", ")
@@ -15938,6 +15977,7 @@ export function CoordinatorDashboard({
                       );
                     })}
                   </select>
+                  {sessionRoomsError && <p role="alert" className="mt-1 text-xs text-amber-700">{sessionRoomsError}</p>}
                 </div>
               ) : sessionLocationType === "online" ? (
                 <div>
@@ -16758,7 +16798,10 @@ export function CoordinatorDashboard({
                                             onChange={(event) => updateSessionWeeklySlot(slotId, { specialty: event.target.value })}
                                           >
                                             <option value="">Selecione...</option>
-                                            {SESSION_SPECIALTY_OPTIONS.map((specialty) => (
+                                            {slot.specialty && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, slot.specialty)) && (
+                                              <option value={String(slot.specialty)} disabled>{String(slot.specialty)} (histórico)</option>
+                                            )}
+                                            {clinicSessionSpecialtyOptions.map((specialty) => (
                                               <option key={specialty} value={specialty}>{specialty}</option>
                                             ))}
                                           </select>
