@@ -1,0 +1,46 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const routes = fs.readFileSync('services/abaReinforcerCatalogRoutes.ts', 'utf8');
+const register = fs.readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
+const client = fs.readFileSync('src/services/dataService.ts', 'utf8');
+const runtime = fs.readFileSync('src/services/abaReinforcers.ts', 'utf8');
+const catalog = fs.readFileSync('src/components/AbaReinforcerCatalogPanel.tsx', 'utf8');
+const panel = fs.readFileSync('src/components/AbaReinforcerSessionPanel.tsx', 'utf8');
+
+assert.match(register, /registerAbaReinforcerCatalogRoutes\(app, deps\)/);
+for (const capability of ['clinical.record.view','session.data.write']) {
+  assert.ok(routes.includes("requireClinicCapability('" + capability + "')"));
+}
+assert.match(routes, /checkAuth, requireClinicCapability\('clinical.record.view'\), checkPatientAccess/);
+assert.match(routes, /checkAuth, requireClinicCapability\('session.data.write'\), checkPatientAccess/);
+assert.match(routes, /currentClinicId\(req.session\?\.user/);
+assert.match(routes, /req\.resolvedPatientId \|\| req\.params\.patientId/);
+assert.match(routes, /req\.session\?\.user\?\.id/);
+assert.match(routes, /patientClinicId === clinicId/);
+assert.match(routes, /list_aba_patient_reinforcers_v1/);
+assert.match(routes, /save_aba_patient_reinforcer_v1/);
+assert.match(routes, /list_aba_session_reinforcer_events_v1/);
+assert.match(routes, /get_aba_session_reinforcer_summary_v1/);
+assert.match(routes, /list_recent_aba_patient_reinforcers_v1/);
+assert.match(routes, /record_aba_reinforcer_delivery_v1/);
+assert.match(routes, /clientEventId\.length > 240/);
+assert.match(routes, /p_client_event_id: clientEventId/);
+assert.doesNotMatch(routes, /from\('aba_patient_reinforcers'\)/);
+assert.doesNotMatch(routes, /auth\.uid\(\).*req\.body/);
+assert.doesNotMatch(routes, /service_role|set search_path|grant execute/i);
+assert.match(client, /credentials: 'include'/);
+assert.match(client, /getAbaPatientReinforcers/);
+assert.match(client, /saveAbaPatientReinforcer/);
+assert.match(client, /getAbaReinforcerSessionBundle/);
+assert.match(client, /recordAbaReinforcerDelivery/);
+assert.doesNotMatch(runtime, /\.rpc\('list_aba_patient_reinforcers_authenticated_v1'/);
+assert.doesNotMatch(runtime, /\.rpc\('save_aba_patient_reinforcer_authenticated_v1'/);
+assert.doesNotMatch(runtime, /\.rpc\('record_aba_reinforcer_delivery_authenticated_v1'/);
+assert.match(runtime, /getRecordsByType\('aba'\)/);
+assert.match(runtime, /markRecordSyncStatus\(row\.id, 'synced'\)/);
+assert.match(runtime, /result\.status === 403/);
+assert.match(catalog, /if \(accessDenied\) return null;/);
+assert.match(panel, /if\(accessDenied\)return null;/);
+assert.match(panel, /getAbaReinforcerSessionBundle\(patientId,sessionId\)/);
+assert.doesNotMatch(panel, /listRecentPatientReinforcers\(patientId\)/);
+console.log('abaReinforcerCookieAuth.regression.test.mjs: ok');
