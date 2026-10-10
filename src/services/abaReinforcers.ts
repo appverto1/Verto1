@@ -1,4 +1,5 @@
 import { getSupabase } from '../lib/supabase';
+import { dataService } from './dataService';
 import { generateId, getRecordsByType, markRecordSyncFailure, markRecordSyncStatus, saveEncryptedRecord } from './localDb';
 
 const ENDPOINT = 'supabase-rpc:record_aba_reinforcer_delivery_authenticated_v1';
@@ -8,14 +9,15 @@ const isTerminalReinforcerSyncError = (message: string) =>
 export type ReinforcerCategory = 'SOCIAL' | 'ACTIVITY' | 'ITEM_OBJECT' | 'SENSORY' | 'FOOD' | 'OTHER';
 
 export async function listPatientReinforcers(patientId: string, includeInactive = false) {
-  const supabase = await getSupabase();
-  const { data, error } = await supabase.rpc('list_aba_patient_reinforcers_authenticated_v1', {
-    p_patient_id: patientId,
-    p_include_inactive: includeInactive,
-    p_limit: 200,
-  });
-  if (error) throw error;
-  return Array.isArray(data) ? data : [];
+  const result = await dataService.getAbaPatientReinforcers(patientId, includeInactive);
+  if (!result?.success) {
+    // The catalog is optional in a patient view without this capability.
+    // Keep denied accesses silent and never display raw PostgREST messages.
+    const error = new Error('Não foi possível carregar os reforçadores.');
+    Object.assign(error, { status: result?.status, code: result?.code });
+    throw error;
+  }
+  return result.data;
 }
 
 export async function savePatientReinforcer(input: {
@@ -26,17 +28,21 @@ export async function savePatientReinforcer(input: {
   note?: string | null;
   isActive?: boolean;
 }) {
-  const supabase = await getSupabase();
-  const { data, error } = await supabase.rpc('save_aba_patient_reinforcer_authenticated_v1', {
-    p_patient_id: input.patientId,
-    p_reinforcer_id: input.reinforcerId || null,
-    p_label: input.label,
-    p_category: input.category || null,
-    p_note: input.note || null,
-    p_is_active: input.isActive !== false,
+  const result = await dataService.saveAbaPatientReinforcer(input.patientId, {
+    reinforcerId: input.reinforcerId || null,
+    label: input.label,
+    category: input.category || null,
+    note: input.note || null,
+    isActive: input.isActive !== false,
   });
-  if (error) throw error;
-  return data;
+  if (!result?.success) {
+    const error = new Error(result?.status === 403
+      ? 'Você não possui permissão para alterar os reforçadores deste paciente.'
+      : 'Não foi possível salvar o reforçador.');
+    Object.assign(error, { status: result?.status, code: result?.code });
+    throw error;
+  }
+  return result.data;
 }
 
 export async function inactivatePatientReinforcer(input: { patientId: string; reinforcer: any }) {
