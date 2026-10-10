@@ -73,7 +73,7 @@ assert.equal(roleHasDefaultCapability('receptionist', 'treatment_plan.create'), 
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const routes = [
-  ["app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'", "'treatment_plan.edit', 'treatment_plan.create'"],
+  ["app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'", "'treatment_plan.edit', 'treatment_plan.create', 'treatment_plan.view'"],
   ["app.post('/api/aba/patients/:patientId/therapeutic-programs'", "'aba.program.create', 'treatment_plan.create'"],
   ["app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status'", "'aba.program.edit', 'treatment_plan.create'"],
   ["app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId'", "'aba.program.edit', 'treatment_plan.create'"],
@@ -82,7 +82,7 @@ const routes = [
 for (const [endpoint, permission] of routes) {
   assert.ok(server.includes(endpoint), 'Route absent: ' + endpoint);
   const route = server.slice(server.indexOf(endpoint), server.indexOf(endpoint) + 350);
-  assert.ok(route.includes("requireAnyClinicCapability(" + permission + ")"), 'Route capability mismatch: ' + endpoint);
+  assert.ok(route.includes(endpoint.includes('therapeutic-plans/:planId') ? "requireScopedTherapeuticPlanCapability('edit')" : "requireAnyClinicCapability(" + permission + ")"), 'Route capability mismatch: ' + endpoint);
   assert.ok(route.includes('checkPatientAccess'), 'Missing backend patient scope: ' + endpoint);
 }
 assert.match(server, /mode === 'interdisciplinary' && String\(req\.effectiveClinicRole \|\| ''\)\.toLowerCase\(\) === 'therapist'/);

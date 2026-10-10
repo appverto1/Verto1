@@ -1174,6 +1174,7 @@ export function validateSalesModularProposalInput(
     errors.push('customBasePackageLimit');
   }
   if (
+    input.exactPerPatientBilling === true &&
     input.commercialPricingMode === 'manual_module_prices' &&
     input.customBasePackageLimit !== undefined &&
     input.customBasePackageLimit !== null &&
@@ -1425,13 +1426,13 @@ const resolveGrossAmounts = (
       : editMode === 'per_patient'
         ? roundSalesMoneyCents(Number(sourceAmount))
         : roundSalesMoneyCents(
-            Number(sourceAmount) / quantity
+            Number(sourceAmount) / contractedCapacityPatients
           );
     const recurringAmountCents =
       proposedPricePerPatientCents === null
         ? 0
         : roundSalesMoneyCents(
-            quantity * proposedPricePerPatientCents
+            contractedCapacityPatients * proposedPricePerPatientCents
           );
     const monthlyTotalRepresentable =
       editMode !== 'monthly_total' ||
@@ -2676,7 +2677,7 @@ export function calculateSalesModularProposal(
   const customCapacityPolicy = hasVersionedCustomCapacityPolicy
     ? {
         ...catalog.customCapacityPolicy!,
-        blockSizePatients: perPatientPricingEnabled
+        blockSizePatients: exactPerPatientBilling
           ? 50
           : catalog.customCapacityPolicy!.blockSizePatients
       }
@@ -2832,13 +2833,16 @@ export function calculateSalesModularProposal(
       item.billingInterval !== 'one_time'
         ? amounts.commercialPricing.proposedPricePerPatientCents
         : null;
+    const pricingQuantityPatients = exactPerPatientBilling
+      ? amounts.quantity
+      : basePackageContractedLimit;
     const offerDiscount =
       normalizedOfferDiscount &&
       normalPricePerPatientCents !== null
         ? normalizePerPatientOfferDiscount(
             normalizedOfferDiscount,
             normalPricePerPatientCents,
-            amounts.quantity
+            pricingQuantityPatients
           )
         : normalizedOfferDiscount;
     const legacyDiscountBasisPoints = nonNegativeInteger(
@@ -2866,7 +2870,7 @@ export function calculateSalesModularProposal(
         : 0
       : normalPricePerPatientCents === null
         ? multiplyBasisPoints(amounts.recurringAmountCents, discountBasisPoints)
-        : amounts.quantity *
+        : pricingQuantityPatients *
           multiplyBasisPoints(
             normalPricePerPatientCents,
             discountBasisPoints
@@ -2882,7 +2886,7 @@ export function calculateSalesModularProposal(
       amounts.quantity,
       input,
       costSettings,
-      basePackageContractedLimit
+      pricingQuantityPatients
     );
     return {
       item,
@@ -2909,7 +2913,7 @@ export function calculateSalesModularProposal(
           ? null
           : roundSalesMoneyCents(
               (amounts.recurringAmountCents - itemDiscountCents) /
-                amounts.quantity
+                pricingQuantityPatients
             ),
       postPromotionPricePerPatientCents:
         normalPricePerPatientCents === null
@@ -2918,7 +2922,7 @@ export function calculateSalesModularProposal(
             ? normalPricePerPatientCents
             : roundSalesMoneyCents(
                 (amounts.recurringAmountCents - itemDiscountCents) /
-                  amounts.quantity
+                  pricingQuantityPatients
               ),
       commercialPricing: resolvedAmounts.commercialPricing,
       directCostCents: costResolution.monthlyCostCents,

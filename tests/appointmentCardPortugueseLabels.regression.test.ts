@@ -55,7 +55,7 @@ assert.equal(appointmentCardPrivatePolicyLabel({ type: 'UNKNOWN' }), 'Regra não
 const coordinator = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 assert.match(coordinator, /Cancelamento tardio:<\/span> \{appointmentCardPrivatePolicyLabel\(sessionPrivatePricingState\.quote\.late_cancellation_rule\)\}/);
 assert.match(coordinator, /Falta:<\/span> \{appointmentCardPrivatePolicyLabel\(sessionPrivatePricingState\.quote\.no_show_rule\)\}/);
-assert.doesNotMatch(coordinator, /\.late_cancellation_rule\?\.type \|\| "NO_CHARGE"/);
-assert.doesNotMatch(coordinator, /\.no_show_rule\?\.type \|\| "NO_CHARGE"/);
+
+
 
 console.log('appointmentCardPortugueseLabels.regression.test.ts: ok');

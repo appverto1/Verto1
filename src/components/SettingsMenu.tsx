@@ -366,4 +366,3 @@ export function SettingsMenu({
     </>
   );
 }
-

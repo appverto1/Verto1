@@ -33,6 +33,7 @@ import {
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
+import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
@@ -37461,7 +37462,7 @@ async function startServer() {
 
   const sendEvolutionTimelineError = (res: any, error: any, route: string) => {
     const message = sanitizeString(error?.message || String(error), 260);
-    if (isMissingRelationError(error)) {
+    if (isMissingRelationError(error) || ['PGRST202', '42883'].includes(String(error?.code || ''))) {
       return res.status(503).json({
         success: false,
         code: 'EVOLUTION_TIMELINE_SCHEMA_UNAVAILABLE',
@@ -47233,7 +47234,7 @@ async function startServer() {
       const multipartFile = multipart?.file;
 
       const rawPatientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
+      let clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const uploadedBy = sanitizeString(req.session.user?.id, 120);
       const rawName =
         (rawUploadMode ? decodeUploadHeader(req.headers?.['x-verto-file-name'], 220) : '') ||
@@ -101776,6 +101777,11 @@ async function startServer() {
   });
 
   // --- STRUCTURED SCHOOL MANAGEMENT ---
+  registerHelpCenterRoutes(app, {
+    supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, currentClinicId,
+    actionLimiter: portalActionLimiter,
+  });
+
   registerSchoolManagementRoutes(app, {
     supabase,
     deploymentEnv: vertoDeploymentEnv,
