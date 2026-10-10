@@ -7440,6 +7440,40 @@ export const dataService = {
     }
   },
 
+  async getAbaReinforcerSessionDetails(patientId: string, sessionId: string) {
+    const safePatientId = String(patientId || '').trim();
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safePatientId || !safeSessionId) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED' };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/reinforcer-sessions/${encodeURIComponent(safeSessionId)}`,
+        { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE' };
+      return { success: true, data: body?.data || { recent: [], events: [], summary: [] } };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE' };
+    }
+  },
+
+  async recordAbaReinforcerDelivery(patientId: string, sessionId: string, input: any) {
+    const safePatientId = String(patientId || '').trim();
+    const safeSessionId = String(sessionId || '').trim();
+    if (!safePatientId || !safeSessionId) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED' };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/reinforcer-sessions/${encodeURIComponent(safeSessionId)}/deliveries`,
+        { method: 'POST', headers: await getNoStoreAuthHeaders(), credentials: 'include', body: JSON.stringify(input || {}) }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE' };
+      return { success: true, data: body?.data };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE' };
+    }
+  },
+
   async saveAbaPatientReinforcer(patientId: string, input: any) {
     const safeId = String(patientId || '').trim();
     if (!safeId) return { success: false, code: 'ABA_REINFORCER_PATIENT_REQUIRED', data: null };
