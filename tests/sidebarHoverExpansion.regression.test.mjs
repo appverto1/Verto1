@@ -25,8 +25,13 @@ assert.ok(
   'Coordinator main and patient-record sidebars must both expand on hover',
 );
 
+// Only the professional's left sidebar deliberately keeps its original wordmark.
+assert.match(
+  read('src/components/TherapistDashboard.tsx'),
+  /<LogoVerto size=\{40\} showText=\{isSidebarExpanded\} preserveProfessionalSidebarBrand \/>/,
+  'Professional sidebar must keep its previous brand asset without changing hover behavior',
+);
 for (const path of [
-  'src/components/TherapistDashboard.tsx',
   'src/components/ReceptionistDashboard.tsx',
   'src/components/AdminDashboard.tsx',
 ]) {
