@@ -951,7 +951,7 @@ export const TherapistDashboard = ({
         }}
       >
         <div className={`mb-10 px-4 flex ${isSidebarExpanded ? 'items-center justify-start gap-2' : 'flex-col items-center justify-center gap-2'} transition-all duration-300`}>
-          <LogoVerto size={40} showText={isSidebarExpanded} />
+          <LogoVerto size={40} showText={isSidebarExpanded} preserveProfessionalSidebarBrand />
         </div>
 
         <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2">
