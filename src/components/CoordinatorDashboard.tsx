@@ -115,6 +115,7 @@ import {
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { NewBadge } from "./NewBadge";
 import { dataService } from "../services/dataService";
+import { appointmentCardPrivatePolicyLabel } from "../utils/appointmentCardDisplayLabels";
 import { CLINICAL_SPECIALTY_OPTIONS, activeClinicAppointmentSpecialty, clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey } from "../utils/clinicalSpecialties";
 import {
   getActiveNewFeatureKeys,
@@ -16571,8 +16572,8 @@ export function CoordinatorDashboard({
                               <p><span className="text-slate-400">Pagador:</span> {sessionPrivatePricingState.quote.payer_name}</p>
                               <p><span className="text-slate-400">Vencimento:</span> {String(sessionPrivatePricingState.quote.due_date || "").split("-").reverse().join("/")}</p>
                               <p><span className="text-slate-400">Cancelamento gratuito até:</span> {sessionPrivatePricingState.quote.cancellation_free_until ? new Date(sessionPrivatePricingState.quote.cancellation_free_until).toLocaleString("pt-BR") : "não configurado"}</p>
-                              <p><span className="text-slate-400">Cancelamento tardio:</span> {sessionPrivatePricingState.quote.late_cancellation_rule?.type || "NO_CHARGE"} · {sessionPrivatePricingState.quote.late_cancellation_rule?.value || 0}</p>
-                              <p><span className="text-slate-400">Falta:</span> {sessionPrivatePricingState.quote.no_show_rule?.type || "NO_CHARGE"} · {sessionPrivatePricingState.quote.no_show_rule?.value || 0}</p>
+                              <p><span className="text-slate-400">Cancelamento tardio:</span> {appointmentCardPrivatePolicyLabel(sessionPrivatePricingState.quote.late_cancellation_rule)}</p>
+                              <p><span className="text-slate-400">Falta:</span> {appointmentCardPrivatePolicyLabel(sessionPrivatePricingState.quote.no_show_rule)}</p>
                             </div>
                           </>
                         ) : sessionPrivatePricingState.error ? (
