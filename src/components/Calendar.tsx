@@ -1458,6 +1458,7 @@ export const ClinicalAgendaBoard = ({
 }: any) => {
   const isDark = theme === 'dark';
   const isReceptionistActor = ['receptionist', 'reception'].includes(String(currentUser?.role || '').trim().toLowerCase());
+  const isTherapistActor = String(currentUser?.role || '').trim().toLowerCase() === 'therapist';
   const activeDate = currentDate instanceof Date ? currentDate : new Date(currentDate || Date.now());
   // Server-filtered actor capabilities determine whether TISS is subscribed and authorized.
   // Never infer module access from payer values on an existing appointment.
@@ -1995,11 +1996,17 @@ export const ClinicalAgendaBoard = ({
     };
   }, []);
 
-  const localEvents = useMemo(() => (agenda || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [agenda, roomLookup]);
+  // The server-scoped calendar is authoritative for therapists. Merging locally
+  // hydrated clinic events would expose other professionals' appointments,
+  // even though the detail endpoint correctly returns CALENDAR_SCOPE_DENIED.
+  const localEvents = useMemo(() => (isTherapistActor ? [] : agenda || [])
+    .filter((event: any) => !isDeletedAppointmentEvent(event))
+    .map((event: any) => normalizeClinicalEvent(event, roomLookup)),
+    [agenda, isTherapistActor, roomLookup]);
   const serverEvents = useMemo(() => (remoteEvents || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
   const baseEvents = useMemo(
-    () => mergeCalendarEventsForRender(localEvents, serverEvents, remoteState.loaded),
-    [localEvents, serverEvents, remoteState.loaded]
+    () => isTherapistActor ? (remoteState.loaded ? serverEvents : []) : mergeCalendarEventsForRender(localEvents, serverEvents, remoteState.loaded),
+    [isTherapistActor, localEvents, serverEvents, remoteState.loaded]
   );
 
   const selectedDateKey = toDateKey(activeDate);
@@ -2169,18 +2176,36 @@ export const ClinicalAgendaBoard = ({
           setDetailState({ loading: false, error: '' });
           return;
         }
+        if (result?.error === 'CALENDAR_SCOPE_DENIED' || result?.error === 'CLINIC_SCOPE_DENIED') {
+          setSelectedEvent(null);
+          setEventDetail(null);
+          setDetailState({ loading: false, error: '' });
+          cacheRef.current.clear();
+          setRemoteRefreshNonce((value) => value + 1);
+          return;
+        }
         setDetailState({ loading: false, error: result?.error || 'Não foi possível carregar os detalhes da sessão agora.' });
       })
       .catch(() => setDetailState({ loading: false, error: 'Não foi possível carregar os detalhes da sessão agora.' }));
-    dataService.getClosureAppointmentDetail(normalized.id)
-      .then((result: any) => {
-        if (result?.success) {
-          setClosureDetailState({ loading: false, error: '', data: result.data || null });
-          return;
-        }
-        setClosureDetailState({ loading: false, error: result?.error || 'Não foi possível carregar o fechamento agora.', data: null });
-      })
-      .catch(() => setClosureDetailState({ loading: false, error: 'Não foi possível carregar o fechamento agora.', data: null }));
+    // A non-TISS clinic/professional must not request the TISS closure route.
+    // Direct API access remains protected by backend entitlements.
+    if (canUseTissBilling) {
+      dataService.getClosureAppointmentDetail(normalized.id)
+        .then((result: any) => {
+          if (result?.success) {
+            setClosureDetailState({ loading: false, error: '', data: result.data || null });
+            return;
+          }
+          if (result?.error === 'CLINIC_MODULE_NOT_ENTITLED' || result?.error === 'CALENDAR_SCOPE_DENIED') {
+            setClosureDetailState({ loading: false, error: '', data: null });
+            return;
+          }
+          setClosureDetailState({ loading: false, error: result?.error || 'Não foi possível carregar o fechamento agora.', data: null });
+        })
+        .catch(() => setClosureDetailState({ loading: false, error: 'Não foi possível carregar o fechamento agora.', data: null }));
+    } else {
+      setClosureDetailState({ loading: false, error: '', data: null });
+    }
   };
 
   const openClosureChecklist = (event: any) => {
@@ -2189,7 +2214,7 @@ export const ClinicalAgendaBoard = ({
       return;
     }
     const appointmentId = String(event?.id || '').trim();
-    if (!appointmentId) return;
+    if (!appointmentId || !canUseTissBilling) return;
     setClosureChecklistExpanded(true);
     setClosureDetailState({ loading: true, error: '', data: null });
     dataService.getClosureAppointmentDetail(appointmentId)
@@ -2579,9 +2604,11 @@ export const ClinicalAgendaBoard = ({
       dataService.getCalendarEventDetail(appointmentId).then((detailResult: any) => {
         if (detailResult?.success) setEventDetail(detailResult.data || null);
       });
-      dataService.getClosureAppointmentDetail(appointmentId).then((closureResult: any) => {
-        if (closureResult?.success) setClosureDetailState((prev) => ({ ...prev, data: closureResult.data || prev.data }));
-      });
+      if (canUseTissBilling) {
+        dataService.getClosureAppointmentDetail(appointmentId).then((closureResult: any) => {
+          if (closureResult?.success) setClosureDetailState((prev) => ({ ...prev, data: closureResult.data || prev.data }));
+        });
+      }
       return true;
     } catch {
       setBillingEditorState((prev) => ({
@@ -4945,7 +4972,7 @@ export const ClinicalAgendaBoard = ({
                         Ver Pré-guias TISS
                       </button>
                     )}
-                    {!detailCancellationState.isCancelled && (
+                    {canUseTissBilling && !detailCancellationState.isCancelled && (
                       <button
                         type="button"
                         onClick={() => openClosureChecklist(detailEvent)}

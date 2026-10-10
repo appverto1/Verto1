@@ -54,7 +54,7 @@ const isGenericBrandName = (value) => {
 
 const isVertoFallbackAsset = (value) =>
   /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/i.test(String(value || "")) ||
-  /(?:^|\/)branding\/verto\/(?:verto-[a-z0-9-]+\.png|favicon\.ico)(?:$|[?#])/i.test(String(value || ""));
+  /(?:^|\/)branding\/verto\/(?:verto-[a-z0-9-]+\.(?:png|svg)|favicon\.ico)(?:$|[?#])/i.test(String(value || ""));
 
 const asNotificationAssetUrl = (value) => {
   const source = String(value || "").trim();

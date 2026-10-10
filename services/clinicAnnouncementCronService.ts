@@ -141,8 +141,13 @@ async function dispatchClinicAnnouncementById(
       patientId: sanitizeText(row?.patient_id, 120),
       recipientUserId: sanitizeText(row?.recipient_user_id, 120),
       patientEmail: sanitizeEmail(row?.recipient_email),
+      pushStatus: sanitizeText(row?.push_status, 30).toUpperCase(),
     }))
     .filter((row: any) => isUuid(row.patientId));
+  // A retry must not deliver push twice to recipients already acknowledged as
+  // SENT by the previous attempt. The portal materialization is idempotent.
+  const pendingPushRecipients = recipients.filter((recipient: any) => recipient.pushStatus !== 'SENT');
+  const previouslySentPushCount = recipients.length - pendingPushRecipients.length;
 
   if (recipients.length === 0) {
     await options.supabase
@@ -167,7 +172,7 @@ async function dispatchClinicAnnouncementById(
       batch = await findPushSubscriptionsForRecipients({
         supabase: options.supabase,
         deploymentEnv: options.deploymentEnv,
-        recipients: recipients.map((recipient: any) => ({
+        recipients: pendingPushRecipients.map((recipient: any) => ({
           key: recipient.patientId,
           patientIds: [recipient.patientId],
           legacyUserIds: [recipient.patientId, recipient.recipientUserId].filter((value) => isUuid(value)),
@@ -186,10 +191,10 @@ async function dispatchClinicAnnouncementById(
 
   const branding = await resolveReminderClinicBranding(options, clinicId);
   const statuses = new Map<string, 'SENT' | 'NO_SUBSCRIPTION' | 'FAILED'>();
-  let pushSentCount = 0;
+  let pushSentCount = previouslySentPushCount;
   let pushFailedCount = 0;
 
-  for (const recipient of recipients) {
+  for (const recipient of pendingPushRecipients) {
     if (!options.vapidPublicKey || !options.vapidPrivateKey) {
       statuses.set(recipient.patientId, 'NO_SUBSCRIPTION');
       continue;
