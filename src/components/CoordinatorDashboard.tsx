@@ -4161,17 +4161,34 @@ export function CoordinatorDashboard({
   const financialPlanMatchesAppointmentService = (plan: any, serviceType: any) => {
     const serviceKey = normalizeBillingServiceMatchKey(serviceType);
     if (!serviceKey) return false;
-    return [
+    const names = [
       plan?.serviceType,
       plan?.service_type,
+      plan?.specialty,
       plan?.customServiceName,
       plan?.custom_service_name,
       plan?.serviceNameSnapshot,
       plan?.service_name_snapshot,
-    ]
-      .map(normalizeBillingServiceMatchKey)
-      .filter(Boolean)
-      .includes(serviceKey);
+    ];
+    return names.some((name) => clinicalSpecialtiesMatch(name, serviceType)) ||
+      names.map(normalizeBillingServiceMatchKey).filter(Boolean).includes(serviceKey);
+  };
+
+  // A plan belongs to this patient and to the explicitly chosen specialty.
+  // Never fall back to an unrelated plan when a patient has multiple care lines.
+  const resolveSessionFinancialPlanForSpecialty = (patient: any, specialty: string) => {
+    const rawPlans = Array.isArray(patient?.financialPlans)
+      ? patient.financialPlans
+      : Array.isArray(patient?.financial_plans)
+        ? patient.financial_plans
+        : [];
+    if (!specialty || !rawPlans.length) return null;
+    const matching = normalizePatientFinancialPlans(rawPlans).filter((plan: any) =>
+      String(plan.status || "ACTIVE").toUpperCase() === "ACTIVE" &&
+      ["PRIVATE", "INSURANCE"].includes(plan.billingMode) &&
+      financialPlanMatchesAppointmentService(plan, specialty),
+    );
+    return matching.length === 1 ? matching[0] : null;
   };
 
   const isPreferredPatientInsurancePlan = (plan: any, rawPlan: any = {}) => {
@@ -4523,6 +4540,17 @@ export function CoordinatorDashboard({
     [selectedSessionPatient],
   );
 
+  const selectedSessionFinancialPlan = useMemo(
+    () => resolveSessionFinancialPlanForSpecialty(selectedSessionPatient, sessionApproach),
+    [selectedSessionPatient, sessionApproach],
+  );
+  const selectedSessionMonthlyPlan = selectedSessionFinancialPlan?.billingMode === "PRIVATE" &&
+    isMonthlySessionBillingPlan(selectedSessionFinancialPlan) &&
+    Number(selectedSessionFinancialPlan.amountCents || 0) > 0 &&
+    Number(selectedSessionFinancialPlan.dueDay || 0) >= 1
+      ? selectedSessionFinancialPlan
+      : null;
+
   const selectedSessionPatientInsurancePayer = useMemo(
     () => resolvePatientInsurancePayer(selectedSessionPatient, sessionApproach),
     [selectedSessionPatient, selectedSessionPatient?.financialPlans, selectedSessionPatient?.financial_plans, sessionApproach],
@@ -4552,6 +4580,9 @@ export function CoordinatorDashboard({
     if (!selectedSessionPatientResponsibleProfessionalId) return;
     const responsibleProfessional = findProfessionalOptionById(selectedSessionPatientResponsibleProfessionalId);
     if (!responsibleProfessional?.id) return;
+    if (sessionApproach && !clinicalSpecialtiesMatch(responsibleProfessional.clinicSpecialty, sessionApproach)) return;
+    if (selectedSessionProfessional?.id &&
+        (!sessionApproach || clinicalSpecialtiesMatch(selectedSessionProfessional.clinicSpecialty, sessionApproach))) return;
     if (sessionProfessionalManuallySelected && selectedSessionProfessional?.id) return;
     if (String(sessionProfessionalId || "") !== String(responsibleProfessional.id)) {
       setSessionProfessionalId(String(responsibleProfessional.id));
@@ -4566,8 +4597,33 @@ export function CoordinatorDashboard({
     selectedSessionProfessional?.id,
     sessionProfessionalId,
     sessionProfessionalManuallySelected,
+    sessionApproach,
     therapistFilterOptions,
   ]);
+
+  // Reconcile asynchronous clinic memberships without overriding a valid manual choice.
+  useEffect(() => {
+    if (!isAddSessionModalOpen || editingAppointmentId || !sessionApproach) return;
+    const eligible = appointmentProfessionalOptions.filter((member) =>
+      clinicalSpecialtiesMatch(member.clinicSpecialty, sessionApproach));
+    if (selectedSessionProfessional?.id &&
+        clinicalSpecialtiesMatch(selectedSessionProfessional.clinicSpecialty, sessionApproach)) return;
+    const preferred = eligible.find((member) =>
+      String(member.id) === String(selectedSessionPatientResponsibleProfessionalId || "") ||
+      (member.matchIds || []).some((id: string) => String(id) === String(selectedSessionPatientResponsibleProfessionalId || "")));
+    const next = preferred || (eligible.length === 1 ? eligible[0] : null);
+    if (next) {
+      setSessionProfessionalId(String(next.id));
+      setSessionProfessional(next.label || "");
+      setSessionProfessionalManuallySelected(false);
+    } else if (sessionProfessionalId) {
+      setSessionProfessionalId("");
+      setSessionProfessional("");
+      setSessionProfessionalManuallySelected(false);
+    }
+  }, [appointmentProfessionalOptions, editingAppointmentId, isAddSessionModalOpen,
+    selectedSessionPatientResponsibleProfessionalId, selectedSessionProfessional,
+    sessionApproach, sessionProfessionalId]);
 
   const selectedSessionPatientResponsibleProfessionalOption = selectedSessionPatientResponsibleProfessionalId
     ? findProfessionalOptionById(selectedSessionPatientResponsibleProfessionalId)
@@ -4978,7 +5034,7 @@ export function CoordinatorDashboard({
   ]);
 
   useEffect(() => {
-    if (!isAddSessionModalOpen || editingAppointmentId) return;
+    if (!isAddSessionModalOpen || editingAppointmentId || sessionFinancialContextType !== "INSURANCE") return;
     const patientPayer = selectedSessionPatientInsurancePayer;
     const matchingPayer = selectedSessionPatientInsuranceClinicPayer;
     const patientKey = getPatientAutoPayerKey(selectedSessionPatient, sessionPatientName);
@@ -5014,6 +5070,7 @@ export function CoordinatorDashboard({
     clinicPayers,
     editingAppointmentId,
     isAddSessionModalOpen,
+    sessionFinancialContextType,
     selectedSessionPatient,
     selectedSessionPatientInsuranceClinicPayer,
     selectedSessionPatientInsurancePayer,
@@ -15926,7 +15983,40 @@ export function CoordinatorDashboard({
                     className={sessionModalSelectClass}
                     value={sessionApproach}
                     onChange={(e) => {
-                      setSessionApproach(e.target.value);
+                      const specialty = e.target.value;
+                      setSessionApproach(specialty);
+                      const eligible = appointmentProfessionalOptions.filter((member) =>
+                        clinicalSpecialtiesMatch(member.clinicSpecialty, specialty));
+                      const current = eligible.find((member) => String(member.id) === sessionProfessionalId);
+                      const responsibleId = selectedSessionPatientResponsibleProfessionalId;
+                      const responsible = eligible.find((member) =>
+                        String(member.id) === String(responsibleId || "") ||
+                        (member.matchIds || []).some((id: string) => String(id) === String(responsibleId || "")));
+                      const selected = current || responsible || (eligible.length === 1 ? eligible[0] : null);
+                      setSessionProfessionalId(selected ? String(selected.id) : "");
+                      setSessionProfessional(selected?.label || "");
+                      setSessionProfessionalManuallySelected(false);
+
+                      const plan = resolveSessionFinancialPlanForSpecialty(selectedSessionPatient, specialty);
+                      if (plan?.billingMode === "PRIVATE") {
+                        setSessionFinancialContextType("PRIVATE");
+                        setSessionPayerId("");
+                        setSessionPayerNameSnapshot("");
+                        setSessionInsurancePlanName("");
+                        setSessionInsuranceCardNumber("");
+                        setSessionInsuranceHolderName("");
+                        setSessionInsuranceCardValidUntil("");
+                      } else if (plan?.billingMode === "INSURANCE") {
+                        setSessionFinancialContextType("INSURANCE");
+                        const payer = clinicPayers.find((item: any) => String(item?.id || "") === String(plan.payerId || ""));
+                        setSessionPayerId(String(payer?.id || plan.payerId || ""));
+                        setSessionPayerNameSnapshot(String(payer?.name || plan.payerNameSnapshot || ""));
+                      }
+                      setSessionPrivateServiceCatalogId("");
+                      setSessionPrivateManualAmount("");
+                      setSessionPrivateDiscountAmount("");
+                      setSessionPrivateZeroClassification("");
+                      setSessionPrivatePricingReason("");
                       setSessionInsuranceServiceCatalogId("");
                       setSessionPatientTissAuthorizationId("");
                       setSessionGuideNumber("");
@@ -15937,11 +16027,9 @@ export function CoordinatorDashboard({
                     {sessionApproach && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, sessionApproach)) && (
                       <option value={sessionApproach} disabled>{sessionApproach} (histórico; não disponível na equipe atual)</option>
                     )}
-                    {clinicSessionSpecialtyOptions
-                      .filter((specialty) => !selectedSessionProfessional?.clinicSpecialty || clinicalSpecialtiesMatch(specialty, selectedSessionProfessional.clinicSpecialty))
-                      .map((specialty) => (
-                        <option key={specialty} value={specialty}>{specialty}</option>
-                      ))}
+                    {clinicSessionSpecialtyOptions.map((specialty) => (
+                      <option key={specialty} value={specialty}>{specialty}</option>
+                    ))}
                   </select>
                   {clinicSpecialtiesError && <p role="alert" className="mt-1 text-xs text-rose-700">{clinicSpecialtiesError}</p>}
                   {!therapistMembersLoading && !clinicSpecialtiesError && clinicSessionSpecialtyOptions.length === 0 && (
@@ -16447,6 +16535,13 @@ export function CoordinatorDashboard({
                           </div>
                           {sessionPrivatePricingState.loading && <Loader2 size={16} className="animate-spin text-emerald-600" />}
                         </div>
+                        {selectedSessionMonthlyPlan && (
+                          <p className="rounded-xl border border-emerald-200 bg-white p-3 text-sm text-emerald-900">
+                            Plano vigente desta especialidade: <strong>{formatCurrency(Number(selectedSessionMonthlyPlan.amountCents) / 100)} por sessão realizada</strong>.
+                            A cobrança é consolidada mensalmente após a conclusão das sessões, com vencimento no dia {selectedSessionMonthlyPlan.dueDay}.
+                            Não é uma cobrança avulsa no agendamento.
+                          </p>
+                        )}
                         {sessionPrivateServices.length > 0 && (
                           <label className={sessionModalLabelClass}>
                             Serviço ou procedimento (opcional)
