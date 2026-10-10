@@ -1,11 +1,12 @@
 export const VERTO_BRAND_VERSION = '20260818-1';
-export const VERTO_HORIZONTAL_LOGO_VERSION = '20260826-1';
+export const VERTO_HORIZONTAL_LOGO_VERSION = '20261010-1';
 
 const withBrandVersion = (path: string) => `${path}?v=${VERTO_BRAND_VERSION}`;
 
 export const VERTO_BRAND_ASSETS = {
   symbol: withBrandVersion('/branding/verto/verto-symbol.png'),
-  horizontalLogo: `/branding/verto/verto-logo-horizontal.png?v=${VERTO_HORIZONTAL_LOGO_VERSION}`,
+  horizontalLogo: `/branding/verto/verto-logo-user-20261010.svg?v=${VERTO_HORIZONTAL_LOGO_VERSION}`,
+  professionalSidebarHorizontalLogo: '/branding/verto/verto-logo-horizontal.png?v=20260826-1',
   favicon16: withBrandVersion('/branding/verto/verto-favicon-16.png'),
   favicon32: withBrandVersion('/branding/verto/verto-favicon-32.png'),
   appleTouchIcon: withBrandVersion('/branding/verto/verto-apple-touch-icon.png'),
@@ -19,7 +20,7 @@ export const VERTO_BRAND_ASSETS = {
 // E-mail clients require an absolute URL. The file remains hosted by Verto,
 // alongside the local assets used by the web application.
 export const VERTO_EMAIL_HORIZONTAL_LOGO_URL =
-  `https://www.appverto.com.br${VERTO_BRAND_ASSETS.horizontalLogo}`;
+  `https://www.appverto.com.br${VERTO_BRAND_ASSETS.professionalSidebarHorizontalLogo}`;
 
 export const isVertoInstitutionalAsset = (value: unknown) => {
   const normalized = String(value || '').trim().toLowerCase();
