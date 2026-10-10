@@ -18,13 +18,13 @@ export const ADULT_CONVENTIONAL_TAGS = [
   { id: 'others', label: 'Outros', icon: <Plus size={18} />, color: 'bg-gray-100 text-gray-600 border-gray-200' }
 ];
 
-export const LogoVerto = ({ size = 64, className = "", showText = false }: { size?: number, className?: string, showText?: boolean }) => (
+export const LogoVerto = ({ size = 64, className = "", showText = false, preserveProfessionalSidebarBrand = false }: { size?: number, className?: string, showText?: boolean, preserveProfessionalSidebarBrand?: boolean }) => (
   <div
     className={`flex shrink-0 items-center ${className}`}
     style={{ width: showText ? Math.round(size * 3.5) : size, height: size }}
   >
     <img
-      src={showText ? VERTO_BRAND_ASSETS.horizontalLogo : VERTO_BRAND_ASSETS.symbol}
+      src={showText ? (preserveProfessionalSidebarBrand ? VERTO_BRAND_ASSETS.professionalSidebarHorizontalLogo : VERTO_BRAND_ASSETS.horizontalLogo) : VERTO_BRAND_ASSETS.symbol}
       alt="Verto"
       className="h-full w-full object-contain"
       draggable={false}
