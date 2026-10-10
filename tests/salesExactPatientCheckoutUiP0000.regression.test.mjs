@@ -16,6 +16,14 @@ assert.match(builder, /hasVersionedCustomCapacityPolicy && input\.exactPerPatien
 assert.match(builder, /disabled=\{input\.exactPerPatientBilling === true\}/);
 assert.match(builder, /input\.exactPerPatientBilling !== true && nextStandardCommercialCapacity/);
 
+// Only newly versioned exact-seat proposals use 50-patient Essencial capacity.
+// Legacy snapshots retain their original ten-patient block-selection semantics.
+assert.match(builder, /const commercialCapacityForExactDemand =/);
+assert.match(builder, /const initialCapacity = commercialCapacityForExactDemand\(patientQuantity\);/);
+assert.match(builder, /input\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(safeQuantity\)/);
+assert.match(builder, /snapshotInput\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(snapshotDemand\)/);
+assert.match(builder, /Plano Essencial · 1 a 50 pacientes/);
+
 // An immutable historical offer must not silently become exact-seat billing.
 assert.match(builder, /selectedSimulation\.modular_input_snapshot\?\.exactPerPatientBilling !== true/);
 assert.match(builder, /Proposta anterior — cobrança por capacidade/);

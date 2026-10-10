@@ -1,0 +1,26 @@
+name: Controlled production promotion
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  production-regressions:
+    if: startsWith(github.head_ref, 'release/controlled-20261010')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: node scripts/controlled-promotion-gate.mjs
+      - name: Protect commercial source
+        run: |
+          git diff --exit-code origin/main HEAD -- services/stripeService.ts 'src/utils/sales*' 'src/components/Sales*'
+      - run: npm run check:docker-runtime-imports

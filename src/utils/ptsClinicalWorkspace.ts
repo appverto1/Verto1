@@ -411,4 +411,3 @@ export function stripPtsTrackingFieldsForDraft(payload: PtsClinicalPayload): Pts
     reviews: [],
   };
 }
-

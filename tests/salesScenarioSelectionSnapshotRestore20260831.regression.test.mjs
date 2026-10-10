@@ -9,7 +9,7 @@ const summaryScope = builder.match(/\{\(\(\) => \{\s*const preview = summaryPrev
 
 assert.match(builder, /assumptions_snapshot: SalesAssumptionSnapshot/);
 assert.match(summarySection, /selectedSimulation\?\.results_snapshot \|\| preview/);
-assert.match(summarySection, /selectedSimulation\?\.modular_input_snapshot \|\| input/);
+assert.match(summarySection, /selectedSimulation\?\.modular_input_snapshot \|\| (?:input|calculationInput)/);
 assert.match(summarySection, /selectedSimulation[\s\S]*?selectedSimulation\.assumptions_snapshot \|\| null[\s\S]*?: assumptions/);
 assert.match(summarySection, /period: summaryPreview\.promotional/);
 assert.match(summarySection, /lines: summaryPreview\.lines/);

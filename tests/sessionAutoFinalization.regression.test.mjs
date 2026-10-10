@@ -127,4 +127,11 @@ await test('completion is durably deferred and reconnect forces immediate queue 
  assert.match(appSource,/handleOnline[\s\S]*syncOfflineData\(\{ force: true \}\)/);
 });
 
+await test('missing timeline RPC returns schema-unavailable; quota remains enforced',async()=>{
+ const server=fs.readFileSync(new URL('../server.ts',import.meta.url),'utf8');const a=server.indexOf('  const sendEvolutionTimelineError =');const b=server.indexOf('  const EVOLUTION_TIMELINE_PLUS_UNIT_AMOUNT_CENTS',a);const slice=server.slice(a,b);
+ const res={statusCode:0,payload:null,status(n){this.statusCode=n;return this;},json(p){this.payload=p;return p;}};
+ const handler=vm.runInNewContext(extract(slice,'sendEvolutionTimelineError'),{sanitizeString:String,isMissingRelationError:()=>false,sendRouteDbError:()=>{throw new Error('unexpected generic failure');}});
+ handler(res,{code:'PGRST202',message:'missing function'},'POST');assert.equal(res.statusCode,503);assert.equal(res.payload.code,'EVOLUTION_TIMELINE_SCHEMA_UNAVAILABLE');
+ handler(res,{code:'P0001',message:'EVOLUTION_TIMELINE_STANDARD_MONTH_LIMIT'},'POST');assert.equal(res.statusCode,409);assert.equal(res.payload.code,'EVOLUTION_TIMELINE_STANDARD_MONTH_LIMIT');
+});
 console.log(`${checks} behavioral checks passed.`);

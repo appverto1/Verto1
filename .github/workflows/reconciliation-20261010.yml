@@ -1,0 +1,46 @@
+name: Bidirectional reconciliation 20261010
+on:
+  pull_request:
+    branches: [staging, main]
+permissions:
+  contents: read
+jobs:
+  reconciliation-gate:
+    if: startsWith(github.head_ref, 'release/reconcile-20261010')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run check:docker-runtime-imports
+      - name: Parse complete server dependency tree
+        run: node --input-type=module -e "import {buildSync} from 'esbuild'; buildSync({entryPoints:['server.ts'],platform:'node',format:'esm',bundle:true,packages:'external',write:false});"
+      - name: Strict clinical, financial and commercial release regressions
+        run: node scripts/controlled-promotion-gate.mjs
+      - name: Complete candidate regression inventory
+        run: node scripts/reconciliation-regression-gate.mjs scan "$RUNNER_TEMP/candidate.json"
+      - name: Archived staging regression inventory
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/staging-baseline" 54b09202c31c96e71736c71ee8aafdb8b2db97b1
+          cp scripts/reconciliation-regression-gate.mjs "$RUNNER_TEMP/scan-reconciliation.mjs"
+          cd "$RUNNER_TEMP/staging-baseline"
+          npm ci --no-audit --no-fund
+          node "$RUNNER_TEMP/scan-reconciliation.mjs" scan "$RUNNER_TEMP/baseline.json"
+      - name: Reject newly failed regressions
+        run: node scripts/reconciliation-regression-gate.mjs compare "$RUNNER_TEMP/candidate.json" "$RUNNER_TEMP/baseline.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reconciliation-regression-results
+          path: |
+            ${{ runner.temp }}/candidate.json
+            ${{ runner.temp }}/baseline.json
