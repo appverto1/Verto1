@@ -33,6 +33,7 @@ import {
   Zap
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { appointmentCardServiceLabel, appointmentCardPaymentMethodLabel, appointmentCardPriceSourceLabel } from '../utils/appointmentCardDisplayLabels';
 import { SchoolMeetingWorkspace } from './SchoolMeetingWorkspace';
 import { formatDisplayDate, formatDisplayDateTime, formatDisplayMonthYear } from '../utils/dateFormatting';
 import { formatRescheduleOptionLabel, parseRescheduleRequestPayload } from '../services/portalRescheduleAvailability';
@@ -4411,14 +4412,14 @@ export const ClinicalAgendaBoard = ({
               <div>
                 <div className="mb-2 flex flex-wrap items-center gap-2">
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${getSessionTypeStyle(detailEvent.type).badge}`}>
-                    {detailEvent.type}
+                    {appointmentCardServiceLabel(detailEvent.type)}
                   </span>
                   <span className={`rounded-full border px-3 py-1 text-[10px] font-bold uppercase ${detailStatusColor.badge}`}>
                     {detailStatusColor.label}
                   </span>
                   {isAppointmentPendingOfflineSync(detailEvent) && (
                     <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase text-amber-800">
-                      Pendente de sincronizacao
+                      Pendente de sincronização
                     </span>
                   )}
                 </div>
@@ -4485,17 +4486,19 @@ export const ClinicalAgendaBoard = ({
                   <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
                     <p>
                       <span className="font-semibold">
-                        {billingDetailIsNonInsuranceContext ? 'Contexto:' : hasSavedBillingContext ? 'Pagador:' : billingSuggestion?.payerName ? 'Sugestao do paciente:' : 'Pagador:'}
+                        {billingDetailIsNonInsuranceContext ? 'Contexto:' : hasSavedBillingContext ? 'Pagador:' : billingSuggestion?.payerName ? 'Sugestão do paciente:' : 'Pagador:'}
                       </span>{' '}
-                      {billingDetailIsNonInsuranceContext ? getAppointmentFinancialContextLabel(billingDisplayFinancialContextType) || 'Não definido' : billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'nao informado'}
+                      {billingDetailIsNonInsuranceContext ? getAppointmentFinancialContextLabel(billingDisplayFinancialContextType) || 'Não definido' : billingContext.payerName || detailEvent.payer_name_snapshot || billingSuggestion?.payerName || 'Não informado'}
                     </p>
-                    <p><span className="font-semibold">Serviço:</span> {canUseTissBilling ? billingContext.serviceType || detailEvent.service_type || detailEvent.type || 'Não informado' : simplePatientFinancialPlan?.customServiceName || simplePatientFinancialPlan?.serviceType || detailEvent.service_type || detailEvent.type || 'Não informado'}</p>
+                    <p><span className="font-semibold">Serviço:</span> {appointmentCardServiceLabel(canUseTissBilling
+                      ? billingContext.serviceType || detailEvent.service_type || detailEvent.type
+                      : simplePatientFinancialPlan?.customServiceName || simplePatientFinancialPlan?.serviceNameSnapshot || simplePatientFinancialPlan?.serviceType || detailEvent.service_type || detailEvent.type)}</p>
                     {!canUseTissBilling && simplePatientFinancialPlan && (
                       <>
                         <p><span className="font-semibold">Valor:</span> {Number(simplePatientFinancialPlan.amountCents || 0) > 0 ? new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(simplePatientFinancialPlan.amountCents) / 100) : 'Não informado'}</p>
                         <p><span className="font-semibold">Faturamento:</span> {simplePatientFinancialPlan.billingFrequency === 'MONTHLY' ? 'Mensal' : 'Por sessão'}</p>
                         {simplePatientFinancialPlan.dueDay && <p><span className="font-semibold">Vencimento:</span> dia {simplePatientFinancialPlan.dueDay}</p>}
-                        {simplePatientFinancialPlan.paymentMethod && <p><span className="font-semibold">Pagamento:</span> {String(simplePatientFinancialPlan.paymentMethod).toUpperCase()}</p>}
+                        {simplePatientFinancialPlan.paymentMethod && <p><span className="font-semibold">Pagamento:</span> {appointmentCardPaymentMethodLabel(simplePatientFinancialPlan.paymentMethod)}</p>}
                       </>
                     )}
                     {!canUseTissBilling && !simplePatientFinancialPlan && (
@@ -4535,7 +4538,7 @@ export const ClinicalAgendaBoard = ({
                 <div className={`mt-4 rounded-2xl border p-4 ${isDark ? 'border-slate-700 bg-[#101827]' : 'border-white bg-white'}`}>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div>
-                      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Validacao financeira da sessão</p>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">Validação financeira da sessão</p>
                       <h4 className={`mt-1 text-base font-bold ${financialBlockingCount > 0 ? 'text-rose-700' : financialWarningCount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
                         {financialValidationStatus}
                       </h4>
@@ -4598,9 +4601,9 @@ export const ClinicalAgendaBoard = ({
                         <div><span className="block text-xs text-slate-400">Pago</span><span className="mt-1 block font-medium text-emerald-600">{formatPatientFinanceCurrency(patientFinanceAmounts.paid)}</span></div>
                         <div><span className="block text-xs text-slate-400">Saldo</span><span className={`mt-1 block font-medium ${patientFinanceAmounts.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{formatPatientFinanceCurrency(patientFinanceAmounts.balance)}</span></div>
                         <div><span className="block text-xs text-slate-400">Vencimento</span><span className="mt-1 block font-medium">{patientFinance?.due_date ? formatDisplayDate(patientFinance.due_date) : 'Não definido'}</span></div>
-                        <div><span className="block text-xs text-slate-400">Forma de pagamento</span><span className="mt-1 block font-medium">{patientFinance?.method || 'Não informada'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Forma de pagamento</span><span className="mt-1 block font-medium">{appointmentCardPaymentMethodLabel(patientFinance?.method)}</span></div>
                         <div><span className="block text-xs text-slate-400">Último pagamento</span><span className="mt-1 block font-medium">{patientFinance?.last_payment_at ? formatDisplayDateTime(patientFinance.last_payment_at, { separator: ', ' }) : 'Não registrado'}</span></div>
-                        <div><span className="block text-xs text-slate-400">Origem do preço</span><span className="mt-1 block font-medium">{patientFinance?.private_price_source_label || patientFinance?.private_price_source || 'Histórico legado'}</span></div>
+                        <div><span className="block text-xs text-slate-400">Origem do preço</span><span className="mt-1 block font-medium">{appointmentCardPriceSourceLabel(patientFinance?.private_price_source_label, patientFinance?.private_price_source)}</span></div>
                         <div><span className="block text-xs text-slate-400">Pagador</span><span className="mt-1 block font-medium">{patientFinance?.payer_name || 'Paciente/responsável'}</span></div>
                         <div><span className="block text-xs text-slate-400">Cancelamento gratuito até</span><span className="mt-1 block font-medium">{patientFinance?.cancellation_free_until ? formatDisplayDateTime(patientFinance.cancellation_free_until, { separator: ', ' }) : 'Política não congelada'}</span></div>
                       </div>
@@ -4949,7 +4952,7 @@ export const ClinicalAgendaBoard = ({
                         className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-3 py-2 text-xs font-bold ${isDark ? 'border-slate-700 text-slate-200 hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
                       >
                         {closureDetailState.loading ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
-                        {closureChecklistExpanded ? 'Ocultar checklist' : 'Ver checklist'}
+                        {closureChecklistExpanded ? 'Ocultar lista de verificação' : 'Ver lista de verificação'}
                       </button>
                     )}
                   </div>
@@ -4985,7 +4988,7 @@ export const ClinicalAgendaBoard = ({
                                   <div className="flex items-start gap-2">
                                     <Icon size={16} className={`${color} mt-0.5 shrink-0`} />
                                     <div>
-                                      <p className="text-sm font-semibold">{item.label || 'Item do checklist'}</p>
+                                      <p className="text-sm font-semibold">{item.label || 'Item da lista de verificação'}</p>
                                       {item.message && <p className={`mt-0.5 text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>{item.message}</p>}
                                     </div>
                                   </div>
