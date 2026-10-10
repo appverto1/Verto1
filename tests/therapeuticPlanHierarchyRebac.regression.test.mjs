@@ -62,10 +62,17 @@ assert.match(
   /PTS_DRAFT_VALIDATION_FAILED[\s\S]*setActivationWarning/,
   'campos pendentes de ativação devem virar aviso de rascunho, não erro global impeditivo',
 );
+const ptsEditor = fs.readFileSync('src/components/PtsWorkspaceEditor.tsx', 'utf8');
+const ptsOptionalMigration = fs.readFileSync('supabase/migrations/20261009160000_pts_activation_optional_content_v4.sql', 'utf8');
 assert.match(
-  panel,
-  /Os campos pendentes impedem somente a ativação; você pode continuar editando e salvando o PTS normalmente/,
-  'a UI deve deixar explícito que um rascunho incompleto continua salvável',
+  ptsEditor,
+  /Preenchimentos clínicos são opcionais para criar e ativar o PTS/,
+  'a UI deve deixar explícito que campos clínicos opcionais não bloqueiam criação ou ativação',
+);
+assert.match(
+  ptsOptionalMigration,
+  /create or replace function public\.patient_pts_snapshot_ready_for_activation_v3/,
+  'a validação opcional deve ser aplicada no banco, não somente no frontend',
 );
 assert.match(
   server,

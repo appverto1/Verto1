@@ -11,6 +11,7 @@ import {
 import { LogoVerto } from './Common';
 import { MonthlyConferenceCenter } from './MonthlyConferenceCenter';
 import { PayerRequirementsPanel } from './PayerRequirementsPanel';
+import { HelpButton } from './HelpButton';
 
 type BillerWorkspaceProps = {
   user: any;
@@ -68,6 +69,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
             <p className="truncate text-sm font-semibold text-slate-900">Faturamento e TISS</p>
             <p className="truncate text-xs text-slate-500">{clinicName}</p>
           </div>
+          <HelpButton />
           {accessContextCount > 1 && (
             <button
               type="button"

@@ -234,6 +234,9 @@ const CoordinatorDashboard = React.lazy(() =>
 const BillerWorkspace = React.lazy(() =>
   import('./components/BillerWorkspace').then((m) => ({ default: m.BillerWorkspace }))
 );
+const HelpCenter = React.lazy(() =>
+  import('./components/HelpCenter').then((m) => ({ default: m.HelpCenter }))
+);
 const AdminDashboard = React.lazy(() =>
   import('./components/AdminDashboard').then((m) => ({ default: m.AdminDashboard }))
 );
@@ -418,6 +421,7 @@ export default function App() {
     (/^\/reset-password\/?$/.test(window.location.pathname) || authAction === 'recovery');
   const isAccessGatewayRoute =
     typeof window !== 'undefined' && /^\/entrar\/?$/i.test(window.location.pathname);
+  const isHelpRoute = typeof window !== 'undefined' && /^\/ajuda\/?$/i.test(window.location.pathname);
   const invitationMode = typeof window !== 'undefined'
     ? String(new URLSearchParams(window.location.search).get('invite_mode') || '').trim().toLowerCase()
     : '';
@@ -6190,6 +6194,8 @@ export default function App() {
         currentPatient?.type,
     );
     const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
+    const requestedPatientCategory = String(updatedData?.group ?? updatedData?.grupo ?? '').trim().toLowerCase();
+    const mustConfirmPatientCategory = ['infantil', 'adolescente', 'adulto', 'idoso'].includes(requestedPatientCategory);
     const syncedAnamnesisData =
       anamnesisData !== undefined
         ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, anamnesisData)
@@ -6449,13 +6455,30 @@ export default function App() {
         const updateResult = await dataService.updatePatient(
           String(updatedData.id),
           patientUpdatePayload,
-          { recordPayload: recordPayloadForAtomicSave || undefined },
+          {
+            recordPayload: recordPayloadForAtomicSave || undefined,
+            requireServerAck: mustConfirmPatientCategory,
+          },
         );
-        if (!updateResult?.success) {
+        if (!updateResult?.success || (mustConfirmPatientCategory && updateResult?.pending === true)) {
           rollbackOptimisticPatientState();
           const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
           alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
           return { success: false, error: errorMessage };
+        }
+        if (mustConfirmPatientCategory) {
+          const confirmation = await dataService.confirmPatientCategoryOnServer(
+            String(updatedData.id),
+            String(user?.activeWorkspaceId || user?.clinicId || '').trim(),
+          );
+          const confirmedCategory = String(confirmation?.data?.group || '').trim().toLowerCase();
+          const confirmedProfileType = normalizePatientProfileType(confirmation?.data?.patientProfileType);
+          if (!confirmation?.success || confirmedCategory !== requestedPatientCategory || confirmedProfileType !== updatedProfileType) {
+            rollbackOptimisticPatientState();
+            const errorMessage = confirmation?.error || 'Categoria ou perfil clínico divergente no banco. Atualize o cadastro e tente novamente.';
+            alert(`Não foi possível confirmar a categoria salva no servidor: ${errorMessage}`);
+            return { success: false, error: errorMessage };
+          }
         }
         billingSync = updateResult?.billing || updateResult?.data?.billing || null;
         void onAddActivityLog(
@@ -6663,7 +6686,8 @@ export default function App() {
     }
     if (!financialContextType && effectivePayerId) financialContextType = 'INSURANCE';
     const usesInsuranceContext = financialContextType.toUpperCase() === 'INSURANCE';
-    const insuranceServiceCatalogId = usesInsuranceContext
+    const usesTissOperationalFields = usesInsuranceContext && sess.insuranceTissEnabled !== false;
+    const insuranceServiceCatalogId = usesTissOperationalFields
       ? String(
           sess.insuranceServiceCatalogId ||
             sess.insurance_service_catalog_id ||
@@ -6672,7 +6696,7 @@ export default function App() {
             '',
         ).trim()
       : '';
-    const insuranceProcedureCode = usesInsuranceContext
+    const insuranceProcedureCode = usesTissOperationalFields
       ? String(sess.procedureCode || sess.procedure_code || '').trim()
       : '';
     const effectiveInsurancePlan = patientInsurancePlans.find((plan: any) => {
@@ -6686,7 +6710,7 @@ export default function App() {
       !patientInsurancePlans.length ||
       !effectivePayerName ||
       normalizePatientPayerKey(patientInsuranceEligibility.insuranceName) === normalizePatientPayerKey(effectivePayerName);
-    const effectiveInsurancePlanName = usesInsuranceContext
+    const effectiveInsurancePlanName = usesTissOperationalFields
       ? String(
           sess.insurancePlanName ||
             sess.insurance_plan_name ||
@@ -6696,7 +6720,7 @@ export default function App() {
             ''
         ).trim()
       : '';
-    const effectiveInsuranceCardNumber = usesInsuranceContext
+    const effectiveInsuranceCardNumber = usesTissOperationalFields
       ? String(
             sess.insuranceCardNumber ||
             sess.insurance_card_number ||
@@ -6711,25 +6735,27 @@ export default function App() {
         ).trim()
       : '';
     const recurringAuthorizationEnabled =
-      numSessions <= 1 ||
-      Boolean(
-        sess.applyAuthorizationToRecurrence ??
-          sess.apply_authorization_to_recurrence ??
-          true,
-      );
+      usesTissOperationalFields &&
+      (numSessions <= 1 ||
+        Boolean(
+          sess.applyAuthorizationToRecurrence ??
+            sess.apply_authorization_to_recurrence ??
+            true,
+        ));
     const recurringGuideReuseEnabled =
+      usesTissOperationalFields &&
       numSessions > 1 &&
       Boolean(
         sess.reuseGuideAcrossRecurrence ??
           sess.reuse_guide_across_recurrence ??
           false,
       );
-    const sourceGuideNumber = String(
-      sess.guideNumber || sess.guide_number || '',
-    ).trim();
-    const sourceAuthorizationCode = String(
-      sess.authorizationCode || sess.authorization_code || '',
-    ).trim();
+    const sourceGuideNumber = usesTissOperationalFields
+      ? String(sess.guideNumber || sess.guide_number || '').trim()
+      : '';
+    const sourceAuthorizationCode = usesTissOperationalFields
+      ? String(sess.authorizationCode || sess.authorization_code || '').trim()
+      : '';
     const newItems = [];
     const conflicts: string[] = [];
 
@@ -6902,12 +6928,12 @@ export default function App() {
           payer_id: usesInsuranceContext ? effectivePayerId || null : null,
           payerName: usesInsuranceContext ? effectivePayerName || '' : '',
           payer_name_snapshot: usesInsuranceContext ? effectivePayerName || '' : '',
-          insuranceServiceCatalogId: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
-          insurance_service_catalog_id: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
-          serviceCatalogId: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
-          service_catalog_id: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
-          procedureCode: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceProcedureCode || null : null,
-          procedure_code: usesInsuranceContext && occurrenceMatchesBaseSpecialty ? insuranceProcedureCode || null : null,
+          insuranceServiceCatalogId: usesTissOperationalFields && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          insurance_service_catalog_id: usesTissOperationalFields && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          serviceCatalogId: usesTissOperationalFields && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          service_catalog_id: usesTissOperationalFields && occurrenceMatchesBaseSpecialty ? insuranceServiceCatalogId || null : null,
+          procedureCode: usesTissOperationalFields && occurrenceMatchesBaseSpecialty ? insuranceProcedureCode || null : null,
+          procedure_code: usesTissOperationalFields && occurrenceMatchesBaseSpecialty ? insuranceProcedureCode || null : null,
           privateServiceCatalogId: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
           private_service_catalog_id: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateServiceCatalogId || sess.private_service_catalog_id || null : null,
           privateManualAmount: financialContextType === 'PRIVATE' && occurrenceMatchesBaseSpecialty ? sess.privateManualAmount ?? sess.private_manual_amount ?? null : null,
@@ -6924,14 +6950,14 @@ export default function App() {
           insurance_plan_name: effectiveInsurancePlanName,
           insuranceCardNumber: effectiveInsuranceCardNumber,
           insurance_card_number: effectiveInsuranceCardNumber,
-          guideNumber: occurrenceBillingFields.guideNumber,
-          guide_number: occurrenceBillingFields.guideNumber,
-          authorizationCode: occurrenceBillingFields.authorizationCode,
-          authorization_code: occurrenceBillingFields.authorizationCode,
-          applyAuthorizationToRecurrence: recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
-          apply_authorization_to_recurrence: recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
-          reuseGuideAcrossRecurrence: recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
-          reuse_guide_across_recurrence: recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
+          guideNumber: usesTissOperationalFields ? occurrenceBillingFields.guideNumber : '',
+          guide_number: usesTissOperationalFields ? occurrenceBillingFields.guideNumber : '',
+          authorizationCode: usesTissOperationalFields ? occurrenceBillingFields.authorizationCode : '',
+          authorization_code: usesTissOperationalFields ? occurrenceBillingFields.authorizationCode : '',
+          applyAuthorizationToRecurrence: usesTissOperationalFields && recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
+          apply_authorization_to_recurrence: usesTissOperationalFields && recurringAuthorizationEnabled && occurrenceMatchesBaseSpecialty,
+          reuseGuideAcrossRecurrence: usesTissOperationalFields && recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
+          reuse_guide_across_recurrence: usesTissOperationalFields && recurringGuideReuseEnabled && occurrenceMatchesBaseSpecialty,
           isRecurring: numSessions > 1,
           is_recurring: numSessions > 1,
           recurrenceGroupId,
@@ -8422,6 +8448,11 @@ export default function App() {
           )
         ) : user?.isPlatformAdmin === true ? (
           <SuperAdminDashboard onLogout={handleLogout} />
+        ) : isHelpRoute && isProfessionalClinicRole(user.role) ? (
+          <HelpCenter
+            clinicName={String(user?.activeAccessContext?.clinicName || user?.clinicName || user?.workspaceName || 'Clínica atual')}
+            onClose={() => window.location.assign('/')}
+          />
         ) : showWorkspacePicker && (accessContextOptions.length > 0 || pendingClinicInvitations.length > 0) ? (
           <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-8 sm:px-6">
             <section

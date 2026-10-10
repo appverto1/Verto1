@@ -2359,11 +2359,44 @@ export const dataService = {
     }
   },
 
-  async updatePatient(id: string, updates: any, options: { recordPayload?: any } = {}) {
+  async updatePatient(id: string, updates: any, options: { recordPayload?: any; requireServerAck?: boolean } = {}) {
     const aggregatePayload = options?.recordPayload && typeof options.recordPayload === 'object'
       ? { ...(updates || {}), recordPayload: options.recordPayload }
       : updates;
-    return await saveOfflineFirst(id, aggregatePayload, 'patient', `/api/patients/${id}`, 'PATCH');
+    return await saveOfflineFirst(id, aggregatePayload, 'patient', `/api/patients/${id}`, 'PATCH', {
+      requireServerAck: options?.requireServerAck === true,
+    });
+  },
+
+  // Verificação pós-Salvar: nunca comparar com IndexedDB/outbox, que pode conter
+  // uma escolha ainda não confirmada. Apenas o GET autenticado do banco vale.
+  async confirmPatientCategoryOnServer(id: string, workspaceId?: string) {
+    const patientId = String(id || '').trim();
+    if (!patientId) return { success: false, error: 'Paciente inválido para confirmação.' };
+    const endpoint = endpointWithQuery('/api/patients', { limit: 1, patientId });
+    try {
+      const headers: Record<string, string> = await getNoStoreAuthHeaders(false);
+      if (workspaceId) headers['X-Workspace-Id'] = workspaceId;
+      const result = await fetchNoStoreJsonWithRetry(endpoint, {
+        credentials: 'include',
+        headers,
+      }, {
+        helperName: 'confirmPatientCategoryOnServer', operation: 'detail',
+        table: 'patients', hasExplicitColumns: true, requiresPatientOrSession: true,
+      }, 'Não foi possível confirmar a categoria no servidor.');
+      if (result?.success !== true || !Array.isArray(result?.data)) {
+        return { success: false, error: result?.error || 'Leitura do cadastro não confirmada.' };
+      }
+      const persisted = result.data.find((row: any) => String(row?.id || '') === patientId);
+      if (!persisted) return { success: false, error: 'Paciente não encontrado no escopo da clínica.' };
+      return { success: true, data: {
+        group: persisted.patient_group ?? persisted.group ?? persisted.grupo,
+        patientProfileType: persisted.patient_profile_type ?? persisted.patientProfileType ??
+          persisted.panel_type ?? persisted.panelType,
+      } };
+    } catch {
+      return { success: false, error: 'A leitura de confirmação do cadastro falhou.' };
+    }
   },
 
   async deletePatient(id: string) {
@@ -2615,14 +2648,16 @@ export const dataService = {
       started_at: session?.started_at || session?.startedAt || new Date().toISOString(),
       source: session?.source || session?.clientSource || ABA_DEFAULT_SOURCE
     };
-    const therapeuticPlanId = String(session?.therapeutic_plan_id || session?.therapeuticPlanId || '').trim();
+    // Opening a clinical session establishes authoritative server state. Never
+    // report a locally queued session as started: completion and appointment
+    // linkage both depend on this exact session id already existing server-side.
     return await saveOfflineFirst(
       id,
       data,
       'aba',
       '/api/aba/sessions',
       'POST',
-      { requireServerAck: Boolean(therapeuticPlanId) },
+      { requireServerAck: true },
     );
   },
 
@@ -8778,6 +8813,23 @@ export const dataService = {
     } catch (error) {
       console.error('Error fetching clinic members:', error);
       return { success: false, error: String(error) };
+    }
+  },
+
+  async getClinicSchedulingSpecialties(clinicId: string) {
+    if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(clinicId || ''))) {
+      return { success: false, error: 'Clínica inválida.' };
+    }
+    try {
+      const client = await getSupabase();
+      if (!client) return { success: false, error: 'Sessão de autenticação indisponível.' };
+      const { data, error } = await client.rpc('clinic_scheduling_specialties_v1', { p_clinic_id: clinicId });
+      if (error || !Array.isArray(data)) {
+        return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
+      }
+      return { success: true, data };
+    } catch {
+      return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
     }
   },
 

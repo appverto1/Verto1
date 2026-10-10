@@ -55,6 +55,7 @@ import {
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
+import { TutorialOverlay } from "./Tutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { ClinicAnnouncementsPanel } from "./ClinicAnnouncementsPanel";
 import { PatientDetailView } from "./PatientDetailView";
@@ -112,6 +113,8 @@ import {
 import { SafeResponsiveContainer } from "./SafeResponsiveContainer";
 import { NewBadge } from "./NewBadge";
 import { dataService } from "../services/dataService";
+import { appointmentCardPrivatePolicyLabel } from "../utils/appointmentCardDisplayLabels";
+import { CLINICAL_SPECIALTY_OPTIONS, activeClinicAppointmentSpecialty, clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey } from "../utils/clinicalSpecialties";
 import {
   getActiveNewFeatureKeys,
   isFeatureWithinNewWindow,
@@ -241,20 +244,8 @@ type NavigationNode = {
   newFeatureKey?: NewFeatureKey;
 };
 
-const SESSION_SPECIALTY_OPTIONS = [
-  "ABA",
-  "Fonoaudiologia",
-  "Terapia Ocupacional",
-  "Psicologia",
-  "Psicopedagogia",
-  "Avaliação",
-  "Supervisão",
-  "Reunião interdisciplinar",
-  "Orientação familiar",
-  "Outro",
-] as const;
-
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
+const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
 
 const createWeeklyScheduleSlotId = () =>
   `weekly-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -280,6 +271,8 @@ import {
   getPatientProfileTypeLabel,
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
+  resolvePatientProfileTypeForCategory,
+  resolvePatientRegistrationCategory,
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
 import {
@@ -1001,6 +994,9 @@ export function CoordinatorDashboard({
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
+  const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
+  const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
+  const guidedTutorialLoadedKeyRef = useRef("");
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
     "care-root": true,
     "tiss-root": true,
@@ -1022,6 +1018,7 @@ export function CoordinatorDashboard({
     action?: "charge" | "payment" | "partial_payment" | "discount" | "courtesy" | "refund" | "receipt" | "due_date" | "cancel" | "history";
   } | null>(null);
   const [therapistMembersById, setTherapistMembersById] = useState<Record<string, any>>({});
+  const [clinicSpecialtiesError, setClinicSpecialtiesError] = useState("");
   const [therapistMembersLoading, setTherapistMembersLoading] = useState(false);
   const therapistMembersRequestSeqRef = useRef(0);
   const therapistMembersWorkspaceRef = useRef("");
@@ -1261,6 +1258,7 @@ export function CoordinatorDashboard({
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
+    setClinicSpecialtiesError("");
     if (!workspaceId) {
       setTherapistMembersLoading(false);
       return;
@@ -1268,19 +1266,41 @@ export function CoordinatorDashboard({
     setTherapistMembersLoading(true);
     const loadTherapistMembers = async () => {
       try {
-        const result = await dataService.getClinicMembers();
+        const [result, clinicSpecialtiesResult] = await Promise.all([
+          dataService.getClinicMembers(),
+          dataService.getClinicSchedulingSpecialties(workspaceId),
+        ]);
         if (
           therapistMembersRequestSeqRef.current !== requestSeq ||
-          therapistMembersWorkspaceRef.current !== workspaceId ||
-          !result?.success ||
-          !Array.isArray(result?.data)
+          therapistMembersWorkspaceRef.current !== workspaceId
         ) return;
+        if (!result?.success || !Array.isArray(result?.data)) {
+          setClinicSpecialtiesError("Não foi possível carregar a equipe clínica.");
+          return;
+        }
+        const activeSpecialtiesById = new Map<string, string>();
+        if (clinicSpecialtiesResult?.success && Array.isArray(clinicSpecialtiesResult.data)) {
+          clinicSpecialtiesResult.data.forEach((row: any) => {
+            const id = String(row?.user_id || "").trim();
+            const specialty = String(row?.specialty || "").trim();
+            if (id && specialty) activeSpecialtiesById.set(id, specialty);
+          });
+        } else {
+          setClinicSpecialtiesError(clinicSpecialtiesResult?.error || "Especialidades indisponíveis.");
+        }
         const byId: Record<string, any> = {};
         result.data.forEach((member: any) => {
           const ids = collectProfessionalIdentifierCandidates(member);
           const id = ids[0] || "";
           if (isPatientCareProfessionalMember(member) && id) {
-            const normalizedMember = { ...member, id, matchIds: ids };
+            const normalizedMember = {
+              ...member,
+              id,
+              matchIds: ids,
+              // Never use a global profile or a pending invitation as the
+              // authority for clinic availability.
+              clinicSpecialty: activeSpecialtiesById.get(String(member?.id || member?.user_id || id)) || null,
+            };
             ids.forEach((candidateId) => {
               byId[candidateId] = normalizedMember;
             });
@@ -1316,6 +1336,9 @@ export function CoordinatorDashboard({
           matchIds,
           label: formatProfessionalDisplayLabel(member, String(member?.email || optionId).trim() || "Profissional"),
           specialty,
+          clinicSpecialty: activeClinicAppointmentSpecialty(member),
+          role: member?.role,
+          status: member?.status,
           profilePicture:
             member?.profilePicture ||
             member?.profile_picture ||
@@ -1341,6 +1364,27 @@ export function CoordinatorDashboard({
       uniqueEntries.push(entry);
     });
     return uniqueEntries;
+  }, [therapistMembersById]);
+
+  const appointmentProfessionalOptions = useMemo(
+    () => therapistFilterOptions.filter((member) => Boolean(activeClinicAppointmentSpecialty(member))),
+    [therapistFilterOptions],
+  );
+
+  // P1-23: derive appointment specialties only from authorized, current-clinic
+  // professional memberships. ABA and non-clinical events are not specialties.
+  const clinicSessionSpecialtyOptions = useMemo(() => {
+    const available = new Set<string>();
+    const uniqueMembers = new Map<string, any>();
+    Object.values(therapistMembersById as Record<string, any>).forEach((member: any) => {
+      const id = String(member?.id || "").trim();
+      if (id && !uniqueMembers.has(id)) uniqueMembers.set(id, member);
+    });
+    uniqueMembers.forEach((member) => {
+      const specialty = activeClinicAppointmentSpecialty(member);
+      if (specialty) available.add(specialty);
+    });
+    return Array.from(available).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [therapistMembersById]);
 
   const patientCareProfessionals = useMemo(() => {
@@ -2526,6 +2570,7 @@ export function CoordinatorDashboard({
     insuranceHolderSuggestedFromResponsible: false,
   });
   const [editingPatientId, setEditingPatientId] = useState<string | null>(null);
+  const patientRegistrationSaveInFlightRef = useRef(false);
   const defaultPatientTissAuthorizationForm = {
     id: "",
     payerId: "",
@@ -4054,17 +4099,34 @@ export function CoordinatorDashboard({
   const financialPlanMatchesAppointmentService = (plan: any, serviceType: any) => {
     const serviceKey = normalizeBillingServiceMatchKey(serviceType);
     if (!serviceKey) return false;
-    return [
+    const names = [
       plan?.serviceType,
       plan?.service_type,
+      plan?.specialty,
       plan?.customServiceName,
       plan?.custom_service_name,
       plan?.serviceNameSnapshot,
       plan?.service_name_snapshot,
-    ]
-      .map(normalizeBillingServiceMatchKey)
-      .filter(Boolean)
-      .includes(serviceKey);
+    ];
+    return names.some((name) => clinicalSpecialtiesMatch(name, serviceType)) ||
+      names.map(normalizeBillingServiceMatchKey).filter(Boolean).includes(serviceKey);
+  };
+
+  // A plan belongs to this patient and to the explicitly chosen specialty.
+  // Never fall back to an unrelated plan when a patient has multiple care lines.
+  const resolveSessionFinancialPlanForSpecialty = (patient: any, specialty: string) => {
+    const rawPlans = Array.isArray(patient?.financialPlans)
+      ? patient.financialPlans
+      : Array.isArray(patient?.financial_plans)
+        ? patient.financial_plans
+        : [];
+    if (!specialty || !rawPlans.length) return null;
+    const matching = normalizePatientFinancialPlans(rawPlans).filter((plan: any) =>
+      String(plan.status || "ACTIVE").toUpperCase() === "ACTIVE" &&
+      ["PRIVATE", "INSURANCE"].includes(plan.billingMode) &&
+      financialPlanMatchesAppointmentService(plan, specialty),
+    );
+    return matching.length === 1 ? matching[0] : null;
   };
 
   const isPreferredPatientInsurancePlan = (plan: any, rawPlan: any = {}) => {
@@ -4275,15 +4337,15 @@ export function CoordinatorDashboard({
     const targetId = String(professionalId || "").trim();
     if (!targetId) return null;
     return (
-      therapistFilterOptions.find((member) => String(member.id || "") === targetId) ||
-      therapistFilterOptions.find(
+      appointmentProfessionalOptions.find((member) => String(member.id || "") === targetId) ||
+      appointmentProfessionalOptions.find(
         (member) =>
           Array.isArray((member as any).matchIds) &&
           (member as any).matchIds.some((candidateId: any) => String(candidateId || "").trim() === targetId),
       ) ||
       null
     );
-  }, [therapistFilterOptions]);
+  }, [appointmentProfessionalOptions]);
 
   const selectPatientForSession = (name: string) => {
     const patient = findSessionPatientByName(name);
@@ -4391,6 +4453,17 @@ export function CoordinatorDashboard({
     [selectedSessionPatient],
   );
 
+  const selectedSessionFinancialPlan = useMemo(
+    () => resolveSessionFinancialPlanForSpecialty(selectedSessionPatient, sessionApproach),
+    [selectedSessionPatient, sessionApproach],
+  );
+  const selectedSessionMonthlyPlan = selectedSessionFinancialPlan?.billingMode === "PRIVATE" &&
+    isMonthlySessionBillingPlan(selectedSessionFinancialPlan) &&
+    Number(selectedSessionFinancialPlan.amountCents || 0) > 0 &&
+    Number(selectedSessionFinancialPlan.dueDay || 0) >= 1
+      ? selectedSessionFinancialPlan
+      : null;
+
   const selectedSessionPatientInsurancePayer = useMemo(
     () => resolvePatientInsurancePayer(selectedSessionPatient, sessionApproach),
     [selectedSessionPatient, selectedSessionPatient?.financialPlans, selectedSessionPatient?.financial_plans, sessionApproach],
@@ -4409,17 +4482,20 @@ export function CoordinatorDashboard({
     const normalizedName = normalizeUtf8Text(sessionProfessional).trim();
     return (
       findProfessionalOptionById(sessionProfessionalId) ||
-      therapistFilterOptions.find((member) => String(member.id || "") === normalizedName) ||
-      therapistFilterOptions.find((member) => member.label === normalizedName) ||
+      appointmentProfessionalOptions.find((member) => String(member.id || "") === normalizedName) ||
+      appointmentProfessionalOptions.find((member) => member.label === normalizedName) ||
       null
     );
-  }, [findProfessionalOptionById, sessionProfessional, sessionProfessionalId, therapistFilterOptions]);
+  }, [appointmentProfessionalOptions, findProfessionalOptionById, sessionProfessional, sessionProfessionalId]);
 
   useEffect(() => {
     if (!isAddSessionModalOpen || editingAppointmentId || !selectedSessionPatient) return;
     if (!selectedSessionPatientResponsibleProfessionalId) return;
     const responsibleProfessional = findProfessionalOptionById(selectedSessionPatientResponsibleProfessionalId);
     if (!responsibleProfessional?.id) return;
+    if (sessionApproach && !clinicalSpecialtiesMatch(responsibleProfessional.clinicSpecialty, sessionApproach)) return;
+    if (selectedSessionProfessional?.id &&
+        (!sessionApproach || clinicalSpecialtiesMatch(selectedSessionProfessional.clinicSpecialty, sessionApproach))) return;
     if (sessionProfessionalManuallySelected && selectedSessionProfessional?.id) return;
     if (String(sessionProfessionalId || "") !== String(responsibleProfessional.id)) {
       setSessionProfessionalId(String(responsibleProfessional.id));
@@ -4434,8 +4510,33 @@ export function CoordinatorDashboard({
     selectedSessionProfessional?.id,
     sessionProfessionalId,
     sessionProfessionalManuallySelected,
+    sessionApproach,
     therapistFilterOptions,
   ]);
+
+  // Reconcile asynchronous clinic memberships without overriding a valid manual choice.
+  useEffect(() => {
+    if (!isAddSessionModalOpen || editingAppointmentId || !sessionApproach) return;
+    const eligible = appointmentProfessionalOptions.filter((member) =>
+      clinicalSpecialtiesMatch(member.clinicSpecialty, sessionApproach));
+    if (selectedSessionProfessional?.id &&
+        clinicalSpecialtiesMatch(selectedSessionProfessional.clinicSpecialty, sessionApproach)) return;
+    const preferred = eligible.find((member) =>
+      String(member.id) === String(selectedSessionPatientResponsibleProfessionalId || "") ||
+      (member.matchIds || []).some((id: string) => String(id) === String(selectedSessionPatientResponsibleProfessionalId || "")));
+    const next = preferred || (eligible.length === 1 ? eligible[0] : null);
+    if (next) {
+      setSessionProfessionalId(String(next.id));
+      setSessionProfessional(next.label || "");
+      setSessionProfessionalManuallySelected(false);
+    } else if (sessionProfessionalId) {
+      setSessionProfessionalId("");
+      setSessionProfessional("");
+      setSessionProfessionalManuallySelected(false);
+    }
+  }, [appointmentProfessionalOptions, editingAppointmentId, isAddSessionModalOpen,
+    selectedSessionPatientResponsibleProfessionalId, selectedSessionProfessional,
+    sessionApproach, sessionProfessionalId]);
 
   const selectedSessionPatientResponsibleProfessionalOption = selectedSessionPatientResponsibleProfessionalId
     ? findProfessionalOptionById(selectedSessionPatientResponsibleProfessionalId)
@@ -4481,6 +4582,8 @@ export function CoordinatorDashboard({
   );
 
   const selectedSessionPayerName = selectedSessionPayer?.name || sessionPayerNameSnapshot || "";
+  const sessionUsesTissOperationalFields =
+    sessionFinancialContextType === "INSURANCE" && hasInsuranceTissModule;
   const sessionPayerSelectValue =
     sessionPayerId || (sessionPayerNameSnapshot ? SESSION_PATIENT_INSURANCE_PAYER_VALUE : "");
   const hasSessionPayerIdOption = Boolean(sessionPayerId && !selectedSessionPayer);
@@ -4727,7 +4830,7 @@ export function CoordinatorDashboard({
     if (!isAddSessionModalOpen || isTherapist) return;
     const patientId = String(selectedSessionPatient?.id || "").trim();
     if (
-      sessionFinancialContextType !== "INSURANCE" ||
+      !sessionUsesTissOperationalFields ||
       !patientId ||
       !sessionPayerId ||
       !sessionApproach ||
@@ -4795,10 +4898,11 @@ export function CoordinatorDashboard({
     sessionDate,
     sessionFinancialContextType,
     sessionPayerId,
+    sessionUsesTissOperationalFields,
   ]);
 
   useEffect(() => {
-    if (!isAddSessionModalOpen || sessionFinancialContextType !== "INSURANCE") return;
+    if (!isAddSessionModalOpen || !sessionUsesTissOperationalFields) return;
     if (sessionBillableServiceOptions.length === 0) return;
     const selectedStillExists = sessionBillableServiceOptions.some(
       (option: any) => String(option?.serviceCatalogId || option?.service_catalog_id || "") === sessionInsuranceServiceCatalogId,
@@ -4818,12 +4922,13 @@ export function CoordinatorDashboard({
     sessionBillableServiceOptions,
     sessionFinancialContextType,
     sessionInsuranceServiceCatalogId,
+    sessionUsesTissOperationalFields,
   ]);
 
   useEffect(() => {
     if (
       !isAddSessionModalOpen ||
-      sessionFinancialContextType !== "INSURANCE" ||
+      !sessionUsesTissOperationalFields ||
       !sessionInsuranceServiceCatalogId ||
       sessionPatientTissAuthorizationId ||
       sessionUsableTissAuthorizations.length !== 1
@@ -4838,10 +4943,11 @@ export function CoordinatorDashboard({
     sessionInsuranceServiceCatalogId,
     sessionPatientTissAuthorizationId,
     sessionUsableTissAuthorizations,
+    sessionUsesTissOperationalFields,
   ]);
 
   useEffect(() => {
-    if (!isAddSessionModalOpen || editingAppointmentId) return;
+    if (!isAddSessionModalOpen || editingAppointmentId || sessionFinancialContextType !== "INSURANCE") return;
     const patientPayer = selectedSessionPatientInsurancePayer;
     const matchingPayer = selectedSessionPatientInsuranceClinicPayer;
     const patientKey = getPatientAutoPayerKey(selectedSessionPatient, sessionPatientName);
@@ -4877,6 +4983,7 @@ export function CoordinatorDashboard({
     clinicPayers,
     editingAppointmentId,
     isAddSessionModalOpen,
+    sessionFinancialContextType,
     selectedSessionPatient,
     selectedSessionPatientInsuranceClinicPayer,
     selectedSessionPatientInsurancePayer,
@@ -5311,9 +5418,9 @@ export function CoordinatorDashboard({
           ? "Informe o motivo da decisão financeira deste reagendamento."
       : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && !sessionPayerId
         ? "Selecione um pagador/convênio cadastrado ou escolha outro contexto financeiro válido."
-        : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && sessionBillingSuggestionState.loading
+        : !isTherapist && sessionNeedsFinancialContext && sessionUsesTissOperationalFields && sessionBillingSuggestionState.loading
           ? "Aguarde o carregamento dos procedimentos faturáveis do convênio."
-          : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "INSURANCE" && sessionBillableServiceOptions.length > 0 && !sessionInsuranceServiceCatalogId
+          : !isTherapist && sessionNeedsFinancialContext && sessionUsesTissOperationalFields && sessionBillableServiceOptions.length > 0 && !sessionInsuranceServiceCatalogId
             ? "Selecione o procedimento faturável do convênio antes de confirmar."
         : !isTherapist && sessionNeedsFinancialContext && sessionFinancialContextType === "PRIVATE" && sessionPrivatePricingState.loading
           ? "Aguarde a confirmação do valor particular."
@@ -5641,6 +5748,11 @@ export function CoordinatorDashboard({
       showToast(sessionWeeklyValidationError, "error");
       return;
     }
+    if ((!editingAppointmentId && !sessionUsesWeeklyAgenda && !clinicalSpecialtiesMatch(selectedSessionProfessional?.clinicSpecialty, sessionApproach))
+      || (sessionUsesWeeklyAgenda && sessionWeeklySlots.some((slot) => !clinicalSpecialtiesMatch(findProfessionalOptionById(slot.professionalId)?.clinicSpecialty, slot.specialty)))) {
+      showToast("Selecione um profissional ativo da clínica com a especialidade correspondente.", "error");
+      return;
+    }
     if (!requiredSessionFieldsReady) {
       const locationMessage =
         sessionLocationType === "escola"
@@ -5785,16 +5897,21 @@ export function CoordinatorDashboard({
         billing_context_type: sessionFinancialContextType,
         payerType: sessionFinancialContextType,
         payer_type: sessionFinancialContextType,
+        insuranceTissEnabled: hasInsuranceTissModule,
         payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
         payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
         payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
-        insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-        insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-        serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-        service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-        procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
-        procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+        ...(hasInsuranceTissModule
+          ? {
+              insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+              insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+              serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+              service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+              procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+              procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+            }
+          : {}),
         privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
         private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
         privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
@@ -5807,20 +5924,24 @@ export function CoordinatorDashboard({
         private_pricing_reason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
         privateRescheduleFinancialDecision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
         private_reschedule_financial_decision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
-        insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
-        insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
-        insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
-        insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
-        insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
-        insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
-        insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
-        insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
-        guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
-        guide_number: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
-        authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
-        authorization_code: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
-        patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
-        patient_tiss_authorization_id: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+        ...(hasInsuranceTissModule
+          ? {
+              insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+              insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+              insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+              insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+              insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+              insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+              insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+              insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+              guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
+              guide_number: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
+              authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
+              authorization_code: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
+              patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+              patient_tiss_authorization_id: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+            }
+          : {}),
         professional: selectedSessionProfessional?.label || sessionProfessional,
         professionalId: selectedSessionProfessional?.id || sessionProfessionalId,
         professional_id: selectedSessionProfessional?.id || sessionProfessionalId,
@@ -5853,29 +5974,31 @@ export function CoordinatorDashboard({
           : `Sessão de ${sessionPatientName} atualizada para ${sessionDate} às ${sessionTime}.`,
         "management",
       );
-      const billingResult = await dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
-        financialContextType: sessionFinancialContextType,
-        billingContextType: sessionFinancialContextType,
-        payerType: sessionFinancialContextType,
-        payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
-        payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
-        serviceType: sessionApproach || "Consulta Padrão",
-        serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-        procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
-        insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
-        insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
-        insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName || null : null,
-        insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil || null : null,
-        guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber || null : null,
-        authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode || null : null,
-        patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
-        source: "APPOINTMENT_CONTEXT",
-      });
-      if (!billingResult?.success) {
-        hideProcessing();
-        releaseSessionSubmit();
-        showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
-        return;
+      if (hasInsuranceTissModule) {
+        const billingResult = await dataService.updateAppointmentBillingContext(String(editingAppointmentId), {
+          financialContextType: sessionFinancialContextType,
+          billingContextType: sessionFinancialContextType,
+          payerType: sessionFinancialContextType,
+          payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
+          payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : null,
+          serviceType: sessionApproach || "Consulta Padrão",
+          serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+          procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+          insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName || null : null,
+          insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber || null : null,
+          insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName || null : null,
+          insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil || null : null,
+          guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber || null : null,
+          authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode || null : null,
+          patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+          source: "APPOINTMENT_CONTEXT",
+        });
+        if (!billingResult?.success) {
+          hideProcessing();
+          releaseSessionSubmit();
+          showToast(billingResult?.error || "Não foi possível salvar o contexto financeiro do atendimento.", "error");
+          return;
+        }
       }
       if (editingAppointmentActionRequest?.id) {
         const buildEditedAppointmentIso = (timeValue: string) => {
@@ -5946,16 +6069,21 @@ export function CoordinatorDashboard({
       billing_context_type: sessionFinancialContextType,
       payerType: sessionFinancialContextType,
       payer_type: sessionFinancialContextType,
+      insuranceTissEnabled: hasInsuranceTissModule,
       payerId: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
       payer_id: sessionFinancialContextType === "INSURANCE" ? sessionPayerId || null : null,
       payerName: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
       payer_name_snapshot: sessionFinancialContextType === "INSURANCE" ? selectedSessionPayerName : "",
-      insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-      insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-      serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-      service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
-      procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
-      procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+      ...(hasInsuranceTissModule
+        ? {
+            insuranceServiceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+            insurance_service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+            serviceCatalogId: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+            service_catalog_id: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceServiceCatalogId || null : null,
+            procedureCode: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+            procedure_code: sessionFinancialContextType === "INSURANCE" ? selectedSessionProcedureCode || null : null,
+          }
+        : {}),
       privateServiceCatalogId: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
       private_service_catalog_id: sessionFinancialContextType === "PRIVATE" ? sessionPrivateServiceCatalogId || null : null,
       privateManualAmount: sessionFinancialContextType === "PRIVATE" && sessionPrivateManualAmount !== "" ? Number(sessionPrivateManualAmount) : null,
@@ -5968,20 +6096,24 @@ export function CoordinatorDashboard({
       private_pricing_reason: sessionFinancialContextType === "PRIVATE" ? sessionPrivatePricingReason.trim() || null : null,
       privateRescheduleFinancialDecision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
       private_reschedule_financial_decision: sessionFinancialContextType === "PRIVATE" ? sessionPrivateRescheduleFinancialDecision || null : null,
-      insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
-      insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
-      insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
-      insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
-      insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
-      insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
-      insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
-      insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
-      guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
-      guide_number: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
-      authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
-      authorization_code: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
-      patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
-      patient_tiss_authorization_id: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+      ...(hasInsuranceTissModule
+        ? {
+            insurancePlanName: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+            insurance_plan_name: sessionFinancialContextType === "INSURANCE" ? sessionInsurancePlanName : "",
+            insuranceCardNumber: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+            insurance_card_number: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardNumber : "",
+            insuranceHolderName: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+            insurance_holder_name: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceHolderName : "",
+            insuranceCardValidUntil: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+            insurance_card_valid_until: sessionFinancialContextType === "INSURANCE" ? sessionInsuranceCardValidUntil : "",
+            guideNumber: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
+            guide_number: sessionFinancialContextType === "INSURANCE" ? sessionGuideNumber : "",
+            authorizationCode: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
+            authorization_code: sessionFinancialContextType === "INSURANCE" ? sessionAuthorizationCode : "",
+            patientTissAuthorizationId: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+            patient_tiss_authorization_id: sessionFinancialContextType === "INSURANCE" ? sessionPatientTissAuthorizationId || null : null,
+          }
+        : {}),
       professional: selectedSessionProfessional?.label || sessionProfessional,
       professionalName: selectedSessionProfessional?.label || sessionProfessional,
       professionalId: selectedSessionProfessional?.id || sessionProfessionalId,
@@ -5998,14 +6130,18 @@ export function CoordinatorDashboard({
       recurrence_weeks: sessionUsesWeeklyAgenda ? sessionWeeklyWeeks : null,
       weeklySchedule: sessionUsesWeeklyAgenda ? normalizeWeeklyScheduleSlots(sessionWeeklySlots) : [],
       weekly_schedule: sessionUsesWeeklyAgenda ? normalizeWeeklyScheduleSlots(sessionWeeklySlots) : [],
-      applyAuthorizationToRecurrence:
-        sessionPlannedOccurrenceCount <= 1 || sessionApplyAuthorizationToRecurrence,
-      apply_authorization_to_recurrence:
-        sessionPlannedOccurrenceCount <= 1 || sessionApplyAuthorizationToRecurrence,
-      reuseGuideAcrossRecurrence:
-        sessionPlannedOccurrenceCount > 1 && sessionReuseGuideAcrossRecurrence,
-      reuse_guide_across_recurrence:
-        sessionPlannedOccurrenceCount > 1 && sessionReuseGuideAcrossRecurrence,
+      ...(hasInsuranceTissModule
+        ? {
+            applyAuthorizationToRecurrence:
+              sessionPlannedOccurrenceCount <= 1 || sessionApplyAuthorizationToRecurrence,
+            apply_authorization_to_recurrence:
+              sessionPlannedOccurrenceCount <= 1 || sessionApplyAuthorizationToRecurrence,
+            reuseGuideAcrossRecurrence:
+              sessionPlannedOccurrenceCount > 1 && sessionReuseGuideAcrossRecurrence,
+            reuse_guide_across_recurrence:
+              sessionPlannedOccurrenceCount > 1 && sessionReuseGuideAcrossRecurrence,
+          }
+        : {}),
     };
     const result = await onScheduleSession(newSession);
     if (result && !result.success) {
@@ -6412,6 +6548,14 @@ export function CoordinatorDashboard({
   };
 
   const handlePatientFormChange = (field: string, value: any) => {
+    if (field === 'grupo') {
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        grupo: value,
+        patientProfileType: resolvePatientProfileTypeForCategory(value, prev.patientProfileType),
+      }));
+      return;
+    }
     if (field === "cpf" || field === "responsavelCpf" || field === "convenioTitularCpf") {
       setNewPatientForm((prev: any) => ({
         ...prev,
@@ -6703,6 +6847,7 @@ export function CoordinatorDashboard({
   };
 
   const handleCreatePatientFromFullForm = async () => {
+    if (patientRegistrationSaveInFlightRef.current) return;
     if (!canCreatePatients) {
       showToast("A criação de pacientes é exclusiva da recepção e coordenação.", "error");
       return;
@@ -6772,7 +6917,10 @@ export function CoordinatorDashboard({
       0,
     );
     const primaryBillingPlan = financialPlans.find((plan: any) => getFinancialPlanPrimaryBillingMethod(plan));
-    const canonicalProfileType = normalizePatientProfileType(newPatientForm.patientProfileType);
+    const canonicalProfileType = resolvePatientProfileTypeForCategory(
+      newPatientForm.grupo,
+      newPatientForm.patientProfileType,
+    );
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
     const canPersistPatientTissOperationalFields =
@@ -6883,11 +7031,12 @@ export function CoordinatorDashboard({
       createdAt: new Date().toISOString(),
     };
 
+    patientRegistrationSaveInFlightRef.current = true;
     try {
       if (editingPatientId && onUpdatePatient) {
         const updateResult = await onUpdatePatient(newPatient);
-        if (updateResult?.success === false) {
-          showToast(String(updateResult?.error || "Não foi possível salvar alterações do paciente."), "error");
+        if (updateResult?.success !== true) {
+          showToast(String(updateResult?.error || "Não foi possível confirmar as alterações do paciente no servidor."), "error");
           return;
         }
         onAddActivityLog(
@@ -6951,6 +7100,7 @@ export function CoordinatorDashboard({
       setIsPatientRegistrationModalOpen(false);
       resetPatientForm();
     } finally {
+      patientRegistrationSaveInFlightRef.current = false;
       hideProcessing();
     }
   };
@@ -7037,7 +7187,7 @@ export function CoordinatorDashboard({
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao || "",
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs || "",
       insuranceHolderSuggestedFromResponsible: insuranceEligibility.holderPrefilledFromResponsible,
-      grupo: patient.group || "adulto",
+      grupo: resolvePatientRegistrationCategory(patient),
       comoConheceu: patient.source || "",
       rg: patient.rg || "",
       cpf: formatCpf(patient.cpf || patient.anamnesisData?.cpf || ""),
@@ -7060,8 +7210,10 @@ export function CoordinatorDashboard({
         patient.responsible_relationship ||
         patient.metadata?.responsibleRelationship ||
         "",
-      patientProfileType: normalizePatientProfileType(
-        patient.patientProfileType || patient.panelType || patient.profile_type || patient.type,
+      patientProfileType: resolvePatientProfileTypeForCategory(
+        resolvePatientRegistrationCategory(patient),
+        patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type ||
+          patient.profileType || patient.profile_type || patient.type,
       ),
       financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
         ...patient,
@@ -7318,7 +7470,7 @@ export function CoordinatorDashboard({
     setSessionPrivateZeroClassification(String(appointment.privateZeroClassification || appointment.private_zero_classification || ""));
     setSessionPrivatePricingReason(String(appointment.privatePricingReason || appointment.private_pricing_reason || appointment.financialEventReason || appointment.financial_event_reason || ""));
     setSessionPrivateRescheduleFinancialDecision(String(appointment.privateRescheduleFinancialDecision || appointment.private_reschedule_financial_decision || ""));
-    if (appointment.id && !isTherapist) {
+    if (appointment.id && !isTherapist && hasInsuranceTissModule) {
       dataService.getAppointmentBillingContext(String(appointment.id)).then((result: any) => {
         if (!result?.success || !result.data) return;
         setSessionFinancialContextType(
@@ -10863,6 +11015,103 @@ export function CoordinatorDashboard({
     .map((group) => group.map(filterNavigationNode).filter(Boolean) as NavigationNode[])
     .filter((group) => group.length > 0);
 
+  const guidedTutorialModuleSignature = Array.from(organizationModules).sort().join(",");
+  const guidedTutorialContextKey = [
+    "verto:guided-tutorial",
+    GUIDED_TUTORIAL_REVISION,
+    String(user?.id || "").trim(),
+    workspaceScopeKey || "global",
+    normalizedRole || "unknown",
+    moduleAccessMode,
+    guidedTutorialModuleSignature || "baseline",
+  ].join(":");
+
+  // The onboarding tutorial points only to the help icon. Navigation between
+  // modules lives in the Help Center, not in a device-dependent guided tour.
+  const guidedTutorialSteps = [
+    {
+      targetId: "help-center",
+      title: "Ajuda e tutoriais",
+      content: "Toque no botão de interrogação (?) para abrir a Central de Ajuda e aprender a utilizar a Verto sempre que precisar.",
+      placement: "bottom" as const,
+    },
+  ];
+
+  const persistGuidedTutorial = useCallback((status: "active" | "skipped" | "completed", step: number) => {
+    try {
+      window.localStorage.setItem(guidedTutorialContextKey, JSON.stringify({
+        revision: GUIDED_TUTORIAL_REVISION,
+        status,
+        step,
+        updatedAt: new Date().toISOString(),
+      }));
+    } catch {
+      // Local persistence is best-effort; live tutorial behavior still works.
+    }
+  }, [guidedTutorialContextKey]);
+
+  const startGuidedTutorial = useCallback(() => {
+    if (!authorizationHydrated || guidedTutorialSteps.length === 0) return;
+    setGuidedTutorialStep(0);
+    persistGuidedTutorial("active", 0);
+    setRunGuidedTutorial(true);
+  }, [authorizationHydrated, guidedTutorialSteps.length, persistGuidedTutorial]);
+
+  const handleGuidedTutorialStepChange = useCallback((nextStep: number) => {
+    const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, nextStep));
+    setGuidedTutorialStep(safeStep);
+    persistGuidedTutorial("active", safeStep);
+  }, [guidedTutorialSteps.length, persistGuidedTutorial]);
+
+  const handleGuidedTutorialClose = useCallback((reason: "pause" | "skip" | "complete" = "pause") => {
+    const status = reason === "skip" ? "skipped" : reason === "complete" ? "completed" : "active";
+    persistGuidedTutorial(status, guidedTutorialStep);
+    setRunGuidedTutorial(false);
+    setIsMobileMenuOpen(false);
+  }, [guidedTutorialStep, persistGuidedTutorial]);
+
+  useEffect(() => {
+    if (!authorizationHydrated || !String(user?.id || "").trim() || guidedTutorialSteps.length === 0) return;
+    if (guidedTutorialLoadedKeyRef.current === guidedTutorialContextKey) return;
+    guidedTutorialLoadedKeyRef.current = guidedTutorialContextKey;
+
+    let stored: any = null;
+    try {
+      const raw = window.localStorage.getItem(guidedTutorialContextKey);
+      stored = raw ? JSON.parse(raw) : null;
+    } catch {
+      stored = null;
+    }
+
+    if (stored?.revision === GUIDED_TUTORIAL_REVISION) {
+      if (stored.status === "active") {
+        const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0)));
+        setGuidedTutorialStep(safeStep);
+        setRunGuidedTutorial(true);
+      }
+      return;
+    }
+
+    setGuidedTutorialStep(0);
+    persistGuidedTutorial("active", 0);
+    setRunGuidedTutorial(true);
+  }, [
+    authorizationHydrated,
+    guidedTutorialContextKey,
+    guidedTutorialSteps.length,
+    persistGuidedTutorial,
+    user?.id,
+  ]);
+
+  useEffect(() => {
+    if (!runGuidedTutorial) return;
+    const step = guidedTutorialSteps[guidedTutorialStep];
+    if (!step) return;
+    const mobile = typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches;
+    if (!mobile) return;
+    setIsMobileMenuOpen(step.targetId.startsWith("nav-"));
+  }, [guidedTutorialStep, guidedTutorialSteps, runGuidedTutorial]);
+
   const isFinancialBreadcrumbActive = (breadcrumb?: string[]) =>
     Boolean(
       breadcrumb?.length &&
@@ -10933,6 +11182,7 @@ export function CoordinatorDashboard({
         <div key={item.id} className={depth === 0 ? "space-y-1" : "space-y-1"}>
           <button
             type="button"
+            data-tutorial-anchor={`nav-${item.id}`}
             onClick={() => {
               const collapsedLeaf = !expanded && hasChildren ? findFirstNavigationLeaf(item) : null;
               const navigated = collapsedLeaf ? handleNavigationNodeSelect(collapsedLeaf) : handleNavigationNodeSelect(item);
@@ -11250,7 +11500,16 @@ export function CoordinatorDashboard({
                   setView("home");
                 }}
                 onOpenOnboarding={onOpenOnboarding}
+                onOpenGuidedTutorial={startGuidedTutorial}
               />
+              {runGuidedTutorial && (
+                <TutorialOverlay
+                  steps={guidedTutorialSteps}
+                  onClose={handleGuidedTutorialClose}
+                  currentStepIndex={guidedTutorialStep}
+                  onStepChange={handleGuidedTutorialStepChange}
+                />
+              )}
 
               <button
                 onClick={() => setIsMobileMenuOpen(true)}
@@ -11566,7 +11825,16 @@ export function CoordinatorDashboard({
               onViewClinicSettings={() => navigateToTab("settings")}
               onViewBilling={() => navigateToTab("billing")}
               onOpenOnboarding={onOpenOnboarding}
+              onOpenGuidedTutorial={startGuidedTutorial}
             />
+            {runGuidedTutorial && (
+              <TutorialOverlay
+                steps={guidedTutorialSteps}
+                onClose={handleGuidedTutorialClose}
+                currentStepIndex={guidedTutorialStep}
+                onStepChange={handleGuidedTutorialStepChange}
+              />
+            )}
           </div>
         </header>
 
@@ -15580,7 +15848,40 @@ export function CoordinatorDashboard({
                     className={sessionModalSelectClass}
                     value={sessionApproach}
                     onChange={(e) => {
-                      setSessionApproach(e.target.value);
+                      const specialty = e.target.value;
+                      setSessionApproach(specialty);
+                      const eligible = appointmentProfessionalOptions.filter((member) =>
+                        clinicalSpecialtiesMatch(member.clinicSpecialty, specialty));
+                      const current = eligible.find((member) => String(member.id) === sessionProfessionalId);
+                      const responsibleId = selectedSessionPatientResponsibleProfessionalId;
+                      const responsible = eligible.find((member) =>
+                        String(member.id) === String(responsibleId || "") ||
+                        (member.matchIds || []).some((id: string) => String(id) === String(responsibleId || "")));
+                      const selected = current || responsible || (eligible.length === 1 ? eligible[0] : null);
+                      setSessionProfessionalId(selected ? String(selected.id) : "");
+                      setSessionProfessional(selected?.label || "");
+                      setSessionProfessionalManuallySelected(false);
+
+                      const plan = resolveSessionFinancialPlanForSpecialty(selectedSessionPatient, specialty);
+                      if (plan?.billingMode === "PRIVATE") {
+                        setSessionFinancialContextType("PRIVATE");
+                        setSessionPayerId("");
+                        setSessionPayerNameSnapshot("");
+                        setSessionInsurancePlanName("");
+                        setSessionInsuranceCardNumber("");
+                        setSessionInsuranceHolderName("");
+                        setSessionInsuranceCardValidUntil("");
+                      } else if (plan?.billingMode === "INSURANCE") {
+                        setSessionFinancialContextType("INSURANCE");
+                        const payer = clinicPayers.find((item: any) => String(item?.id || "") === String(plan.payerId || ""));
+                        setSessionPayerId(String(payer?.id || plan.payerId || ""));
+                        setSessionPayerNameSnapshot(String(payer?.name || plan.payerNameSnapshot || ""));
+                      }
+                      setSessionPrivateServiceCatalogId("");
+                      setSessionPrivateManualAmount("");
+                      setSessionPrivateDiscountAmount("");
+                      setSessionPrivateZeroClassification("");
+                      setSessionPrivatePricingReason("");
                       setSessionInsuranceServiceCatalogId("");
                       setSessionPatientTissAuthorizationId("");
                       setSessionGuideNumber("");
@@ -15588,10 +15889,17 @@ export function CoordinatorDashboard({
                     }}
                   >
                     <option value="">Selecione...</option>
-                    {SESSION_SPECIALTY_OPTIONS.map((specialty) => (
+                    {sessionApproach && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, sessionApproach)) && (
+                      <option value={sessionApproach} disabled>{sessionApproach} (histórico; não disponível na equipe atual)</option>
+                    )}
+                    {clinicSessionSpecialtyOptions.map((specialty) => (
                       <option key={specialty} value={specialty}>{specialty}</option>
                     ))}
                   </select>
+                  {clinicSpecialtiesError && <p role="alert" className="mt-1 text-xs text-rose-700">{clinicSpecialtiesError}</p>}
+                  {!therapistMembersLoading && !clinicSpecialtiesError && clinicSessionSpecialtyOptions.length === 0 && (
+                    <p className="mt-1 text-xs text-amber-700">Cadastre ou vincule um profissional ativo para disponibilizar especialidades nesta clínica.</p>
+                  )}
                 </div>
                 <div>
                   <label className={sessionModalLabelClass}>
@@ -15879,10 +16187,19 @@ export function CoordinatorDashboard({
                     setSessionProfessionalManuallySelected(Boolean(nextId));
                     setSessionProfessionalId(nextId);
                     setSessionProfessional(nextProfessional?.label || "");
+                    if (nextProfessional?.clinicSpecialty && !clinicalSpecialtiesMatch(sessionApproach, nextProfessional.clinicSpecialty)) {
+                      setSessionApproach(nextProfessional.clinicSpecialty);
+                      setSessionInsuranceServiceCatalogId("");
+                      setSessionPatientTissAuthorizationId("");
+                      setSessionGuideNumber("");
+                      setSessionAuthorizationCode("");
+                    }
                   }}
                 >
                   <option value="">Selecione...</option>
-                  {therapistFilterOptions.map((member) => (
+                  {appointmentProfessionalOptions
+                    .filter((member) => !sessionApproach || clinicalSpecialtiesMatch(member.clinicSpecialty, sessionApproach))
+                    .map((member) => (
                     <option key={member.id} value={member.id}>
                       {member.label}
                     </option>
@@ -15973,7 +16290,7 @@ export function CoordinatorDashboard({
                         </select>
                       </label>
                     )}
-                    {sessionFinancialContextType === "INSURANCE" && (
+                    {sessionUsesTissOperationalFields && (
                       <label className={`sm:col-span-2 ${sessionModalLabelClass}`}>
                         Procedimento faturável do convênio
                         <select
@@ -16010,7 +16327,7 @@ export function CoordinatorDashboard({
                         </span>
                       </label>
                     )}
-                    {sessionFinancialContextType === "INSURANCE" && (
+                    {sessionUsesTissOperationalFields && (
                       <div className="sm:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                           <div>
@@ -16051,7 +16368,7 @@ export function CoordinatorDashboard({
                         )}
                       </div>
                     )}
-                    {sessionFinancialContextType === "INSURANCE" ? (
+                    {sessionUsesTissOperationalFields ? (
                       <>
                         <label className={sessionModalLabelClass}>
                           Guia
@@ -16081,6 +16398,13 @@ export function CoordinatorDashboard({
                           </div>
                           {sessionPrivatePricingState.loading && <Loader2 size={16} className="animate-spin text-emerald-600" />}
                         </div>
+                        {selectedSessionMonthlyPlan && (
+                          <p className="rounded-xl border border-emerald-200 bg-white p-3 text-sm text-emerald-900">
+                            Plano vigente desta especialidade: <strong>{formatCurrency(Number(selectedSessionMonthlyPlan.amountCents) / 100)} por sessão realizada</strong>.
+                            A cobrança é consolidada mensalmente após a conclusão das sessões, com vencimento no dia {selectedSessionMonthlyPlan.dueDay}.
+                            Não é uma cobrança avulsa no agendamento.
+                          </p>
+                        )}
                         {sessionPrivateServices.length > 0 && (
                           <label className={sessionModalLabelClass}>
                             Serviço ou procedimento (opcional)
@@ -16110,8 +16434,8 @@ export function CoordinatorDashboard({
                               <p><span className="text-slate-400">Pagador:</span> {sessionPrivatePricingState.quote.payer_name}</p>
                               <p><span className="text-slate-400">Vencimento:</span> {String(sessionPrivatePricingState.quote.due_date || "").split("-").reverse().join("/")}</p>
                               <p><span className="text-slate-400">Cancelamento gratuito até:</span> {sessionPrivatePricingState.quote.cancellation_free_until ? new Date(sessionPrivatePricingState.quote.cancellation_free_until).toLocaleString("pt-BR") : "não configurado"}</p>
-                              <p><span className="text-slate-400">Cancelamento tardio:</span> {sessionPrivatePricingState.quote.late_cancellation_rule?.type || "NO_CHARGE"} · {sessionPrivatePricingState.quote.late_cancellation_rule?.value || 0}</p>
-                              <p><span className="text-slate-400">Falta:</span> {sessionPrivatePricingState.quote.no_show_rule?.type || "NO_CHARGE"} · {sessionPrivatePricingState.quote.no_show_rule?.value || 0}</p>
+                              <p><span className="text-slate-400">Cancelamento tardio:</span> {appointmentCardPrivatePolicyLabel(sessionPrivatePricingState.quote.late_cancellation_rule)}</p>
+                              <p><span className="text-slate-400">Falta:</span> {appointmentCardPrivatePolicyLabel(sessionPrivatePricingState.quote.no_show_rule)}</p>
                             </div>
                           </>
                         ) : sessionPrivatePricingState.error ? (
@@ -16180,7 +16504,7 @@ export function CoordinatorDashboard({
                         )}
                       </div>
                     ) : null}
-                    {sessionFinancialContextType === "INSURANCE" && sessionPayerId && selectedSessionPatient && (
+                    {sessionUsesTissOperationalFields && sessionPayerId && selectedSessionPatient && (
                       <div className="sm:col-span-2 rounded-2xl border border-slate-100 bg-slate-50/70 p-3">
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -16243,7 +16567,7 @@ export function CoordinatorDashboard({
                         </div>
                       </div>
                     )}
-                    {sessionFinancialContextType === "INSURANCE" && !editingAppointmentId && sessionPlannedOccurrenceCount > 1 && (
+                    {sessionUsesTissOperationalFields && !editingAppointmentId && sessionPlannedOccurrenceCount > 1 && (
                       <div className="sm:col-span-2 space-y-3 rounded-2xl border border-violet-100 bg-white p-3">
                         <label className="flex items-start gap-3 text-xs font-semibold normal-case tracking-normal text-slate-700">
                           <input
@@ -16461,9 +16785,14 @@ export function CoordinatorDashboard({
                                             onChange={(event) => updateSessionWeeklySlot(slotId, { specialty: event.target.value })}
                                           >
                                             <option value="">Selecione...</option>
-                                            {SESSION_SPECIALTY_OPTIONS.map((specialty) => (
-                                              <option key={specialty} value={specialty}>{specialty}</option>
-                                            ))}
+                                            {slot.specialty && !clinicSessionSpecialtyOptions.some((option) => clinicalSpecialtiesMatch(option, slot.specialty)) && (
+                                              <option value={String(slot.specialty)} disabled>{String(slot.specialty)} (histórico)</option>
+                                            )}
+                                            {clinicSessionSpecialtyOptions
+                                              .filter((specialty) => !slot.professionalId || !findProfessionalOptionById(slot.professionalId)?.clinicSpecialty || clinicalSpecialtiesMatch(specialty, findProfessionalOptionById(slot.professionalId)?.clinicSpecialty))
+                                              .map((specialty) => (
+                                                <option key={specialty} value={specialty}>{specialty}</option>
+                                              ))}
                                           </select>
                                         </div>
                                         <div>
@@ -16476,11 +16805,16 @@ export function CoordinatorDashboard({
                                               updateSessionWeeklySlot(slotId, {
                                                 professionalId: event.target.value,
                                                 professionalName: professional?.label || "",
+                                                specialty: professional?.clinicSpecialty && !clinicalSpecialtiesMatch(slot.specialty, professional.clinicSpecialty)
+                                                  ? professional.clinicSpecialty
+                                                  : slot.specialty,
                                               });
                                             }}
                                           >
                                             <option value="">Selecione...</option>
-                                            {therapistFilterOptions.map((member) => (
+                                            {appointmentProfessionalOptions
+                                              .filter((member) => !slot.specialty || clinicalSpecialtiesMatch(member.clinicSpecialty, slot.specialty))
+                                              .map((member) => (
                                               <option key={member.id} value={member.id}>{member.label}</option>
                                             ))}
                                           </select>

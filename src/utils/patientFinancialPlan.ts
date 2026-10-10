@@ -1,3 +1,5 @@
+import { clinicalSpecialtiesMatch } from './clinicalSpecialties';
+
 export const PATIENT_FINANCIAL_SERVICE_OPTIONS = [
   { value: 'PSYCHOLOGY', label: 'Psicologia' },
   { value: 'SPEECH_THERAPY', label: 'Fonoaudiologia' },
@@ -378,6 +380,32 @@ export const normalizePatientFinancialPlans = (plans: any, fallback: any = {}) =
         '',
     }),
   ];
+};
+
+/**
+ * Read-only, fail-closed lookup of the patient's ACTIVE plan for a calendar
+ * service. Clinical professions (e.g. Fonoaudiólogo) and financial catalog
+ * codes (SPEECH_THERAPY) represent the same specialty.
+ *
+ * Deliberately does not select an unrelated plan just because it is the only
+ * plan in the patient record. The database remains the billing authority.
+ */
+export const findUniqueActiveFinancialPlanForService = (plans: any[], service: any) => {
+  const serviceLabel = String(service ?? '').trim();
+  if (!serviceLabel || !Array.isArray(plans)) return null;
+  const normalized = (value: any) => String(value ?? '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+  const serviceKey = normalized(serviceLabel);
+  const matches = plans.filter((plan: any) =>
+    String(plan?.status || 'ACTIVE').toUpperCase() === 'ACTIVE' &&
+    [plan?.serviceType, plan?.service_type, plan?.specialty, plan?.customServiceName,
+      plan?.custom_service_name, plan?.serviceNameSnapshot, plan?.service_name_snapshot]
+      .some((candidate: any) => {
+        const key = normalized(candidate);
+        return Boolean(key && (key === serviceKey || clinicalSpecialtiesMatch(candidate, serviceLabel)));
+      })
+  );
+  return matches.length === 1 ? matches[0] : null;
 };
 
 export const isMonthlySessionBillingPlan = (plan: any) => {

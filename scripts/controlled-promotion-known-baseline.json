@@ -1,0 +1,62 @@
+[
+  {
+    "test": "salesFinancialManagementAssumptions.test.mjs",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesProfitabilityPolicyVersioning.test.ts",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesStripeModularScheduleBoundaryP0_20260902.regression.test.mjs",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesStripeScheduleLinkHotfix20260901.regression.test.mjs",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesDirectAccessLink.test.mjs",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "billingPlanSnapshotBulkPersistence.test.mjs",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "pendingProfessionalInvitationsRuntime.test.mjs",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesPersonalizedPerPatientPricing.test.ts",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesPlatformFoundationModularity.test.ts",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "salesModularProposalFlow.test.ts",
+    "baseline": 1,
+    "candidate": 1
+  },
+  {
+    "test": "monthlySessionPatientBilling.regression.test.mjs",
+    "baseline": 0,
+    "candidate": 1
+  },
+  {
+    "test": "salesModularCapacityBlockPricing.test.ts",
+    "baseline": 1,
+    "candidate": 1
+  }
+]

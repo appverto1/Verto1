@@ -67,6 +67,8 @@ import html2canvas from 'html2canvas';
 import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
+import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
+import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -2071,7 +2073,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     };
   }, [sessionStorageKey, patient?.id]);
 
-  const requestSessionStart = (
+  const requestSessionStart = async (
     nextAction: 'tab' | 'fullscreen' = 'fullscreen',
     planContext?: { therapeuticPlanId?: string | null; specialty?: string | null } | null,
   ) => {
@@ -2084,11 +2086,74 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       setIsSessionModeOpen(true);
       return;
     }
+
+    let requestedPlanId = String(planContext?.therapeuticPlanId || '').trim();
+    let requestedPlanSpecialty = String(planContext?.specialty || '').trim() || null;
+
+    // Even a plan selected directly from the Plan panel can become paused or
+    // inaccessible before session start. Revalidate it against the server scope.
+    // Without an explicit plan, Agenda may choose only an active, matching
+    // specialty plan; otherwise the shared/legacy PEI stays unbound.
+    if (requestedPlanId || (scheduledSessionForPatient && (isKidsProfile || appointmentClinicalSpecialtyKey(scheduledSessionForPatient)))) {
+      const planResult = await dataService.getPatientTherapeuticPlan(String(patient?.id || ''), { force: true });
+      if (planResult?.success === false) {
+        alert(planResult?.message || planResult?.error || 'Não foi possível validar o plano clínico no servidor. Tente novamente.');
+        return;
+      }
+      const hasServerScopes = Array.isArray(planResult?.data?.planScopes);
+      const scopes = hasServerScopes ? planResult.data.planScopes : [];
+      if (scheduledSessionForPatient && isKidsProfile && !hasServerScopes) {
+        alert('Não foi possível carregar os planos clínicos infantis do servidor. A sessão não foi iniciada para evitar uma coleta sem o PTS e os planos por especialidade.');
+        return;
+      }
+      if (requestedPlanId) {
+        if (!hasServerScopes) {
+          alert('Não foi possível confirmar se o plano selecionado continua ativo. Nenhuma sessão foi iniciada.');
+          return;
+        }
+        const chosen = scopes.find((scope: any) => String(scope?.id || '').trim() === requestedPlanId);
+        if (
+          !chosen ||
+          String(chosen.status || '').toLowerCase() !== 'active' ||
+          chosen.canEdit !== true ||
+          (scheduledSessionForPatient && !sessionPlanMatchesAppointmentSpecialty(chosen, scheduledSessionForPatient))
+        ) {
+          alert('O plano selecionado está pausado, sem permissão ou não corresponde à especialidade deste atendimento. Nenhuma sessão foi iniciada.');
+          return;
+        }
+        requestedPlanSpecialty = String(chosen.specialty || '').trim() || null;
+      } else {
+        const candidates = sessionSpecialtyPlanCandidates(scopes, scheduledSessionForPatient)
+          .filter((scope: any) => scope?.canEdit === true);
+        if (candidates.length > 1) {
+          alert('Existe mais de um plano ativo para a especialidade deste atendimento. Inicie a sessão pelo plano correto.');
+          return;
+        }
+        if (candidates.length === 1) {
+          requestedPlanId = String(candidates[0]?.id || '').trim();
+          requestedPlanSpecialty = String(candidates[0]?.specialty || '').trim() || null;
+        }
+        if (candidates.length === 0 && scheduledSessionForPatient && isKidsProfile) {
+          const activeSpecialtyPlans = scopes.filter((scope: any) =>
+            String(scope?.mode || '').toLowerCase() === 'specialty'
+            && String(scope?.status || '').toLowerCase() === 'active'
+          );
+          if (activeSpecialtyPlans.length > 0) {
+            alert('Há planos por especialidade ativos, mas nenhum corresponde à especialidade do agendamento. Abra o plano infantil correto e inicie a sessão por ele. Nenhum registro foi alterado.');
+            return;
+          }
+        }
+      }
+      // A ausência de alvos ativos não impede o atendimento infantil:
+      // a sessão mantém o escopo do PTS, e a coleta mostra seu estado vazio
+      // com orientações para ativar alvos, sem criar dados fictícios.
+      // PEI-only is allowed solely when there is no matching, active specialty plan.
+    }
+
     setPendingSessionAction(resolvedAction);
-    const requestedPlanId = String(planContext?.therapeuticPlanId || '').trim();
     setPendingSessionPlanContext(requestedPlanId ? {
       therapeuticPlanId: requestedPlanId,
-      specialty: String(planContext?.specialty || '').trim() || null,
+      specialty: requestedPlanSpecialty,
     } : null);
     setSessionDurationInput(String(scheduledSessionForPatient ? scheduledSessionDurationMinutes : configuredDefaultSessionMinutes));
     setRestoreSessionData(false);
@@ -2251,16 +2316,17 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       room_name: scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomDisplayName || null,
       locationType: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
       location_type: scheduledSessionForPatient?.locationType || scheduledSessionForPatient?.location_type || scheduledSessionForPatient?.location || null,
+      locationContextSnapshot: scheduledSessionForPatient?.locationContextSnapshot || scheduledSessionForPatient?.location_context_snapshot || null,
+      location_context_snapshot: scheduledSessionForPatient?.location_context_snapshot || scheduledSessionForPatient?.locationContextSnapshot || null,
       startedAt: startedAt.toISOString(),
       endsAt: endsAt.toISOString(),
       referenceDate: formatDateInAppointmentTimezone(startedAt) || startedAt.toISOString().slice(0, 10),
       recordCount: 0
     };
     const requiresServerIssuedPlanContext = Boolean(nextSession.therapeutic_plan_id);
-    // A plan-scoped session becomes locally active only after the server has
-    // issued the immutable specialty-plan/PTS context. Generic legacy sessions
-    // preserve the existing offline-first behavior.
-    if (!requiresServerIssuedPlanContext) persistActiveSession(nextSession);
+    // ABA V2 session start is server-authoritative. Only the disabled/legacy
+    // surface keeps the historical local-only behavior.
+    if (!abaV2Enabled) persistActiveSession(nextSession);
     if (abaV2Enabled) {
       const saveResult = await dataService.saveAbaSession({
         id: nextSession.id,
@@ -2388,6 +2454,22 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               ? 'Sessão não encontrada. Atualize a agenda e tente novamente.'
               : errorText || 'Não foi possível vincular a Sessão ABA a este agendamento clínico.';
         alert(humanError);
+        return;
+      }
+      const serverSessionConfirmed =
+        saveResult?.success === true &&
+        saveResult?.offline !== true &&
+        saveResult?.pending !== true &&
+        Boolean(savedSession?.id);
+      if (!serverSessionConfirmed) {
+        clearActiveSession();
+        setShowSessionStartConfirm(false);
+        setPendingSessionPlanContext(null);
+        const serverPersistenceError = String(saveResult?.error || saveResult?.message || '').trim();
+        alert(
+          serverPersistenceError ||
+          'Não foi possível confirmar o início da sessão no servidor. Verifique a conexão e tente novamente.'
+        );
         return;
       }
       if (requiresServerIssuedPlanContext) {
@@ -2712,7 +2794,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           roomName: sessionToOpen?.roomName || scheduledSessionForPatient?.roomName || scheduledSessionForPatient?.room_name || null,
           room_name: sessionToOpen?.room_name || scheduledSessionForPatient?.room_name || scheduledSessionForPatient?.roomName || null
         };
-        persistActiveSession(linkedSession);
+        // Recover an existing session's appointment link only after the server
+        // confirms the original session, patient and appointment scope.
+        // Do not overwrite the local session or open SessionMode optimistically.
+        if (!isUuidLike(scheduledAppointmentId)) {
+          alert('Este agendamento ainda não está salvo no servidor. Atualize a Agenda e tente novamente.');
+          return;
+        }
         void dataService.saveAbaSession({
           id: linkedSession.id,
           patient_id: patient.id,
@@ -2743,7 +2831,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           clientSource: 'appointment'
         }).then((saveResult: any) => {
           const savedSession = saveResult?.session || saveResult?.data;
-          if (saveResult?.success && savedSession?.id) {
+          const serverLinkConfirmed = isConfirmedAbaSessionAppointmentLink(saveResult, {
+            sessionId: String(linkedSession.id),
+            patientId: String(patient.id),
+            appointmentId: String(scheduledAppointmentId),
+          });
+          if (!serverLinkConfirmed) {
+            // Keep this start key consumed after a server denial. Replaying the
+            // same Agenda event must never create an endless blocking alert.
+            // A new user click creates a fresh start key for an explicit retry.
+            alert(String(saveResult?.error || saveResult?.message || '').trim() ||
+              'Não foi possível confirmar o vínculo da sessão com este agendamento no servidor. Seus registros foram preservados; atualize a Agenda e tente novamente.');
+            return;
+          }
+          {
             const serverReferenceDate = savedSession.reference_date || savedSession.referenceDate || linkedSession.referenceDate;
             persistActiveSession({
               ...linkedSession,
@@ -2756,10 +2857,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               locationContextSnapshot: savedSession.location_context_snapshot || linkedSession.locationContextSnapshot,
               location_context_snapshot: savedSession.location_context_snapshot || linkedSession.location_context_snapshot
             });
+            setIsSessionModeOpen(true);
           }
         }).catch((error: any) => {
+          // Do not re-arm the rejected start key on a failed request.
           console.warn('[ABA] Não foi possível vincular a Sessão ABA ativa ao agendamento clínico:', error?.message || String(error));
+          alert('Não foi possível confirmar o vínculo da sessão com o agendamento no servidor. Seus registros foram preservados; tente novamente.');
         });
+        return;
       } else if (persistedSession && !activeSession) {
         persistActiveSession(persistedSession);
       }
@@ -2767,7 +2872,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
 
-    void handleConfirmSessionStart({ durationMinutes: scheduledSessionDurationMinutes, openSessionMode: true });
+    // Route Agenda through the same server-authoritative PTS/specialty
+    // preflight as the Plan tab. Direct start here silently discarded the
+    // plan and opened an unscoped legacy/adult-looking collection.
+    void requestSessionStart('fullscreen');
   }, [
     hasAbaSessionSurface,
     activeSession,

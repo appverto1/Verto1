@@ -38,3 +38,16 @@ export async function waitForSessionWrites(hasWrites: () => boolean, timeoutMs =
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
 }
+
+export function isConfirmedAbaSessionAppointmentLink(
+  result: any,
+  expected: { sessionId: string; patientId: string; appointmentId: string }
+): boolean {
+  const saved = result?.session || result?.data;
+  return result?.success === true
+    && result?.pending !== true
+    && result?.offline !== true
+    && String(saved?.id || '') === expected.sessionId
+    && String(saved?.patient_id || saved?.patientId || '') === expected.patientId
+    && String(saved?.appointment_id || saved?.appointmentId || '') === expected.appointmentId;
+}
