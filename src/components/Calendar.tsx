@@ -69,6 +69,7 @@ import {
   resolvePatientFinancialStatus
 } from '../utils/patientFinancialLedger';
 import {
+  findUniqueActiveFinancialPlanForService,
   isMonthlySessionBillingPlan,
   normalizePatientFinancialPlans,
 } from '../utils/patientFinancialPlan';
@@ -3439,22 +3440,34 @@ export const ClinicalAgendaBoard = ({
     monthlySessionPatient?.financialPlans || monthlySessionPatient?.financial_plans || [],
     monthlySessionPatient || {},
   );
-  const monthlySessionPlans = patientFinancialPlans.filter(isMonthlySessionBillingPlan);
-  const simplePatientFinancialPlans = patientFinancialPlans.filter((plan: any) =>
-    String(plan?.billingMode || '').toUpperCase() !== 'INSURANCE');
-  const simplePatientFinancialPlan = simplePatientFinancialPlans.find((plan: any) => {
-    const appointmentService = String(detailEvent?.service_type || detailEvent?.type || '').trim().toLowerCase();
-    const planService = String(plan?.serviceType || plan?.customServiceName || plan?.specialty || '').trim().toLowerCase();
-    return Boolean(appointmentService && planService && appointmentService === planService);
-  }) || (simplePatientFinancialPlans.length === 1 ? simplePatientFinancialPlans[0] : null);
-  const monthlySessionPlan = monthlySessionPlans.length === 1
-    ? monthlySessionPlans[0]
-    : monthlySessionPlans.find((plan: any) => {
-        const appointmentService = String(detailEvent?.service_type || detailEvent?.type || '').trim().toLowerCase();
-        const planService = String(plan?.serviceType || plan?.customServiceName || plan?.specialty || '').trim().toLowerCase();
-        return Boolean(appointmentService && planService && (appointmentService === planService || appointmentService.includes(planService) || planService.includes(appointmentService)));
-      }) || null;
-  const monthlySessionUnitAmount = Number(patientFinance?.unit_amount ?? monthlySessionPlan?.amountCents / 100 ?? 0) || 0;
+  const eventSourceFinancial = parseEventSourcePayload(detailEvent);
+  const savedAppointmentFinancialContext = normalizeAppointmentFinancialContextType(
+    billingContext.financialContextType || billingContext.financial_context_type ||
+    billingContext.payerType || billingContext.payer_type ||
+    detailEvent.financialContextType || detailEvent.financial_context_type ||
+    detailEvent.payerType || detailEvent.payer_type ||
+    eventSourceFinancial.financialContextType || eventSourceFinancial.financial_context_type ||
+    eventSourceFinancial.payerType || eventSourceFinancial.payer_type
+  ) || '';
+  const appointmentService = detailEvent?.service_type || detailEvent?.type || detailEvent?.approach || '';
+  const simplePatientFinancialPlan = findUniqueActiveFinancialPlanForService(
+    patientFinancialPlans.filter((plan: any) => String(plan?.billingMode || '').toUpperCase() !== 'INSURANCE'),
+    appointmentService,
+  );
+  const monthlySessionPlan = findUniqueActiveFinancialPlanForService(
+    patientFinancialPlans.filter((plan: any) =>
+      isMonthlySessionBillingPlan(plan) &&
+      (!savedAppointmentFinancialContext || plan.billingMode === savedAppointmentFinancialContext)),
+    appointmentService,
+  );
+  // A scheduled monthly session does not have a financial item yet. Show the
+  // patient plan's unit price, not a fabricated R$ 0,00. Once billed, use the
+  // historical item snapshot rather than recalculating a settled amount.
+  const monthlySessionUnitAmount = patientFinance?.payment_id
+    ? Number(patientFinance.unit_amount ?? 0)
+    : monthlySessionPlan
+      ? Number(monthlySessionPlan.amountCents || 0) / 100
+      : null;
   const patientFinanceStatus = resolvePatientFinancialStatus(patientFinance);
   const patientFinanceAmounts = getPatientFinanceAmounts(patientFinance);
   const billingDocuments = Array.isArray(billingContext.documents) ? billingContext.documents : [];
@@ -3501,11 +3514,11 @@ export const ClinicalAgendaBoard = ({
         billingContext.payer_type ||
         (billingContext.payerId || billingContext.payer_id ? 'INSURANCE' : '')
     ) || '';
-  const billingDisplayFinancialContextType = canUseTissBilling
-    ? billingFinancialContextType
-    : normalizeAppointmentFinancialContextType(simplePatientFinancialPlan?.billingMode) || '';
+  const billingDisplayFinancialContextType =
+    billingFinancialContextType || savedAppointmentFinancialContext ||
+    (!canUseTissBilling ? normalizeAppointmentFinancialContextType(simplePatientFinancialPlan?.billingMode) || '' : '');
   const billingDetailIsNonInsuranceContext = !canUseTissBilling
-    || Boolean(billingFinancialContextType && billingFinancialContextType !== 'INSURANCE');
+    || Boolean(billingDisplayFinancialContextType && billingDisplayFinancialContextType !== 'INSURANCE');
   const billingFormFinancialContextType = normalizeAppointmentFinancialContextType(billingForm.financialContextType) || 'INSURANCE';
   const billingFormUsesInsurance = appointmentFinancialContextRequiresPayer(billingFormFinancialContextType);
   const matchedBillingPayerByName =
@@ -4566,7 +4579,7 @@ export const ClinicalAgendaBoard = ({
                     <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-400">{isMonthlySessionFinance ? 'Faturamento mensal automático' : 'Financeiro da sessão'}</p>
                     {isMonthlySessionFinance ? (
                       <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
-                        <div><span className="block text-xs text-slate-400">Regra</span><span className="mt-1 block font-medium">{formatPatientFinanceCurrency(monthlySessionUnitAmount)} por sessão realizada</span></div>
+                        <div><span className="block text-xs text-slate-400">Regra</span><span className="mt-1 block font-medium">{monthlySessionUnitAmount === null ? 'Valor não disponível; consulte o plano financeiro' : `${formatPatientFinanceCurrency(monthlySessionUnitAmount)} por sessão realizada`}</span></div>
                         <div><span className="block text-xs text-slate-400">Estado</span><span className="mt-1 block font-medium">{patientFinance?.payment_id ? 'Incluída no faturamento mensal' : 'Ainda não incluída na competência'}</span></div>
                         <div><span className="block text-xs text-slate-400">Competência</span><span className="mt-1 block font-medium">{patientFinance?.appointment_scheduled_at ? formatDisplayMonthYear(patientFinance.appointment_scheduled_at) : 'Será definida pela data da sessão'}</span></div>
                         {patientFinance?.payment_id && (
