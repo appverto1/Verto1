@@ -4482,7 +4482,7 @@ export const ClinicalAgendaBoard = ({
             <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">{canUseTissBilling ? 'Pagador e conferência' : 'Plano financeiro do paciente'}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#7a32fc]">{canUseTissBilling ? 'Pagador e conferência' : 'Plano Financeiro do paciente'}</p>
                   <div className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
                     <p>
                       <span className="font-semibold">
