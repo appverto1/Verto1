@@ -52,9 +52,9 @@ assert.match(wrappedLogo, /data:image\/webp;base64,/);
 assert.ok(fs.statSync(userLogo).size > 2000, 'new horizontal logo is unexpectedly small');
 // Social/email clients still get the legacy PNG until a compatible raster
 // upload is available. The therapist sidebar is deliberately unchanged.
-assert.match(index, /verto-logo-horizontal\\.png\\?v=20260826-1/);
+assert.match(index, /verto-logo-horizontal\.png\?v=20260826-1/);
 assert.match(branding, /professionalSidebarHorizontalLogo:/);
-assert.match(branding, /verto-logo-user-20261010\\.svg/);
+assert.match(branding, /verto-logo-user-20261010\.svg/);
 assert.match(read('src/components/TherapistDashboard.tsx'), /showText=\{isSidebarExpanded\} preserveProfessionalSidebarBrand/);
 
 const manifest = JSON.parse(read('public/manifest.webmanifest'));
