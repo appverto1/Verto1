@@ -7496,38 +7496,6 @@ export const dataService = {
     }
   },
 
-  async getAbaSessionReinforcerReadModel(patientId: string, sessionId: string) {
-    const patient = String(patientId || '').trim(), session = String(sessionId || '').trim();
-    if (!patient || !session) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED', data: null };
-    try {
-      const response = await fetchWithAuthRetry(
-        `/api/clinical-measurement-v3/patients/${encodeURIComponent(patient)}/reinforcer-sessions/${encodeURIComponent(session)}`,
-        { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' }
-      );
-      const result = await safeJson(response);
-      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
-      return { success: true, data: result.data };
-    } catch {
-      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
-    }
-  },
-
-  async recordAbaReinforcerDelivery(patientId: string, sessionId: string, payload: any) {
-    const patient = String(patientId || '').trim(), session = String(sessionId || '').trim();
-    if (!patient || !session) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED', data: null };
-    try {
-      const response = await fetchWithAuthRetry(
-        `/api/clinical-measurement-v3/patients/${encodeURIComponent(patient)}/reinforcer-sessions/${encodeURIComponent(session)}/deliveries`,
-        { method: 'POST', headers: await getNoStoreAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }
-      );
-      const result = await safeJson(response);
-      if (!response.ok || result?.success === false) return { success: false, status: response.status, code: result?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
-      return { success: true, data: result.data };
-    } catch {
-      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
-    }
-  },
-
   async getClinicalMeasurementV3View(patientId: string, targetId: string, options: { definitionId?: string; days?: number } = {}) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: null };
     const safePatientId = String(patientId || '').trim();
