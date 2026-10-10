@@ -78390,6 +78390,9 @@ async function startServer() {
           message: 'Reabra o formulário e tente salvar o plano novamente.'
         });
       }
+      if (mode === 'interdisciplinary' && String(req.effectiveClinicRole || '').toLowerCase() === 'therapist') {
+        return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_INTERDISCIPLINARY_MANAGEMENT_REQUIRED' });
+      }
       if (participantProfessionalIds.some((id) => !isUuid(id))) {
         return res.status(400).json({
           success: false,
@@ -78749,7 +78752,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireAnyClinicCapability('treatment_plan.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -79232,7 +79235,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.create'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.create', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -79521,7 +79524,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -79632,7 +79635,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -79702,7 +79705,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
