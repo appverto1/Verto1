@@ -67,6 +67,20 @@ export async function reactivatePatientReinforcer(input: { patientId: string; re
   });
 }
 
+export async function getSessionReinforcerReadModel(patientId: string, sessionId: string) {
+  const result = await dataService.getAbaSessionReinforcerReadModel(patientId, sessionId);
+  if (!result?.success) {
+    const error = new Error('Não foi possível carregar os reforçadores.');
+    Object.assign(error, { status: result?.status, code: result?.code });
+    throw error;
+  }
+  return {
+    recent: result.data?.recent || [],
+    events: result.data?.events || [],
+    summary: result.data?.summary || [],
+  };
+}
+
 export async function listRecentPatientReinforcers(patientId: string) {
   const supabase = await getSupabase();
   const { data, error } = await supabase.rpc('list_recent_aba_patient_reinforcers_authenticated_v1', {
