@@ -37,8 +37,9 @@ assert.match(detail, /!isKidsProfile && \(\s*<section data-testid="adult-protoco
 assert.match(agenda, /const canUseTissBilling = hasAgendaCapability\('patient\.insurance\.view'\)/);
 assert.match(agenda, /const canEditBillingContext = canUseTissBilling/);
 assert.match(agenda, /const patientFinancialPlans = normalizePatientFinancialPlans/);
-assert.match(agenda, /const simplePatientFinancialPlans = patientFinancialPlans\.filter/);
-assert.match(agenda, /simplePatientFinancialPlans\.length === 1 \? simplePatientFinancialPlans\[0\] : null/);
+assert.match(agenda, /const simplePatientFinancialPlan = findUniqueActiveFinancialPlanForService/);
+assert.match(agenda, /patientFinancialPlans\.filter\(\(plan: any\) => String\(plan\?\.billingMode/);
+assert.doesNotMatch(agenda, /simplePatientFinancialPlans\.length === 1/);
 assert.match(agenda, /Plano Financeiro do paciente/);
 assert.match(agenda, /!canUseTissBilling && simplePatientFinancialPlan/);
 assert.match(agenda, /!canUseTissBilling && !simplePatientFinancialPlan/);
