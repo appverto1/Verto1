@@ -53,3 +53,27 @@ export const appointmentCardPriceSourceLabel = (label: unknown, code: unknown): 
   const originalCode = String(code ?? '').trim();
   return priceSourceLabels[originalCode.toUpperCase()] || (originalCode ? 'Origem não identificada' : 'Histórico anterior');
 };
+
+/**
+ * Human-readable preview of the saved private session cancellation/no-show
+ * policy. A display formatter only: keep backend policy codes unchanged.
+ */
+export const appointmentCardPrivatePolicyLabel = (rule: any): string => {
+  const type = String(rule?.type || 'NO_CHARGE').trim().toUpperCase();
+  const raw = Number(rule?.value);
+  const value = Number.isFinite(raw) && raw >= 0 ? raw : 0;
+  switch (type) {
+    case 'NO_CHARGE':
+      return 'Sem cobrança';
+    case 'FULL':
+      return '100% do valor da sessão';
+    case 'PERCENTAGE':
+      return `${value.toLocaleString('pt-BR')}% do valor da sessão`;
+    case 'FIXED':
+      return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    case 'MANUAL':
+      return 'Decisão manual';
+    default:
+      return 'Regra não informada';
+  }
+};
