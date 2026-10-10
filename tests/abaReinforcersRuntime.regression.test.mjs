@@ -12,14 +12,19 @@ const v3Architecture = fs.readFileSync('docs/architecture/aba-measurement-v3.md'
 
 for (const rpc of [
   'record_aba_reinforcer_delivery_authenticated_v1',
-  'list_aba_patient_reinforcers_authenticated_v1',
   'list_recent_aba_patient_reinforcers_authenticated_v1',
   'list_aba_session_reinforcer_events_authenticated_v1',
   'get_aba_session_reinforcer_summary_authenticated_v1',
-  'save_aba_patient_reinforcer_authenticated_v1',
 ]) {
   assert.match(service, new RegExp(rpc));
 }
+
+// Catalog writes/reads are now authenticated through the verified backend
+// cookie/bearer session, not an anon PostgREST browser connection.
+assert.match(service, /dataService\.getAbaPatientReinforcers\(patientId, includeInactive\)/);
+assert.match(service, /dataService\.saveAbaPatientReinforcer\(input\.patientId/);
+assert.doesNotMatch(service, /\.rpc\('list_aba_patient_reinforcers_authenticated_v1'/);
+assert.doesNotMatch(service, /\.rpc\('save_aba_patient_reinforcer_authenticated_v1'/);
 
 assert.match(service, /clientEventId = generateId\(\)/);
 assert.match(service, /saveEncryptedRecord/);
