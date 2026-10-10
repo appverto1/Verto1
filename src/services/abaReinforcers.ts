@@ -4,7 +4,7 @@ import { generateId, getRecordsByType, markRecordSyncFailure, markRecordSyncStat
 
 const ENDPOINT = 'supabase-rpc:record_aba_reinforcer_delivery_authenticated_v1';
 const isTerminalReinforcerSyncError = (message: string) =>
-  /AUTH_REQUIRED|FORBIDDEN|SCOPE_INVALID|SESSION_NOT_EDITABLE|SESSION_CLOSED|REINFORCER_INACTIVE|MISMATCH|NOT_FOUND/i.test(message);
+  /AUTH_REQUIRED|ACCESS_DENIED|FORBIDDEN|SCOPE_INVALID|SESSION_NOT_EDITABLE|SESSION_CLOSED|REINFORCER_INACTIVE|MISMATCH|NOT_FOUND|DELIVERY_INVALID/i.test(message);
 
 export type ReinforcerCategory = 'SOCIAL' | 'ACTIVITY' | 'ITEM_OBJECT' | 'SENSORY' | 'FOOD' | 'OTHER';
 
@@ -168,16 +168,14 @@ export async function flushReinforcerDeliveries(sessionId: string) {
       next_retry_at: null,
     });
     try {
-      const supabase = await getSupabase();
-      const { error } = await supabase.rpc('record_aba_reinforcer_delivery_authenticated_v1', {
-        p_session_id: row.data.sessionId,
-        p_reinforcer_id: row.data.reinforcerId,
-        p_client_event_id: row.data.clientEventId,
-        p_occurred_at: row.data.occurredAt,
+      const result = await dataService.recordAbaReinforcerDelivery(row.data.patientId, row.data.sessionId, {
+        reinforcerId: row.data.reinforcerId,
+        clientEventId: row.data.clientEventId,
+        occurredAt: row.data.occurredAt,
       });
-      if (error) {
-        const message = String(error.message || error.code || 'Falha de sincronização');
-        if (isTerminalReinforcerSyncError(message)) {
+      if (!result.success) {
+        const message = String(result.code || 'Falha de sincronização');
+        if (result.status === 403 || isTerminalReinforcerSyncError(message)) {
           await markRecordSyncFailure(row.id, { retryable: false, error: message });
           terminal += 1;
         } else {
