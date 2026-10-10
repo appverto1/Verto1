@@ -186,6 +186,7 @@ const criticalTests = [
   'tests/backgroundWorkerEconomyMode.test.ts',
   'tests/supabaseSchemaSelectGuard.test.ts',
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',
+  'tests/therapeuticPlanCaseProfessionalCapability.regression.test.ts',
   'tests/therapeuticPlanSessionContext.regression.test.mjs',
   'tests/sessionSpecialtyIsolation.test.ts',
   'tests/clinicSchedulingActiveMembership.regression.test.mjs',
