@@ -26,6 +26,6 @@ export const isVertoInstitutionalAsset = (value: unknown) => {
   const normalized = String(value || '').trim().toLowerCase();
   return (
     /(?:^|\/)(?:verto-3d(?:-transparent)?|logoverto|verto-logo)\.(?:png|webp|jpe?g)(?:$|[?#])/.test(normalized) ||
-    /(?:^|\/)branding\/verto\/(?:verto-[a-z0-9-]+\.png|favicon\.ico)(?:$|[?#])/.test(normalized)
+    /(?:^|\/)branding\/verto\/(?:verto-[a-z0-9-]+\.(?:png|svg)|favicon\.ico)(?:$|[?#])/.test(normalized)
   );
 };
