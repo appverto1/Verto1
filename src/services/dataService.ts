@@ -7458,6 +7458,44 @@ export const dataService = {
     }
   },
 
+  async getAbaReinforcerSessionBundle(patientId: string, sessionId: string) {
+    const patient = String(patientId || '').trim();
+    const session = String(sessionId || '').trim();
+    if (!patient || !session) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED', data: null };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(patient)}/reinforcer-sessions/${encodeURIComponent(session)}`,
+        { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) {
+        return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
+      }
+      return { success: true, data: body?.data || null };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
+    }
+  },
+
+  async recordAbaReinforcerDelivery(patientId: string, sessionId: string, payload: any) {
+    const patient = String(patientId || '').trim();
+    const session = String(sessionId || '').trim();
+    if (!patient || !session) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED', data: null };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(patient)}/reinforcer-sessions/${encodeURIComponent(session)}/deliveries`,
+        { method: 'POST', headers: await getNoStoreAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) {
+        return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
+      }
+      return { success: true, data: body?.data || null };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
+    }
+  },
+
   async getClinicalMeasurementV3View(patientId: string, targetId: string, options: { definitionId?: string; days?: number } = {}) {
     if (!isAbaV3UiEnabled()) return { success: false, code: 'feature_disabled', error: 'Clinical Measurement V3 UI desabilitada.', data: null };
     const safePatientId = String(patientId || '').trim();
