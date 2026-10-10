@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
+import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../services/localDb';
 import { AUTOMATIC_SESSION_CLOSURE_KEYS, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import {
@@ -1107,6 +1108,7 @@ export const SessionMode = ({
   const isCompletedSessionReview = Boolean(requestedReviewSessionId);
   const sessionId = String(requestedReviewSessionId || activeSession?.id || `draft-${patient?.id || 'patient'}`);
   const patientId = String(patient?.id || '');
+  const isPediatricSession = resolvePatientPortalKind(patient) === 'KIDS';
   const resolvedTherapistId = String(therapistId || activeSession?.therapistId || activeSession?.therapist_id || '').trim();
   const resolvedClinicId = String(clinicId || activeSession?.clinicId || activeSession?.clinic_id || patient?.clinicId || patient?.clinic_id || patient?.organizationId || patient?.organization_id || '').trim();
   const activeAppointmentId = String(activeSession?.appointmentId || activeSession?.appointment_id || '').trim();
@@ -1152,6 +1154,8 @@ export const SessionMode = ({
   const [maintenancePanel, setMaintenancePanel] = useState<any>(null);
   const [therapeuticPrograms, setTherapeuticPrograms] = useState<any[]>([]);
   const [therapeuticPlanLoading, setTherapeuticPlanLoading] = useState(true);
+  const [therapeuticPlanLoadError, setTherapeuticPlanLoadError] = useState('');
+  const [therapeuticPlanReloadKey, setTherapeuticPlanReloadKey] = useState(0);
   const [sessionMaintenanceProbes, setSessionMaintenanceProbes] = useState<any>({ available: [], upcoming: [], loaded: false, error: '' });
   const [maintenanceScheduleModalGoal, setMaintenanceScheduleModalGoal] = useState<any>(null);
   const [maintenanceScheduleMode, setMaintenanceScheduleMode] = useState('DEFAULT_SEQUENCE');
@@ -1401,23 +1405,40 @@ export const SessionMode = ({
   useEffect(() => {
     let cancelled = false;
     setTherapeuticPlanLoading(true);
+    setTherapeuticPlanLoadError('');
     setTherapeuticPrograms([]);
-    dataService.getPatientTherapeuticPlan(patientId)
+
+    // A session without a frozen specialty plan must never aggregate every
+    // specialty plan visible for the patient. Legacy PEI remains separate.
+    if (!activeTherapeuticPlanId) {
+      setTherapeuticPlanLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    // No conditional-cache replay: the session must see the currently authorized
+    // PTS targets for the plan bound when care began, never targets from another plan.
+    dataService.getPatientTherapeuticPlan(patientId, { force: true })
       .then((result: any) => {
         if (cancelled) return;
         if (result?.success === false) {
           if (import.meta.env.DEV) console.warn('Plano terapêutico indisponível na sessão:', result?.message || result?.error);
           setTherapeuticPrograms([]);
+          setTherapeuticPlanLoadError(String(result?.message || result?.error || 'Não foi possível carregar os alvos do PTS.'));
           return;
         }
         const normalizedPrograms = normalizeTherapeuticPrograms(result?.data || result);
-        setTherapeuticPrograms(activeTherapeuticPlanId
-          ? normalizedPrograms.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId)
-          : normalizedPrograms);
+        setTherapeuticPrograms(
+          normalizedPrograms.filter((program: any) => String(program?.therapeutic_plan_id || program?.therapeuticPlanId || '').trim() === activeTherapeuticPlanId)
+        );
       })
       .catch((loadError: any) => {
         if (import.meta.env.DEV) console.warn('Falha ao carregar programas terapêuticos na sessão:', loadError);
-        if (!cancelled) setTherapeuticPrograms([]);
+        if (!cancelled) {
+          setTherapeuticPrograms([]);
+          setTherapeuticPlanLoadError('Falha de conexão ao consultar os alvos deste plano.');
+        }
       })
       .finally(() => {
         if (!cancelled) setTherapeuticPlanLoading(false);
@@ -1425,7 +1446,7 @@ export const SessionMode = ({
     return () => {
       cancelled = true;
     };
-  }, [activeTherapeuticPlanId, patientId]);
+  }, [activeTherapeuticPlanId, patientId, therapeuticPlanReloadKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2339,6 +2360,8 @@ export const SessionMode = ({
       observedAt: timestamp,
       idempotencyKey: trialId,
       numericValue,
+      sessionId,
+      therapeuticPlanId: activeTherapeuticPlanId || null,
     };
     if (measurementType === 'duration' || measurementType === 'latency') {
       payload.startedAt = startedAt;
@@ -7895,6 +7918,54 @@ export const SessionMode = ({
     && !showSessionSummary
     && !(sessionCompleted && postClosureSummary)
   ) {
+    // KIDS: nunca substituir a coleta de alvos por evolução genérica de adulto.
+    // Uma sessão pode permanecer ativa sem alvos (plano não vinculado, alvos ainda
+    // não ativados ou falha de leitura), mas nenhum alvo deve ser inventado.
+    if (isPediatricSession && !isCompletedSessionReview) {
+      const pediatricEmptyContent = (
+        <div className="fixed inset-0 z-[100] overflow-y-auto bg-[#F4F7FE]" data-testid="pediatric-session-targets-unavailable">
+          <header className="sticky top-0 z-10 border-b border-blue-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">
+            <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-3">
+              <button type="button" onClick={onClose} className="rounded-full p-2 text-gray-500 hover:bg-gray-100" aria-label="Voltar ao prontuário"><ChevronLeft size={28} /></button>
+              <div className="min-w-0 flex-1 text-center">
+                <p className="truncate text-sm font-semibold text-gray-900">{patientDisplayName}</p>
+                <p className="text-xs text-gray-500">Sessão infantil em andamento · {formatCountdown?.(remainingSeconds) || formatSessionDuration(remainingSeconds)}</p>
+              </div>
+              {activeSession && <button type="button" onClick={requestEndSession} className="rounded-xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-100">Encerrar atendimento</button>}
+            </div>
+          </header>
+          <main className="mx-auto flex min-h-[calc(100dvh-66px)] w-full max-w-3xl flex-col justify-center px-4 py-6 sm:px-6">
+            <section role="alert" className="rounded-[28px] border border-amber-200 bg-white p-6 shadow-sm sm:p-8">
+              <div className="flex items-center gap-3 text-amber-700"><AlertCircle size={24} /><h2 className="text-xl font-semibold text-slate-900">Alvos de coleta infantil indisponíveis</h2></div>
+              <p className="mt-4 text-sm leading-relaxed text-slate-700">
+                {therapeuticPlanLoadError
+                  ? therapeuticPlanLoadError
+                  : activeTherapeuticPlanId
+                    ? 'Este PTS não retornou alvos ativos em ensino ou manutenção para a sessão. Verifique os programas e os alvos do plano vinculado à especialidade antes de coletar.'
+                    : 'Esta sessão não possui PTS de especialidade vinculado e nenhum alvo ativo foi encontrado no PEI. Confira o plano e inicie a coleta a partir do contexto clínico correto.'}
+              </p>
+              <p className="mt-3 text-sm text-slate-600">A sessão e seus registros existentes foram preservados. Nenhum alvo de outra especialidade será adicionado automaticamente.</p>
+              <label className="mt-5 block text-xs font-medium text-slate-600">
+                Evolução e observações da sessão infantil (opcional)
+                <textarea value={sessionNote} onChange={(event) => setSessionNote(event.target.value)}
+                  maxLength={4000} placeholder="Observações do atendimento; os alvos serão disponibilizados após ativação no PTS."
+                  className="mt-2 min-h-32 w-full resize-y rounded-xl border border-blue-100 bg-[#F8FAFF] px-4 py-3 text-sm text-slate-700 outline-none focus:border-violet-400" />
+              </label>
+              {activeSession && <button type="button" onClick={requestEndSession}
+                className="mt-4 w-full rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-sm font-semibold text-violet-700">
+                Revisar e encerrar atendimento sem coleta de alvos
+              </button>}
+              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                {activeTherapeuticPlanId && <button type="button" onClick={() => setTherapeuticPlanReloadKey((value) => value + 1)} className="flex-1 rounded-xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white hover:bg-[#6425df]">Recarregar alvos do PTS</button>}
+                <button type="button" onClick={onClose} className="flex-1 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Voltar ao prontuário e revisar o plano</button>
+              </div>
+            </section>
+          </main>
+          {actionToastPortal}
+        </div>
+      );
+      return typeof document === 'undefined' ? pediatricEmptyContent : createPortal(pediatricEmptyContent, document.body);
+    }
     const emptyStateContent = (
       <div className="fixed inset-0 z-[100] overflow-y-auto bg-[#F4F7FE]">
         <header className="sticky top-0 z-10 border-b border-blue-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-6">

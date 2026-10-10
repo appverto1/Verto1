@@ -7,7 +7,10 @@ const workspace = fs.readFileSync(new URL('../src/utils/ptsClinicalWorkspace.ts'
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260826190000_pts_draft_persistence_activation_v3.sql', import.meta.url), 'utf8');
 
-assert.match(editor, /Activation may be blocked, but the current form must still reach the[\s\S]*await onSave\(\{/);
+assert.match(editor, /expectedDraftRevision: confirmedRevisionRef\.current/,
+  'o editor envia a ultima revisao confirmada pelo Salvar, nao props obsoletas');
+assert.match(editor, /persistInFlightRef\.current = true[\s\S]*finally \{[\s\S]*persistInFlightRef\.current = false/,
+  'duplo clique em Salvar/Ativar nao pode criar requests concorrentes');
 assert.doesNotMatch(editor, /activationValidation\.firstFieldId[\s\S]{0,500}return;[\s\S]{0,300}const normalized/);
 
 for (const pattern of [

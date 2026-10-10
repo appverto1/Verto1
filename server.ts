@@ -31,6 +31,7 @@ import {
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
+import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
@@ -78122,7 +78123,46 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireClinicCapability('treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
+  // The case link, professional's membership specialty and write permission
+  // remain the resource authority below; the capability is only the first gate.
+  const requireScopedTherapeuticPlanCapability = (operation: 'create' | 'edit') =>
+    async (req: any, res: any, next: any) => {
+      try {
+        const ctx = await resolveClinicCapabilityContext(req.session?.user);
+        const hasCapability = operation === 'create'
+          ? ctx?.capabilities.has('treatment_plan.create')
+          : ctx?.capabilities.has('treatment_plan.edit') || ctx?.capabilities.has('treatment_plan.create');
+        const denied = (key: string) =>
+          (ctx?.overrides || []).some((o: any) =>
+            String(o?.permission_key || o?.permissionKey || '').trim() === key &&
+            String(o?.effect || '').toLowerCase() === 'deny');
+        // Older case-professional profiles sometimes lack the role-default
+        // create grant. A real, clinic-authenticated therapist with clinical
+        // record+plan read permissions can continue only into the SAME
+        // case-scoped, server-authorized plan handler (no arbitrary specialty).
+        const scopedTherapistFallback = ctx?.role === 'therapist' &&
+          ctx.capabilities.has('clinical.record.view') &&
+          ctx.capabilities.has('treatment_plan.view') &&
+          !denied('treatment_plan.create') &&
+          (operation === 'create' || !denied('treatment_plan.edit'));
+        if (!ctx || !(hasCapability || scopedTherapistFallback)) {
+          return res.status(403).json({
+            success: false, error: 'CLINIC_CAPABILITY_DENIED',
+            capability: operation === 'create' ? 'treatment_plan.create' : 'treatment_plan.edit',
+            message: 'Seu acesso atual nesta clínica não permite esta ação.'
+          });
+        }
+        req.authorizationContext = ctx;
+        req.effectiveClinicRole = ctx.role;
+        return next();
+      } catch (error) {
+        return sendRouteDbError(res, 'therapeutic-plan-capability', error, {
+          fallbackMessage: 'Não foi possível verificar a permissão do plano terapêutico.'
+        });
+      }
+    };
+
+  app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireScopedTherapeuticPlanCapability('create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -78153,6 +78193,9 @@ async function startServer() {
           error: 'THERAPEUTIC_PLAN_IDEMPOTENCY_KEY_REQUIRED',
           message: 'Reabra o formulário e tente salvar o plano novamente.'
         });
+      }
+      if (mode === 'interdisciplinary' && String(req.effectiveClinicRole || '').toLowerCase() === 'therapist') {
+        return res.status(403).json({ success: false, error: 'THERAPEUTIC_PLAN_INTERDISCIPLINARY_MANAGEMENT_REQUIRED' });
       }
       if (participantProfessionalIds.some((id) => !isUuid(id))) {
         return res.status(400).json({
@@ -78513,7 +78556,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireClinicCapability('treatment_plan.edit'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId', checkAuth, requireScopedTherapeuticPlanCapability('edit'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Escopo do Plano terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -78996,7 +79039,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.create'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.create', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -79285,7 +79328,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -79396,7 +79439,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
+  app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -79466,7 +79509,7 @@ async function startServer() {
     }
   });
 
-  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.program.edit'), checkPatientAccess, async (req: any, res) => {
+  app.post('/api/aba/patients/:patientId/therapeutic-programs/:programId/targets', requireAbaV2Feature, checkAuth, requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create'), checkPatientAccess, async (req: any, res) => {
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -101268,6 +101311,11 @@ async function startServer() {
   });
 
   // --- STRUCTURED SCHOOL MANAGEMENT ---
+  registerHelpCenterRoutes(app, {
+    supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, currentClinicId,
+    actionLimiter: portalActionLimiter,
+  });
+
   registerSchoolManagementRoutes(app, {
     supabase,
     noStoreDynamicResponse,

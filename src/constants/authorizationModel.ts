@@ -254,7 +254,7 @@ export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, read
     'team.view',
     'patient.list','patient.birthdays.view','patient.documents.registration.view',
     'clinical.record.view','clinical.history.view','clinical.evolution.create','clinical.evolution.own_edit','clinical.evolution.team_view','clinical.notes.create','clinical.documents.view','clinical.documents.upload','clinical.anamnesis.view','clinical.anamnesis.edit',
-    'treatment_plan.view','treatment_goal.view',
+    'treatment_plan.view','treatment_plan.create','treatment_goal.view',
     'school.view','school.meetings.manage',
     'aba.program.view','aba.trial.record','aba.behavior.record','aba.analytics.view','aba.mastery.view','aba.suggestions.view','aba.suggestions.apply','aba.next_session.view',
     'calendar.own.view',

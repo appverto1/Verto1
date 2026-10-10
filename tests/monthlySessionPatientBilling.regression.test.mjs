@@ -154,7 +154,7 @@ assert.match(ledgerUtil, /monthlySessionCount/);
 assert.match(server, /monthlySessionChargeIds[\s\S]{0,420}item\?\.active === true/);
 
 // Utility behavior: fixed monthly and legacy private keep their semantics; monthly-session is opt-in.
-const utilContext = { console };
+const utilContext = { console, exports: {}, require: () => ({ clinicalSpecialtiesMatch: () => false }) };
 vm.createContext(utilContext);
 const transpiled = ts.transpileModule(utilSource.replace(/export\s+/g, ''), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },

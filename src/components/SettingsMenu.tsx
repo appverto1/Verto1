@@ -7,10 +7,12 @@ import {
   CreditCard,
   ChevronRight,
   ShoppingBag,
-  ArrowLeftRight
+  ArrowLeftRight,
+  BookOpenCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SecureImage } from './SecureMedia';
+import { HelpButton } from './HelpButton';
 
 interface SettingsMenuProps {
   user: any;
@@ -23,6 +25,7 @@ interface SettingsMenuProps {
   onViewBilling?: () => void;
   onOpenOnboarding?: () => void;
   onOpenMarketplace?: () => void;
+  onOpenGuidedTutorial?: () => void;
 }
 
 export function SettingsMenu({ 
@@ -35,7 +38,8 @@ export function SettingsMenu({
   canManageClinicSettings = false,
   onViewBilling,
   onOpenOnboarding,
-  onOpenMarketplace
+  onOpenMarketplace,
+  onOpenGuidedTutorial
 }: SettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -159,7 +163,9 @@ export function SettingsMenu({
   };
 
   return (
-    <div className="relative" ref={menuRef} style={{ zIndex: 100 }}>
+    <>
+    <HelpButton />
+    <div className="relative" ref={menuRef} style={{ zIndex: 100 }} data-tutorial-anchor="account-menu">
       <button
         ref={triggerRef}
         type="button"
@@ -222,6 +228,24 @@ export function SettingsMenu({
                 </div>
                 <ChevronRight size={14} className="text-slate-300" />
               </button>
+
+              {onOpenGuidedTutorial && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onOpenGuidedTutorial();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <BookOpenCheck size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Reiniciar tutorial guiado</span>
+                  </div>
+                  <ChevronRight size={14} className="text-slate-300" />
+                </button>
+              )}
 
               {canManageClinicSettings && onViewClinicSettings && (
                 <button
@@ -336,6 +360,6 @@ export function SettingsMenu({
         )}
       </AnimatePresence>
     </div>
+    </>
   );
 }
-

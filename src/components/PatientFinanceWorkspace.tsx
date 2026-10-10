@@ -24,6 +24,7 @@ import { dataService } from '../services/dataService';
 import { PrivatePricingManagement } from './PrivatePricingManagement';
 import { formatDisplayDate, formatDisplayDateTime } from '../utils/dateFormatting';
 import { isMonthlySessionBillingPlan, normalizePatientFinancialPlans } from '../utils/patientFinancialPlan';
+import { clinicalSpecialtiesMatch } from '../utils/clinicalSpecialties';
 import {
   PATIENT_FINANCIAL_STATUS_CLASSES,
   PATIENT_FINANCIAL_STATUS_LABELS,
@@ -356,11 +357,12 @@ export function PatientFinanceWorkspace({
       Number(plan.amountCents || 0) > 0
     );
     const serviceKey = String(row?.serviceType || '').trim().toLocaleLowerCase('pt-BR');
-    const exact = privateSessionPlans.find((plan: any) =>
+    const matching = privateSessionPlans.filter((plan: any) =>
       [plan.specialty, plan.customServiceName, plan.serviceType]
-        .some((value) => String(value || '').trim().toLocaleLowerCase('pt-BR') === serviceKey)
+        .some((value) => String(value || '').trim().toLocaleLowerCase('pt-BR') === serviceKey ||
+          clinicalSpecialtiesMatch(value, row?.serviceType))
     );
-    const selectedPlan = exact || (privateSessionPlans.length === 1 ? privateSessionPlans[0] : null);
+    const selectedPlan = matching.length === 1 ? matching[0] : null;
     return selectedPlan ? Number(selectedPlan.amountCents || 0) / 100 : 0;
   };
 
@@ -369,11 +371,12 @@ export function PatientFinanceWorkspace({
     const plans = normalizePatientFinancialPlans(patient?.financialPlans || patient?.financial_plans || [], patient || {})
       .filter((plan: any) => isMonthlySessionBillingPlan(plan));
     const serviceKey = String(row?.serviceType || '').trim().toLocaleLowerCase('pt-BR');
-    const exact = plans.find((plan: any) =>
+    const matching = plans.filter((plan: any) =>
       [plan.specialty, plan.customServiceName, plan.serviceType]
-        .some((value) => String(value || '').trim().toLocaleLowerCase('pt-BR') === serviceKey)
+        .some((value) => String(value || '').trim().toLocaleLowerCase('pt-BR') === serviceKey ||
+          clinicalSpecialtiesMatch(value, row?.serviceType))
     );
-    return exact || (plans.length === 1 ? plans[0] : null);
+    return matching.length === 1 ? matching[0] : null;
   };
 
   const filteredAppointments = useMemo(() => {

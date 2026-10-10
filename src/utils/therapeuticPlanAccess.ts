@@ -123,7 +123,11 @@ const supervisionBelongsToScope = (
   const supervisionPatientId = cleanText(readValue(supervision, 'patient_id', 'patientId'));
   const supervisionClinicId = cleanText(readValue(supervision, 'clinic_id', 'clinicId'));
   if (scopeClinicId && supervisionClinicId && scopeClinicId !== supervisionClinicId) return false;
-  if (supervisionPatientId && scopePatientId && supervisionPatientId === scopePatientId) return true;
+  // A supervisor's case link must not expand to a different patient's
+  // specialty plan merely because the same professional handles both cases.
+  if (supervisionPatientId && scopePatientId) {
+    return supervisionPatientId === scopePatientId;
+  }
 
   const supervisedUserId = cleanText(
     readValue(supervision, 'supervised_user_id', 'supervisedUserId')
