@@ -118,6 +118,12 @@ jobs:
           node --import tsx tests/serverReadyRouteHandler.test.ts
           node tests/serverReadyRouteExtraction.regression.test.mjs
 
+      - name: Clinic access and work schedule batch 02 regressions
+        run: |
+          node tests/serverRouteBatch02.regression.test.mjs
+          node tests/serverRouteBatch02SourceParity.test.mjs
+          node --import tsx tests/clinicRouteBatch02Handlers.test.ts
+
       - name: Verto pre-main regression ratchet
         shell: bash
         env:
