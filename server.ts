@@ -34,6 +34,7 @@ import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/st
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
 import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
+import { createHealthDetailsHandler } from './services/healthDetailsRouteHandler';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
@@ -28694,41 +28695,9 @@ async function startServer() {
     }));
   });
 
-  app.get('/api/health/details', async (_req, res) => {
-    if (isProd) {
-      return res.status(404).json({ error: 'Not found' });
-    }
-
-    const release = deploymentReleaseId();
-    const status: any = {
-      release,
-      supabase: 'unknown',
-      stripe: 'unknown',
-      env: {
-        NODE_ENV: process.env.NODE_ENV,
-        HAS_SUPABASE_URL: !!process.env.SUPABASE_URL,
-        HAS_SUPABASE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-        HAS_STRIPE_KEY: !!process.env.STRIPE_SECRET_KEY,
-        HAS_DATABASE_URL: !!process.env.DATABASE_URL
-      }
-    };
-
-    try {
-      const { error } = await supabase.from('users').select('count', { count: 'exact', head: true });
-      status.supabase = error ? `error: ${error.message}` : 'ok';
-    } catch (err: any) {
-      status.supabase = `exception: ${err.message}`;
-    }
-
-    try {
-      getStripe();
-      status.stripe = 'ok';
-    } catch (err: any) {
-      status.stripe = `error: ${err.message}`;
-    }
-
-    return res.json(status);
-  });
+  app.get('/api/health/details', createHealthDetailsHandler({
+    isProd, deploymentReleaseId, supabase, getStripe,
+  }));
 
   app.get('/api/internal/schema-status', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     const state = await refreshAppointmentActionResolutionSchema(Boolean(req.query?.refresh));
