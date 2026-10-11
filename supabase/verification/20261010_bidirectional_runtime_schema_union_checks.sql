@@ -382,6 +382,12 @@ DO $verify$ BEGIN BEGIN PERFORM public.list_aba_patient_reinforcers_v1(gen_rando
 
 DO $verify$ BEGIN BEGIN PERFORM public.save_aba_patient_reinforcer_v1(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),null,'synthetic-denial-probe',null,null,true); RAISE EXCEPTION 'DENIAL_PROBE_UNEXPECTEDLY_ALLOWED'; EXCEPTION WHEN OTHERS THEN IF SQLERRM NOT LIKE '%ABA_REINFORCER_ACTOR_FORBIDDEN%' THEN RAISE; END IF; END; END $verify$;
 
+
+DO $private_verify$ BEGIN
+ IF to_regnamespace('private') IS NULL OR to_regprocedure('private.clinic_billing_communication_capability_v1(uuid,uuid,text)') IS NULL OR to_regprocedure('private.clinic_billing_tiss_reference_access_v1(uuid,uuid)') IS NULL OR to_regprocedure('private.guard_clinic_communication_tiss_reference_v1()') IS NULL THEN RAISE EXCEPTION 'Missing private communication dependency'; END IF;
+ IF has_schema_privilege('anon','private','USAGE') OR has_schema_privilege('authenticated','private','USAGE') OR has_function_privilege('authenticated','private.clinic_billing_communication_capability_v1(uuid,uuid,text)','EXECUTE') OR has_function_privilege('anon','private.clinic_billing_tiss_reference_access_v1(uuid,uuid)','EXECUTE') THEN RAISE EXCEPTION 'Private communication exposed to clients'; END IF;
+END $private_verify$;
+
 rollback;
 
 select jsonb_build_object('schema_union','PASS','required_tables',19,'required_columns',43,'required_functions',74,'namespace_authority','PASS','denial_probes','PASS') verification;

@@ -352,6 +352,160 @@ ALTER TABLE public."tiss_official_tracking_events" ADD COLUMN IF NOT EXISTS "ide
 
 ALTER TABLE public."tiss_revenue_cycle_events" ADD COLUMN IF NOT EXISTS "idempotency_key" text;
 
+-- Private communication dependencies; no direct client schema or function access.
+CREATE SCHEMA IF NOT EXISTS private;
+REVOKE ALL ON SCHEMA private FROM PUBLIC, anon, authenticated;
+CREATE OR REPLACE FUNCTION private.clinic_billing_communication_capability_v1(p_user_id uuid, p_clinic_id uuid, p_capability text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+ SET row_security TO 'off'
+AS $function$
+declare
+  v_role text;
+  v_effect text;
+  v_default_allow boolean := false;
+begin
+  if p_user_id is null or p_clinic_id is null
+     or p_capability not in (
+       'communication.billing_updates.view',
+       'communication.billing_updates.write',
+       'communication.billing_updates.manage'
+     ) then
+    return false;
+  end if;
+
+  select cm.role
+    into v_role
+  from public.clinic_memberships cm
+  where cm.user_id = p_user_id
+    and cm.clinic_id = p_clinic_id
+    and cm.status = 'active'
+  limit 1;
+
+  if v_role is null then
+    return false;
+  end if;
+
+  select o.effect
+    into v_effect
+  from public.clinic_membership_permission_overrides o
+  join public.clinic_memberships cm on cm.id = o.membership_id
+  where cm.user_id = p_user_id
+    and cm.clinic_id = p_clinic_id
+    and cm.status = 'active'
+    and o.permission_key = p_capability
+  limit 1;
+
+  if v_effect = 'deny' then
+    return false;
+  end if;
+
+  v_default_allow :=
+    v_role in ('director','coordinator')
+    or (
+      v_role = 'biller'
+      and p_capability in (
+        'communication.billing_updates.view',
+        'communication.billing_updates.write'
+      )
+    );
+
+  if v_default_allow then
+    return true;
+  end if;
+
+  -- Explicit allow follows the existing role-scope policy: clinic managers and
+  -- receptionist may receive delegable communication.* capabilities. Biller
+  -- does not gain manage by override; therapist/supervisor scopes do not expand
+  -- into clinic-wide communication.
+  if v_effect = 'allow' and v_role in ('director','coordinator','receptionist') then
+    return true;
+  end if;
+
+  return false;
+end;
+$function$
+;
+REVOKE ALL ON FUNCTION private.clinic_billing_communication_capability_v1(uuid,uuid,text) FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION private.clinic_billing_tiss_reference_access_v1(p_user_id uuid, p_clinic_id uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ STABLE SECURITY DEFINER
+ SET search_path TO ''
+ SET row_security TO 'off'
+AS $function$
+declare
+  v_role text;
+  v_effect text;
+begin
+  if p_user_id is null or p_clinic_id is null then
+    return false;
+  end if;
+
+  select cm.role into v_role
+  from public.clinic_memberships cm
+  where cm.user_id=p_user_id
+    and cm.clinic_id=p_clinic_id
+    and cm.status='active'
+  limit 1;
+
+  if v_role is null then
+    return false;
+  end if;
+
+  select o.effect into v_effect
+  from public.clinic_membership_permission_overrides o
+  join public.clinic_memberships cm on cm.id=o.membership_id
+  where cm.user_id=p_user_id
+    and cm.clinic_id=p_clinic_id
+    and cm.status='active'
+    and o.permission_key='billing.xml.export'
+  limit 1;
+
+  if v_effect='deny' then
+    return false;
+  end if;
+
+  return v_role in ('director','coordinator','biller');
+end;
+$function$
+;
+REVOKE ALL ON FUNCTION private.clinic_billing_tiss_reference_access_v1(uuid,uuid) FROM PUBLIC, anon, authenticated, service_role;
+
+CREATE OR REPLACE FUNCTION private.guard_clinic_communication_tiss_reference_v1()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+ SET row_security TO 'off'
+AS $function$
+declare
+  v_actor uuid := auth.uid();
+begin
+  if new.reference_type is null then
+    return new;
+  end if;
+
+  if new.reference_type <> 'TISS_OFFICIAL_LOT'
+     or new.reference_id is null
+     or v_actor is null
+     or not private.clinic_billing_tiss_reference_access_v1(v_actor,new.clinic_id)
+     or not exists (
+       select 1 from public.tiss_official_documents d
+       where d.id=new.reference_id and d.clinic_id=new.clinic_id
+     ) then
+    raise exception using errcode='42501', message='COMMUNICATION_REFERENCE_UNAVAILABLE';
+  end if;
+
+  return new;
+end;
+$function$
+;
+REVOKE ALL ON FUNCTION private.guard_clinic_communication_tiss_reference_v1() FROM PUBLIC, anon, authenticated, service_role;
+
 CREATE OR REPLACE FUNCTION public.ack_onboarding_response_v1(p_response_id uuid, p_actor_id uuid)
  RETURNS TABLE(response_id uuid, admin_ack_at timestamp with time zone, admin_ack_by uuid)
  LANGUAGE plpgsql
