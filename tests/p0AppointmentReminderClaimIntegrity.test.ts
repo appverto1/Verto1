@@ -1,6 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { validateClaimedAppointmentReminder } from '../services/appointmentReminderJobGuards';
+import { normalizeId, UUID, validInstant, responded } from '../services/appointmentReminderClaimPrimitives';
+
+// The exact extracted primitives remain fail-closed for inconsistent identities and dates.
+assert.equal(normalizeId(' ABC-123 '), 'abc-123');
+assert.equal(normalizeId(42), '');
+assert.equal(UUID.test('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), true);
+assert.equal(UUID.test('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaz'), false);
+assert.equal(validInstant('2026-10-08T12:00:00.000Z'), Date.parse('2026-10-08T12:00:00.000Z'));
+assert.equal(validInstant('invalid-date'), null);
+assert.equal(validInstant('2026-10-08T12:00:00.000Z'.repeat(4)), null);
+assert.equal(validInstant(123), null);
+assert.equal(responded.has('confirmed'), true);
+assert.equal(responded.has('reschedule_requested'), true);
+assert.equal(responded.has('pending'), false);
 
 const appointmentId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const patientId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
