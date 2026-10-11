@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 
 const branch = 'refactor/backend-auth-config-route-20261011';
@@ -65,6 +65,7 @@ const checkpoint=[
  '- No merge/deploy/smoke of a live environment; no Fábrica Verto or Issues dependency.',
  ''
 ].join('\n');
+mkdirSync('docs/backend-modularization', { recursive: true });
 writeFileSync('docs/backend-modularization/20261011-auth-config-route.md',checkpoint);
 const run=(cmd,args)=>{
   const result=spawnSync(cmd,args,{stdio:'inherit',timeout:300000,env:{...process.env,NODE_ENV:'test'}});
