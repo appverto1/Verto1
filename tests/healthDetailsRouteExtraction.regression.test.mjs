@@ -20,8 +20,9 @@ assert.ok(module.includes(originalBody), 'handler body preserved exactly');
 const replacement = "  app.get('/api/health/details', createHealthDetailsHandler({\n    isProd, deploymentReleaseId, supabase, getStripe,\n  }));";
 assert.ok(server.includes(replacement));
 assert.equal((server.match(/app\.get\('\/api\/health\/details'/g) || []).length, 1);
-assert.equal(server.replace(origImport + addedImport, origImport).replace(replacement, originalBlock), original, 'entire server reconstructs original');
-assert.equal(original.split('\n').length - server.split('\n').length, 31);
+// Guard the moved handler and registration, not the entirety of server.ts: other independent PRs may extract unrelated routes.
+assert.ok(server.includes(origImport + addedImport), 'entrypoint retains the imported handler after its original import');
+assert.ok(!server.includes(start), 'previous inline handler no longer exists');
 assert.ok(server.indexOf("app.get('/api/ready'") < server.indexOf(replacement));
 assert.ok(server.indexOf(replacement) < server.indexOf("app.get('/api/internal/schema-status'"));
 assert.match(module, /if \(isProd\) \{\s+return res\.status\(404\)\.json\(\{ error: 'Not found' \}\);/);
