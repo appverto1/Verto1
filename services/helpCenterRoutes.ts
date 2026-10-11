@@ -1,8 +1,8 @@
 import type { Express } from 'express';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 import { publishedTutorialHelpProjection } from './helpTutorialCatalog';
+import { createHelpContext } from './helpCenterContext';
 
 type Deps = {
   supabase: any;
@@ -16,24 +16,12 @@ type Deps = {
   supportNumber?: () => string;
 };
 
-const setValues = (value:any): string[] => value instanceof Set ? Array.from(value).map(String) : Array.isArray(value) ? value.map(String) : [];
 
 export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   const { supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, currentClinicId } = deps;
   const projectArticles = deps.projectArticles || publishedTutorialHelpProjection;
   const resolveMedia = deps.resolveMedia || resolveHelpMedia;
-  const helpContext = (req:any) => {
-    const clinicId = currentClinicId(req.session?.user);
-    const context = req.authorizationContext;
-    const audience = String(context?.role || req.session?.user?.role || '').trim().toLowerCase();
-    const capabilities = setValues(context?.capabilities);
-    const modules = setValues(context?.modules);
-    const clinicName = String(context?.clinicName || req.session?.user?.activeAccessContext?.clinicName || req.session?.user?.clinicName || 'Clínica atual');
-    const userId=String(context?.userId||req.session?.user?.id||'');
-    const membershipId=String(context?.membershipId||'');
-    const contextKey=createHash('sha256').update(JSON.stringify([userId,clinicId,membershipId,audience,[...capabilities].sort(),[...modules].sort()])).digest('hex');
-    return { clinicId, clinicName, audience, capabilities, modules, userId, membershipId, contextKey };
-  };
+  const helpContext = createHelpContext(currentClinicId);
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
     const { clinicId, clinicName, audience, capabilities, modules, userId, contextKey } = helpContext(req);
