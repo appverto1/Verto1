@@ -39,7 +39,7 @@ assert.ok(handler.includes('const clinicId = user.clinic_id || user.id;'));
 
 fs.writeFileSync('server.ts', updated, 'utf8');
 assert.ok(!fs.existsSync('services/clinicDreHandler.ts'), 'handler path already exists');
-fs.writeFileSync('services/clinicDreHandler.ts', handler, 'utf8');
+fs.writeFileSync('services/clinicDreHandler.ts', handler.replace(/^[ \\t]+$/gm, ''), 'utf8');
 const summary = [
   '# Backend modularization: clinic DRE GET route',
   '',
