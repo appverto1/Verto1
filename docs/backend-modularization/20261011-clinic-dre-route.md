@@ -8,4 +8,5 @@
 - Resulting `server.ts` has 102031 lines; direct reduction: 35 lines (35 / 102,066 = 0.0343%).
 - Node 20 focused test and Vite build are required by the temporary one-run workflow; full staging CI is required before merge. No production deployment.
 - The temporary writer script and workflow are removed from the resulting feature branch before PR; no privileged writer workflow goes to staging.
-- PR, merge and deploy: not performed at initial checkpoint; verify actual GitHub state and append evidence after checks.
+- Branch-only writer run [38177433884](https://github.com/appverto1/Verto1/actions/runs/38177433884) succeeded on Node 20: original blob guard, focused route tests, production build and safe branch-only commit. Earlier failed run was fixed only for inherited trailing whitespace in moved helper. Final extracted commit: `9dd2d1a763d35ed726cfe3237842b000ac898246`.
+- [PR #390](https://github.com/appverto1/Verto1/pull/390) opened against `staging`; effective diff is exactly 4 files, no temporary workflows/scripts, no unrelated changes. CI pending at checkpoint time. Merge and deployment: not yet performed. Re-check live CI/head/merge/deploy before reporting completion.
