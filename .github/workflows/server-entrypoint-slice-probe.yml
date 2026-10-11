@@ -1,0 +1,20 @@
+name: Server Entry Point Slice Probe (isolated branch)
+on:
+  push:
+    branches:
+      - refactor/backend-server-entrypoint-slice-20261011
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Inspect bounded health and ready routes
+        run: node scripts/server-entrypoint-slice-probe.mjs
