@@ -1,0 +1,44 @@
+name: One-time clinic DRE route extraction
+
+on:
+  push:
+    branches:
+      - refactor/backend-clinic-dre-route-20261011
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    if: github.ref == 'refs/heads/refactor/backend-clinic-dre-route-20261011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Reversible source extraction with exact baseline SHA
+        run: node scripts/_clinic-dre-extract-once.mjs
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused route contract and error regression
+        run: node --import tsx tests/clinicDreHandler.test.ts
+      - name: Production build (compile)
+        run: npm run build
+      - name: Remove disposable writer and commit only product/test/checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/_clinic-dre-extract-once.yml
+          rm scripts/_clinic-dre-extract-once.mjs
+          git diff --check
+          git add -- server.ts services/clinicDreHandler.ts tests/clinicDreHandler.test.ts docs/backend-modularization/20261011-clinic-dre-route.md .github/workflows/_clinic-dre-extract-once.yml scripts/_clinic-dre-extract-once.mjs
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "refactor(backend): extract isolated clinic DRE GET handler from server.ts"
+          git push origin HEAD:refs/heads/refactor/backend-clinic-dre-route-20261011
