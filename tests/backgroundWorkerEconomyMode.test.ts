@@ -30,6 +30,10 @@ const deploymentEnv = (
 assert.equal(normalizeVertoBackgroundWorkerMode('active'), 'active');
 assert.equal(normalizeVertoBackgroundWorkerMode('ECONOMY'), 'economy');
 assert.equal(normalizeVertoBackgroundWorkerMode('disabled'), null);
+assert.equal(normalizeVertoBackgroundWorkerMode(' ACTIVE '), 'active');
+assert.equal(normalizeVertoBackgroundWorkerMode('economy-disabled'), null);
+assert.throws(() => resolveVertoBackgroundWorkerMode({ env: { VERTO_DEPLOYMENT_ENV: 'invalid' } }), /staging ou production/);
+
 
 // Server-owned defaults: staging is economy-by-default; production behavior is preserved.
 assert.equal(resolveVertoBackgroundWorkerMode({ env: deploymentEnv('staging') }), 'economy');
@@ -210,6 +214,7 @@ const clinicAnnouncementCronService = read('services/clinicAnnouncementCronServi
 const recurringCronSources = [cronService, clinicAnnouncementCronService].join('\n');
 const noShowService = read('services/appointmentNoShowService.ts');
 const backgroundWorkerMode = read('services/backgroundWorkerMode.ts');
+const backgroundWorkerModeConfig = read('services/backgroundWorkerModeConfig.ts');
 const distributedRuntime = read('services/distributedRuntimeState.ts');
 const server = read('server.ts');
 const envExample = read('.env.example');
@@ -223,7 +228,8 @@ assert.match(backgroundWorkerMode, /from 'node-cron'/);
 assert.match(backgroundWorkerMode, /scheduler\.createTask/);
 assert.match(backgroundWorkerMode, /notification_jobs_startup/);
 assert.match(backgroundWorkerMode, /startup_warmup/);
-assert.match(backgroundWorkerMode, /VERTO_BACKGROUND_WORKER_MODE=economy é proibido em production/);
+assert.match(backgroundWorkerModeConfig, /VERTO_BACKGROUND_WORKER_MODE=economy é proibido em production/);
+assert.match(backgroundWorkerMode, /from '\.\/backgroundWorkerModeConfig'/);
 assert.match(cronService, /runAppointmentReminderScan/);
 assert.match(recurringCronSources, /runClinicAnnouncementDispatchScan/);
 assert.match(noShowService, /runAppointmentNoShowScan/);
