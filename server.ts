@@ -34,6 +34,7 @@ import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/st
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
 import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
+import { createAuthConfigHandler } from './services/authConfigRouteHandler';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
@@ -29270,18 +29271,7 @@ async function startServer() {
     }
   });
 
-  app.get('/api/auth/config', (_req, res) => {
-    try {
-      res.json({
-        success: true,
-        authRedirectUrl: getAuthRedirectUrl(),
-        recoveryRedirectUrl: getRecoveryRedirectUrl(),
-        productionBaseUrl: sanitizeString(process.env.VERTO_APP_BASE_URL || process.env.APP_BASE_URL || '', 500)
-      });
-    } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message || 'Configuração de Auth indisponível.' });
-    }
-  });
+  app.get('/api/auth/config', createAuthConfigHandler({ getAuthRedirectUrl, getRecoveryRedirectUrl, sanitizeString }));
 
   app.post('/api/auth/resend-confirmation', recoveryLimiter, async (req, res) => {
     try {
