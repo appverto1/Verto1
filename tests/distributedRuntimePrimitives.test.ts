@@ -22,8 +22,8 @@ for (const token of [null, undefined, '', 'token-a', ' token ', 0, 123, false, t
   assert.equal(hashRuntimeSessionToken(token), expected, 'Public token hash semantics changed');
 }
 assert.equal(asDate('2026-10-11T12:00:00.000Z', 1000).toISOString(), '2026-10-11T12:00:00.000Z');
-assert.equal(asDate(0, 1000).toISOString(), '1970-01-01T00:00:00.000Z');
-for (const invalid of [null, undefined, '', 'not-a-date']) {
+assert.equal(asDate('2025-01-01T00:00:00Z', 1000).toISOString(), '2025-01-01T00:00:00.000Z');
+for (const invalid of [null, undefined, '', 0, false, 'not-a-date']) {
   const before = Date.now();
   const parsed = asDate(invalid, 4200);
   const after = Date.now();
