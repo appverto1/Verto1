@@ -55,7 +55,7 @@ statements,
 '  };',
 '}',
 ''
-].join('\n');
+].join('\n').replace(/[ \t]+$/gm, '');
 for(const key of expected)if(!moved.includes(key))throw new Error('MOVED_BODY_INCOMPLETE '+key);
 if(!updated.includes("app.get('/api/ready'")||!updated.includes("app.get('/api/health'"))
   throw new Error('REQUIRED_ENDPOINT_MISSING');
