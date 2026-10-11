@@ -14,3 +14,10 @@ Date: 2026-10-11. Target base `staging` at `e78a05511dfd03b82d32d92d44f4231004d7
 - Follow-up: validate combined CI and new test coverage; optional safe merge needs explicit instruction. Later establish a transport that supports modifying `server.ts` directly before claiming entrypoint shrinkage.
 
 Branch: `refactor/backend-modularization-batch01-20261011` based on `e78a05511dfd03b82d32d92d44f4231004d71a64`. Consolidation PR and final CI status to be recorded in PR body after verification; no merge or deploy.
+
+## Integrated test execution hardening
+
+- A dedicated `scripts/backend-modularization-batch01-regressions.mjs` enumerates **all 10 new TypeScript regression test files** introduced by source PRs #369–#378. Each file runs in its own Node 20 process using `node --import tsx`, with a 120-second process timeout and fail-fast errors.
+- `.github/workflows/staging-ci.yml` now executes the suite as a **required step** in the existing `staging-gate` after the tutorial isolation step and before the pre-main ratchet. Existing gates are unchanged.
+- Before this follow-up commit, CI checked build/typecheck/pre-main but did not prove execution of these 10 tests. Do not infer this new step is passing until GitHub Actions verifies the final commit.
+- This follow-up changes **only test infrastructure and this checkpoint**, not any of the exact 44 original source PR file blobs or `server.ts`.
