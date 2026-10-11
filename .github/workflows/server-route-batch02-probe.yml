@@ -1,0 +1,19 @@
+name: Server Route Batch 02 Probe
+on:
+  push:
+    branches:
+      - refactor/backend-server-route-batch02-20261011
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/server-route-batch02-probe.mjs
