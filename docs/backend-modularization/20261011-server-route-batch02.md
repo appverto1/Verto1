@@ -1,5 +1,5 @@
-# Backend server route batch 02 — direct extraction
+# Backend modularization batch 02 — direct extraction of 12 clinic authorization, membership and work-schedule handlers
 
-Starting baseline: PR #380 `3fea74f6f5b10a6515621541580f1ed46f2fcaf9`, branch scoped to `refactor/backend-server-route-batch02-20261011`.
+Baseline: `server.ts` blob `a301111eac512996c2a019b728e080b9aa54b63a` from PR #380, branch `refactor/backend-server-route-batch02-20261011`.
 
-Probe-only initial commit. No source edits or deployment. Goal: coherent group of direct route extractions from server.ts (more than single-readiness handler), preserve route order and authorization. Extraction must be a separate validated commit.
+All 12 exact AST handlers move into two service modules, preserving the original route declarations, method, URL, ALL existing middleware expressions and their order in `server.ts`. Original statements copied as-is (except removing harmless trailing whitespace); access to original lexical dependencies via lazy per-request getter. Context type definition copied verbatim and types imported from existing modules. No database/schema/RLS/Stripe/production writes. One-time GitHub Actions writer commits to isolated feature branch only after structural checks, typecheck, build and clean diff; temporary writer removed prior to PR.

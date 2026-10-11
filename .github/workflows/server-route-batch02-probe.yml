@@ -1,19 +1,44 @@
-name: Server Route Batch 02 Probe
+name: Server Route Batch 02 Writer (temporary isolated branch)
 on:
   push:
     branches:
       - refactor/backend-server-route-batch02-20261011
 permissions:
-  contents: read
+  contents: write
 jobs:
-  inspect:
+  extract:
+    if: "github.event.head_commit.message == 'chore(backend): authorize 12 clinic route AST extraction'"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: node scripts/server-route-batch02-probe.mjs
+      - name: Extract 12 handlers with source AST guard
+        run: node scripts/server-route-batch02-extract.mjs
+      - name: Verify structural guards and compiler/build
+        run: |
+          node tests/serverRouteBatch02.regression.test.mjs
+          npm run typecheck
+          npm run build
+          git diff --check
+      - name: Commit only to feature branch
+        env:
+          TARGET_BRANCH: refactor/backend-server-route-batch02-20261011
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = "$TARGET_BRANCH"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- server.ts services/clinicAccessMembershipHandlers.ts services/clinicWorkScheduleHandlers.ts docs/backend-modularization/20261011-server-route-batch02.md docs/backend-modularization/20261011-server-route-batch02-manifest.json
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 5
+          git commit -m "refactor(backend): extract 12 clinic authorization and schedule handlers"
+          git push origin "HEAD:refs/heads/$TARGET_BRANCH"
