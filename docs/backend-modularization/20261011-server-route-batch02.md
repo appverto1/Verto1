@@ -19,3 +19,9 @@ All 12 exact AST handlers move into two service modules, preserving the original
 - A new `tests/serverRouteBatch02SourceParity.test.mjs` reads the baseline Git blob and compares all twelve original AST statement sequences byte-faithfully (except trailing whitespace) to the moved implementations. It is now a required CI step; verify results before claiming success.
 - Cleanup: branch-only writer workflow and two one-shot scripts removed from the final PR; only production code, tests, the manifest and checkpoint remain. Workflow `.github/workflows/staging-ci.yml` requires structural, original-statement parity and functional regressions in the regular staging gate.
 - The branch stacks on PR #380, which already contains ten tested extractions from PR #379. The new PR should be the sole merge candidate. Do not merge ancestors independently, and no deploy, DB write or staging smoke has occurred.
+
+## Final pre-main structural regression repair
+
+- First staging CI run [38160586175](https://github.com/appverto1/Verto1/actions/runs/38160586175) passed Node 20 typecheck, build, all ten batch 01 tests, /api/ready tests and all three new batch 02 regressions. Its pre-main gate found one **test-location-only** failure: `tests/teamManagementTenantRefresh.regression.test.mjs` looked for member-role projections in `server.ts` after the GET handler moved to the module.
+- Updated this existing regression to inspect **the same original `role: m.role` and `not m.users.role` assertions** in `services/clinicAccessMembershipHandlers.ts`; added a guard that `server.ts` still registers the original clinic team capability middleware on the same GET URL. All other tenant-switching freshness assertions stay identical.
+- Verify the full CI again on the new HEAD before claiming green. No behavior or billing/security logic rewritten, and no merge/deploy.

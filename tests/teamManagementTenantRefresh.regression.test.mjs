@@ -12,10 +12,12 @@ assert.match(team, /invitationsTenantKey === activeTenantKey \? invitations : \[
 assert.match(team, /setMembersTenantKey\(''\)[\s\S]{0,180}setMembers\(\[\]\)/);
 assert.match(team, /formatAccessRoleLabel\(member\.role, member\)/);
 
-const membersRouteStart = server.indexOf("app.get('/api/clinic/members'");
-const membersRouteEnd = server.indexOf("app.patch('/api/clinic/members/:memberId/supervision-eligibility'", membersRouteStart);
+assert.match(server, /app\.get\('\/api\/clinic\/members', checkAuth, requireClinicCapability\('team\.view'\), createClinicMembersReadHandler\(/);
+const accessHandlers = fs.readFileSync('services/clinicAccessMembershipHandlers.ts', 'utf8');
+const membersRouteStart = accessHandlers.indexOf('export function createClinicMembersReadHandler(');
+const membersRouteEnd = accessHandlers.indexOf('export function createClinicSupervisionEligibilityWriteHandler(', membersRouteStart);
 assert.ok(membersRouteStart >= 0 && membersRouteEnd > membersRouteStart);
-const membersRoute = server.slice(membersRouteStart, membersRouteEnd);
+const membersRoute = accessHandlers.slice(membersRouteStart, membersRouteEnd);
 assert.match(membersRoute, /role:\s*m\.role/);
 assert.doesNotMatch(membersRoute, /role:\s*m\.users\?\.role|role:\s*m\.users\.role/);
 
