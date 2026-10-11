@@ -1,16 +1,94 @@
+import { isRecoverableFailedOfflineSyncRecord, type OfflineSyncStatus } from './offlineSyncResilience';
+
+/**
+ * Appointment recovery must be server-authoritative. A queued/optimistic write,
+ * another patient's session or a different appointment cannot open SessionMode.
+ */
+export function isConfirmedAbaSessionAppointmentLink(
+  result: any,
+  expected: { sessionId: string; patientId: string; appointmentId: string }
+): boolean {
+  const saved = result?.session || result?.data;
+  return result?.success === true
+    && result?.pending !== true
+    && result?.offline !== true
+    && String(saved?.id || '') === expected.sessionId
+    && String(saved?.patient_id || saved?.patientId || '') === expected.patientId
+    && String(saved?.appointment_id || saved?.appointmentId || '') === expected.appointmentId;
+}
+
 export const AUTOMATIC_SESSION_CLOSURE_KEYS = new Set([
   'open_duration', 'open_interval_collection', 'therapeutic_measurement_timer_open',
   'unsaved_local_records', 'server_sync_required', 'v3_failed_trials_require_resolution'
 ]);
 
-export function isQueuedRecordForSession(record: {
-  id: string; entity_id?: string; type: string; endpoint: string; data?: any;
-}, sessionId: string, entityIds: string[] = []) {
+export type SessionQueueRecord = {
+  id: string;
+  entity_id?: string;
+  type: string;
+  sync_status?: OfflineSyncStatus;
+  last_updated?: number;
+  last_error?: string | null;
+  method?: string;
+  endpoint: string;
+  data?: any;
+};
+
+export function queuedSessionId(record: SessionQueueRecord): string {
+  const explicitSessionId = String(record?.data?.session_id || record?.data?.sessionId || '').trim();
+  if (explicitSessionId) return explicitSessionId;
+  const match = String(record?.endpoint || '').match(/^\/api\/aba\/sessions\/([^/]+)\/(?:complete|.*)$/);
+  if (!match?.[1]) return '';
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+export function isSessionCompletionQueueRecord(record: SessionQueueRecord): boolean {
+  return record?.type === 'aba'
+    && String(record?.method || 'POST').toUpperCase() === 'POST'
+    && /^\/api\/aba\/sessions\/[^/]+\/complete$/.test(String(record?.endpoint || ''));
+}
+
+export function isDurableDeferredSessionRecord(record: SessionQueueRecord): boolean {
+  if (record?.sync_status === 'pending') return true;
+  return record?.sync_status === 'failed' && isRecoverableFailedOfflineSyncRecord(record);
+}
+
+export function partitionSessionQueueForClosure(records: SessionQueueRecord[]) {
+  const durable: SessionQueueRecord[] = [];
+  const terminal: SessionQueueRecord[] = [];
+  for (const record of records || []) {
+    if (isDurableDeferredSessionRecord(record)) durable.push(record);
+    else terminal.push(record);
+  }
+  return { durable, terminal };
+}
+
+export function hasUnresolvedSessionPredecessor(
+  completion: SessionQueueRecord,
+  records: SessionQueueRecord[]
+): boolean {
+  if (!isSessionCompletionQueueRecord(completion)) return false;
+  const sessionId = queuedSessionId(completion);
+  if (!sessionId) return true;
+  return (records || []).some((candidate) => {
+    if (!candidate || candidate.id === completion.id || isSessionCompletionQueueRecord(candidate)) return false;
+    if (queuedSessionId(candidate) !== sessionId) return false;
+    // Close is the final causal barrier for the session. Even a clinical write
+    // persisted a few milliseconds later (clock drift / pending callbacks)
+    // must be replayed before completion, or the server will reject it as closed.
+    return candidate.sync_status !== 'synced';
+  });
+}
+
+export function isQueuedRecordForSession(record: SessionQueueRecord, sessionId: string, entityIds: string[] = []) {
   if (!['aba', 'aba_v3'].includes(record.type)) return false;
-  const explicitSessionId = record.data?.session_id || record.data?.sessionId;
-  if (explicitSessionId) return String(explicitSessionId) === sessionId;
+  const explicitSessionId = queuedSessionId(record);
+  if (explicitSessionId) return explicitSessionId === sessionId;
   return String(record.entity_id || record.id) === sessionId
-    || record.endpoint.startsWith(`/api/aba/sessions/${encodeURIComponent(sessionId)}/`)
     || entityIds.includes(String(record.entity_id || record.id));
 }
 
@@ -37,17 +115,4 @@ export async function waitForSessionWrites(hasWrites: () => boolean, timeoutMs =
     if (Date.now() >= deadline) throw new Error('A gravação ainda está em andamento. Os dados foram preservados; tente finalizar novamente.');
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
   }
-}
-
-export function isConfirmedAbaSessionAppointmentLink(
-  result: any,
-  expected: { sessionId: string; patientId: string; appointmentId: string }
-): boolean {
-  const saved = result?.session || result?.data;
-  return result?.success === true
-    && result?.pending !== true
-    && result?.offline !== true
-    && String(saved?.id || '') === expected.sessionId
-    && String(saved?.patient_id || saved?.patientId || '') === expected.patientId
-    && String(saved?.appointment_id || saved?.appointmentId || '') === expected.appointmentId;
 }

@@ -1,4 +1,5 @@
 import express from 'express';
+import { canManageAppointmentActionInClinic, resolveAuthenticatedCalendarScope } from './services/appointmentTenantGuards';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
@@ -31,6 +32,7 @@ import {
 } from './services/stripeService';
 import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
+import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
 import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
@@ -427,6 +429,10 @@ import {
   normalizeClinicalSpecialty,
   readClinicalSpecialtyFromSource
 } from './src/utils/clinicalSpecialties';
+import {
+  clinicalGraphLegacySnapshotVisibleToActor,
+  filterClinicalGraphPlanScopesForActor
+} from './src/utils/clinicalGraphScope';
 import {
   canEditTherapeuticPlanScope,
   filterTherapeuticPlanProgramsForActor,
@@ -1588,7 +1594,6 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
     path.startsWith('/api/profile/') ||
     path.startsWith('/api/stripe/') ||
     path.startsWith('/api/billing/') ||
-    path.startsWith('/api/storage/') ||
     path.startsWith('/api/config')
   );
 }
@@ -3982,7 +3987,18 @@ function buildClinicProtocolFromApprovedRequest(request: any): any | null {
 }
 
 function mergeApprovedProtocolsIntoClinicState(existingProtocols: any[], approvedProtocols: any[]) {
-  const merged = normalizeProtocolArrayForRoute(existingProtocols);
+  const activeIdentityKeys = new Set(
+    approvedProtocols.flatMap((protocol: any) => buildProtocolIdentityKeys(protocol))
+  );
+  const existing = normalizeProtocolArrayForRoute(existingProtocols);
+  const merged = existing.filter((protocol: any) => {
+    const origin = sanitizeString(protocol?.origin, 80).toLowerCase();
+    const source = sanitizeString(protocol?.source, 80).toLowerCase();
+    const isDerivedApprovedProjection = origin === 'verto_approved_import' || source === 'protocol_import_requests';
+    if (!isDerivedApprovedProjection) return true;
+    return buildProtocolIdentityKeys(protocol).some((key) => activeIdentityKeys.has(key));
+  });
+  const removed = existing.length - merged.length;
   const indexByIdentity = new Map<string, number>();
   const registerProtocol = (protocol: any, index: number) => {
     for (const key of buildProtocolIdentityKeys(protocol)) {
@@ -4012,7 +4028,7 @@ function mergeApprovedProtocolsIntoClinicState(existingProtocols: any[], approve
     added += 1;
   }
 
-  return { protocols: merged, added, refreshed };
+  return { protocols: merged, added, refreshed, removed };
 }
 
 function buildProtocolAccessScopeKeys(params: { clinicId?: any; requesterUserId?: any; requesterEmail?: any }): string[] {
@@ -4033,35 +4049,26 @@ function buildProtocolAccessScopeKey(params: { clinicId?: any; requesterUserId?:
 async function loadProtocolAccessMap(): Promise<Map<string, string[]>> {
   const accessMap = new Map<string, string[]>();
   try {
-    const { data } = await supabase
-      .from('activity_logs')
-      .select('payload_details, timestamp')
-      .eq('type', 'protocol_access_updated')
-      .eq('is_active', true)
-      .is('deleted_at', null)
-      .gte('timestamp', VERTO_PROTOCOL_PANEL_RESET_AT)
-      .order('timestamp', { ascending: true })
-      .limit(1000);
+    const { data, error } = await supabase
+      .from('clinic_protocol_grants')
+      .select('clinic_id, canonical_key')
+      .is('revoked_at', null)
+      .limit(5000);
+    if (error) throw error;
 
-    for (const log of data || []) {
-      try {
-        const payload = JSON.parse(String((log as any).payload_details || '{}'));
-        const scopeKey = sanitizeString(payload.scopeKey, 220);
-        if (!scopeKey) continue;
-        const protocolKeys = Array.isArray(payload.protocolKeys)
-          ? payload.protocolKeys.map((key: any) => normalizeApprovedProtocolKey(key)).filter((key: string) => VERTO_PROTOCOL_BY_KEY.has(key))
-          : [];
-        accessMap.set(scopeKey, Array.from(new Set(protocolKeys)));
-      } catch {
-        // Ignore malformed access history entries.
-      }
+    for (const grant of data || []) {
+      const clinicId = sanitizeString((grant as any)?.clinic_id, 120);
+      const protocolKey = normalizeApprovedProtocolKey((grant as any)?.canonical_key);
+      if (!isUuid(clinicId) || !VERTO_PROTOCOL_BY_KEY.has(protocolKey)) continue;
+      const scopeKey = `clinic:${clinicId}`;
+      const currentKeys = accessMap.get(scopeKey) || [];
+      if (!currentKeys.includes(protocolKey)) accessMap.set(scopeKey, [...currentKeys, protocolKey]);
     }
-  } catch {
-    // Access history is additive; if it is unavailable, callers fall back to no assignments.
+  } catch (error: any) {
+    console.warn('[Protocol Access] Canonical grant lookup unavailable:', sanitizeString(error?.message || String(error), 240));
   }
   return accessMap;
 }
-
 function normalizeBrazilMobilePhone(value: unknown): string | null {
   const digits = sanitizeString(value, 40).replace(/\D/g, '');
   if (!digits) return null;
@@ -19018,11 +19025,7 @@ async function resolveExternalEvolutionInvitationCredential(req: any, res: any, 
 }
 
 function externalEvolutionInviteDiagnosticsEnabled(): boolean {
-  const railwayEnvironment = sanitizeString(
-    process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || '',
-    80,
-  ).toLowerCase();
-  return ['staging', 'stage', 'preview'].some((hint) => railwayEnvironment.includes(hint));
+  return sanitizeString(process.env.VERTO_DEPLOYMENT_ENV || '', 40).toLowerCase() === 'staging';
 }
 
 function externalEvolutionInviteSessionState(req: any, recipientEmail: string): 'MATCH' | 'MISMATCH' | 'NONE' {
@@ -20495,6 +20498,8 @@ const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
 const supabasePublishableKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 const supabasePublicClientKey = supabasePublishableKey || supabaseAnonKey;
+const vertoDeploymentEnv = requireVertoDeploymentEnvironment(process.env);
+const deploymentEnv = vertoDeploymentEnv;
 
 function getProjectRefFromSupabaseUrl(url: string): string | null {
   try {
@@ -20573,6 +20578,9 @@ try {
         persistSession: false,
         autoRefreshToken: false,
         detectSessionInUrl: false
+      },
+      global: {
+        headers: { 'x-verto-deployment-env': vertoDeploymentEnv }
       }
     });
   }
@@ -24931,40 +24939,50 @@ async function startServer() {
   const loadApprovedProtocolImportRequestsForClinic = async (clinicId: string): Promise<any[]> => {
     const safeClinicId = sanitizeString(clinicId, 120);
     if (!isUuid(safeClinicId)) return [];
-    let columns = [...PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS];
 
+    const { data: grants, error: grantError } = await supabase
+      .from('clinic_protocol_grants')
+      .select('source_request_id, canonical_key')
+      .eq('clinic_id', safeClinicId)
+      .is('revoked_at', null);
+    if (grantError) {
+      console.warn('[Protocol Sync] Canonical grants unavailable; skipping compatibility sync.', {
+        clinicId: safeClinicId,
+        message: extractSupabaseErrorMessage(grantError)
+      });
+      return [];
+    }
+
+    const grantKeyByRequestId = new Map<string, string>();
+    for (const grant of grants || []) {
+      const requestId = sanitizeString((grant as any)?.source_request_id, 120);
+      const canonicalKey = normalizeApprovedProtocolKey((grant as any)?.canonical_key);
+      if (requestId && LICENSED_VERTO_PROTOCOLS_BY_KEY.has(canonicalKey)) grantKeyByRequestId.set(requestId, canonicalKey);
+    }
+    const requestIds = Array.from(grantKeyByRequestId.keys());
+    if (requestIds.length === 0) return [];
+
+    let columns = [...PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS];
     for (let attempt = 0; attempt < PROTOCOL_IMPORT_REQUEST_SYNC_SELECT_COLUMNS.length; attempt += 1) {
       const { data, error } = await supabase
         .from('protocol_import_requests')
         .select(columns.join(',') || PROTOCOL_IMPORT_REQUEST_SYNC_SELECT)
         .eq('clinic_id', safeClinicId)
-        .eq('status', 'approved')
+        .in('id', requestIds)
         .order('created_at', { ascending: true });
-
-      if (!error) return Array.isArray(data) ? data : [];
-      if (isMissingRelationError(error)) {
-        console.warn('[Protocol Sync] Tabela protocol_import_requests indisponivel; pulando sync automatico.', {
-          clinicId: safeClinicId,
-          message: extractSupabaseErrorMessage(error)
-        });
-        return [];
+      if (!error) {
+        return (Array.isArray(data) ? data : []).map((row: any) => ({
+          ...row,
+          approved_canonical_key: grantKeyByRequestId.get(sanitizeString(row?.id, 120)) || row?.approved_canonical_key
+        }));
       }
-
+      if (isMissingRelationError(error)) return [];
       const missingColumn = extractMissingColumnName(error);
-      if (!missingColumn || !columns.includes(missingColumn) || missingColumn === 'status' || missingColumn === 'clinic_id') {
-        console.warn('[Protocol Sync] Nao foi possivel consultar requests aprovados; pulando sync automatico.', {
-          clinicId: safeClinicId,
-          missingColumn,
-          message: extractSupabaseErrorMessage(error)
-        });
-        return [];
-      }
+      if (!missingColumn || !columns.includes(missingColumn) || missingColumn === 'clinic_id' || missingColumn === 'id') return [];
       columns = columns.filter((column) => column !== missingColumn);
     }
-
     return [];
   };
-
   const getApprovedProtocolImportRequestKeys = async (clinicId: string): Promise<string[]> => {
     const approvedRows = await loadApprovedProtocolImportRequestsForClinic(clinicId);
     return Array.from(new Set(
@@ -25027,7 +25045,7 @@ async function startServer() {
     const currentProtocols = normalizeProtocolArrayForRoute(currentState?.protocols);
     const merged = mergeApprovedProtocolsIntoClinicState(currentProtocols, approvedProtocols);
     const sourceRequestIds = sourceRequests.map((row) => sanitizeString(row?.id, 120)).filter(Boolean);
-    const synced = merged.added + merged.refreshed;
+    const synced = merged.added + merged.refreshed + merged.removed;
 
     if (synced > 0 || !currentState) {
       const nowIso = new Date().toISOString();
@@ -25080,6 +25098,7 @@ async function startServer() {
           sourceRequestIds,
           added: merged.added,
           refreshed: merged.refreshed,
+          removed: merged.removed,
           skipped: Math.max(0, (approvedRows || []).length - approvedProtocols.length),
           performedAt: new Date().toISOString(),
           performedBy: sanitizeString(params.performedBy, 120) || 'system'
@@ -25092,10 +25111,45 @@ async function startServer() {
       synced,
       added: merged.added,
       refreshed: merged.refreshed,
+      removed: merged.removed,
       skipped: Math.max(0, (approvedRows || []).length - approvedProtocols.length),
       sourceRequestIds,
       protocols: merged.protocols
     };
+  };
+
+  const revokeProtocolGrantForRequest = async (params: {
+    clinicId: string;
+    requestId: string;
+    actorId: string;
+    actorName?: string | null;
+    auditAction: string;
+  }) => {
+    const clinicId = sanitizeString(params.clinicId, 120);
+    const requestId = sanitizeString(params.requestId, 120);
+    const actorId = sanitizeString(params.actorId, 120);
+    if (![clinicId, requestId, actorId].every(isUuid)) {
+      throw new Error('PROTOCOL_GRANT_REVOKE_SCOPE_INVALID');
+    }
+
+    const { data: grant, error } = await supabase.rpc('revoke_clinic_protocol_grant_v1', {
+      p_actor_id: actorId,
+      p_request_id: requestId
+    });
+    if (error) throw error;
+
+    const protocolSync = await syncApprovedProtocolsToClinicState({
+      clinicId,
+      performedBy: actorId,
+      actorName: sanitizeString(params.actorName, 180) || 'Equipe Verto',
+      auditAction: params.auditAction,
+      forceAudit: true
+    });
+    if (protocolSync?.success === false) {
+      throw new Error(protocolSync.error || 'PROTOCOL_GRANT_PROJECTION_SYNC_FAILED');
+    }
+
+    return { grant, protocolSync };
   };
 
   const summarizePayloadForAudit = (input: any): string => {
@@ -28459,6 +28513,8 @@ async function startServer() {
           if (evidence.activeSupervisionLink) {
             req.patientSupervisionLink = evidence.activeSupervisionLink;
           }
+          req.patientActorSpecialty =
+            normalizeClinicalSpecialty(evidence.activeProfessionalProfile?.specialty) || null;
           return next();
         }
 
@@ -36636,6 +36692,7 @@ async function startServer() {
       const renewalToken = crypto.randomBytes(32).toString('base64url');
       const result = await savePatientPushSubscription({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         subscription,
         patientId,
         userId: sanitizeString(user?.id, 120),
@@ -36672,26 +36729,37 @@ async function startServer() {
 
   const handlePushUnsubscribe = async (req: any, res: any) => {
     try {
+      const user = req.session.user;
+      if (sanitizeString(user?.role, 40).toLowerCase() !== 'patient') {
+        return res.status(403).json({ success: false, error: 'PUSH_UNSUBSCRIBE_ROLE_DENIED' });
+      }
+      const actorUserId = sanitizeString(user?.id, 120);
       const subscription = req.body?.subscription || req.body;
       const endpoint = sanitizeString(subscription?.endpoint, 2000);
-      const user = req.session.user;
-      const isPatientRole = sanitizeString(user?.role, 40).toLowerCase() === 'patient';
-      const patientIds = await resolvePatientIdsForPush({
-        supabase,
-        patientId: sanitizeString(req.body?.patientId || req.body?.patient_id, 120),
-        patientEmail: sanitizeEmail(req.body?.patientEmail || req.body?.patient_email || user?.email),
-        userId: sanitizeString(user?.id, 120),
-        clinicId: isPatientRole ? null : currentClinicId(user)
-      });
+      if (!isUuid(actorUserId) || !endpoint) {
+        return res.status(400).json({ success: false, error: 'PUSH_UNSUBSCRIBE_SCOPE_INVALID' });
+      }
+      // Look up only the signed-in user's endpoint, never resolve a patient from
+      // user-controlled IDs or email. Idempotent when absent.
+      const { data: owned, error: lookupError } = await supabase
+        .from('push_subscriptions')
+        .select('patient_id')
+        .eq('deployment_env', vertoDeploymentEnv)
+        .eq('user_id', actorUserId)
+        .eq('endpoint', endpoint)
+        .maybeSingle();
+      if (lookupError) return res.status(503).json({ success: false, error: 'PUSH_UNSUBSCRIBE_LOOKUP_FAILED' });
+      if (!owned?.patient_id) return res.json({ success: true });
       const result = await removePatientPushSubscription({
         supabase,
-        patientId: patientIds[0] || '',
+        deploymentEnv: vertoDeploymentEnv,
+        patientId: String(owned.patient_id),
+        actorUserId,
         endpoint
       });
-      if (!result.success) return res.status(500).json({ success: false, error: result.error });
+      if (!result.success) return res.status(503).json({ success: false, error: result.error });
       return res.json({ success: true });
-    } catch (error: any) {
-      console.error('[Push] unsubscribe error:', error?.message || String(error));
+    } catch (_error: any) {
       return res.status(500).json({ success: false, error: 'Erro ao remover inscrição push.' });
     }
   };
@@ -36707,6 +36775,7 @@ async function startServer() {
       }
       const result = await renewPatientPushSubscription({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         renewalToken,
         subscription,
         oldEndpoint,
@@ -40638,6 +40707,7 @@ async function startServer() {
 
       const result = await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail,
         appointment: {
@@ -47164,7 +47234,7 @@ async function startServer() {
       const multipartFile = multipart?.file;
 
       const rawPatientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 100);
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 100);
+      let clinicId = sanitizeString(currentClinicId(req.session.user), 100);
       const uploadedBy = sanitizeString(req.session.user?.id, 120);
       const rawName =
         (rawUploadMode ? decodeUploadHeader(req.headers?.['x-verto-file-name'], 220) : '') ||
@@ -55532,8 +55602,8 @@ async function startServer() {
   };
 
   const checkScheduleConflicts = async (rawInput: any, user: any): Promise<any> => {
-    const clinicId = sanitizeString(rawInput?.clinic_id || rawInput?.clinicId || currentClinicId(user), 120);
-    const organizationId = sanitizeString(rawInput?.organization_id || rawInput?.organizationId || user?.organizationId || user?.organization_id || clinicId, 120);
+    // Never trust browser-supplied clinic or organization IDs for conflict detection.
+    const { clinicId, organizationId } = resolveAuthenticatedCalendarScope(currentClinicId(user), user?.organizationId || user?.organization_id);
     const parsedDates = normalizeConflictInputDates(rawInput);
     const patientId = sanitizeString(rawInput?.patient_id || rawInput?.patientId, 120);
     const professionalIds = Array.from(new Set([
@@ -55909,6 +55979,7 @@ async function startServer() {
     const patient = patientRead.data;
     const row = patient || { id: primaryPatientId };
     const clinicId = sanitizeString(row?.clinic_id || currentClinicId(user), 120);
+
     // Legacy portal profiles can already own a valid patient-photo object while
     // the patient row still lacks the canonical PORTAL media fields. Repair the
     // mismatch once here so later clinic reads remain read-many.
@@ -56356,6 +56427,7 @@ async function startServer() {
       let query = supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata')
+        .eq('deployment_env', deploymentEnv)
         .in('patient_id', patientIds)
         .order('created_at', { ascending: false })
         .limit(Math.min(200, limit * 4 + 1));
@@ -56635,6 +56707,7 @@ async function startServer() {
       const { data: existing, error: existingError } = await supabase
         .from('portal_notifications')
         .select('id, organization_id, clinic_id, patient_id, appointment_id, recipient_user_id, recipient_email, type, scheduled_for, read_at, acknowledged_at, metadata')
+        .eq('deployment_env', deploymentEnv)
         .eq('id', notificationId)
         .limit(1)
         .maybeSingle();
@@ -56663,6 +56736,7 @@ async function startServer() {
           let siblingQuery = supabase
             .from('portal_notifications')
             .select('id, scheduled_for, metadata')
+            .eq('deployment_env', deploymentEnv)
             .eq('patient_id', existing.patient_id)
             .eq('type', existing.type)
             .is('acknowledged_at', null)
@@ -56704,6 +56778,7 @@ async function startServer() {
           ...(acknowledge ? { acknowledged_at: existing.acknowledged_at || now } : {}),
           updated_at: now
         })
+        .eq('deployment_env', deploymentEnv)
         .in('id', targetNotificationIds)
         .select('id, patient_id, appointment_id, type, title, message, read_at, acknowledged_at, sent_at, scheduled_for, created_at, metadata');
       if (error) throw error;
@@ -56872,6 +56947,7 @@ async function startServer() {
         acknowledged_at: now,
         updated_at: now
       })
+      .eq('deployment_env', deploymentEnv)
       .eq('appointment_id', appointmentId)
       .eq('patient_id', patientId);
     if (requestedNotificationId) query = query.eq('id', requestedNotificationId);
@@ -56892,6 +56968,7 @@ async function startServer() {
           read_at: now,
           acknowledged_at: now
         })
+        .eq('deployment_env', deploymentEnv)
         .eq('appointment_id', appointmentId)
         .eq('patient_id', patientId);
       if (requestedNotificationId) fallbackQuery = fallbackQuery.eq('id', requestedNotificationId);
@@ -56948,6 +57025,7 @@ async function startServer() {
           acknowledged_at: now,
           ...(includeUpdatedAt ? { updated_at: now } : {})
         })
+        .eq('deployment_env', deploymentEnv)
         .in('appointment_id', appointmentIds)
         .in('patient_id', patientIds)
         .in('type', reminderTypes)
@@ -57955,12 +58033,35 @@ async function startServer() {
       durationMinutes
     );
     if (selectedOptions.length === 0) return { ok: false, status: 400, error: 'Escolha pelo menos um horário disponível.' };
-    const availabilityResult = await buildPortalRescheduleAvailabilityForAppointment(appointment, user, body);
-    const availableSlots = flattenRescheduleSlotGroups(availabilityResult.data?.days || []);
+
+    // Selected options may come from different navigated weeks. Revalidate each
+    // exact day instead of assuming every option belongs to one request window.
+    const availabilityByDate = new Map<string, PortalRescheduleSlot[]>();
     const validOptions: PortalRescheduleOption[] = [];
-    for (const option of selectedOptions) {
-      const selectedStart = new Date(option.scheduledStart).getTime();
-      const match = availableSlots.find((slot) => Math.abs(new Date(slot.scheduledStart).getTime() - selectedStart) < 60_000);
+    for (const option of selectedOptions.slice(0, PORTAL_RESCHEDULE_MAX_OPTIONS)) {
+      const selectedStartDate = new Date(option.scheduledStart);
+      if (Number.isNaN(selectedStartDate.getTime())) {
+        return { ok: false, status: 400, error: 'Um dos horários selecionados é inválido.' };
+      }
+      const selectedDate = formatDateInAppointmentTimezone(selectedStartDate);
+      if (!availabilityByDate.has(selectedDate)) {
+        const availabilityResult = await buildPortalRescheduleAvailabilityForAppointment(appointment, user, {
+          ...body,
+          dateFrom: selectedDate,
+          date_from: selectedDate,
+          maxDays: 1,
+          max_days: 1
+        });
+        availabilityByDate.set(
+          selectedDate,
+          flattenRescheduleSlotGroups(availabilityResult.data?.days || [])
+        );
+      }
+      const availableSlots = availabilityByDate.get(selectedDate) || [];
+      const selectedStart = selectedStartDate.getTime();
+      const match = availableSlots.find((slot) =>
+        Math.abs(new Date(slot.scheduledStart).getTime() - selectedStart) < 60_000
+      );
       if (!match) {
         return { ok: false, status: 409, error: 'Este horário não está mais disponível. Escolha outra opção.' };
       }
@@ -58012,6 +58113,7 @@ async function startServer() {
       const sentAt = new Date().toISOString();
       if (recipientUserId || recipientEmail) {
         const notificationPayload = cleanObject({
+          deployment_env: deploymentEnv,
           organization_id: isUuid(params.organizationId) ? params.organizationId : clinicBranding.id || clinicId || null,
           clinic_id: clinicBranding.id || (isUuid(clinicId) ? clinicId : null),
           recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -58035,13 +58137,14 @@ async function startServer() {
         });
         const { error } = await supabase
           .from('portal_notifications')
-          .upsert(notificationPayload, { onConflict: 'idempotency_key' });
+          .upsert(notificationPayload, { onConflict: 'deployment_env,idempotency_key' });
         if (error && !isMissingRelationError(error)) {
           console.warn('[PortalReschedule] internal notification skipped:', error.message);
         }
       }
       await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -58083,20 +58186,44 @@ async function startServer() {
       throw error;
     }
     if (!data?.id) return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    const appointmentId = sanitizeString(data.appointment_id, 120);
     const requestOrganizationId = sanitizeString(data.organization_id, 120);
-    const activeClinicId = currentClinicId(user);
-    if (
-      !hasGlobalClinicAccess(user) &&
-      (!isUuid(requestOrganizationId) || !isUuid(activeClinicId) || requestOrganizationId !== activeClinicId)
-    ) {
+    const requestPatientId = sanitizeString(data.patient_id, 120);
+    const activeClinicId = sanitizeString(currentClinicId(user), 120);
+    const globalAccess = hasGlobalClinicAccess(user);
+    if (!isUuid(appointmentId) || !isUuid(requestOrganizationId) || !isUuid(requestPatientId)
+      || (!globalAccess && !isUuid(activeClinicId))) {
       return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
     }
-    const appointmentContext = await fetchPortalAppointmentForUser(data.appointment_id, user, {
-      patientId: data.patient_id,
-      organizationId: requestOrganizationId
-    });
-    if (!appointmentContext.ok) return appointmentContext;
-    return { ok: true, request: data, appointment: (appointmentContext as any).appointment };
+    // Route middleware checks calendar.requests.manage. Scope by persisted clinic;
+    // do not reuse clinical-chart permissions for authorized reception staff.
+    const appointmentResult = await queryPortalAppointmentsWithSchemaFallback(
+      (columns) => {
+        let query = supabase.from('appointments').select(columns).eq('id', appointmentId);
+        if (!globalAccess) query = query.eq('clinic_id', activeClinicId);
+        return query.limit(1).maybeSingle();
+      },
+      'appointment_admin_action_request'
+    );
+    if (appointmentResult.error) {
+      if (hasMissingFinancialSchema(appointmentResult.error)) {
+        return { ok: false, status: 503, error: 'Agenda indisponível.' };
+      }
+      throw appointmentResult.error;
+    }
+    const appointment = appointmentResult.data;
+    if (!appointment?.id || !canManageAppointmentActionInClinic({
+      activeClinicId,
+      appointmentClinicId: appointment.clinic_id,
+      requestOrganizationId,
+      appointmentOrganizationId: appointment.organization_id || appointment.clinic_id,
+      requestPatientId,
+      appointmentPatientId: appointment.patient_id,
+      globalAccess
+    })) {
+      return { ok: false, status: 404, error: 'Solicitação não encontrada.' };
+    }
+    return { ok: true, request: data, appointment };
   };
 
   const mapAuditLogToHumanHistory = (row: any) => ({
@@ -58289,6 +58416,7 @@ async function startServer() {
         const notificationResult = await supabase
           .from('portal_notifications')
           .select('appointment_id')
+          .eq('deployment_env', deploymentEnv)
           .in('patient_id', patientIds)
           .is('acknowledged_at', null)
           .limit(Math.min(200, limit * 4));
@@ -58520,26 +58648,39 @@ async function startServer() {
       if (!persistedAppointment || normalizeOperationalAppointmentStatus(persistedAppointment.status) !== 'CONFIRMED') {
         return res.status(500).json({ success: false, error: 'Não foi possível confirmar a persistência da resposta.' });
       }
-      const notificationUpdate = await acknowledgePortalAppointmentNotifications({
-        appointment: persistedAppointment,
-        user: req.session.user,
-        action: 'confirmed_by_family',
-        notificationId: req.body?.notificationId || req.body?.notification_id
-      });
-      if (!notificationUpdate.ok) {
-        return res.status((notificationUpdate as any).status || 404).json(portalSafeError((notificationUpdate as any).status || 404));
+      // Confirmation has already been persisted. Secondary effects must not
+      // produce a false HTTP 500/404 after durable confirmation.
+      let notificationIds: string[] = [];
+      try {
+        const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+          appointment: persistedAppointment,
+          user: req.session.user,
+          action: 'confirmed_by_family',
+          notificationId: req.body?.notificationId || req.body?.notification_id
+        });
+        if (notificationUpdate.ok) {
+          notificationIds = notificationUpdate.notificationIds;
+        } else {
+          console.warn('[PortalAppointments] confirmation persisted; notification acknowledgement rejected:', (notificationUpdate as any).status);
+        }
+      } catch (notificationError: any) {
+        console.warn('[PortalAppointments] confirmation persisted; notification acknowledgement failed:', notificationError?.message || String(notificationError));
       }
-      await writeAppointmentStatusAuditLog({
-        organizationId: appointment.organization_id || appointment.clinic_id,
-        appointmentId: appointment.id,
-        patientId: appointment.patient_id,
-        action: 'CONFIRMED_BY_RESPONSIBLE',
-        previousStatus,
-        newStatus: 'CONFIRMED',
-        performedBy: actorId,
-        performedByRole: actorRole,
-        metadata: { source: 'portal' }
-      });
+      try {
+        await writeAppointmentStatusAuditLog({
+          organizationId: appointment.organization_id || appointment.clinic_id,
+          appointmentId: appointment.id,
+          patientId: appointment.patient_id,
+          action: 'CONFIRMED_BY_RESPONSIBLE',
+          previousStatus,
+          newStatus: 'CONFIRMED',
+          performedBy: actorId,
+          performedByRole: actorRole,
+          metadata: { source: 'portal' }
+        });
+      } catch (auditError: any) {
+        console.warn('[PortalAppointments] confirmation persisted; audit log failed:', auditError?.message || String(auditError));
+      }
       void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_confirmed_by_responsible');
       const serializedAppointment = await serializePortalAppointmentForFamilyView(persistedAppointment);
       return res.json(buildPortalAppointmentActionResult({
@@ -58547,10 +58688,24 @@ async function startServer() {
         appointment: serializedAppointment,
         message: 'Sessão confirmada.',
         user: req.session.user,
-        notificationIds: notificationUpdate.notificationIds
+        notificationIds
       }));
     } catch (error: any) {
       console.warn('[PortalAppointments] confirm failed:', error?.message || String(error));
+      const transientCode = sanitizeString(error?.code, 40).toUpperCase();
+      const transientStatus = Number(error?.status || error?.statusCode || 0);
+      const transientMessage = sanitizeString(error?.message || error?.details || '', 600).toUpperCase();
+      const isTransient = [408, 425, 429, 502, 503, 504].includes(transientStatus)
+        || ['PGRST000','PGRST001','PGRST002','PGRST003','08000','08001','08003','08004','08006','08007','08P01','40001','40P01','53300','53400','57P01','57P02','57P03'].includes(transientCode)
+        || /TIMEOUT|TIMED OUT|ECONNRESET|ECONNREFUSED|CONNECTION (?:RESET|REFUSED)|DATABASE (?:UNAVAILABLE|STARTING)|UPSTREAM UNAVAILABLE/.test(transientMessage);
+      if (isTransient) {
+        return res.status(503).json({
+          success: false,
+          code: 'APPOINTMENT_CONFIRMATION_TEMPORARILY_UNAVAILABLE',
+          retryable: true,
+          error: 'A confirmação está temporariamente indisponível. Tente novamente em instantes.'
+        });
+      }
       return res.status(500).json(portalSafeError(500));
     }
   });
@@ -59710,6 +59865,7 @@ async function startServer() {
       const limit = Math.min(50, Math.max(1, Math.round(Number(req.query?.limit || 30) || 30)));
       const { data, error } = await supabase.from('clinic_announcements')
         .select('id,clinic_id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at,updated_at')
+        .eq('deployment_env', deploymentEnv)
         .eq('clinic_id', clinicId).order('created_at', { ascending: false }).limit(limit);
       if (error) { if (isMissingRelationError(error)) return res.status(503).json({ success:false, error:'O módulo de avisos ainda não foi ativado no banco.' }); throw error; }
       return res.json({ success:true, data:data || [] });
@@ -59743,8 +59899,9 @@ async function startServer() {
       const selectedIds=Array.from(new Set((Array.isArray(req.body?.patientIds)?req.body.patientIds:[]).map((v:unknown)=>sanitizeString(v,120)).filter((v:string)=>isUuid(v)))).slice(0,500) as string[];
       if(audienceMode==='SELECTED' && !selectedIds.length) return res.status(400).json({success:false,error:'Selecione ao menos um paciente.'});
       const idempotencyKey=sanitizeString(req.body?.idempotencyKey,120) || crypto.randomUUID();
+      const environmentScopedIdempotencyKey=`${deploymentEnv}:${idempotencyKey.replace(/^(staging|production):/i,'')}`;
       const announcementSelect='id,category,title,message,event_date,audience_mode,recipient_count,push_sent_count,push_failed_count,status,scheduled_for,sent_at,created_at';
-      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('clinic_id',clinicId).eq('idempotency_key',idempotencyKey).limit(1).maybeSingle();
+      const existing=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('clinic_id',clinicId).eq('idempotency_key',environmentScopedIdempotencyKey).limit(1).maybeSingle();
       if(!existing.error && existing.data) return res.json({success:true,data:existing.data,duplicate:true});
       if(existing.error && !isMissingRelationError(existing.error)) throw existing.error;
       const context = req.authorizationContext as ResolvedClinicCapabilityContext | undefined;
@@ -59808,18 +59965,18 @@ async function startServer() {
       const deliveryRow=delivery.data && typeof delivery.data==='object' && !Array.isArray(delivery.data) ? delivery.data : {};
       const announcementId=sanitizeString(deliveryRow?.announcement_id || requestedAnnouncementId,120);
       if(deliveryRow?.created===false){
-        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
+        const duplicate=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).limit(1).maybeSingle();
         if(!duplicate.error&&duplicate.data)return res.json({success:true,data:duplicate.data,duplicate:true});
       }
 
       if(normalizedScheduledFor){
-        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+        const scheduled=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
         if(scheduled.error) throw scheduled.error;
         return res.status(201).json({success:true,data:scheduled.data,scheduled:true});
       }
 
       const dispatched=await dispatchClinicAnnouncementNow(announcementId,'api_immediate');
-      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('id',announcementId).eq('clinic_id',clinicId).single();
+      const final=await supabase.from('clinic_announcements').select(announcementSelect).eq('deployment_env',deploymentEnv).eq('id',announcementId).eq('clinic_id',clinicId).single();
       if(final.error) throw final.error;
       return res.status(201).json({
         success:true,
@@ -65357,6 +65514,45 @@ async function startServer() {
     };
   };
 
+  const canonicalizeTissIdempotencyValue = (value: any): any => {
+    if (Array.isArray(value)) return value.map(canonicalizeTissIdempotencyValue);
+    if (value && typeof value === 'object') {
+      return Object.keys(value).sort().reduce((acc: Record<string, any>, key) => {
+        if (value[key] !== undefined) acc[key] = canonicalizeTissIdempotencyValue(value[key]);
+        return acc;
+      }, {});
+    }
+    return value;
+  };
+
+  const buildTissAtomicIdempotencyKey = (params: { organizationId: string; officialDocumentId: string; actorId: string; operation: string; payload?: Record<string, any> | null; }) =>
+    crypto.createHash('sha256').update(JSON.stringify(canonicalizeTissIdempotencyValue({
+      organizationId: params.organizationId,
+      officialDocumentId: params.officialDocumentId,
+      actorId: params.actorId,
+      operation: params.operation,
+      payload: params.payload || {}
+    })), 'utf8').digest('hex');
+
+  const applyTissOfficialTrackingMutation = async (params: {
+    organizationId: string;
+    officialDocumentId: string;
+    actorId: string;
+    operation: 'mark_sent' | 'register_return' | 'guide_settlement' | 'appeal_update';
+    payload: Record<string, any>;
+  }) => {
+    const { data, error } = await supabase.rpc('apply_tiss_official_tracking_mutation_v1', {
+      p_organization_id: params.organizationId,
+      p_official_document_id: params.officialDocumentId,
+      p_actor_id: params.actorId,
+      p_operation: params.operation,
+      p_idempotency_key: buildTissAtomicIdempotencyKey(params),
+      p_payload: params.payload
+    });
+    if (error) throw error;
+    return data && typeof data === 'object' ? data : {};
+  };
+
   const refreshTissOfficialDocumentTrackingTotals = async (params: {
     organizationId: string;
     officialDocumentId: string;
@@ -68744,44 +68940,29 @@ async function startServer() {
       const bundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
       if (!bundle.ok) return res.status(bundle.status).json({ success: false, code: bundle.code, error: bundle.error });
       const sentAtInput = sanitizeString(req.body?.sentAt || req.body?.sent_at || req.body?.sentDate || req.body?.sent_date, 80);
-      const sentAt = sentAtInput ? new Date(sentAtInput).toISOString() : new Date().toISOString();
       const sentChannel = sanitizeString(req.body?.sentChannel || req.body?.sent_channel || 'portal', 80);
       const operatorProtocol = sanitizeString(req.body?.operatorProtocol || req.body?.operator_protocol || req.body?.protocol, 160);
       const notes = sanitizeTextField(req.body?.notes || req.body?.observations, 1200);
       const expectedReturnDate = sanitizeString(req.body?.expectedReturnDate || req.body?.expected_return_date, 40).slice(0, 10);
-      const previousStatus = sanitizeString(bundle.tracking?.status, 80) || 'generated';
-      const nextStatus = operatorProtocol ? 'protocol_registered' : 'sent_to_operator';
-      const updated = await supabase
-        .from('tiss_official_document_tracking')
-        .update(cleanObject({
-          status: nextStatus,
-          sent_at: sentAt,
-          sent_channel: sentChannel || null,
-          operator_protocol: operatorProtocol || null,
-          sent_registered_by: isUuid(userId) ? userId : null,
-          expected_return_date: expectedReturnDate || null,
-          notes: notes || bundle.tracking?.notes || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', bundle.tracking.id)
-        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      await recordTissOfficialTrackingEvent({
+      const atomicPayload = cleanObject({
+        sent_at: sentAtInput ? new Date(sentAtInput).toISOString() : undefined,
+        sent_channel: sentChannel || 'portal',
+        operator_protocol: operatorProtocol || null,
+        expected_return_date: expectedReturnDate || null,
+        notes: notes || undefined
+      });
+      await applyTissOfficialTrackingMutation({
         organizationId,
         officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        userId,
-        eventType: operatorProtocol ? 'official_xml_protocol_registered' : 'official_xml_marked_sent',
-        previousStatus,
-        newStatus: nextStatus,
-        metadata: { sentAt, sentChannel, operatorProtocol: operatorProtocol || null, notes: notes || null }
+        actorId: userId,
+        operation: 'mark_sent',
+        payload: atomicPayload
       });
       const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...refreshed, tracking: updated.data || bundle.tracking }),
+        data: serializeTissOfficialTrackingBundle(refreshed),
         message: operatorProtocol ? 'Protocolo da operadora registrado.' : 'Envio manual à operadora registrado.'
       });
     } catch (error: any) {
@@ -68832,66 +69013,49 @@ async function startServer() {
           error: 'Valor pago e valor glosado não podem ultrapassar o valor enviado.'
         });
       }
+      if (nextStatus === 'partially_paid' && paidAmount <= 0) {
+        return res.status(422).json({ success: false, code: 'TISS_OFFICIAL_RETURN_AMOUNTS_INVALID', error: 'Retorno parcialmente pago exige valor pago maior que zero.' });
+      }
       const returnedAtInput = sanitizeString(req.body?.returnedAt || req.body?.returned_at || req.body?.returnDate || req.body?.return_date, 80);
-      const returnedAt = returnedAtInput ? new Date(returnedAtInput).toISOString() : new Date().toISOString();
+      const returnedAt = returnedAtInput ? new Date(returnedAtInput).toISOString() : undefined;
       const notes = sanitizeTextField(req.body?.notes || req.body?.observations, 1200);
-      const previousStatus = sanitizeString(bundle.tracking?.status, 80) || 'generated';
-      if (nextStatus === 'paid' || nextStatus === 'glossed' || nextStatus === 'denied_or_rejected') {
-        const guideUpdates = (bundle.guides || []).map((guide: any) => {
-          const sent = normalizeNonNegativeCents(guide?.sent_amount_cents);
-          return {
-            id: guide.id,
-            status: nextStatus === 'paid' ? 'paid' : nextStatus === 'glossed' ? 'glossed' : 'rejected',
-            paid_amount_cents: nextStatus === 'paid' ? sent : 0,
-            glossed_amount_cents: nextStatus === 'paid' ? 0 : sent,
-            pending_amount_cents: 0,
-            return_date: returnedAt.slice(0, 10),
-            payment_date: nextStatus === 'paid' ? returnedAt.slice(0, 10) : null,
-            updated_at: new Date().toISOString()
-          };
-        });
-        for (const guideUpdate of guideUpdates) {
-          await supabase
-            .from('tiss_official_guide_tracking')
-            .update(cleanObject(guideUpdate))
-            .eq('organization_id', organizationId)
-            .eq('id', guideUpdate.id);
+      const guideSettlements: any[] = [];
+      if ((nextStatus === 'partially_paid' || nextStatus === 'under_review') && (paidAmount > 0 || glossedAmount > 0)) {
+        let remainingPaid = paidAmount;
+        let remainingGlossed = glossedAmount;
+        const guides = [...(bundle.guides || [])].sort((left: any, right: any) => sanitizeString(left?.id, 120).localeCompare(sanitizeString(right?.id, 120)));
+        for (const guide of guides) {
+          const sentAmount = normalizeNonNegativeCents(guide?.sent_amount_cents);
+          const guidePaid = Math.min(sentAmount, remainingPaid);
+          remainingPaid -= guidePaid;
+          const guideGlossed = Math.min(Math.max(0, sentAmount - guidePaid), remainingGlossed);
+          remainingGlossed -= guideGlossed;
+          if (guidePaid > 0 || guideGlossed > 0) {
+            guideSettlements.push(cleanObject({
+              guide_id: guide.id,
+              paid_amount_cents: guidePaid,
+              glossed_amount_cents: guideGlossed,
+              return_date: returnedAt ? returnedAt.slice(0, 10) : undefined,
+              payment_date: guidePaid > 0 && returnedAt ? returnedAt.slice(0, 10) : undefined
+            }));
+          }
+        }
+        if (remainingPaid > 0 || remainingGlossed > 0) {
+          return res.status(422).json({ success: false, code: 'TISS_OFFICIAL_RETURN_AMOUNTS_INVALID', error: 'Os valores informados não cabem nas guias deste lote.' });
         }
       }
-      const pendingAmount = Math.max(0, totalSentAmount - paidAmount - glossedAmount);
-      const updated = await supabase
-        .from('tiss_official_document_tracking')
-        .update(cleanObject({
-          status: nextStatus,
-          returned_at: returnedAt,
-          return_status: nextStatus,
-          return_registered_by: isUuid(userId) ? userId : null,
-          total_sent_amount_cents: totalSentAmount,
-          total_paid_amount_cents: paidAmount,
-          total_glossed_amount_cents: glossedAmount,
-          total_pending_amount_cents: pendingAmount,
-          notes: notes || bundle.tracking?.notes || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', bundle.tracking.id)
-        .select(TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      await recordTissOfficialTrackingEvent({
+      await applyTissOfficialTrackingMutation({
         organizationId,
         officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        userId,
-        eventType: 'official_xml_return_registered',
-        previousStatus,
-        newStatus: nextStatus,
-        metadata: { returnedAt, paidAmountCents: paidAmount, glossedAmountCents: glossedAmount, pendingAmountCents: pendingAmount, notes: notes || null }
+        actorId: userId,
+        operation: 'register_return',
+        payload: cleanObject({ return_status: nextStatus, returned_at: returnedAt, notes: notes || undefined, guide_settlements: guideSettlements })
       });
       const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...refreshed, tracking: updated.data || bundle.tracking }),
+        data: serializeTissOfficialTrackingBundle(refreshed),
         message: 'Retorno da operadora registrado.'
       });
     } catch (error: any) {
@@ -68922,7 +69086,8 @@ async function startServer() {
         });
       }
       const statusInput = sanitizeString(req.body?.status, 80);
-      let nextStatus = statusInput && OFFICIAL_XML_GUIDE_TRACKING_STATUSES.has(statusInput)
+      const supportedStatus = new Set(['under_review', 'paid', 'partially_paid', 'glossed', 'rejected']);
+      const nextStatus = supportedStatus.has(statusInput)
         ? statusInput
         : glossedAmount > 0
           ? 'glossed'
@@ -68931,60 +69096,30 @@ async function startServer() {
             : paidAmount > 0
               ? 'partially_paid'
               : 'under_review';
-      if (!OFFICIAL_XML_GUIDE_TRACKING_STATUSES.has(nextStatus)) nextStatus = 'under_review';
-      const previousStatus = sanitizeString(guide.status, 80) || 'sent';
-      const pendingAmount = Math.max(0, sentAmount - paidAmount - glossedAmount);
-      const updated = await supabase
-        .from('tiss_official_guide_tracking')
-        .update(cleanObject({
-          status: nextStatus,
+      const mutation = await applyTissOfficialTrackingMutation({
+        organizationId,
+        officialDocumentId: documentId,
+        actorId: userId,
+        operation: 'guide_settlement',
+        payload: cleanObject({
+          guide_id: guide.id,
           paid_amount_cents: paidAmount,
           glossed_amount_cents: glossedAmount,
-          pending_amount_cents: pendingAmount,
+          status: nextStatus,
           denial_reason: sanitizeTextField(req.body?.denialReason || req.body?.denial_reason, 800) || null,
           operator_reason_code: sanitizeString(req.body?.operatorReasonCode || req.body?.operator_reason_code, 120) || null,
           internal_note: sanitizeTextField(req.body?.internalNote || req.body?.internal_note || req.body?.notes, 1200) || null,
           return_date: sanitizeString(req.body?.returnDate || req.body?.return_date, 40).slice(0, 10) || null,
           payment_date: sanitizeString(req.body?.paymentDate || req.body?.payment_date, 40).slice(0, 10) || null,
-          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', guide.id)
-        .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      const eventType = nextStatus === 'glossed'
-        ? 'official_xml_guide_glossed'
-        : nextStatus === 'paid'
-          ? 'official_xml_guide_paid'
-          : nextStatus === 'partially_paid'
-            ? 'official_xml_guide_partially_paid'
-            : nextStatus === 'rejected'
-              ? 'official_xml_guide_rejected'
-              : 'official_xml_return_registered';
-      await recordTissOfficialTrackingEvent({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        guideTrackingId: guide.id,
-        preGuideId: guide.pre_guide_id,
-        userId,
-        eventType,
-        previousStatus,
-        newStatus: nextStatus,
-        metadata: { paidAmountCents: paidAmount, glossedAmountCents: glossedAmount, pendingAmountCents: pendingAmount }
+          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || null
+        })
       });
-      const totals = await refreshTissOfficialDocumentTrackingTotals({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        fallbackSentAmount: bundle.document?.total_amount_cents
-      });
+      const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...bundle, tracking: totals.tracking, guides: totals.guides }),
-        guide: serializeTissOfficialGuideTracking(updated.data),
+        data: serializeTissOfficialTrackingBundle(refreshed),
+        guide: serializeTissOfficialGuideTracking(mutation?.guide),
         message: 'Acompanhamento da guia atualizado.'
       });
     } catch (error: any) {
@@ -69007,71 +69142,92 @@ async function startServer() {
       const appealStatusInput = sanitizeString(req.body?.appealStatus || req.body?.appeal_status || 'appeal_prepared', 80);
       const allowedAppealStatus = new Set(['appeal_pending', 'appeal_prepared', 'appeal_sent', 'appeal_accepted', 'appeal_rejected']);
       const appealStatus = allowedAppealStatus.has(appealStatusInput) ? appealStatusInput : 'appeal_prepared';
-      const nextGuideStatus = appealStatus === 'appeal_sent'
-        ? 'appeal_sent'
-        : appealStatus === 'appeal_accepted'
-          ? 'appeal_accepted'
-          : appealStatus === 'appeal_rejected'
-            ? 'appeal_rejected'
-            : 'appeal_pending';
-      const previousStatus = sanitizeString(guide.status, 80) || 'glossed';
-      const updated = await supabase
-        .from('tiss_official_guide_tracking')
-        .update(cleanObject({
-          status: nextGuideStatus,
+      const appealSentAtInput = sanitizeString(req.body?.appealSentAt || req.body?.appeal_sent_at, 80);
+      const mutation = await applyTissOfficialTrackingMutation({
+        organizationId,
+        officialDocumentId: documentId,
+        actorId: userId,
+        operation: 'appeal_update',
+        payload: cleanObject({
+          guide_id: guide.id,
           appeal_status: appealStatus,
-          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || guide.appeal_deadline || null,
-          appeal_sent_at: appealStatus === 'appeal_sent'
-            ? (sanitizeString(req.body?.appealSentAt || req.body?.appeal_sent_at, 80) ? new Date(req.body?.appealSentAt || req.body?.appeal_sent_at).toISOString() : new Date().toISOString())
-            : guide.appeal_sent_at || null,
+          appeal_deadline: sanitizeString(req.body?.appealDeadline || req.body?.appeal_deadline, 40).slice(0, 10) || undefined,
+          appeal_sent_at: appealStatus === 'appeal_sent' && appealSentAtInput ? new Date(appealSentAtInput).toISOString() : undefined,
           appeal_result: sanitizeString(req.body?.appealResult || req.body?.appeal_result, 80) || null,
-          appeal_note: sanitizeTextField(req.body?.appealNote || req.body?.appeal_note || req.body?.notes, 1200) || null,
-          updated_at: new Date().toISOString()
-        }))
-        .eq('organization_id', organizationId)
-        .eq('id', guide.id)
-        .select(TISS_OFFICIAL_GUIDE_TRACKING_SELECT)
-        .maybeSingle();
-      if (updated.error) throw updated.error;
-      const eventType = appealStatus === 'appeal_sent'
-        ? 'official_xml_appeal_sent'
-        : appealStatus === 'appeal_accepted' || appealStatus === 'appeal_rejected'
-          ? 'official_xml_appeal_resolved'
-          : 'official_xml_appeal_prepared';
-      await recordTissOfficialTrackingEvent({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        guideTrackingId: guide.id,
-        preGuideId: guide.pre_guide_id,
-        userId,
-        eventType,
-        previousStatus,
-        newStatus: nextGuideStatus,
-        metadata: { appealStatus }
+          appeal_note: sanitizeTextField(req.body?.appealNote || req.body?.appeal_note || req.body?.notes, 1200) || null
+        })
       });
-      const totals = await refreshTissOfficialDocumentTrackingTotals({
-        organizationId,
-        officialDocumentId: documentId,
-        officialTrackingId: bundle.tracking.id,
-        fallbackSentAmount: bundle.document?.total_amount_cents,
-        preferredStatus: appealStatus === 'appeal_sent'
-          ? 'appeal_sent'
-          : appealStatus === 'appeal_accepted'
-            ? 'appeal_accepted'
-            : appealStatus === 'appeal_rejected'
-              ? 'appeal_rejected'
-              : 'appeal_prepared'
-      });
+      const refreshed = await ensureTissOfficialDocumentTracking({ organizationId, documentId, userId });
+      if (!refreshed.ok) return res.status(refreshed.status).json({ success: false, code: refreshed.code, error: refreshed.error });
       return sendNoStoreJson(res, {
         success: true,
-        data: serializeTissOfficialTrackingBundle({ ...bundle, tracking: totals.tracking, guides: totals.guides }),
-        guide: serializeTissOfficialGuideTracking(updated.data),
+        data: serializeTissOfficialTrackingBundle(refreshed),
+        guide: serializeTissOfficialGuideTracking(mutation?.guide),
         message: 'Recurso de glosa registrado.'
       });
     } catch (error: any) {
       console.warn('[TissOfficialTracking] appeal failed:', error?.message || String(error));
       return res.status(500).json({ success: false, error: 'Não foi possível registrar o recurso de glosa agora.' });
+    }
+  });
+
+  app.post('/api/tiss/official-documents/:documentId/reissue', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicModule('insurance_tiss'), requireClinicCapability('billing.xml.generate'), async (req: any, res) => {
+    try {
+      if (!enforcePayloadLimit(req, res, 16 * 1024, 'reemissão de XML TISS oficial')) return;
+      const organizationId = sanitizeString(currentClinicId(req.session.user), 120);
+      const documentId = sanitizeString(req.params.documentId, 120);
+      const userId = sanitizeString(req.session.user?.id, 120);
+      const reason = sanitizeTextField(req.body?.reason || req.body?.reissueReason || req.body?.reissue_reason, 1200);
+      if (!isUuid(organizationId) || !isUuid(documentId) || !isUuid(userId)) return res.status(400).json(payerSafeError(400));
+      if (reason.length < 8) return res.status(400).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_REASON_REQUIRED', error: 'Informe uma justificativa com pelo menos 8 caracteres para reemitir o XML.' });
+      const idempotencyKey = buildTissAtomicIdempotencyKey({ organizationId, officialDocumentId: documentId, actorId: userId, operation: 'reissue', payload: { reason } });
+      const replay = await supabase.from('tiss_official_tracking_events').select('metadata').eq('organization_id', organizationId).eq('official_document_id', documentId).eq('event_type', 'official_xml_replaced').eq('idempotency_key', idempotencyKey).limit(1).maybeSingle();
+      if (replay.error && !hasMissingFinancialSchema(replay.error) && !isMissingRelationError(replay.error)) throw replay.error;
+      const replayDocumentId = sanitizeString(replay.data?.metadata?.replacement_document_id, 120);
+      if (isUuid(replayDocumentId)) {
+        const replayDocument = await supabase.from('tiss_official_documents').select(TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT).eq('organization_id', organizationId).eq('id', replayDocumentId).maybeSingle();
+        if (replayDocument.error) throw replayDocument.error;
+        if (replayDocument.data) {
+          const replayBundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId: replayDocumentId, userId });
+          return sendNoStoreJson(res, { success: true, data: { ...serializeTissOfficialDocument(replayDocument.data, true), tracking: replayBundle.ok ? serializeTissOfficialTracking(replayBundle.tracking) : null, guideTracking: replayBundle.ok ? (replayBundle.guides || []).map(serializeTissOfficialGuideTracking).filter(Boolean) : [], reissueOfOfficialDocumentId: documentId }, idempotentReplay: true, message: 'XML TISS oficial reemitido como novo documento. O documento anterior foi preservado.' });
+        }
+      }
+      const original = await supabase.from('tiss_official_documents').select(TISS_OFFICIAL_DOCUMENT_DETAIL_SELECT).eq('organization_id', organizationId).eq('id', documentId).eq('status', 'validated').maybeSingle();
+      if (original.error) throw original.error;
+      if (!original.data) return res.status(404).json(payerSafeError(404));
+      const preGuideIds = Array.isArray(original.data.generated_from_pre_guide_ids) ? original.data.generated_from_pre_guide_ids.map((id: unknown) => sanitizeString(id, 120)).filter((id: string) => isUuid(id)) : [];
+      if (preGuideIds.length === 0) return res.status(409).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_PRE_GUIDES_MISSING', error: 'O documento não possui Pré-guias válidas para reemissão.' });
+      const preGuideLoad = await loadTissPreGuidesSchemaSafe({ organizationId, preGuideIds });
+      if (!preGuideLoad.ok) return res.status(preGuideLoad.status).json({ success: false, code: preGuideLoad.code, error: preGuideLoad.error, diagnostics: preGuideLoad.diagnostics });
+      const preGuideRows = preGuideLoad.data || [];
+      if (preGuideRows.length !== preGuideIds.length) return res.status(409).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_PRE_GUIDE_SCOPE_MISMATCH', error: 'Uma ou mais Pré-guias do documento anterior não estão mais disponíveis nesta clínica.' });
+      const preGuides = preGuideRows.map((row: any) => serializeTissPreGuide(row));
+      const preGuideVersions = Object.fromEntries(preGuideRows.map((row: any) => [String(row.id), row.updated_at]));
+      let batchNumber = deriveOfficialTissBatchNumber(idempotencyKey);
+      if (batchNumber === sanitizeString(original.data.batch_number, 24)) batchNumber = deriveOfficialTissBatchNumber(crypto.createHash('sha256').update(`${idempotencyKey}:replacement`, 'utf8').digest('hex'));
+      const built = await generateAndValidateOfficialTissDocument({
+        preGuides,
+        payerId: sanitizeString(original.data.payer_id, 120),
+        competenceMonth: sanitizeString(original.data.competence_month, 40),
+        timeZone: currentClinicTimeZone(req.session.user),
+        batchNumber,
+        generatedBy: userId,
+        communicationVersion: officialTissStrategy.communicationVersion,
+        contentStructureVersion: officialTissStrategy.contentStructureVersion,
+        tussVersion: officialTissStrategy.tussVersion,
+        generatedAt: new Date().toISOString()
+      });
+      if (!built.ok) return res.status(built.code === 'TISS_OFFICIAL_XSD_VALIDATION_FAILED' ? 422 : 409).json({ success: false, code: built.code, error: built.message, issues: built.issues || [] });
+      const rpc = await supabase.rpc('reissue_tiss_official_document_v1', { p_organization_id: organizationId, p_replaced_document_id: documentId, p_actor_id: userId, p_idempotency_key: idempotencyKey, p_payload: { xml_content: built.generated.xml, xml_hash: built.generated.xmlHash, batch_number: built.generated.batchNumber, pre_guide_versions: preGuideVersions, validation_summary: built.generated.validationSummary, reason } });
+      if (rpc.error) throw rpc.error;
+      const mutation = rpc.data && typeof rpc.data === 'object' ? rpc.data : {};
+      const replacementId = sanitizeString(mutation?.document?.id, 120);
+      if (!isUuid(replacementId)) throw new Error('TISS_OFFICIAL_REISSUE_EMPTY');
+      const replacementBundle = await ensureTissOfficialDocumentTracking({ organizationId, documentId: replacementId, userId });
+      return sendNoStoreJson(res, { success: true, data: { ...serializeTissOfficialDocument(mutation.document, true), tracking: replacementBundle.ok ? serializeTissOfficialTracking(replacementBundle.tracking) : serializeTissOfficialTracking(mutation?.tracking), guideTracking: replacementBundle.ok ? (replacementBundle.guides || []).map(serializeTissOfficialGuideTracking).filter(Boolean) : [], reissueOfOfficialDocumentId: documentId }, idempotentReplay: Boolean(mutation?.idempotentReplay), message: 'XML TISS oficial reemitido como novo documento. O documento anterior foi preservado.' });
+    } catch (error: any) {
+      console.warn('[TissOfficial] reissue failed:', error?.message || String(error));
+      return res.status(500).json({ success: false, code: 'TISS_OFFICIAL_REISSUE_FAILED', error: 'Não foi possível reemitir o XML TISS oficial agora.' });
     }
   });
 
@@ -73400,6 +73556,12 @@ async function startServer() {
     const professionalId = sanitizeString(source?.professionalId || source?.professional_id, 120);
     const payerId = sanitizeString(source?.payerId || source?.payer_id, 120);
     const serviceType = sanitizeString(source?.serviceType || source?.service_type, 120);
+    const plan = sanitizeString(source?.plan || source?.insurancePlanName || source?.insurance_plan_name, 160).trim();
+    const financialContextRaw = sanitizeString(source?.financialContextType || source?.financial_context_type || source?.billingMode || source?.billing_mode, 80);
+    const normalizedFinancialContext = normalizeAppointmentFinancialContextType(financialContextRaw) ||
+      (financialContextRaw.trim().toUpperCase() === 'OTHER' ? 'OTHER' : '');
+    const validPlanBillingModes = new Set(['', 'PRIVATE', 'INSURANCE', 'PACKAGE', 'MONTHLY', 'COURTESY', 'OTHER']);
+    const financialContextType = validPlanBillingModes.has(normalizedFinancialContext) ? normalizedFinancialContext : '';
     const readinessStatus = parseClosureStatusFilter(source?.readinessStatus || source?.readiness_status || source?.status);
     const appointmentStatus = sanitizeString(source?.appointmentStatus || source?.appointment_status, 40).toLowerCase();
     const onlyPending = String(source?.onlyPending || source?.only_pending || '').toLowerCase() === 'true';
@@ -73412,14 +73574,17 @@ async function startServer() {
       (professionalId && !isUuid(professionalId)) ||
       (payerId && !isUuid(payerId));
     const validAppointmentStatuses = ['', 'scheduled', 'pending', 'confirmed', 'completed', 'cancelled', 'canceled', 'no_show', 'missed'];
+    const invalidFinancialContext = Boolean(financialContextRaw && !financialContextType);
     return {
-      ok: range.ok && !invalidUuid && validAppointmentStatuses.includes(appointmentStatus),
+      ok: range.ok && !invalidUuid && !invalidFinancialContext && validAppointmentStatuses.includes(appointmentStatus),
       ...range,
       ...pageParams,
       patientId,
       professionalId,
       payerId,
       serviceType,
+      plan,
+      financialContextType,
       readinessStatus,
       appointmentStatus,
       onlyPending,
@@ -73430,6 +73595,36 @@ async function startServer() {
     };
   };
 
+  const resolveConferenceFinancialPlanPatientIds = async (filters: any, clinicId: string) => {
+    const plan = sanitizeString(filters?.plan, 160).trim();
+    const financialContextType = sanitizeString(filters?.financialContextType, 40).trim().toUpperCase();
+    if (!plan && !financialContextType) return null;
+    const patientIds = new Set<string>();
+    const pageSize = 500;
+    for (let offset = 0; ; offset += pageSize) {
+      let query = supabase
+        .from('patient_financial_plans')
+        .select('patient_id')
+        .eq('organization_id', clinicId)
+        .eq('status', 'ACTIVE')
+        .is('valid_until', null)
+        .order('patient_id', { ascending: true });
+      if (filters.patientId) query = query.eq('patient_id', filters.patientId);
+      if (filters.payerId) query = query.eq('payer_id', filters.payerId);
+      if (financialContextType) query = query.eq('billing_mode', financialContextType);
+      if (plan) query = query.ilike('insurance_plan_name', plan);
+      const { data, error } = await query.range(offset, offset + pageSize - 1);
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      rows.forEach((row: any) => {
+        const patientId = sanitizeString(row?.patient_id, 120);
+        if (isUuid(patientId)) patientIds.add(patientId);
+      });
+      if (rows.length < pageSize) break;
+    }
+    return Array.from(patientIds);
+  };
+
   const applyConferenceFilters = (query: any, filters: any) => {
     let scoped = query;
     if (filters.readinessStatus) scoped = scoped.eq('readiness_status', filters.readinessStatus);
@@ -73437,6 +73632,9 @@ async function startServer() {
     if (filters.onlyReady) scoped = scoped.eq('readiness_status', 'READY');
     if (filters.onlyNotBillable) scoped = scoped.eq('readiness_status', 'NOT_BILLABLE');
     if (filters.patientId) scoped = scoped.eq('patient_id', filters.patientId);
+    if (Array.isArray(filters.financialPlanPatientIds) && filters.financialPlanPatientIds.length > 0) {
+      scoped = scoped.in('patient_id', filters.financialPlanPatientIds);
+    }
     if (filters.professionalId) scoped = scoped.eq('professional_id', filters.professionalId);
     if (filters.payerId) scoped = scoped.eq('payer_id', filters.payerId);
     if (filters.serviceType) scoped = scoped.eq('service_type', filters.serviceType);
@@ -73999,6 +74197,32 @@ async function startServer() {
       const filters = parseConferenceFilters(req.query);
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const financialPlanPatientIds = await resolveConferenceFinancialPlanPatientIds(filters, clinicId);
+      if (financialPlanPatientIds !== null) filters.financialPlanPatientIds = financialPlanPatientIds;
+      if (Array.isArray(financialPlanPatientIds) && financialPlanPatientIds.length === 0) {
+        const emptySummary = buildMonthlyConferenceSummary([]);
+        return sendNoStoreJson(res, {
+          success: true,
+          data: [],
+          rows: [],
+          kpis: emptySummary.kpis,
+          pendingByType: emptySummary.pendingByType,
+          page: filters.page,
+          limit: filters.limit,
+          filters: {
+            from: filters.fromIso,
+            to: filters.toIso,
+            patientId: filters.patientId || null,
+            professionalId: filters.professionalId || null,
+            payerId: filters.payerId || null,
+            serviceType: filters.serviceType || null,
+            plan: filters.plan || null,
+            financialContextType: filters.financialContextType || null,
+            readinessStatus: filters.readinessStatus || null,
+            quickFilter: filters.quickFilter || null
+          }
+        });
+      }
       const queryStartedAt = Date.now();
       const hasQuickFilter = Boolean(filters.quickFilter);
       let pageRows: any[] = [];
@@ -74053,6 +74277,8 @@ async function startServer() {
           professionalId: filters.professionalId || null,
           payerId: filters.payerId || null,
           serviceType: filters.serviceType || null,
+          plan: filters.plan || null,
+          financialContextType: filters.financialContextType || null,
           readinessStatus: filters.readinessStatus || null,
           quickFilter: filters.quickFilter || null
         }
@@ -74070,6 +74296,12 @@ async function startServer() {
       const filters = parseConferenceFilters(req.query);
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const financialPlanPatientIds = await resolveConferenceFinancialPlanPatientIds(filters, clinicId);
+      if (financialPlanPatientIds !== null) filters.financialPlanPatientIds = financialPlanPatientIds;
+      if (Array.isArray(financialPlanPatientIds) && financialPlanPatientIds.length === 0) {
+        const emptySummary = buildMonthlyConferenceSummary([]);
+        return sendNoStoreJson(res, { success: true, data: (emptySummary as any)[summaryKey] || [], kpis: emptySummary.kpis });
+      }
       const queryStartedAt = Date.now();
       const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
       const queryMs = Date.now() - queryStartedAt;
@@ -74268,6 +74500,8 @@ async function startServer() {
       const filters = parseConferenceFilters(req.body?.filters || req.body || {});
       if (!isUuid(clinicId) || !filters.ok) return res.status(400).json(conferenceSafeError(400));
       if (!(await assertConferenceFilterOwnership(filters, clinicId))) return res.status(404).json(conferenceSafeError(404));
+      const financialPlanPatientIds = await resolveConferenceFinancialPlanPatientIds(filters, clinicId);
+      if (financialPlanPatientIds !== null) filters.financialPlanPatientIds = financialPlanPatientIds;
       const requestedFields = Array.isArray(req.body?.fields) ? req.body.fields.map((field: any) => sanitizeString(field, 80)) : [];
       await revalidateClosureChecksForPeriod({
         clinicId,
@@ -74276,7 +74510,9 @@ async function startServer() {
         toIso: filters.toIso,
         source: 'monthly_conference_export'
       });
-      const rows = await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
+      const rows = Array.isArray(filters.financialPlanPatientIds) && filters.financialPlanPatientIds.length === 0
+        ? []
+        : await loadConferenceClosureRows({ clinicId, user: req.session.user, filters, hardLimit: 2000 });
       let hydratedRows = filterHydratedRowsByPrefacturingQuickFilter(
         filterHydratedRowsByTussMissingKind(
           await hydrateConferenceRows(rows, clinicId, req.session.user),
@@ -80648,7 +80884,7 @@ async function startServer() {
 
   const handleAbaV3CollectionRpcError = (res: any, error: any) => {
     const message = sanitizeString(error?.message || '', 700);
-    if (hasMissingFinancialSchema(error) || /record_aba_trial_action_v3|record_aba_trial_revision_v3|record_aba_trial_correction_v3|resolve_aba_session_target_measurement_binding_v1|resolve_aba_behavior_collection_v3|record_aba_behavior_action_v3|start_aba_interval_run_action_v3|record_aba_interval_observation_action_v3|finalize_aba_interval_run_action_v3|get_aba_task_analysis_definition_for_session_v3|record_aba_task_analysis_action_v3|PGRST202|42883|42P01/i.test(message)) {
+    if (hasMissingFinancialSchema(error) || /record_aba_trial_action_v3|record_aba_trial_revision_v3|record_aba_trial_correction_v3|resolve_aba_session_target_measurement_binding_v1|set_aba_session_target_exposure_v3|resolve_aba_behavior_collection_v3|record_aba_behavior_action_v3|start_aba_interval_run_action_v3|record_aba_interval_observation_action_v3|finalize_aba_interval_run_action_v3|get_aba_task_analysis_definition_for_session_v3|record_aba_task_analysis_action_v3|PGRST202|42883|42P01/i.test(message)) {
       return res.status(503).json({ success: false, code: 'ABA_V3_SCHEMA_NOT_READY', error: 'Schema de coleta ABA V3 ainda não aplicado.' });
     }
     if (/CROSS_TENANT|SCOPE_MISMATCH|_SCOPE_INVALID|ACCESS_DENIED/i.test(message)) {
@@ -80683,6 +80919,9 @@ async function startServer() {
     }
     if (/ABA_V3_REVISION_(VOID_TRANSITION_INVALID|RESTORE_REQUIRES_VOID|SUPERSEDE_TRANSITION_INVALID|REPLACEMENT_SELF_REFERENCE|REPLACEMENT_SCOPE_INVALID|REPLACEMENT_NOT_ALLOWED)|ABA_V3_ATOMIC_CORRECTION_/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_REVISION_CONFLICT', error: 'Este registro clínico já possui uma revisão incompatível com a operação solicitada.' });
+    }
+    if (/ABA_V3_EXPOSURE_CONFLICTS_WITH_COLLECTED_TRIALS|ABA_V3_EXPOSURE_REQUIRES_V3_BINDING/i.test(message)) {
+      return res.status(409).json({ success: false, code: 'ABA_V3_EXPOSURE_CONFLICT', conflict: true, error: 'Já existem tentativas para este alvo ou a sessão não usa coleta V3.' });
     }
     if (/IDEMPOTENCY.*CONFLICT|ABA_V3_REVISION_IDEMPOTENCY_CONFLICT/i.test(message)) {
       return res.status(409).json({ success: false, code: 'ABA_V3_IDEMPOTENCY_CONFLICT', conflict: true, error: 'A mesma operação foi reenviada com conteúdo diferente.' });
@@ -80730,6 +80969,59 @@ async function startServer() {
         res.setHeader('Cache-Control', 'private, no-store');
         return res.json({ success: true, data: serializeAbaV3BindingForClient(data) });
       } catch (error: any) {
+        return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
+      }
+    }
+  );
+
+  // Persist exposure state without fabricating an ABA V3 trial.
+  app.post(
+    '/api/aba/v3/target-exposures',
+    requireAbaV3CollectionFeature,
+    checkAuth,
+    requireClinicCapability('aba.trial.record'),
+    checkPatientAccess,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 16 * 1024, 'Exposição de target ABA V3')) return;
+        const patientId = sanitizeString(req.resolvedPatientId || req.body?.patient_id || req.body?.patientId, 120);
+        const organizationId = sanitizeString(req.resolvedPatientClinicId || currentClinicId(req.session.user), 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const sessionId = sanitizeString(req.body?.session_id || req.body?.sessionId, 180);
+        const targetId = sanitizeString(req.body?.target_id || req.body?.targetId, 180);
+        const clientEventId = sanitizeString(req.body?.client_event_id || req.body?.clientEventId, 240);
+        const status = sanitizeString(req.body?.status, 40).toUpperCase();
+        if (!isUuid(patientId) || !isUuid(organizationId) || !isUuid(actorId)
+          || !sessionId || !targetId || !clientEventId || status !== 'NO_OPPORTUNITY') {
+          return res.status(400).json({ success: false, code: 'ABA_V3_EXPOSURE_INVALID', error: 'Estado de exposição ABA V3 inválido.' });
+        }
+        const sessionScope = await resolveAbaSessionReadScope(sessionId, req.session.user);
+        if (!sessionScope.ok) return res.status((sessionScope as any).status || 404).json({ success: false, error: (sessionScope as any).error });
+        if (sanitizeString((sessionScope as any).patientId, 120) !== patientId
+          || sanitizeString((sessionScope as any).clinicId, 120) !== organizationId) {
+          return res.status(403).json({ success: false, code: 'ABA_V3_COLLECTION_SCOPE_DENIED', error: 'Sessão fora do escopo do paciente.' });
+        }
+        const writeScope = await assertAbaSessionCanAcceptClinicalWrite(sessionId, organizationId, req.session.user);
+        if (!writeScope.ok) return res.status(writeScope.status || 409).json({ success: false, error: writeScope.error });
+        const targetReadiness = await assertAbaV3Pr9bTargetReady(organizationId, patientId, targetId);
+        if (!targetReadiness.ok) return res.status(targetReadiness.status || 409).json({ success: false, code: targetReadiness.code, error: targetReadiness.error });
+        const { data, error } = await supabase.rpc('set_aba_session_target_exposure_v3', {
+          p_organization_id: organizationId,
+          p_patient_id: patientId,
+          p_session_id: sessionId,
+          p_target_id: targetId,
+          p_status: 'NO_OPPORTUNITY',
+          p_reason_code: 'NO_OPPORTUNITY_REPORTED',
+          p_reason_text: null,
+          p_actor_id: actorId
+        });
+        if (error) return handleAbaV3CollectionRpcError(res, error);
+        if (!data?.id || data.exposure_status !== 'NO_OPPORTUNITY') {
+          return res.status(503).json({ success: false, code: 'ABA_V3_EXPOSURE_UNCONFIRMED', error: 'Estado de exposição não confirmado no servidor.' });
+        }
+        res.setHeader('Cache-Control', 'private, no-store');
+        return res.json({ success: true, data: { id: data.id, status: data.exposure_status, stateVersion: data.state_version } });
+      } catch (_error: any) {
         return res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
       }
     }
@@ -86296,6 +86588,7 @@ async function startServer() {
     targetById: Map<string, any>,
     programById: Map<string, any>,
     ptsVersionBySessionPlan: Map<string, number>,
+    historyBindingBySessionTarget: Map<string, any>,
   ) => {
     const normalized: any[] = [];
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -86318,6 +86611,8 @@ async function startServer() {
         : sanitizeString(programTargetMatch?.[1], 180);
       const semanticTarget = semanticTargetId ? targetById.get(semanticTargetId) || null : null;
       const semanticProgram = semanticTarget?.program_id ? programById.get(String(semanticTarget.program_id)) || null : null;
+      const historyBinding = sourceKind === 'ABA_TARGET' ? historyBindingBySessionTarget.get(`${sanitizeString(row?.session_id, 180)}::${semanticTargetId}`) || null : null;
+      const historyVersionStatus = sourceKind === 'ABA_TARGET' ? (historyBinding?.program_version_id ? 'VERSION_BOUND' : 'LEGACY_UNVERSIONED') : 'VERSION_BOUND';
       const targetMasteryCriteria = semanticTarget?.mastery_criteria && typeof semanticTarget.mastery_criteria === 'object' && !Array.isArray(semanticTarget.mastery_criteria) && Object.keys(semanticTarget.mastery_criteria).length > 0
         ? semanticTarget.mastery_criteria
         : null;
@@ -86380,8 +86675,11 @@ async function startServer() {
             programMasteryCriteria: programMasteryCriteria || null,
             criterionSource: targetMasteryCriteria ? 'TARGET' : programMasteryCriteria ? 'PROGRAM_INHERITED' : null,
             targetType: semanticTarget?.target_type || null,
-            targetPhase: semanticTarget?.phase || null,
-            programMeasurementType: semanticProgram?.measurement_type || null,
+            targetPhase: sourceKind === 'ABA_TARGET' ? (historyBinding?.target_status_snapshot || null) : (semanticTarget?.phase || null),
+            programMeasurementType: sourceKind === 'ABA_TARGET' ? (historyBinding?.measurement_type_snapshot || null) : (semanticProgram?.measurement_type || null),
+            historyVersionStatus,
+            programVersionId: historyBinding?.program_version_id || null,
+            programVersion: historyBinding?.program_version_snapshot || null,
             sourceFamily: row?.value_details?.source_family || null,
             requiresReview: row?.value_details?.requires_review === true,
             phaseAssignmentId: row?.value_details?.phase_assignment_id || null,
@@ -86489,7 +86787,7 @@ async function startServer() {
       const dateFromIso = dateFrom.toISOString();
       const dateToIso = dateTo.toISOString();
 
-      const [planResult, linkResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult, taskReviewResult] = await Promise.all([
+      const [planResult, linkResult, supervisionResult, programResult, targetResult, snapshotResult, definitionResult, observationResult, contributionResult, phaseResult, ptsContextResult, taskReviewResult] = await Promise.all([
         supabase
           .from('patient_therapeutic_plans')
           .select('id,organization_id,clinic_id,patient_id,mode,specialty,responsible_professional_id,participant_professional_ids,participant_specialties,common_objectives,specialty_objectives,pts_payload,pts_schema_version,review_due_date,last_reviewed_at,status,edit_version,created_at,updated_at')
@@ -86504,6 +86802,10 @@ async function startServer() {
           .eq('patient_id', patientId)
           .eq('status', 'active')
           .limit(20),
+        supabase
+          .from('clinical_supervision_links')
+          .select('clinic_id,patient_id,supervisor_user_id,supervised_user_id,status')
+          .eq('clinic_id', clinicId).eq('patient_id', patientId).eq('supervisor_user_id', actorId).eq('status', 'active').limit(100),
         supabase
           .from('aba_programs')
           .select('id,patient_id,therapeutic_plan_id,therapeutic_objective_id,domain_id,domain_name,name,status,measurement_type,mastery_criteria,responsible_professional_ids,created_by')
@@ -86577,10 +86879,10 @@ async function startServer() {
           .gte('reviewed_at', dateFromIso)
           .lte('reviewed_at', dateToIso)
           .order('reviewed_at', { ascending: true })
-          .limit(500)
+          .limit(500),
       ]);
 
-      const criticalError = [planResult.error, linkResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
+      const criticalError = [planResult.error, linkResult.error, supervisionResult.error, programResult.error, targetResult.error, snapshotResult.error].find(Boolean);
       if (criticalError) throw criticalError;
       const clinicalSchemaResults = [definitionResult, observationResult, contributionResult, phaseResult];
       const clinicalSchemaAvailable = clinicalSchemaResults.every((result: any) => !result.error);
@@ -86606,20 +86908,43 @@ async function startServer() {
       }
 
       const actorRole = sanitizeString(req.effectiveClinicRole, 40).toLowerCase();
-      const accessContext = { actorId, actorRole, professionalLinks: linkResult.data || [] };
+      const actorSpecialty =
+        normalizeClinicalSpecialty(
+          req.patientActorSpecialty ||
+          req.session.user?.activeAccessContext?.specialty
+        ) || null;
+      const hasGraphSupervisionAccess =
+        actorRole === 'supervisor' || Boolean(req.patientSupervisionLink);
+      const graphActorScope = {
+        actorRole,
+        actorSpecialty,
+        hasSupervisionAccess: hasGraphSupervisionAccess
+      };
+      const accessContext = { actorId, actorRole, professionalLinks: linkResult.data || [], supervisionLinks: supervisionResult.data || [] };
       const allPlans = planResult.data || [];
-      const visiblePlans = filterTherapeuticPlanScopesForActor(allPlans, accessContext).map((plan: any) => ({
+      const rebacVisiblePlans = filterTherapeuticPlanScopesForActor(allPlans, accessContext);
+      const graphVisiblePlanScopes = filterClinicalGraphPlanScopesForActor(rebacVisiblePlans, graphActorScope);
+      const visiblePlans = graphVisiblePlanScopes.map((plan: any) => ({
         ...plan,
         canEdit: canEditTherapeuticPlanScope(plan, accessContext)
       }));
       const visiblePlanIds = new Set(visiblePlans.map((plan: any) => String(plan.id)));
-      const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], allPlans, accessContext);
+      const visiblePrograms = filterTherapeuticPlanProgramsForActor(programResult.data || [], graphVisiblePlanScopes, accessContext);
       const visibleProgramIds = new Set(visiblePrograms.map((program: any) => String(program.id)));
       const visibleProgramIdList = Array.from(visibleProgramIds).map((programId) => sanitizeString(programId, 180)).filter(Boolean);
+      const historyBindingResult = isUuid(clinicId) && visibleProgramIdList.length > 0
+        ? await supabase.from('aba_session_target_measurement_bindings')
+          .select('session_id,target_id,program_id,measurement_model_version,program_version_id,program_version_snapshot,measurement_type_snapshot,target_status_snapshot,decision_at')
+          .eq('organization_id', clinicId).eq('patient_id', patientId)
+          .in('program_id', visibleProgramIdList)
+          .gte('decision_at', dateFromIso).lte('decision_at', dateToIso).limit(5000)
+        : { data: [], error: null };
+      if (historyBindingResult.error) throw historyBindingResult.error;
       const programById = new Map(visiblePrograms.map((program: any) => [String(program.id), program]));
       const targetById = new Map((targetResult.data || []).filter((target: any) => visibleProgramIds.has(String(target.program_id))).map((target: any) => [String(target.id), target]));
       const definitionById = new Map((definitionResult.error ? [] : definitionResult.data || []).filter((definition: any) => visiblePlanIds.has(String(definition.plan_id))).map((definition: any) => [String(definition.id), definition]));
 
+      const historyBindingBySessionTarget = new Map((historyBindingResult.data || []).map((binding: any) => [`${String(binding.session_id)}::${String(binding.target_id)}`, binding]));
       const visiblePlanMap = new Map(visiblePlans.map((plan: any) => [String(plan.id), plan]));
       const visiblePlanIdList = Array.from(visiblePlanIds).filter((planId: string) => isUuid(planId));
       const objectivePlanMap = new Map<string, Set<string>>();
@@ -86654,7 +86979,7 @@ async function startServer() {
             throw v3Result.error;
           }
         } else {
-          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById, programById, ptsVersionBySessionPlan);
+          v3PlanOutcomeRows = normalizeClinicalPlanOutcomesV3ForDashboard(v3Result.data || [], visiblePlanMap, objectivePlanMap, targetById, programById, ptsVersionBySessionPlan, historyBindingBySessionTarget);
         }
       }
 
@@ -86707,6 +87032,10 @@ async function startServer() {
         const program: any = target ? programById.get(String(target.program_id || '')) : null;
         const planId = program?.therapeutic_plan_id ? String(program.therapeutic_plan_id) : null;
         if (planId && !visiblePlanIds.has(planId)) return null;
+        if (
+          !planId &&
+          !clinicalGraphLegacySnapshotVisibleToActor(point.specialty, graphActorScope)
+        ) return null;
         return {
           id: String(point.id),
           planId,
@@ -91474,9 +91803,10 @@ async function startServer() {
       const localDay = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit'
       }).format(new Date());
-      const idempotencyKey = `patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
+      const idempotencyKey = `${deploymentEnv}:patient-finance:${paymentId}:reminder:${localDay}:${Math.round(balance * 100)}`;
       const now = new Date().toISOString();
       const notificationPayload = cleanObject({
+        deployment_env: deploymentEnv,
         organization_id: organizationId,
         clinic_id: organizationId,
         recipient_user_id: isUuid(recipientUserId) ? recipientUserId : null,
@@ -91516,6 +91846,7 @@ async function startServer() {
 
       await sendAppointmentNotification({
         supabase,
+        deploymentEnv: vertoDeploymentEnv,
         patientId,
         patientEmail: recipientEmail || sanitizeEmail(patient?.email) || null,
         appointment: {
@@ -95048,6 +95379,15 @@ async function startServer() {
         diagnostics.authorizedScopeKeys = scopeKeys;
         diagnostics.authorizedProtocolKeys = authorizedProtocolKeys.length;
       }
+      const authorizedProtocolKeySet = new Set(authorizedProtocolKeys);
+      requests = requests.filter((request) => {
+        const status = String(request.status || '').toLowerCase();
+        if (status !== 'approved') return true;
+        const canonicalKey = normalizeApprovedProtocolKey(
+          request.canonicalKey || identifyVertoProtocolCandidate(request.canonicalName).canonicalKey
+        );
+        return authorizedProtocolKeySet.has(canonicalKey);
+      });
       const existingAuthorizedKeys = new Set(
         requests
           .filter((request) => String(request.status || '').toLowerCase() === 'approved')
@@ -95125,6 +95465,86 @@ async function startServer() {
     }
   });
 
+  app.post('/api/protocol-import-requests/:requestId/revoke', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('aba.program.edit'), async (req: any, res) => {
+    try {
+      const requestId = sanitizeString(req.params.requestId, 120);
+      const user = req.session.user;
+      const actorId = sanitizeString(user?.id || user?.user_id, 120);
+      const clinicId = sanitizeString(currentClinicId(user), 120);
+      if (!isUuid(requestId) || !isUuid(actorId) || !isUuid(clinicId)) {
+        return res.status(400).json({ success: false, error: 'Escopo de revogacao invalido.' });
+      }
+
+      const { data: requestRow, error: requestError } = await supabase
+        .from('protocol_import_requests')
+        .select('id,clinic_id,status,approved_canonical_key')
+        .eq('id', requestId)
+        .eq('clinic_id', clinicId)
+        .limit(1)
+        .maybeSingle();
+      if (requestError) throw requestError;
+      if (!requestRow?.id) {
+        return res.status(404).json({ success: false, error: 'Solicitacao de protocolo nao encontrada nesta clinica.' });
+      }
+      if (sanitizeString(requestRow.status, 40).toLowerCase() !== 'approved') {
+        return res.status(409).json({ success: false, error: 'Somente uma liberacao aprovada pode ser revogada.' });
+      }
+
+      const canonicalKey = normalizeApprovedProtocolKey(requestRow.approved_canonical_key);
+      if (!VERTO_PROTOCOL_BY_KEY.has(canonicalKey)) {
+        return res.status(409).json({ success: false, error: 'O grant aprovado nao possui uma chave canonica valida.' });
+      }
+
+      const revokeResult = await revokeProtocolGrantForRequest({
+        clinicId,
+        requestId,
+        actorId,
+        actorName: sanitizeString(user?.name || user?.email || 'Equipe', 180),
+        auditAction: 'sync_revoked_protocols_to_clinic_state'
+      });
+      const accessMap = await loadProtocolAccessMap();
+      const scopeKey = 'clinic:' + clinicId;
+      const protocolKeys = accessMap.get(scopeKey) || [];
+
+      await persistActivityLog({
+        userId: actorId,
+        clinicId,
+        actorName: sanitizeString(user?.name || user?.email || 'Equipe', 180),
+        title: 'Protocolo removido da biblioteca',
+        content: 'Grant ' + canonicalKey + ' revogado para a clinica atual.',
+        type: 'protocol_access_updated',
+        actionType: 'protocol_grant_revoked',
+        payloadDetails: JSON.stringify({ requestId, canonicalKey, enabled: false, updatedAt: new Date().toISOString() })
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          requestId,
+          canonicalKey,
+          protocolKeys,
+          revoked: true,
+          protocolSync: {
+            synced: revokeResult.protocolSync.synced,
+            added: revokeResult.protocolSync.added,
+            refreshed: revokeResult.protocolSync.refreshed,
+            removed: revokeResult.protocolSync.removed
+          }
+        }
+      });
+    } catch (error: any) {
+      const message = extractSupabaseErrorMessage(error);
+      const status = message.includes('required') || message.includes('denied') ? 403
+        : message.includes('not_found') ? 404
+          : 409;
+      logRouteDbError('/api/protocol-import-requests/:requestId/revoke [POST]', error, {
+        requestId: sanitizeString(req.params.requestId, 120),
+        clinicId: sanitizeString(currentClinicId(req.session?.user), 120)
+      });
+      return res.status(status).json({ success: false, error: 'Nao foi possivel remover o protocolo da biblioteca.' });
+    }
+  });
+
   app.delete('/api/protocol-import-requests/:requestId', checkAuth, async (req: any, res) => {
     try {
       const requestId = sanitizeString(req.params.requestId, 120);
@@ -95135,17 +95555,40 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Informe a solicitacao de protocolo.' });
       }
 
+      let lookup = supabase
+        .from('protocol_import_requests')
+        .select('id,status')
+        .eq('id', requestId);
+      if (isUuid(clinicId)) {
+        lookup = lookup.eq('clinic_id', clinicId);
+      } else if (userId) {
+        lookup = lookup.eq('requester_user_id', userId);
+      } else {
+        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+
+      const { data: requestRow, error: lookupError } = await lookup.limit(1).maybeSingle();
+      if (lookupError) throw lookupError;
+      if (!requestRow?.id) {
+        return res.status(404).json({ success: false, error: 'Solicitacao de protocolo nao encontrada.' });
+      }
+      if (sanitizeString(requestRow.status, 40).toLowerCase() === 'approved') {
+        return res.status(409).json({
+          success: false,
+          error: 'A revogacao de protocolo aprovado exige o fluxo canonico de grants.'
+        });
+      }
+
       let query = supabase
         .from('protocol_import_requests')
         .delete()
-        .eq('id', requestId);
+        .eq('id', requestId)
+        .neq('status', 'approved');
 
       if (isUuid(clinicId)) {
         query = query.eq('clinic_id', clinicId);
-      } else if (userId) {
-        query = query.eq('requester_user_id', userId);
       } else {
-        return res.status(403).json({ success: false, error: 'Acesso negado.' });
+        query = query.eq('requester_user_id', userId);
       }
 
       const { error } = await query;
@@ -95154,7 +95597,7 @@ async function startServer() {
       void persistActivityLog({
         type: 'protocol_import_request_deleted',
         title: 'Solicitacao de protocolo excluida',
-        details: `Solicitacao de protocolo ${requestId} excluida pelo solicitante.`,
+        details: 'Solicitacao de protocolo ' + requestId + ' excluida pelo solicitante.',
         userId,
         clinicId,
         payload: { requestId }
@@ -95321,97 +95764,114 @@ async function startServer() {
       const protocolKey = normalizeApprovedProtocolKey(req.body?.protocolKey);
       const enabled = Boolean(req.body?.enabled);
       const requestId = sanitizeString(req.body?.requestId, 120);
-      if (!scopeKey || !VERTO_PROTOCOL_BY_KEY.has(protocolKey)) {
-        return res.status(400).json({ success: false, error: 'Informe o acervo e o protocolo Verto.' });
+      if (!scopeKey || !requestId || !VERTO_PROTOCOL_BY_KEY.has(protocolKey)) {
+        return res.status(400).json({ success: false, error: 'Informe a clinica, a solicitacao e o protocolo Verto.' });
+      }
+      const { data: requestRow, error: requestError } = await supabase
+        .from('protocol_import_requests')
+        .select('clinic_id,status,approved_canonical_key')
+        .eq('id', requestId)
+        .maybeSingle();
+      const requestClinicId = sanitizeString((requestRow as any)?.clinic_id, 120);
+      if (requestError || !isUuid(requestClinicId) || scopeKey !== `clinic:${requestClinicId}`) {
+        return res.status(409).json({ success: false, error: 'A solicitacao nao pertence ao acervo informado.' });
       }
 
-      const accessMap = await loadProtocolAccessMap();
-      const currentKeys = new Set(accessMap.get(scopeKey) || []);
-      if (enabled) currentKeys.add(protocolKey);
-      else currentKeys.delete(protocolKey);
-      const protocolKeys = Array.from(currentKeys).filter((key) => VERTO_PROTOCOL_BY_KEY.has(key));
-      const changedProtocol = VERTO_PROTOCOL_BY_KEY.get(protocolKey);
-
-      if (enabled && requestId && changedProtocol) {
-        try {
-          await supabase
-            .from('protocol_import_requests')
-            .update({
-              status: 'approved',
-              approved_canonical_key: changedProtocol.key,
-              approved_canonical_name: changedProtocol.name,
-              reviewed_by: sanitizeString(req.session.user?.id, 120) || null,
-              reviewed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', requestId);
-        } catch {
-          // The acervo is the source of truth; keep it updated even if the legacy request row is unavailable.
+      if (!enabled) {
+        const requestStatus = sanitizeString((requestRow as any)?.status, 40).toLowerCase();
+        const approvedProtocolKey = normalizeApprovedProtocolKey((requestRow as any)?.approved_canonical_key);
+        if (requestStatus !== 'approved' || !VERTO_PROTOCOL_BY_KEY.has(approvedProtocolKey) || approvedProtocolKey !== protocolKey) {
+          return res.status(409).json({ success: false, error: 'O grant informado nao corresponde a uma liberacao aprovada desta clinica.' });
         }
-      }
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        if (!isUuid(actorId)) {
+          return res.status(401).json({ success: false, error: 'Identidade autenticada obrigatoria para revogar o acervo.' });
+        }
 
-      let protocolSyncResult: any = null;
-      if (enabled && requestId) {
-        try {
-          const { data: requestRow } = await supabase
-            .from('protocol_import_requests')
-            .select('clinic_id')
-            .eq('id', requestId)
-            .maybeSingle();
-          const requestClinicId = sanitizeString((requestRow as any)?.clinic_id, 120);
-          if (isUuid(requestClinicId)) {
-            protocolSyncResult = await syncApprovedProtocolsToClinicState({
-              clinicId: requestClinicId,
-              performedBy: sanitizeString(req.session.user?.id, 120),
-              actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
-              auditAction: 'sync_approved_protocols_to_clinic_state'
-            });
+        const revokeResult = await revokeProtocolGrantForRequest({
+          clinicId: requestClinicId,
+          requestId,
+          actorId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+          auditAction: 'sync_revoked_protocols_to_clinic_state'
+        });
+        const accessMap = await loadProtocolAccessMap();
+        const protocolKeys = accessMap.get(scopeKey) || [];
+        const changedProtocol = VERTO_PROTOCOL_BY_KEY.get(approvedProtocolKey);
+
+        await persistActivityLog({
+          userId: actorId,
+          clinicId: requestClinicId,
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+          title: 'Acervo de protocolos atualizado',
+          content: 'Grant ' + approvedProtocolKey + ' revogado para ' + scopeKey + '.',
+          type: 'protocol_access_updated',
+          actionType: 'protocol_access_updated',
+          payloadDetails: JSON.stringify({ scopeKey, protocolKeys, changedProtocolKey: approvedProtocolKey, requestId, enabled: false, updatedAt: new Date().toISOString() })
+        });
+
+        return res.json({ success: true, data: {
+          scopeKey,
+          protocolKeys,
+          requestStatus: 'approved',
+          canonicalKey: changedProtocol?.key || approvedProtocolKey,
+          canonicalName: changedProtocol?.name || approvedProtocolKey,
+          revoked: true,
+          protocolSync: {
+            synced: revokeResult.protocolSync.synced,
+            added: revokeResult.protocolSync.added,
+            refreshed: revokeResult.protocolSync.refreshed,
+            removed: revokeResult.protocolSync.removed
           }
-        } catch (syncError: any) {
-          console.warn('[Protocol Sync] Falha ao sincronizar protocolos apos atualizacao do acervo:', syncError?.message || String(syncError));
-        }
+        } });
       }
+
+      const authHeader = sanitizeString(req.headers?.authorization, 4096);
+      const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      const { user: tokenUser, error: tokenError } = accessToken ? await getUserFromAccessToken(accessToken) : { user: null, error: 'missing_token' };
+      if (!accessToken || !supabaseUrl || !supabasePublicClientKey || tokenError || !tokenUser || sanitizeString(tokenUser.id, 120) !== sanitizeString(req.session.user?.id, 120)) {
+        return res.status(401).json({ success: false, error: 'Identidade autenticada obrigatoria para atualizar o acervo.' });
+      }
+      const actorSupabase = createClient(supabaseUrl, supabasePublicClientKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        global: { headers: { Authorization: `Bearer ${accessToken}`, 'x-verto-deployment-env': vertoDeploymentEnv } }
+      });
+      const { error: approveError } = await actorSupabase.rpc('approve_protocol_import_request_v1', {
+        p_request_id: requestId,
+        p_canonical_key: protocolKey
+      });
+      if (approveError) return res.status(409).json({ success: false, error: 'Nao foi possivel atualizar o grant canonico.' });
+
+      const protocolSyncResult = await syncApprovedProtocolsToClinicState({
+        clinicId: requestClinicId,
+        performedBy: sanitizeString(req.session.user?.id, 120),
+        actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+        auditAction: 'sync_approved_protocols_to_clinic_state'
+      });
+      const accessMap = await loadProtocolAccessMap();
+      const protocolKeys = accessMap.get(scopeKey) || [];
+      const changedProtocol = VERTO_PROTOCOL_BY_KEY.get(protocolKey);
 
       await persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
-        clinicId: sanitizeString(currentClinicId(req.session.user), 120),
+        clinicId: requestClinicId,
         actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
         title: 'Acervo de protocolos atualizado',
         content: `Acervo ${scopeKey} atualizado com ${protocolKeys.length} protocolo(s).`,
         type: 'protocol_access_updated',
         actionType: 'protocol_access_updated',
-        payloadDetails: JSON.stringify({
-          scopeKey,
-          protocolKeys,
-          changedProtocolKey: protocolKey,
-          requestId: requestId || null,
-          enabled,
-          updatedAt: new Date().toISOString()
-        })
+        payloadDetails: JSON.stringify({ scopeKey, protocolKeys, changedProtocolKey: protocolKey, requestId, enabled: true, updatedAt: new Date().toISOString() })
       });
 
-      return res.json({
-        success: true,
-        data: {
-          scopeKey,
-          protocolKeys,
-          requestStatus: enabled ? 'approved' : undefined,
-          canonicalKey: changedProtocol?.key || protocolKey,
-          canonicalName: changedProtocol?.name || protocolKey,
-          protocolSync: protocolSyncResult
-            ? {
-                synced: protocolSyncResult.synced,
-                added: protocolSyncResult.added,
-                refreshed: protocolSyncResult.refreshed
-              }
-            : null
-        }
-      });
+      return res.json({ success: true, data: {
+        scopeKey, protocolKeys, requestStatus: 'approved', canonicalKey: changedProtocol?.key || protocolKey,
+        canonicalName: changedProtocol?.name || protocolKey,
+        protocolSync: { synced: protocolSyncResult.synced, added: protocolSyncResult.added, refreshed: protocolSyncResult.refreshed }
+      } });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: 'Nao foi possivel atualizar o acervo de protocolos.' });
     }
   });
-
   app.post('/api/admin/protocol-import-requests/:requestId/approve', checkAuth, checkPlatformAdmin, async (req: any, res) => {
     try {
       const requestId = sanitizeString(req.params.requestId, 120);
@@ -95428,58 +95888,64 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Selecione um protocolo existente na Biblioteca Verto.' });
       }
 
-      let updatedTable = false;
-      let requestClinicId = '';
-      try {
-        const { data: currentRequest } = await supabase
-          .from('protocol_import_requests')
-          .select('clinic_id, scan_status, quarantine_status, file_type, file_data_url, scan_report')
-          .eq('id', requestId)
-          .maybeSingle();
-        requestClinicId = sanitizeString((currentRequest as any)?.clinic_id, 120);
-        const currentScanReport = parseStoredJsonObject((currentRequest as any)?.scan_report);
-        const screenshotEvidence = currentScanReport?.evidence?.mode === 'screenshots'
-          ? (currentScanReport?.evidence?.screenshots || [])
-          : [];
-        const hasScreenshotImage = screenshotEvidence.some((shot: any) => isAllowedScreenshotDataUrl(shot?.dataUrl))
-          || isAllowedScreenshotDataUrl((currentRequest as any)?.file_data_url);
-        const canApproveScreenshotEvidence = sanitizeString((currentRequest as any)?.file_type, 80) === 'screenshots' && hasScreenshotImage;
-        if ((currentRequest as any)?.scan_status && (currentRequest as any)?.scan_status !== 'clean' && !canApproveScreenshotEvidence) {
-          return res.status(409).json({
-            success: false,
-            error: 'Este protocolo ainda nao passou por uma varredura segura limpa.'
-          });
-        }
-        const { error } = await supabase
-          .from('protocol_import_requests')
-          .update({
-            status: 'approved',
-            approved_canonical_key: canonicalKey,
-            approved_canonical_name: canonicalName,
-            reviewed_by: sanitizeString(req.session.user?.id, 120) || null,
-            reviewed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', requestId);
-        updatedTable = !error;
-      } catch {
-        updatedTable = false;
+      const { data: currentRequest, error: requestError } = await supabase
+        .from('protocol_import_requests')
+        .select('clinic_id, scan_status, quarantine_status, file_type, file_data_url, scan_report')
+        .eq('id', requestId)
+        .maybeSingle();
+      if (requestError || !currentRequest) {
+        return res.status(404).json({ success: false, error: 'Solicitacao de protocolo nao encontrada.' });
       }
+      const requestClinicId = sanitizeString((currentRequest as any)?.clinic_id, 120);
+      const currentScanReport = parseStoredJsonObject((currentRequest as any)?.scan_report);
+      const screenshotEvidence = currentScanReport?.evidence?.mode === 'screenshots'
+        ? (currentScanReport?.evidence?.screenshots || [])
+        : [];
+      const hasScreenshotImage = screenshotEvidence.some((shot: any) => isAllowedScreenshotDataUrl(shot?.dataUrl))
+        || isAllowedScreenshotDataUrl((currentRequest as any)?.file_data_url);
+      const canApproveScreenshotEvidence = sanitizeString((currentRequest as any)?.file_type, 80) === 'screenshots' && hasScreenshotImage;
+      if ((currentRequest as any)?.scan_status && (currentRequest as any)?.scan_status !== 'clean' && !canApproveScreenshotEvidence) {
+        return res.status(409).json({ success: false, error: 'Este protocolo ainda nao passou por uma varredura segura limpa.' });
+      }
+
+      const authHeader = sanitizeString(req.headers?.authorization, 4096);
+      const accessToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      if (!accessToken || !supabaseUrl || !supabasePublicClientKey) {
+        return res.status(401).json({ success: false, error: 'Sessao autenticada obrigatoria para aprovar protocolos.' });
+      }
+      const { user: tokenUser, error: tokenError } = await getUserFromAccessToken(accessToken);
+      if (tokenError || !tokenUser || sanitizeString(tokenUser.id, 120) !== sanitizeString(req.session.user?.id, 120)) {
+        return res.status(401).json({ success: false, error: 'Identidade da sessao nao confere com a credencial de aprovacao.' });
+      }
+      const actorSupabase = createClient(supabaseUrl, supabasePublicClientKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        global: { headers: { Authorization: `Bearer ${accessToken}`, 'x-verto-deployment-env': vertoDeploymentEnv } }
+      });
+      const { error: approveError } = await actorSupabase.rpc('approve_protocol_import_request_v1', {
+        p_request_id: requestId,
+        p_canonical_key: canonicalKey
+      });
+      if (approveError) {
+        const message = extractSupabaseErrorMessage(approveError);
+        const status = message.includes('platform_admin_required') ? 403 : message.includes('request_not_found') ? 404 : 409;
+        return res.status(status).json({ success: false, error: 'Nao foi possivel concluir a aprovacao atomica do protocolo.' });
+      }
+
+      await supabase
+        .from('protocol_import_requests')
+        .update({ approved_canonical_name: canonicalName })
+        .eq('id', requestId)
+        .eq('status', 'approved');
 
       let protocolSyncResult: any = null;
-      if (updatedTable && isUuid(requestClinicId)) {
-        try {
-          protocolSyncResult = await syncApprovedProtocolsToClinicState({
-            clinicId: requestClinicId,
-            performedBy: sanitizeString(req.session.user?.id, 120),
-            actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
-            auditAction: 'sync_approved_protocols_to_clinic_state'
-          });
-        } catch (syncError: any) {
-          console.warn('[Protocol Sync] Falha ao sincronizar protocolos apos aprovacao:', syncError?.message || String(syncError));
-        }
+      if (isUuid(requestClinicId)) {
+        protocolSyncResult = await syncApprovedProtocolsToClinicState({
+          clinicId: requestClinicId,
+          performedBy: sanitizeString(req.session.user?.id, 120),
+          actorName: sanitizeString(req.session.user?.name || req.session.user?.email || 'Admin Verto', 180),
+          auditAction: 'sync_approved_protocols_to_clinic_state'
+        });
       }
-
       await persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(currentClinicId(req.session.user), 120),
@@ -95492,7 +95958,7 @@ async function startServer() {
           requestId,
           canonicalKey,
           canonicalName,
-          updatedTable,
+          atomicApproval: true,
           protocolSync: protocolSyncResult
             ? {
                 synced: protocolSyncResult.synced,
@@ -101318,6 +101784,7 @@ async function startServer() {
 
   registerSchoolManagementRoutes(app, {
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     noStoreDynamicResponse,
     checkAuth,
     requireClinicCapability,
@@ -101538,6 +102005,7 @@ async function startServer() {
 
   startAppointmentReminderCron({
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,
@@ -101546,6 +102014,7 @@ async function startServer() {
   });
   startClinicAnnouncementCron({
     supabase,
+    deploymentEnv: vertoDeploymentEnv,
     vapidPublicKey,
     vapidPrivateKey,
     logger: console,

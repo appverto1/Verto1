@@ -146,4 +146,47 @@ assert.equal(
   'nem diretor atravessa tenant/unidade',
 );
 
+// P0: permissions and supervision do not supersede patient/tenant scope.
+for (const changed of [
+  { patientId: '99999999-9999-4999-8999-999999999999' },
+  { actorClinicId: '44444444-4444-4444-8444-444444444444' },
+]) {
+  assert.equal(evaluatePatientClinicalAccess({
+    ...base,
+    ...changed,
+    actorRole: 'supervisor',
+    activeProfessionalMembership: membership('supervisor'),
+    activeSupervisionLink: {
+      clinic_id: clinicId,
+      supervisor_user_id: actorId,
+      patient_id: patientId,
+      status: 'active',
+    },
+  }), false, 'supervisão não amplia acesso a outro paciente ou clínica');
+}
+for (const status of ['inactive', 'revoked']) {
+  assert.equal(evaluatePatientClinicalAccess({
+    ...base,
+    actorRole: 'supervisor',
+    activeProfessionalMembership: membership('supervisor'),
+    activeSupervisionLink: {
+      clinic_id: clinicId,
+      supervisor_user_id: actorId,
+      patient_id: patientId,
+      status,
+    },
+  }), false, 'vínculo de supervisão revogado não autoriza acesso clínico');
+}
+assert.equal(evaluatePatientClinicalAccess({
+  ...base,
+  actorRole: 'supervisor',
+  activeProfessionalMembership: membership('supervisor', 'inactive'),
+  activeSupervisionLink: {
+    clinic_id: clinicId,
+    supervisor_user_id: actorId,
+    patient_id: patientId,
+    status: 'active',
+  },
+}), false, 'membership revogada prevalece sobre vínculo de supervisão antigo');
+
 console.log('patientClinicalAccessScope.test.ts: ok');

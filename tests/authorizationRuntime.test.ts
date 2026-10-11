@@ -26,10 +26,47 @@ assert.equal(
   'override não pode romper o teto estrutural do escopo do profissional',
 );
 
+// P0: anamnesis operational changes require clinic manager or verified supervision.
+// A stale or forged allow override must not upgrade an ordinary therapist.
+const commonTherapist = resolveEffectiveClinicCapabilities('therapist');
+assert.equal(commonTherapist?.capabilities.has('clinical.anamnesis.view'), false);
+assert.equal(commonTherapist?.capabilities.has('clinical.anamnesis.edit'), false);
+const therapistWithUnsafeAnamnesisGrant = resolveEffectiveClinicCapabilities('therapist', [
+  { permission_key: 'clinical.anamnesis.edit', effect: 'allow' },
+]);
+assert.equal(therapistWithUnsafeAnamnesisGrant?.capabilities.has('clinical.anamnesis.edit'), false);
+const therapistWithUnsafeViewGrant = resolveEffectiveClinicCapabilities('therapist', [
+  { permission_key: 'clinical.anamnesis.view', effect: 'allow' },
+]);
+assert.equal(therapistWithUnsafeViewGrant?.capabilities.has('clinical.anamnesis.view'), false);
+for (const role of ['director', 'coordinator', 'supervisor'] as const) {
+  assert.equal(
+    resolveEffectiveClinicCapabilities(role)?.capabilities.has('clinical.anamnesis.edit'),
+    true,
+    `${role} autorizado deve manter capacidade operacional de anamnese`,
+  );
+}
+for (const role of ['receptionist', 'biller'] as const) {
+  assert.equal(
+    resolveEffectiveClinicCapabilities(role, [{ permission_key: 'clinical.anamnesis.edit', effect: 'allow' }])
+      ?.capabilities.has('clinical.anamnesis.edit'),
+    false,
+    `${role} não pode editar anamnese via override`,
+  );
+}
+
 const therapistSupervisor = resolveEffectiveClinicCapabilities('therapist', [], { canSupervise: true });
 assert.equal(therapistSupervisor?.capabilities.has('session.start'), true);
 assert.equal(therapistSupervisor?.capabilities.has('calendar.team.view'), true);
 assert.equal(therapistSupervisor?.capabilities.has('treatment_plan.approve'), true);
+assert.equal(therapistSupervisor?.capabilities.has('clinical.anamnesis.edit'), true);
+assert.equal(
+  resolveEffectiveClinicCapabilities('therapist', [
+    { permission_key: 'clinical.anamnesis.edit', effect: 'deny' },
+  ], { canSupervise: true })?.capabilities.has('clinical.anamnesis.edit'),
+  false,
+  'override deny explícito prevalece mesmo para supervisor contextual',
+);
 
 const coordinatorInvite = resolveEffectiveClinicCapabilities('coordinator');
 assert.equal(

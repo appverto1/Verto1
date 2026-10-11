@@ -244,7 +244,7 @@ export function PtsTherapeuticDashboard({
           onClick={() => setOpenSections((current) => ({ ...current, [id]: !open }))}
           aria-expanded={open}
         >
-          <span className={`text-sm ${text}`}>{title}</span>
+          <span className={`text-sm font-medium ${text}`}>{title}</span>
           {open ? <ChevronUp size={16} className={muted} /> : <ChevronDown size={16} className={muted} />}
         </button>
         {open && <div className="pb-1 pt-2">{content}</div>}
@@ -272,18 +272,18 @@ export function PtsTherapeuticDashboard({
 
   return (
     <div className="space-y-5" data-testid="pts-therapeutic-dashboard">
-      <header className={`rounded-2xl border p-4 sm:p-5 ${surface}`}>
+      <header className={`rounded-3xl border p-5 sm:p-6 ${surface}`}>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className={`text-xl font-semibold ${text}`}>Projeto Terapêutico Singular</h2>
+              <h2 className={`text-xl font-semibold tracking-tight sm:text-2xl ${text}`}>Projeto Terapêutico Singular</h2>
               {hasActiveVersion ? (
                 <span className={`rounded-full border px-2.5 py-1 text-xs ${activeBadge}`}>Ativo · v{activePtsVersionNumber}</span>
               ) : (
                 <span className={`rounded-full border px-2.5 py-1 text-xs ${draftBadge}`}>Rascunho · v{draftPtsVersionNumber}</span>
               )}
             </div>
-            <p className={`mt-1 text-sm ${muted}`}>Plano compartilhado da equipe assistencial.</p>
+            <p className={`mt-1.5 max-w-2xl text-sm leading-6 ${muted}`}>Plano compartilhado da equipe assistencial.</p>
             {hasActiveVersion ? (
               <p className={`mt-2 text-xs leading-5 ${muted}`}>
                 Ativado em {formatTherapeuticPlanDate(activeVersion?.activatedAt || scope?.updated_at || scope?.created_at)}
@@ -313,7 +313,7 @@ export function PtsTherapeuticDashboard({
             )}
           </div>
 
-          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap xl:max-w-[520px] xl:justify-end">
+          <div className={`flex flex-col gap-2 rounded-2xl border p-2 sm:flex-row sm:flex-wrap xl:max-w-[540px] xl:justify-end ${inset}`} aria-label="Ações do PTS">
             {canManagePlans && <button type="button" className={neutralButton} onClick={onManagePlans}>Voltar aos planos</button>}
             {hasActiveVersion && onRecordReview && <button type="button" className={reviewButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
             {hasActiveVersion && onRecordRisk && <button type="button" className={riskButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
@@ -333,7 +333,7 @@ export function PtsTherapeuticDashboard({
       )}
 
       {hasActiveVersion && (
-        <dl className={`grid gap-px overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`} data-testid="pts-active-summary">
+        <dl className={`grid gap-px overflow-hidden rounded-2xl border sm:grid-cols-2 lg:grid-cols-4 ${isDark ? 'border-slate-700 bg-slate-700' : 'border-slate-100 bg-slate-100'}`} data-testid="pts-active-summary">
           {[
             { label: 'Metas em andamento', value: goalsInProgress },
             { label: 'Metas atingidas', value: achievedGoals },
@@ -353,11 +353,11 @@ export function PtsTherapeuticDashboard({
         </dl>
       )}
 
-      <div className="grid gap-4 lg:min-h-[560px] lg:grid-cols-[300px_minmax(0,1fr)]">
+      <div className="grid gap-5 lg:min-h-[560px] lg:grid-cols-[320px_minmax(0,1fr)]">
         <aside className={`self-start rounded-2xl border px-4 lg:sticky lg:top-4 ${surface}`} aria-label="Índice do PTS">
           <div className="flex items-center gap-2 border-b py-4">
             <ClipboardList size={18} className="text-violet-500" />
-            <h3 className={`text-base font-semibold ${text}`}>{hasActiveVersion ? 'Resumo do plano' : 'Estrutura do rascunho'}</h3>
+            <h3 className={`text-base font-semibold tracking-tight ${text}`}>{hasActiveVersion ? 'Resumo do plano' : 'Estrutura do rascunho'}</h3>
           </div>
 
           {section('reference', 'Técnico de referência', (
@@ -502,7 +502,6 @@ export function PtsTherapeuticDashboard({
                               <div className="min-w-0 flex-1">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <p className={`text-xs ${muted}`}>{sourceSpecialty}</p>
-                                  {evidence?.sharingMode === 'legacy_pts' && <span className={`rounded-full border px-2 py-0.5 text-[10px] ${isDark ? 'border-slate-600 text-slate-300' : 'border-slate-200 text-slate-500'}`}>Legado</span>}
                                 </div>
                                 <h4 className={`mt-1 text-base font-semibold ${text}`}>{evidence?.name || 'Evidência compartilhada'}</h4>
                                 {evidence?.objective && <p className={`mt-2 text-sm leading-6 ${muted}`}>{evidence.objective}</p>}

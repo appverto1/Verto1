@@ -156,6 +156,469 @@ const unitInput = (
   return input;
 };
 
+const essencial40Input = proposalInputFixture(
+  40,
+  PACKAGE_TIERS.upTo50.id,
+  null,
+  null
+);
+essencial40Input.commercialPricingMode = 'manual_module_prices';
+essencial40Input.commercialCapacityBasis = 'current_patients';
+essencial40Input.platformFoundationPricingMode = 'manual';
+essencial40Input.platformFoundationMonthlyAmountCents = 0;
+essencial40Input.expectedPatientQuantity12Months = 40;
+essencial40Input.customCapacityBlocks = null;
+essencial40Input.customCapacitySelectionMode = 'automatic';
+essencial40Input.offerStartsAt = effectiveAt;
+essencial40Input.usageProfile = 'intensive';
+essencial40Input.lines[0] = {
+  ...essencial40Input.lines[0],
+  quantity: 40,
+  pricingEditMode: 'per_patient',
+  proposedPricePerPatientCents: 1241,
+  customRecurringAmountCents: null
+};
+
+const recoveredAssumptions40 = structuredClone(modularAssumptionsFixture);
+recoveredAssumptions40.version = 1;
+recoveredAssumptions40.name = 'Recuperação staging — baseline comercial 2026-10-07';
+recoveredAssumptions40.values = {
+  ...recoveredAssumptions40.values,
+  stripeFeeBasisPoints: 399,
+  stripeFixedFeeCents: 39,
+  revenueTaxBasisPoints: 0,
+  estimatedDelinquencyBasisPoints: 0,
+  refundChargebackBasisPoints: 0,
+  fixedMonthlyEligibleCostCents: 11092,
+  fixedAllocationMethod: 'per_clinic',
+  fixedAllocationPatientCount: null,
+  fixedAllocationClinicCount: 1,
+  depreciationAmortizationCents: 0,
+  financialExpensesCents: 0,
+  profitTaxBasisPoints: 0,
+  otherBelowEbitdaCents: 0,
+  minimumMarginBasisPoints: 6000,
+  healthyMarginBasisPoints: 7000,
+  attentionMarginBasisPoints: 6000
+};
+
+const essencial40 = calculateSalesModularProposal(
+  essencial40Input,
+  catalog(),
+  recoveredAssumptions40
+);
+const essencial40Core = essencial40.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.equal(
+  essencial40.basePackage.limitQuantity,
+  50,
+  '40 pacientes devem permanecer na capacidade Essencial de 50'
+);
+assert.equal(
+  essencial40Core?.commercialPricing.proposedPricePerPatientCents,
+  1241
+);
+assert.equal(
+  essencial40Core?.commercialPricing.derivedMonthlyRevenueCents,
+  40 * 1241,
+  'o faturamento recorrente deve usar pacientes atuais, não a capacidade máxima'
+);
+assert.notEqual(
+  essencial40Core?.postPromotion.ebitdaMarginBasisPoints,
+  null,
+  'a margem do módulo deve ser calculável com premissas completas'
+);
+assert.notEqual(
+  essencial40.promotional.ebitdaMarginBasisPoints,
+  null,
+  'a margem consolidada deve ser calculável com premissas completas'
+);
+
+const builderState40 = proposalInputFixture(
+  40,
+  PACKAGE_TIERS.custom.id,
+  50,
+  null
+);
+builderState40.commercialPricingMode = 'manual_module_prices';
+builderState40.commercialCapacityBasis = 'current_patients';
+builderState40.platformFoundationPricingMode = 'manual';
+builderState40.platformFoundationMonthlyAmountCents = 0;
+builderState40.basePackageSelectionMode = 'manual';
+builderState40.expectedPatientQuantity12Months = 40;
+builderState40.customCapacityBlocks = null;
+builderState40.customCapacitySelectionMode = 'automatic';
+builderState40.offerStartsAt = effectiveAt;
+builderState40.usageProfile = 'intensive';
+builderState40.lines[0] = {
+  ...builderState40.lines[0],
+  tierId: PACKAGE_TIERS.custom.id,
+  quantity: 40,
+  pricingEditMode: 'per_patient',
+  proposedPricePerPatientCents: 1241,
+  customRecurringAmountCents: null
+};
+
+const builderState40Result = calculateSalesModularProposal(
+  builderState40,
+  catalog(),
+  recoveredAssumptions40
+);
+const builderState40Core = builderState40Result.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.equal(
+  builderState40Result.basePackage.limitQuantity,
+  50,
+  'o estado inicial do builder deve representar Essencial 1–50 sem quebrar o cálculo'
+);
+assert.equal(
+  builderState40Core?.commercialPricing.derivedMonthlyRevenueCents,
+  40 * 1241,
+  'o tier técnico custom não pode converter a capacidade de 50 em 50 pacientes faturados'
+);
+assert.notEqual(
+  builderState40Core?.postPromotion.ebitdaMarginBasisPoints,
+  null,
+  'o estado real do builder deve manter margem do módulo disponível'
+);
+assert.notEqual(
+  builderState40Result.promotional.ebitdaMarginBasisPoints,
+  null,
+  'o estado real do builder deve manter margem consolidada disponível'
+);
+
+const liveClinicalCatalog40 = catalog();
+liveClinicalCatalog.modularCostSettings = {
+  schemaVersion: 2,
+  ownership: {
+    variablePatientCost: 'item_direct',
+    variableClinicCost: 'item_direct',
+    storageCost: 'item_direct',
+    egressCost: 'item_direct',
+    processingCost: 'item_direct',
+    notificationCost: 'item_direct',
+    otherVariableCost: 'item_direct',
+    supportClinicCost: 'item_direct',
+    supportPatientCost: 'item_direct',
+    operationalCost: 'item_direct',
+    fixedMonthlyEligibleCost: 'shared'
+  },
+  ownershipJustifications: {},
+  includedStorageMbPerPatient: 100,
+  usageProfiles: {
+    light: {
+      storageUtilizationBasisPoints: 2500,
+      expectedEgressMultiplier: 0.5
+    },
+    standard: {
+      storageUtilizationBasisPoints: 6000,
+      expectedEgressMultiplier: 2
+    },
+    intensive: {
+      storageUtilizationBasisPoints: 10000,
+      expectedEgressMultiplier: 5
+    }
+  }
+};
+const liveClinicalCore40 = liveClinicalCatalog40.items.find(
+  (item) => item.itemKey === 'clinical_core'
+);
+assert.ok(liveClinicalCore40);
+liveClinicalCore40.costModel = {
+  ...liveClinicalCore40.costModel!,
+  version: 1,
+  directFixedMonthlyCostCents: null,
+  directCostPerPatientCents: 0,
+  directCostPerClinicCents: 0,
+  directCostPerUsageUnitCents: 0,
+  storageCostPerGbCents: 11,
+  egressCostPerGbCents: 46,
+  notificationCostPerUnitCents: null,
+  processingCostPerUnitCents: null,
+  otherVariableCostCents: 0,
+  supportFixedMonthlyCostCents: 1875,
+  supportCostPerPatientCents: 125,
+  operationalFixedMonthlyCostCents: 1875,
+  onboardingCostCents: null,
+  sharedCostAllocationWeight: 4,
+  costSource: 'estimated',
+  sourceDetail: 'Premissa econômica pré-lançamento reproduzida do catálogo ativo.',
+  effectiveAt,
+  driverConfig: {
+    schemaVersion: 2,
+    requiredDrivers: [
+      'monthlyClinicalSessions',
+      'monthlyAbaSessions',
+      'monthlyAbaRecords',
+      'generatedDocuments'
+    ],
+    profiles: {
+      light: {
+        monthlyClinicalSessions: driver(20),
+        monthlyAbaSessions: driver(40),
+        monthlyAbaRecords: driver(4000),
+        generatedDocuments: driver(2)
+      },
+      standard: {
+        monthlyClinicalSessions: driver(40),
+        monthlyAbaSessions: driver(120),
+        monthlyAbaRecords: driver(12000),
+        generatedDocuments: driver(5)
+      },
+      intensive: {
+        monthlyClinicalSessions: driver(80),
+        monthlyAbaSessions: driver(300),
+        monthlyAbaRecords: driver(30000),
+        generatedDocuments: driver(10)
+      }
+    },
+    unitCostsCents: {
+      monthlyAbaSessions: 0,
+      monthlyAbaRecords: 0,
+      generatedDocuments: 0
+    }
+  }
+};
+
+const liveClinicalResult40 = calculateSalesModularProposal(
+  builderState40,
+  liveClinicalCatalog40,
+  recoveredAssumptions40
+);
+const liveClinicalCoreResult40 = liveClinicalResult40.lines.find(
+  (line) => line.itemKey === 'clinical_core'
+);
+assert.notEqual(
+  liveClinicalCoreResult40?.commercialPricing.estimatedMonthlyCostCents,
+  null,
+  'o modelo de custo real do clinical_core deve produzir custo mensal'
+);
+assert.notEqual(
+  liveClinicalCoreResult40?.postPromotion.ebitdaMarginBasisPoints,
+  null,
+  'o modelo de custo real do clinical_core deve produzir margem'
+);
+assert.notEqual(
+  liveClinicalResult40.promotional.ebitdaMarginBasisPoints,
+  null,
+  'o catálogo real do clinical_core deve produzir margem consolidada'
+);
+
+const liveAgenda40 = recurringModule();
+liveAgenda40.pricingMode = 'package_limit';
+liveAgenda40.unitName = 'pacientes';
+liveAgenda40.recurringAmountCents = null;
+liveAgenda40.tiers = [
+  {
+    id: 'agenda-up-to-50',
+    itemId: liveAgenda40.id,
+    tierKey: 'up_to_50',
+    publicName: 'Agenda até 50',
+    minimumQuantity: 1,
+    maximumQuantity: 50,
+    includedQuantity: 50,
+    recurringAmountCents: 12900,
+    oneTimeAmountCents: null,
+    sortOrder: 30,
+    isCustom: false,
+    metadata: {}
+  },
+  {
+    id: 'agenda-custom',
+    itemId: liveAgenda40.id,
+    tierKey: 'custom',
+    publicName: 'Agenda personalizada',
+    minimumQuantity: 101,
+    maximumQuantity: null,
+    includedQuantity: null,
+    recurringAmountCents: null,
+    oneTimeAmountCents: null,
+    sortOrder: 50,
+    isCustom: true,
+    metadata: {}
+  }
+];
+liveAgenda40.costModel = {
+  ...liveAgenda40.costModel!,
+  directFixedMonthlyCostCents: null,
+  directCostPerPatientCents: 0,
+  directCostPerClinicCents: 0,
+  directCostPerUsageUnitCents: 0,
+  storageCostPerGbCents: null,
+  egressCostPerGbCents: null,
+  notificationCostPerUnitCents: 0,
+  processingCostPerUnitCents: null,
+  otherVariableCostCents: 0,
+  supportFixedMonthlyCostCents: 625,
+  supportCostPerPatientCents: 31,
+  operationalFixedMonthlyCostCents: 625,
+  sharedCostAllocationWeight: 2,
+  driverConfig: {
+    schemaVersion: 2,
+    requiredDrivers: [
+      'monthlyAppointments',
+      'remindersPerAppointment',
+      'internalNotifications',
+      'emails',
+      'webPushNotifications'
+    ],
+    profiles: {
+      light: {
+        monthlyAppointments: driver(20),
+        remindersPerAppointment: driver(1),
+        internalNotifications: driver(20),
+        emails: driver(20),
+        webPushNotifications: driver(20)
+      },
+      standard: {
+        monthlyAppointments: driver(40),
+        remindersPerAppointment: driver(2),
+        internalNotifications: driver(40),
+        emails: driver(80),
+        webPushNotifications: driver(80)
+      },
+      intensive: {
+        monthlyAppointments: driver(80),
+        remindersPerAppointment: driver(3),
+        internalNotifications: driver(80),
+        emails: driver(240),
+        webPushNotifications: driver(240)
+      }
+    },
+    unitCostsCents: {}
+  }
+};
+
+const liveFinance40: SalesPricingCatalogItem = {
+  id: 'financial-item-live',
+  itemKey: 'financial_management',
+  publicName: 'Financeiro e Gestão',
+  internalName: 'Financeiro gerencial',
+  description: 'Financeiro gerencial',
+  pricingMode: 'flat_monthly',
+  billingInterval: 'monthly',
+  unitName: 'clínica',
+  includedQuantity: null,
+  maximumQuantity: null,
+  recurringAmountCents: 9900,
+  oneTimeAmountCents: null,
+  sortOrder: 30,
+  isRequired: false,
+  isPublic: true,
+  isActive: true,
+  compatibleBasePackages: [],
+  metadata: {},
+  tiers: [],
+  costModel: {
+    id: 'financial-cost-live',
+    itemId: 'financial-item-live',
+    version: 1,
+    directFixedMonthlyCostCents: 0,
+    directCostPerPatientCents: null,
+    directCostPerClinicCents: 0,
+    directCostPerUsageUnitCents: 0,
+    storageCostPerGbCents: null,
+    egressCostPerGbCents: null,
+    notificationCostPerUnitCents: null,
+    processingCostPerUnitCents: 0,
+    otherVariableCostCents: 0,
+    supportFixedMonthlyCostCents: 625,
+    supportCostPerPatientCents: null,
+    operationalFixedMonthlyCostCents: 623,
+    onboardingCostCents: null,
+    sharedCostAllocationWeight: 1,
+    costSource: 'estimated',
+    sourceDetail: 'Premissa econômica pré-lançamento reproduzida do catálogo ativo.',
+    effectiveAt,
+    driverConfig: {
+      schemaVersion: 2,
+      requiredDrivers: [
+        'financialEntries',
+        'financialReports',
+        'recurringProcesses'
+      ],
+      profiles: {
+        light: {
+          financialEntries: driver(40),
+          financialReports: driver(2),
+          recurringProcesses: driver(4)
+        },
+        standard: {
+          financialEntries: driver(100),
+          financialReports: driver(5),
+          recurringProcesses: driver(10)
+        },
+        intensive: {
+          financialEntries: driver(250),
+          financialReports: driver(10),
+          recurringProcesses: driver(20)
+        }
+      },
+      unitCostsCents: {
+        financialReports: 0,
+        recurringProcesses: 0
+      }
+    }
+  }
+};
+
+const liveThreeModuleCatalog40 = structuredClone(liveClinicalCatalog40);
+liveThreeModuleCatalog40.items = [
+  ...liveThreeModuleCatalog40.items.filter(
+    (item) => !['appointments_communication', 'financial_management'].includes(item.itemKey)
+  ),
+  liveAgenda40,
+  liveFinance40
+];
+
+const liveThreeModuleInput40 = structuredClone(builderState40);
+liveThreeModuleInput40.lines.push(
+  {
+    itemKey: 'appointments_communication',
+    tierId: 'agenda-custom',
+    quantity: 40,
+    itemDiscountBasisPoints: 0,
+    pricingEditMode: 'monthly_total',
+    proposedPricePerPatientCents: null,
+    customRecurringAmountCents: 4900
+  },
+  {
+    itemKey: 'financial_management',
+    tierId: null,
+    quantity: 40,
+    itemDiscountBasisPoints: 0,
+    pricingEditMode: 'monthly_total',
+    proposedPricePerPatientCents: null,
+    customRecurringAmountCents: 9900
+  }
+);
+
+const liveThreeModuleResult40 = calculateSalesModularProposal(
+  liveThreeModuleInput40,
+  liveThreeModuleCatalog40,
+  recoveredAssumptions40
+);
+for (const itemKey of [
+  'clinical_core',
+  'appointments_communication',
+  'financial_management'
+]) {
+  const line = liveThreeModuleResult40.lines.find((candidate) => candidate.itemKey === itemKey);
+  assert.ok(line, `linha ausente: ${itemKey}`);
+  assert.notEqual(
+    line.postPromotion.ebitdaMarginBasisPoints,
+    null,
+    `margem indisponível no cenário real: ${itemKey}`
+  );
+}
+assert.notEqual(
+  liveThreeModuleResult40.promotional.ebitdaMarginBasisPoints,
+  null,
+  'Clínica + Agenda + Financeiro devem produzir margem consolidada'
+);
+
 const result150 = calculateSalesModularProposal(
   unitInput(150),
   catalog(),

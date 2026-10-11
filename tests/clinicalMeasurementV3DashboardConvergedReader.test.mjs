@@ -5,7 +5,12 @@ const sql = fs.readFileSync(
   'supabase/migrations/20260821162500_clinical_measurement_v3_dashboard_converged_reader.sql',
   'utf8',
 );
-const routes = fs.readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
+const routes = [
+  fs.readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8'),
+  fs.readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8'),
+  fs.readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8'),
+  fs.readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8'),
+].join('\n');
 const server = fs.readFileSync('server.ts', 'utf8');
 
 assert.match(sql, /create or replace function public\.read_clinical_outcomes_converged_v3\(/);

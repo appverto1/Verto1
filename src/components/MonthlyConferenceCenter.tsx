@@ -475,6 +475,9 @@ export function MonthlyConferenceCenter({
   const [professionalId, setProfessionalId] = useState("");
   const [payerId, setPayerId] = useState("");
   const [serviceType, setServiceType] = useState("");
+  const [planInput, setPlanInput] = useState("");
+  const [plan, setPlan] = useState("");
+  const [financialContextType, setFinancialContextType] = useState("");
   const [readinessStatus, setReadinessStatus] = useState("");
   const [appointmentStatus, setAppointmentStatus] = useState("");
   const [quickFilter, setQuickFilter] = useState("");
@@ -567,6 +570,14 @@ export function MonthlyConferenceCenter({
     setPage(1);
   }, [initialPayerId, navigationIntentKey]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setPlan(planInput.trim());
+      setPage(1);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [planInput]);
+
   const serviceTypeOptions = useMemo(() => {
     const values = new Set<string>();
     rows.forEach((row) => {
@@ -583,6 +594,8 @@ export function MonthlyConferenceCenter({
     professionalId,
     payerId,
     serviceType,
+    plan,
+    financialContextType,
     readinessStatus,
     appointmentStatus,
     onlyPending: quickFilter === "pending",
@@ -590,12 +603,12 @@ export function MonthlyConferenceCenter({
     onlyNotBillable: quickFilter === "not_billable",
     missing: ["signature", "report", "guide", "authorization", "documents", "procedure", "tuss", "amount", "professional_registry", "card"].includes(quickFilter) ? quickFilter : "",
     quickFilter: activeKpiFilter?.key || "",
-  }), [activeKpiFilter, appointmentStatus, from, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType, to]);
+  }), [activeKpiFilter, appointmentStatus, financialContextType, from, patientId, payerId, plan, professionalId, quickFilter, readinessStatus, serviceType, to]);
 
   useEffect(() => {
     setDrilldownFilter(null);
     setSummaries(createEmptyConferenceSummaries());
-  }, [appointmentStatus, filterPayload, patientId, payerId, professionalId, quickFilter, readinessStatus, serviceType]);
+  }, [appointmentStatus, filterPayload, financialContextType, patientId, payerId, plan, professionalId, quickFilter, readinessStatus, serviceType]);
 
   const loadConference = useCallback(async (options: { actionRevision?: string | number; preserveMessage?: boolean } = {}) => {
     setLoading(true);
@@ -668,7 +681,7 @@ export function MonthlyConferenceCenter({
     setLoading(true);
     setError("");
     try {
-      const hasActiveFilters = Boolean(patientId || professionalId || payerId || serviceType || readinessStatus || appointmentStatus || quickFilter);
+      const hasActiveFilters = Boolean(patientId || professionalId || payerId || serviceType || plan || financialContextType || readinessStatus || appointmentStatus || quickFilter);
       const revalidation = await dataService.revalidateClosurePeriod({
         from: filterPayload.from,
         to: filterPayload.to,
@@ -964,7 +977,7 @@ export function MonthlyConferenceCenter({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 lg:grid-cols-8">
+        <div className="mt-4 grid gap-3 lg:grid-cols-10">
           <label className="text-xs font-medium text-slate-600">
             De
             <input type="date" value={from} onChange={(event) => { setFrom(event.target.value); setPage(1); }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
@@ -1002,6 +1015,22 @@ export function MonthlyConferenceCenter({
             <select value={serviceType} onChange={(event) => { setServiceType(event.target.value); setPage(1); }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
               <option value="">Todas</option>
               {serviceTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-medium text-slate-600">
+            Plano
+            <input type="text" value={planInput} onChange={(event) => setPlanInput(event.target.value)} placeholder="Nome do plano" maxLength={160} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" />
+          </label>
+          <label className="text-xs font-medium text-slate-600">
+            Contexto financeiro
+            <select value={financialContextType} onChange={(event) => { setFinancialContextType(event.target.value); setPage(1); }} className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm">
+              <option value="">Todos</option>
+              <option value="INSURANCE">Convênio</option>
+              <option value="PRIVATE">Particular</option>
+              <option value="PACKAGE">Pacote</option>
+              <option value="MONTHLY">Mensalidade</option>
+              <option value="COURTESY">Cortesia</option>
+              <option value="OTHER">Outro</option>
             </select>
           </label>
           <label className="text-xs font-medium text-slate-600">

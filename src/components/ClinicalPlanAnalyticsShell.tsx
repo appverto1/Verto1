@@ -27,6 +27,7 @@ type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'mainte
 export type AnalyticsAxis = 'date' | 'session';
 
 type ClinicalPlanAnalyticsShellProps = {
+  key?: React.Key;
   scopeLabel: string;
   series: ClinicalOutcomeSeriesSummary[];
   previousSeriesByKey: Map<string, ClinicalOutcomeSeriesSummary>;
@@ -539,7 +540,7 @@ function ProgramChangesView({
     onOpenSessionReport(sessionId);
   };
 
-  const HighlightCard = ({ target, tone }: { target: ClinicalTargetChange; tone: 'improving' | 'attention' }) => {
+  const HighlightCard = ({ target, tone }: { key?: React.Key; target: ClinicalTargetChange; tone: 'improving' | 'attention' }) => {
     const canOpen = clean(target.latestSessionId).startsWith('session-') && Boolean(onOpenSessionReport);
     const favorable = tone === 'improving';
     const sustained = target.movement === 'criterion_sustained';
@@ -1006,20 +1007,20 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
   return (
     <section className={`overflow-hidden rounded-2xl border ${panel}`} data-testid="clinical-plan-analytics-shell">
-      <div className={`border-b px-3 pt-3 sm:px-4 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
+      <div className={`border-b px-4 pt-4 sm:px-5 sm:pt-5 ${isDark ? 'border-slate-700' : 'border-slate-200'}`}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className={`text-[10px] font-medium uppercase tracking-[0.14em] ${isDark ? 'text-violet-300' : 'text-violet-600'}`}>Leitura clínica</p>
-            <h2 className={`mt-1 text-base font-semibold ${text}`}>{scopeLabel}</h2>
+            <h2 className={`mt-1 text-lg font-semibold tracking-tight ${text}`}>{scopeLabel}</h2>
             <p className={`mt-1 text-xs ${subtle}`}>Escolha o domínio e a métrica. Séries incompatíveis continuam separadas.</p>
           </div>
-          <div className="flex items-center gap-1 rounded-xl border p-1 dark:border-slate-700">
-            <button type="button" aria-pressed={axis === 'date'} onClick={() => activeDomain !== 'changes' && onAxisChange('date')} disabled={activeDomain === 'changes'} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium ${axis === 'date' ? 'bg-violet-600 text-white' : `${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-40`}><CalendarDays size={14} /> Por data</button>
-            <button type="button" aria-pressed={axis === 'session'} onClick={() => onAxisChange('session')} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium ${axis === 'session' ? 'bg-violet-600 text-white' : `${subtle} hover:text-violet-600`}`}><Layers3 size={14} /> Por sessão</button>
+          <div role="group" aria-label="Agrupamento do gráfico" className="flex items-center gap-1 self-start rounded-xl border p-1 dark:border-slate-700">
+            <button type="button" aria-pressed={axis === 'date'} onClick={() => activeDomain !== 'changes' && onAxisChange('date')} disabled={activeDomain === 'changes'} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${axis === 'date' ? 'bg-violet-600 text-white shadow-sm' : `${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-40`}><CalendarDays size={14} /> Por data</button>
+            <button type="button" aria-pressed={axis === 'session'} onClick={() => onAxisChange('session')} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${axis === 'session' ? 'bg-violet-600 text-white shadow-sm' : `${subtle} hover:text-violet-600`}`}><Layers3 size={14} /> Por sessão</button>
           </div>
         </div>
 
-        <nav className="mt-3 flex gap-1 overflow-x-auto" aria-label="Domínios dos gráficos do plano">
+        <nav className="mt-4 flex gap-1 overflow-x-auto pb-1" aria-label="Domínios dos gráficos do plano">
           {DOMAIN_TABS.map((tab) => {
             const available = tabAvailability(tab.id);
             return <button key={tab.id} type="button" disabled={!available} aria-pressed={activeDomain === tab.id} onClick={() => available && setActiveDomain(tab.id)} className={`min-h-10 shrink-0 border-b-[3px] px-3 text-sm font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${activeDomain === tab.id ? (isDark ? DOMAIN_ACTIVE_TONE_DARK : DOMAIN_ACTIVE_TONE[tab.id]) : `border-transparent ${isDark ? 'text-slate-300 hover:bg-slate-800/60 hover:text-slate-100' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`} disabled:cursor-not-allowed disabled:opacity-35`}>{tab.label}</button>;
@@ -1027,11 +1028,11 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         </nav>
       </div>
 
-      <div className="p-3 sm:px-4 sm:py-3">
+      <div className="p-4 sm:px-5 sm:py-4">
         {activeDomain !== 'overview' && activeDomain !== 'changes' && activeMetric && (
           <div className="mb-4 space-y-3">
-            <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Métricas clínicas">
-              {metricOptions.map((option) => <button key={option.signature} type="button" aria-pressed={activeMetric.signature === option.signature} onClick={() => setMetricSignatureValue(option.signature)} className={`min-h-10 shrink-0 rounded-xl border px-3 text-xs font-medium ${activeMetric.signature === option.signature ? DOMAIN_SOFT_TONE[activeDomain as Exclude<AnalyticsDomain, 'overview'>] : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}>{option.label}</button>)}
+            <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Métricas clínicas">
+              {metricOptions.map((option) => <button key={option.signature} type="button" aria-pressed={activeMetric.signature === option.signature} onClick={() => setMetricSignatureValue(option.signature)} className={`min-h-10 shrink-0 rounded-xl border px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${activeMetric.signature === option.signature ? DOMAIN_SOFT_TONE[activeDomain as Exclude<AnalyticsDomain, 'overview'>] : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'}`}>{option.label}</button>)}
             </div>
 
             <div>
@@ -1039,11 +1040,11 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
                 <p className={`text-[11px] font-medium uppercase tracking-wide ${subtle}`}>{activeDomain === 'behaviors' ? 'Comportamentos interferentes no gráfico · até 3' : 'Alvos no gráfico · até 3'}</p>
                 {activeMetric.series.length > 3 && <p className={`text-[11px] ${subtle}`}>{selectedSeriesKeys.length}/3 selecionados</p>}
               </div>
-              <div className="mt-2 flex flex-wrap gap-2">
+              <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label={activeDomain === 'behaviors' ? 'Comportamentos interferentes exibidos' : 'Alvos exibidos'}>
                 {activeMetric.series.map((item) => {
                   const selected = selectedSeriesKeys.includes(item.key);
                   const disabled = !selected && selectedSeriesKeys.length >= 3;
-                  return <button key={item.key} type="button" disabled={disabled} aria-pressed={selected} onClick={() => toggleSeries(item.key)} className={`min-h-10 rounded-xl border px-3 text-xs ${selected ? DOMAIN_SOFT_TONE[activeDomain as Exclude<AnalyticsDomain, 'overview'>] : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'} disabled:cursor-not-allowed disabled:opacity-35`}>{item.itemLabel || item.metricLabel}</button>;
+                  return <button key={item.key} type="button" disabled={disabled} aria-pressed={selected} onClick={() => toggleSeries(item.key)} className={`min-h-10 rounded-xl border px-3 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${selected ? DOMAIN_SOFT_TONE[activeDomain as Exclude<AnalyticsDomain, 'overview'>] : isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-600'} disabled:cursor-not-allowed disabled:opacity-35`}>{item.itemLabel || item.metricLabel}</button>;
                 })}
               </div>
             </div>
@@ -1055,7 +1056,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
             <p className={`text-sm font-semibold ${text}`}>{activeDomain === 'overview' ? 'Registros clínicos por domínio' : activeDomain === 'changes' ? 'Andamento geral dos programas' : activeMetric?.label}</p>
             <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? `Uma barra por ${axis === 'session' ? 'sessão' : 'dia'}, com os domínios empilhados; não é um score clínico.` : activeDomain === 'changes' ? 'Leitura consolidada das mudanças entre sessões, preservando a direção e a unidade de cada métrica.' : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
           </div>
-          {comparePrevious && activeDomain !== 'changes' && <div className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
+          {comparePrevious && activeDomain !== 'changes' && <div role="group" aria-label="Legenda de período" className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
         </div>
 
         {activeDomain === 'overview' && (
@@ -1093,7 +1094,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         ) : activeDomain === 'overview' ? (
           <div className="flex h-[170px] min-w-0 sm:h-[180px]" data-testid="overview-chart-frame">
             <OverviewYAxisPane max={overviewYAxis.max} ticks={overviewYAxis.ticks} isDark={isDark} />
-            <div className="min-w-0 flex-1 overflow-x-auto" data-testid="overview-x-scroll-viewport">
+            <div className="min-w-0 flex-1 overflow-x-auto rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2" data-testid="overview-x-scroll-viewport" role="region" aria-label={`Gráfico geral por ${axis === 'session' ? 'sessão' : 'data'} com rolagem horizontal`} tabIndex={0}>
               <div ref={chartContentRef} className="h-full" style={{ minWidth: Math.max(620, overviewChartRows.length * 72) }}>
                 <SafeResponsiveContainer width="100%" height="100%" minHeight={150}>
                   <BarChart data={overviewChartRows} margin={{ top: OVERVIEW_Y_AXIS_TOP, right: 24, left: 0, bottom: 24 }}>
@@ -1134,7 +1135,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
             </div>
           </div>
         ) : (
-          <div className="h-[250px] min-w-0 overflow-x-auto sm:h-[285px]">
+          <div className="h-[250px] min-w-0 overflow-x-auto rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:h-[285px]" role="region" aria-label={`Gráfico de ${activeMetric?.label || 'métrica clínica'} com rolagem horizontal`} tabIndex={0}>
             <div ref={chartContentRef} className="h-full" style={{ minWidth: Math.max(620, rows.length * 72) }}>
               <SafeResponsiveContainer width="100%" height="100%" minHeight={230}>
                 <LineChart data={rows} margin={{ top: 12, right: 18, left: 4, bottom: 32 }}>

@@ -31,7 +31,9 @@ import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
 import { dataService } from '../services/dataService';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../services/localDb';
-import { AUTOMATIC_SESSION_CLOSURE_KEYS, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
+import { AUTOMATIC_SESSION_CLOSURE_KEYS, partitionSessionQueueForClosure, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
+import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
+import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
   normalizeAbaPromptTypeConfig,
   resolveTrialPromptInfo,
@@ -1135,6 +1137,7 @@ export const SessionMode = ({
   const sessionStateKey = `verto.aba_session_state:${patientId}:${sessionId}`;
 
   const [trialCount, setTrialCount] = useState(0);
+  const [reinforcerClosureSyncing, setReinforcerClosureSyncing] = useState(false);
   const [activeCriteria, setActiveCriteria] = useState<string | null>(null);
   const [collectionType, setCollectionType] = useState('dtt');
   const [lastRegularTrialType, setLastRegularTrialType] = useState('dtt');
@@ -1282,6 +1285,7 @@ export const SessionMode = ({
   const [promptSelectionGoal, setPromptSelectionGoal] = useState<any>(null);
   const [promptWarning, setPromptWarning] = useState('');
   const [abaV3ErrorSelection, setAbaV3ErrorSelection] = useState<AbaV3ErrorSelection | null>(null);
+  const abaV3ExposureSavingRef = useRef(false);
   const abaV3BindingCacheRef = useRef<Map<string, AbaV3BindingDecision>>(new Map());
   const abaV3BindingInflightRef = useRef<Map<string, Promise<AbaV3BindingDecision | null>>>(new Map());
   const abaV3BehaviorBindingCacheRef = useRef<Map<string, AbaV3BehaviorDecision>>(new Map());
@@ -4317,6 +4321,42 @@ export const SessionMode = ({
     });
   };
 
+  const saveAbaV3NoOpportunity = async () => {
+    const selection = abaV3ErrorSelection;
+    if (!selection || abaV3ExposureSavingRef.current) return;
+    abaV3ExposureSavingRef.current = true;
+    try {
+      const targetId = String(selection.activeMaintenanceProbe?.targetId || goalTargetId(selection.goal) || '').trim();
+      if (!patientId || !sessionId || sessionId.startsWith('draft-') || !targetId) {
+        throw new Error('A ausência de oportunidade exige uma sessão V3 persistida e um target válido.');
+      }
+      const result = await dataService.saveAbaV3TargetExposure({
+        patientId, sessionId, targetId, clientEventId: crypto.randomUUID(),
+      });
+      if (result?.conflict) throw new Error(result?.error || 'Conflito com coleta clínica já persistida.');
+      if (!result?.success) throw new Error(result?.error || 'Não foi possível registrar a ausência de oportunidade.');
+      setAbaV3ErrorSelection(null);
+      if (result?.pending) {
+        showClinicalToast({
+          variant: 'info', title: 'Registro aguardando sincronização',
+          subtitle: 'A ausência de oportunidade foi preservada localmente e ainda não está confirmada no servidor.'
+        }, 'none');
+      } else {
+        showClinicalToast({
+          variant: 'success', title: 'Ausência de oportunidade registrada',
+          subtitle: 'Estado clínico persistido sem criar ou contabilizar uma tentativa.'
+        }, 'none');
+      }
+    } catch (error: any) {
+      showClinicalToast({
+        variant: 'error', title: 'Não foi possível registrar',
+        subtitle: error?.message || 'Tente novamente sem criar uma tentativa fictícia.'
+      }, 'error');
+    } finally {
+      abaV3ExposureSavingRef.current = false;
+    }
+  };
+
   const saveAbaV3ErrorOutcome = async (actionKey: 'INDEPENDENT_INCORRECT' | 'NO_RESPONSE') => {
     const selection = abaV3ErrorSelection;
     if (!selection) return;
@@ -5890,11 +5930,12 @@ export const SessionMode = ({
       const endedAt = completionRequestRef.current?.payload?.endedAt || new Date().toISOString();
       let records = completionRequestRef.current?.records || recordsRef.current;
       let closureIssues = { blockers: [] as SessionSummaryPendingItem[], warnings: [] as SessionSummaryPendingItem[] };
+      let hasDeferredOfflineWrites = false;
       if (!completionRequestRef.current) {
         const mandatory = buildSessionClosureIssues().blockers.filter((item) => !AUTOMATIC_SESSION_CLOSURE_KEYS.has(item.key));
         if (mandatory.length) throw new Error(mandatory.map((item) => item.label).join('. '));
         await waitForSessionWrites(() => recordsRef.current.some((record) => record.syncStatus === 'syncing'));
-        for (const timer of Object.values(therapeuticTimersRef.current)) {
+        for (const timer of Object.values(therapeuticTimersRef.current) as TherapeuticTimerState[]) {
           const goal = timer.goalSnapshot || sessionGoals.find((item: any) => therapeuticGoalKey(item) === timer.goalKey);
           if (!goal) throw new Error('O alvo do cronômetro não foi encontrado. O tempo foi preservado.');
           if (!await finishTherapeuticTimer(goal, endedAt, true)) throw new Error('Não foi possível salvar o tempo observado. Tente finalizar novamente.');
@@ -5916,24 +5957,63 @@ export const SessionMode = ({
         for (const record of recordsRef.current.filter((item) => item.kind === 'trial' && item.measurementModelVersion === 'V3' && item.syncStatus === 'error')) {
           await retryFailedV3Trial(record);
         }
-        const entityIds = recordsRef.current.flatMap((record) => [record.id, String(record.rawPayload?.clientEventId || '')]).filter(Boolean);
+        setReinforcerClosureSyncing(true);
+      setSessionWarning('Sincronizando registros antes de encerrar…');
+      try {
+        const reinforcerFlush = await flushReinforcerDeliveries(sessionId);
+        if (!reinforcerFlush.ok) {
+          throw new Error(
+            reinforcerFlush.terminal > 0
+              ? 'Há um registro de reforçador que não pôde ser confirmado. O registro local foi preservado.'
+              : 'Há registros de reforçadores aguardando sincronização. Os dados foram preservados; tente finalizar novamente quando a conexão confirmar o envio.'
+          );
+        }
+      } finally {
+        setReinforcerClosureSyncing(false);
+      }
+
+      const entityIds = recordsRef.current.flatMap((record) => [record.id, String(record.rawPayload?.clientEventId || '')]).filter(Boolean);
         await syncOfflineData({ force: true, sessionId, entityIds });
         const queued = await getSessionQueuedRecords(sessionId, entityIds);
-        const unconfirmedIds = new Set(queued.map((record) => String(record.entity_id || record.id)));
+        const { durable: durableQueued, terminal: terminalQueued } = partitionSessionQueueForClosure(queued);
+        if (terminalQueued.length > 0) {
+          throw new Error('Há um registro clínico preservado localmente que precisa de revisão antes da sincronização.');
+        }
+
+        const durableEntityIds = new Set(durableQueued.map((record) => String(record.entity_id || record.id)));
         const refreshedRecords = await Promise.all(recordsRef.current.map(async (record) => {
           if (record.syncStatus === 'synced') return record;
           const entityId = record.measurementModelVersion === 'V3' ? String(record.rawPayload?.clientEventId || record.id) : record.id;
-          if (unconfirmedIds.has(entityId)) return record;
+          if (durableEntityIds.has(entityId)) return record;
           const cached = await getRecordById(entityId);
           return cached?.sync_status === 'synced' ? { ...record, syncStatus: 'synced' as const } : record;
         }));
         setRecords(refreshedRecords);
+
+        const unprotectedUnsynced = recordsRef.current.filter((record) => {
+          if (record.syncStatus === 'synced') return false;
+          const entityId = record.measurementModelVersion === 'V3' ? String(record.rawPayload?.clientEventId || record.id) : record.id;
+          return !durableEntityIds.has(entityId);
+        });
+        if (unprotectedUnsynced.length > 0) {
+          throw new Error('Há um registro ainda não confirmado que não está protegido pela fila local. A sessão permanece aberta para evitar perda de dados.');
+        }
+
+        hasDeferredOfflineWrites = durableQueued.length > 0;
         closureIssues = buildSessionClosureIssues();
-        closureIssues.blockers = closureIssues.blockers.filter((item) => !(
-          (item.key === 'open_duration' && openDurationsRef.current.every((event) => event.measurementModelVersion === 'V3'))
-          || (item.key === 'open_interval_collection' && intervalRunRef.current?.measurementModelVersion === 'V3')
-        ));
-        if (queued.length || closureIssues.blockers.length) throw new Error('Ainda não foi possível confirmar todos os salvamentos. Os dados estão preservados; tente finalizar novamente.');
+        closureIssues.blockers = closureIssues.blockers.filter((item) => {
+          if (item.key === 'open_duration' && openDurationsRef.current.every((event) => event.measurementModelVersion === 'V3')) return false;
+          if (item.key === 'open_interval_collection' && intervalRunRef.current?.measurementModelVersion === 'V3') return false;
+          if (
+            unprotectedUnsynced.length === 0 &&
+            ['unsaved_local_records', 'server_sync_required', 'v3_failed_trials_require_resolution'].includes(item.key)
+          ) return false;
+          return true;
+        });
+        if (closureIssues.blockers.length) {
+          throw new Error(closureIssues.blockers.map((item) => item.label).join('. '));
+        }
+
         records = recordsRef.current.map((record) => {
           const event = openDurationsRef.current.find((item) => item.id === record.id && item.measurementModelVersion === 'V3');
           if (!event) return record;
@@ -5973,7 +6053,7 @@ export const SessionMode = ({
         blockingItems: closureIssues.blockers,
         warningItems: closureIssues.warnings,
         sessionNote,
-        syncStatus: 'synced'
+        syncStatus: hasDeferredOfflineWrites ? 'local' : 'synced'
       });
       const finalMaintenanceSummary = completionRequestRef.current?.payload?.summary?.maintenanceSummary || maintenanceProbeRows;
       const idempotencyKey = completionIdempotencyKeyRef.current || createSessionCompletionKey();
@@ -6029,18 +6109,22 @@ export const SessionMode = ({
         throw new Error(completionResult?.message || completionResult?.error || 'Não foi possível encerrar a sessão.');
       }
 
+      const completionPending = completionResult?.pending === true || completionResult?.offline === true;
       const completionData = completionResult?.data || {};
+      const resolvedOperationalClosure = completionPending
+        ? { status: 'PENDING_SYNC', pendingSync: true, endedAt }
+        : completionData?.closure || null;
       const persistedSummary = {
         ...finalSummary,
         maintenanceSummary: Array.isArray(completionData?.maintenanceSummary)
           ? completionData.maintenanceSummary
           : finalMaintenanceSummary,
         id: String(completionData?.summaryId || finalSummary.id),
-        syncStatus: 'synced',
+        syncStatus: completionPending || hasDeferredOfflineWrites ? 'local' : 'synced',
         createdAt: completionData?.createdAt || finalSummary.createdAt,
         attendanceStatus: completionData?.attendanceStatus || attendanceStatus,
         billingStatus: completionData?.billingStatus || (NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'NOT_BILLABLE' : 'PENDING_REVIEW'),
-        operationalClosure: completionData?.closure || null
+        operationalClosure: resolvedOperationalClosure
       } as SessionSummary & {
         attendanceStatus: SessionAttendanceStatus;
         billingStatus: string;
@@ -6049,7 +6133,7 @@ export const SessionMode = ({
 
       setSessionEndPreviewAt(String(completionData?.endedAt || endedAt));
       setPostClosureSummary(persistedSummary);
-      setOperationalClosure(completionData?.closure || null);
+      setOperationalClosure(resolvedOperationalClosure);
       setSessionCompleted(true);
       setRecords(records);
       setOpenDurations([]);
@@ -6061,12 +6145,12 @@ export const SessionMode = ({
       completionIdempotencyKeyRef.current = '';
       completionRequestRef.current = null;
 
-      if (typeof onSessionSummaryPersisted === 'function') {
+      if (!completionPending && typeof onSessionSummaryPersisted === 'function') {
         void Promise.resolve(onSessionSummaryPersisted(persistedSummary)).catch((error: any) => {
           console.warn('[ABA] Não foi possível aplicar resumo de maestria no PEI local:', error);
         });
       }
-      showClinicalToast(buildClinicalActionToast({ action: 'session_end' }));
+      showClinicalToast(completionPending ? buildClinicalOfflineToast() : buildClinicalActionToast({ action: 'session_end' }));
     } catch (error: any) {
       console.error('Falha ao persistir encerramento atômico da sessão ABA:', error);
       setSessionEndError(error?.message || 'Não foi possível encerrar a sessão. Nenhum dado foi descartado.');
@@ -7856,7 +7940,7 @@ export const SessionMode = ({
       return;
     }
     if (typeof onConfirmEndSession === 'function') {
-      onConfirmEndSession({ alreadyPersisted: true, summary: postClosureSummary });
+      onConfirmEndSession({ alreadyPersisted: true, summary: postClosureSummary?.syncStatus === 'synced' ? postClosureSummary : null, pendingSync: postClosureSummary?.syncStatus !== 'synced' });
       return;
     }
     onClose?.();
@@ -9140,6 +9224,12 @@ export const SessionMode = ({
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-4 sm:px-4" data-aba-quick-register-body>
+
+        <AbaReinforcerSessionPanel
+          patientId={patientId}
+          sessionId={sessionId}
+          readOnly={sessionCompleted || isCompletedSessionReview}
+        />
 
         <section className="space-y-4" data-aba-dock-context-panel data-aba-quick-register-chip-panel>
           <div className="space-y-4">
@@ -11511,7 +11601,14 @@ export const SessionMode = ({
                 <span className="mt-1 block text-xs font-semibold text-slate-500">A oportunidade ocorreu, mas não houve resposta observável.</span>
               </button>
             </div>
-            <button type="button" onClick={() => setAbaV3ErrorSelection(null)} className="mt-5 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">
+            <button
+              type="button"
+              onClick={() => { void saveAbaV3NoOpportunity(); }}
+              className="mt-3 w-full min-h-[48px] rounded-2xl border border-blue-100 bg-blue-50 px-4 py-3 text-left text-sm font-semibold text-blue-800"
+            >
+              Não houve oportunidade — não contabilizar tentativa
+            </button>
+            <button type="button" onClick={() => setAbaV3ErrorSelection(null)} className="mt-3 w-full py-3 rounded-2xl bg-gray-100 text-gray-600 font-semibold">
               Cancelar
             </button>
           </div>
@@ -11780,7 +11877,7 @@ export const SessionMode = ({
               <h4 className="text-lg font-bold text-gray-800">Preparação do encerramento</h4>
               {hasClosureBlockers && (
                 <p className="mt-2 rounded-2xl bg-red-50 border border-red-100 px-4 py-3 text-sm font-semibold text-red-700">
-                  Ao confirmar, os cronômetros serão finalizados e os registros pendentes serão enviados automaticamente.
+                  Ao confirmar, cronômetros e estados transitórios serão finalizados automaticamente; registros pendentes serão sincronizados antes da confirmação.
                 </p>
               )}
               <div className="mt-3 space-y-2">
@@ -11888,14 +11985,14 @@ export const SessionMode = ({
             )}
 
             <div className="mt-6 flex flex-col sm:flex-row gap-3">
-              <button onClick={returnToActiveSession} disabled={endingSession} className="flex-1 py-3 rounded-2xl bg-white border border-blue-100 text-gray-600 font-semibold disabled:cursor-not-allowed disabled:opacity-50">Voltar para o atendimento</button>
+              <button onClick={returnToActiveSession} disabled={endingSession || reinforcerClosureSyncing} className="flex-1 py-3 rounded-2xl bg-white border border-blue-100 text-gray-600 font-semibold disabled:cursor-not-allowed disabled:opacity-50">Voltar para o atendimento</button>
               <button
                 onClick={confirmEndSession}
-                disabled={endingSession}
-                className={`flex-1 inline-flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold shadow-lg transition-all ${endingSession ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
+                disabled={endingSession || reinforcerClosureSyncing}
+                className={`flex-1 inline-flex items-center justify-center gap-2 py-3 rounded-2xl font-semibold shadow-lg transition-all ${endingSession || reinforcerClosureSyncing ? 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none' : 'bg-[#7a32fc] text-white shadow-purple-500/20 hover:bg-[#6425df]'}`}
               >
-                {endingSession && <Loader2 size={18} className="animate-spin" />}
-                {endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
+                {(endingSession || reinforcerClosureSyncing) && <Loader2 size={18} className="animate-spin" />}
+                {reinforcerClosureSyncing ? 'Sincronizando registros antes de encerrar…' : endingSession ? 'Encerrando com segurança...' : NON_ATTENDANCE_STATUSES.has(attendanceStatus) ? 'Confirmar ausência e encerrar' : 'Confirmar encerramento do atendimento'}
               </button>
             </div>
           </div>

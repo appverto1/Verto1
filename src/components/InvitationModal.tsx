@@ -61,7 +61,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
       return;
     }
     if (maxMembers && invitations.length + 1 >= maxMembers) {
-      setError(`Sua configuracao permite no maximo ${maxMembers} profissionais.`);
+      setError(`Sua configuração permite no máximo ${maxMembers} profissionais.`);
       return;
     }
     if (role === 'therapist' && !specialty) {
@@ -110,55 +110,61 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-100"
+        className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl max-h-[calc(100dvh-2rem)] overflow-y-auto overflow-x-hidden border border-slate-100"
       >
-        <div className="flex flex-col md:flex-row h-full">
+        <div className="flex flex-col md:flex-row min-h-0">
           {/* Left Side - Info */}
           <div className="bg-[#4318FF] p-8 md:w-1/3 text-white flex flex-col justify-between">
             <div>
               <LogoVerto size={28} showText={true} className="mb-6" />
-              <h2 className="text-2xl font-bold mb-4 tracking-tight">Bem-vindo à Verto!</h2>
+              <h2 className="text-2xl font-bold mb-4 tracking-tight">Convide sua equipe</h2>
               <p className="text-blue-100 text-sm leading-relaxed mb-6">
-                Vamos configurar sua equipe. {maxMembers ? `Voce pode convidar ate ${maxMembers - 1} outros profissionais.` : 'Convide os profissionais que vao colaborar na clinica.'}
+                Envie convites para as pessoas que vão trabalhar na clínica.{' '}
+                {maxMembers
+                  ? `Você pode convidar até ${maxMembers - 1} outros profissionais.`
+                  : 'Defina o papel de cada pessoa para organizar os acessos da equipe.'}
               </p>
             </div>
-            
+
             <div className="space-y-4">
               <div className="flex items-center gap-3 text-xs font-medium text-blue-100">
                 <div className="w-5 h-5 bg-white/10 rounded-full flex items-center justify-center">1</div>
-                Convide por e-mail
+                Informe o e-mail e o papel
               </div>
               <div className="flex items-center gap-3 text-xs font-medium text-blue-100">
                 <div className="w-5 h-5 bg-white/10 rounded-full flex items-center justify-center">2</div>
-                Eles aceitam o convite
+                A pessoa confirma o convite
               </div>
               <div className="flex items-center gap-3 text-xs font-medium text-blue-100">
                 <div className="w-5 h-5 bg-white/10 rounded-full flex items-center justify-center">3</div>
-                Pronto para colaborar!
+                O acesso aparece na equipe
               </div>
             </div>
           </div>
 
           {/* Right Side - Form */}
           <div className="p-8 md:w-2/3 relative">
-            <button 
+            <button
               onClick={onClose}
               className="absolute top-6 right-6 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
             >
               <X size={20} />
             </button>
 
-            <h3 className="text-xl font-bold text-slate-900 mb-6">Configurar Papéis e Convites</h3>
+            <h3 className="text-xl font-bold text-slate-900 mb-2 pr-12">Convidar profissional</h3>
+            <p className="text-sm leading-relaxed text-slate-500 mb-6 pr-8">
+              Defina o papel na clínica e, para atendimento, a especialidade clínica.
+            </p>
 
             <form onSubmit={handleInvite} className="space-y-6">
               <div>
                 <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">E-mail do Profissional</label>
                 <div className="relative">
                   <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
+                  <input
                     type="email"
                     required
                     value={email}
@@ -258,7 +264,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
             )}
 
             <div className="mt-8 pt-6 border-t border-slate-100 flex justify-end">
-              <button 
+              <button
                 onClick={onClose}
                 className="flex items-center gap-2 text-slate-900 font-bold text-sm hover:gap-3 transition-all"
               >

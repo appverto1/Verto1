@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+const workspace = fs.readFileSync('src/components/ClinicalChartsWorkspace.tsx', 'utf8');
+const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
+const panel = fs.readFileSync('src/components/LegacyAssessmentChartsPanel.tsx', 'utf8');
+assert.match(workspace, /data-testid="clinical-charts-workspace"/);
+assert.match(workspace, /LegacyAssessmentChartsPanel/);
+assert.match(workspace, /legacyAssessmentProtocols/);
+assert.match(workspace, /Planos e PTS/);
+assert.doesNotMatch(workspace.slice(workspace.indexOf("view === 'aba'"), workspace.indexOf("view === 'aba-v3'")), /AbaClinicalChartsPanel/);
+assert.doesNotMatch(workspace, /legacyProtocolSkillKeys\.has\(titleKey\)/);
+assert.match(patientDetail, /legacyAssessmentProtocols=\{planProtocolCatalog\}/);
+assert.match(panel, /RadarDomainAssessmentChart/);
+assert.match(panel, /CumulativeGrowthChart/);
+assert.match(panel, /Dados de intervenção do plano individual não entram no ABA Legacy/);
+console.log('abaLegacyProtocolApplicationsP0.regression: PASS');

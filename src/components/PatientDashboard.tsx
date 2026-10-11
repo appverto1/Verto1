@@ -12,7 +12,7 @@ import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { AdultWellbeingTrendChart, type WellbeingPeriod } from './AdultWellbeingTrendChart';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
-import { persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
+import { clearPushRenewalContext, persistPushRenewalContext } from '../services/pushSubscriptionRenewal';
 import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemplate } from '../lib/anamnesisSchema';
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
@@ -85,6 +85,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isInterventionUploading, setIsInterventionUploading] = useState(false);
   const [taskStep, setTaskStep] = useState(1);
   const [showTaskSuccess, setShowTaskSuccess] = useState(false);
+  const [isTaskSaving, setIsTaskSaving] = useState(false);
+  const taskSubmitInFlightRef = useRef(false);
   const [selectedMood, setSelectedMood] = useState<any>(null);
   const [hoveredMood, setHoveredMood] = useState<any>(null);
   const [isMoodModalOpen, setIsMoodModalOpen] = useState(false);
@@ -378,6 +380,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
     let cancelled = false;
     const checkSubscription = async () => {
+      const permission = Notification.permission;
+      if (!cancelled) setNotificationStatus(permission);
+      // An installed subscription is NOT usable after a browser-level revoke.
+      if (permission !== 'granted') {
+        if (!cancelled) setNotificationSubscriptionReady(false);
+        return;
+      }
       try {
         const registration = await navigator.serviceWorker.getRegistration('/sw.js');
         const subscription = await registration?.pushManager.getSubscription();
@@ -387,9 +396,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }
     };
 
+    const refreshOnFocus = () => { void checkSubscription(); };
+    const refreshOnVisibility = () => {
+      if (document.visibilityState === 'visible') void checkSubscription();
+    };
+    window.addEventListener('focus', refreshOnFocus);
+    document.addEventListener('visibilitychange', refreshOnVisibility);
     void checkSubscription();
     return () => {
       cancelled = true;
+      window.removeEventListener('focus', refreshOnFocus);
+      document.removeEventListener('visibilitychange', refreshOnVisibility);
     };
   }, [notificationStatus, isSettingsOpen]);
 
@@ -980,6 +997,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return false;
     }
 
+    if (Notification.permission === 'denied') {
+      setNotificationStatus('denied');
+      setNotificationSubscriptionReady(false);
+      setSettingsMessage('O navegador bloqueou as notificações. Clique no ícone de cadeado ao lado do endereço, abra as permissões do site, permita Notificações e volte à Verto.');
+      return false;
+    }
     setIsEnablingNotifications(true);
     setSettingsMessage('');
     try {
@@ -998,7 +1021,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setNotificationStatus(permission);
       if (permission !== 'granted') {
         setNotificationSubscriptionReady(false);
-        setSettingsMessage('As notificações não foram liberadas. Se você bloqueou antes, habilite nas configurações do navegador.');
+        setSettingsMessage(permission === 'denied'
+          ? 'Notificações bloqueadas no navegador. Nas configurações do site (ícone de cadeado), permita Notificações e volte para ativá-las.'
+          : 'Permissão não concedida. As notificações não foram ativadas neste dispositivo.');
         return false;
       }
 
@@ -1065,6 +1090,45 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       console.warn('Patient notification permission failed:', error);
       setNotificationSubscriptionReady(false);
       setSettingsMessage(error?.message || 'Não foi possível ativar as notificações.');
+      return false;
+    } finally {
+      setIsEnablingNotifications(false);
+    }
+  };
+
+  const disablePatientNotifications = async () => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+      setSettingsMessage('Não foi possível localizar as notificações neste dispositivo.');
+      return false;
+    }
+    setIsEnablingNotifications(true);
+    setSettingsMessage('');
+    try {
+      const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) {
+        const response = await fetch('/api/push/subscribe', {
+          method: 'DELETE',
+          headers: await buildPushRequestHeaders(),
+          credentials: 'include',
+          body: JSON.stringify({ subscription: { endpoint: subscription.endpoint } }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result?.success !== true) {
+          setSettingsMessage(result?.error || 'Não foi possível desativar as notificações no servidor.');
+          return false;
+        }
+      }
+      await clearPushRenewalContext();
+      if (subscription && !(await subscription.unsubscribe())) {
+        setSettingsMessage('Servidor desativado. Verifique a inscrição local do navegador e tente novamente.');
+        return false;
+      }
+      setNotificationSubscriptionReady(false);
+      setSettingsMessage('Notificações desativadas neste dispositivo.');
+      return true;
+    } catch {
+      setSettingsMessage('Não foi possível desativar as notificações. Tente novamente.');
       return false;
     } finally {
       setIsEnablingNotifications(false);
@@ -1577,11 +1641,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       : [];
 
     const sourceHistory = Array.isArray(activeKidsProtocolEvents) ? activeKidsProtocolEvents : [];
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
     const scoredEvents = sourceHistory
       .map((h: any) => {
         const scoreRaw = getEventScore(h);
         if (scoreRaw === null) return null;
-        const score = Math.max(0, Math.min(1, Number(scoreRaw) || 0));
+        const rawScore = Number(scoreRaw) || 0;
+        const score = isVbMappProtocol
+          ? Math.max(0, Math.min(1, rawScore))
+          : Math.max(0, rawScore);
+        const rawMaxScore = Number(
+          h?.maxScore ??
+          h?.max_score ??
+          h?.task_data?.maxScore ??
+          h?.task_data?.max_score
+        );
+        const eventMaxScore = Number.isFinite(rawMaxScore) && rawMaxScore > 0 ? rawMaxScore : null;
         const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
         const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
         const domain = String(
@@ -1596,6 +1672,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         return {
           ...h,
           _score: score,
+          _maxScore: eventMaxScore,
           _timestamp: ts,
           _title: title,
           _titleKey: normalizeClinicalKey(title),
@@ -1634,9 +1711,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     };
 
-    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
-    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
-
     const resolveDomainProgressPercent = (dateFilter: string | null, mode: 'first' | 'latest') => {
       const cutoffTs = resolveCutoffTimestamp(dateFilter);
       const modeNormalized = mode === 'first' ? 'baseline' : 'latest';
@@ -1653,13 +1727,21 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             const matchesSkill = domainTasks.some((task: any) => isSameClinicalSkill(task.name, event?._title || ''));
             return matchesDomain || matchesSkill;
           })
-          .map((event: any) => ({
-            title: event?._title || '',
-            score: event?._score,
-            maxScore: 1,
-            consecutive_successes: event?.consecutive_successes,
-            created_at: event?.created_at || event?.date || null
-          }));
+          .map((event: any) => {
+            const matchedTask = domainTasks.find((task: any) =>
+              isSameClinicalSkill(task.name, event?._title || '')
+            );
+            const maxScore = isVbMappProtocol
+              ? 1
+              : Math.max(1, Number(event?._maxScore ?? matchedTask?.maxScore ?? 1) || 1);
+            return {
+              title: event?._title || '',
+              score: event?._score,
+              maxScore,
+              consecutive_successes: event?.consecutive_successes,
+              created_at: event?.created_at || event?.date || null
+            };
+          });
         return calculateDomainMastery(domainEvents, domainTasks, {
           mode: modeNormalized as any,
           protocolKind: isVbMappProtocol ? 'vbmapp' : 'other',
@@ -2494,8 +2576,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 type="checkbox"
                 className="mt-1 h-5 w-5 rounded border-emerald-300 text-emerald-600 accent-emerald-500"
                 checked={notificationStatus === 'granted' && notificationSubscriptionReady}
-                disabled={notificationSubscriptionReady || isEnablingNotifications || notificationStatus === 'unsupported'}
-                onChange={() => void enablePatientNotifications()}
+                disabled={isEnablingNotifications || notificationStatus === 'unsupported' || (notificationStatus === 'denied' && !notificationSubscriptionReady)}
+                onChange={(event) => { void (event.currentTarget.checked ? enablePatientNotifications() : disablePatientNotifications()); }}
               />
               <span>
                 <span className="flex items-center gap-2 text-sm font-black text-emerald-800">
@@ -2504,6 +2586,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                 <span className="mt-1 block text-xs font-medium leading-relaxed text-emerald-700">
                   Use esta opção se você pulou ou não aprovou o aviso inicial. Se o navegador bloqueou, libere nas configurações do site.
                 </span>
+                {notificationStatus === 'denied' && (
+                  <span role="alert" className="mt-2 block text-xs font-semibold text-red-700">
+                    Bloqueadas pelo navegador: abra o ícone de cadeado ao lado do endereço, permita Notificações e retorne à Verto. Nenhum aviso push será recebido até essa alteração.
+                  </span>
+                )}
               </span>
             </label>
           </div>
@@ -2715,7 +2802,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       type="button"
       onClick={() => {
         if (notificationStatus === 'denied') {
-          setSettingsMessage('As notificações estão bloqueadas neste aparelho. Libere a permissão do site/app nas configurações do navegador.');
+          setSettingsMessage('As notificações estão bloqueadas neste navegador. Abra as permissões do site pelo ícone de cadeado, permita Notificações e depois retorne à Verto.');
           setIsSettingsOpen(true);
           return;
         }
@@ -4015,25 +4102,32 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setTaskStep(2);
   };
   const handleConfirmTask = async () => {
-    if (isReadOnlyMode || !selectedTask) return;
+    if (isReadOnlyMode || !selectedTask || isTaskSaving || taskSubmitInFlightRef.current) return;
     if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
-    const interventionDetails = [
-      interventionResponse?.trim() ? `Resposta:
+    taskSubmitInFlightRef.current = true;
+    setIsTaskSaving(true);
+    try {
+      const interventionDetails = [
+        interventionResponse?.trim() ? `Resposta:
 ${interventionResponse.trim()}` : '',
-      taskNote?.trim() ? `Observação:
+        taskNote?.trim() ? `Observação:
 ${taskNote.trim()}` : '',
-      interventionImages.length > 0 ? `Anexos:
+        interventionImages.length > 0 ? `Anexos:
 ${interventionImages.join('\n')}` : ''
-    ].filter(Boolean).join('\n\n');
-    const finalNote = selectedTask.type === 'intervention' ? interventionDetails : taskNote;
-    const result = await onCompleteTask(selectedTask, taskEnergy, finalNote);
-    if (result?.success === false) return;
-    setShowTaskSuccess(true);
-    window.setTimeout(() => setShowTaskSuccess(false), 1200);
-    setSelectedTask(null);
-    setInterventionResponse("");
-    setInterventionImages([]);
-    setTaskStep(1);
+      ].filter(Boolean).join('\n\n');
+      const finalNote = selectedTask.type === 'intervention' ? interventionDetails : taskNote;
+      const result = await onCompleteTask(selectedTask, taskEnergy, finalNote);
+      if (result?.success === false) return;
+      setShowTaskSuccess(true);
+      window.setTimeout(() => setShowTaskSuccess(false), 1200);
+      setSelectedTask(null);
+      setInterventionResponse("");
+      setInterventionImages([]);
+      setTaskStep(1);
+    } finally {
+      taskSubmitInFlightRef.current = false;
+      setIsTaskSaving(false);
+    }
   };
 
   const dailyReviewTasks = useMemo(() => {
@@ -4473,7 +4567,7 @@ ${interventionImages.join('\n')}` : ''
                     {!isKidsProfile ? (
                       <button
                         onClick={handleInterventionResponseContinue}
-                        disabled={showTaskSuccess || !interventionResponse.trim() || isInterventionUploading}
+                        disabled={isTaskSaving || showTaskSuccess || !interventionResponse.trim() || isInterventionUploading}
                         className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <Check size={20} strokeWidth={3} /> Enviar Resposta
@@ -4481,10 +4575,10 @@ ${interventionImages.join('\n')}` : ''
                     ) : (
                       <button
                         onClick={handleConfirmTask}
-                        disabled={showTaskSuccess || !interventionResponse.trim()}
+                        disabled={isTaskSaving || showTaskSuccess || !interventionResponse.trim()}
                         className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                       >
-                        {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
+                        {isTaskSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin"/> Enviando...</React.Fragment> : showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Enviar Resposta</React.Fragment>}
                       </button>
                     )}
                   </React.Fragment>
@@ -4512,10 +4606,10 @@ ${interventionImages.join('\n')}` : ''
                     </div>
                     <button
                       onClick={handleConfirmTask}
-                      disabled={showTaskSuccess || taskEnergy === null}
+                      disabled={isTaskSaving || showTaskSuccess || taskEnergy === null}
                       className={`w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${showTaskSuccess ? 'bg-green-500 text-white' : 'bg-green-600 text-white shadow-green-600/30 hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                     >
-                      {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir tarefa</React.Fragment>}
+                      {isTaskSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin"/> Salvando...</React.Fragment> : showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir tarefa</React.Fragment>}
                     </button>
                     <button
                       type="button"
@@ -4633,7 +4727,7 @@ ${interventionImages.join('\n')}` : ''
                   )}
                 </div>
                 <textarea className="w-full h-24 bg-gray-50 border border-gray-200 rounded-2xl p-4 text-sm focus:outline-none focus:border-[#7a32fc]/50 transition-all resize-none mb-4 font-medium" placeholder={isKidsProfile ? "Quer contar como foi?" : isConventionalAdult ? "Observação opcional sobre o esforço..." : "Quer adicionar alguma observação?"} value={taskNote} onChange={(e) => setTaskNote(e.target.value)} autoFocus ></textarea>
-                <button onClick={handleConfirmTask} disabled={showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button>
+                <button onClick={handleConfirmTask} disabled={isTaskSaving || showTaskSuccess} className="w-full font-semibold text-lg py-3 rounded-2xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 bg-green-500 text-white shadow-green-500/30 hover:opacity-90" > {isTaskSaving ? <React.Fragment><RefreshCcw size={20} className="animate-spin"/> Salvando...</React.Fragment> : showTaskSuccess ? <React.Fragment><CheckCircle size={24}/> Sucesso!</React.Fragment> : <React.Fragment><Check size={20} strokeWidth={3} /> Concluir</React.Fragment>} </button>
               </div>
             )}
           </div>

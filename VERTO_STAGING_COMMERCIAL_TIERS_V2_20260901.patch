@@ -1,0 +1,1581 @@
+diff --git a/server.ts b/server.ts
+index adab4d0..ccc598c 100644
+--- a/server.ts
++++ b/server.ts
+@@ -2026,7 +2026,7 @@ const SALES_ESTIMATED_ACTIVE_PATIENTS_MAX = 100000;
+ const SALES_ESTIMATED_PROFESSIONALS_MAX = 10000;
+ const MODULAR_COMMERCIAL_CONSENT_VERSION = "modular-commercial-v1";
+ const MODULAR_COMMERCIAL_CONSENT_TEXT =
+-  "Declaro estar ciente dos valores promocionais e dos valores aplicáveis após o término de cada benefício.";
++  "Declaro estar ciente dos módulos incluídos, da capacidade contratada e do valor mensal final desta proposta.";
+ 
+ function normalizeSalesPhone(value: unknown): string | null {
+   const digits = sanitizeString(value, 40).replace(/\D/g, "");
+@@ -2643,7 +2643,7 @@ const SALES_MODULAR_SIMULATION_SELECT =
+   `${SALES_OFFER_SIMULATION_SELECT},simulation_type,scenario_name,catalog_version_id,request_hash,modular_input_snapshot,public_notes`;
+ const SALES_MODULAR_SIMULATION_ITEM_SELECT =
+   "id,simulation_id,catalog_version_id,catalog_item_id,tier_id,item_key,public_name_snapshot,public_description_snapshot,pricing_mode_snapshot,quantity,limit_quantity,included_quantity,gross_recurring_amount_cents,recurring_amount_cents,post_promotion_recurring_amount_cents,one_time_amount_cents,item_discount_basis_points,item_discount_cents,allocated_global_discount_cents,direct_cost_cents,transaction_tax_cost_allocated_cents,shared_cost_allocated_cents,contribution_margin_cents,contribution_margin_basis_points,ebitda_cents,ebitda_margin_basis_points,below_ebitda_cost_allocated_cents,profit_tax_allocated_cents,net_income_cents,net_margin_basis_points,cost_source,cost_model_snapshot,result_snapshot,public_metadata,sort_order,created_at";
+-const SALES_CUSTOMER_FACING_PRESENTATION_VERSION = 2;
++const SALES_CUSTOMER_FACING_PRESENTATION_VERSION = 3;
+ const SALES_INTERNAL_COMMERCIAL_ITEM_KEYS = new Set([
+   "platform_foundation",
+   "onboarding",
+@@ -3068,9 +3068,7 @@ function normalizeSalesModularProposalRequest(
+     ),
+     discountDurationMonths: Number(source.discountDurationMonths || 0),
+     offerValidityDays: Number(source.offerValidityDays || 14),
+-    trialDays: [0, 7, 14, 30].includes(Number(source.trialDays || 0))
+-      ? Number(source.trialDays || 0) as 0 | 7 | 14 | 30
+-      : Number(source.trialDays || 0) as 0 | 7 | 14 | 30,
++    trialDays: 0,
+     onboardingInstallments: Number(source.onboardingInstallments || 1),
+     usageProfile: "intensive" as SalesUsageProfile,
+     driverOverrides: {},
+@@ -24792,8 +24790,10 @@ async function startServer() {
+             && typeof (offer as any).modular_snapshot === "object"
+               ? (offer as any).modular_snapshot
+               : {};
++          const presentationVersion = Number(modularSnapshot.commercialPresentationVersion || 0);
+           const customerFacingModulesOnly =
+             salesOfferUsesCustomerFacingModulesOnly(modularSnapshot);
++          const compactCommercialPresentation = presentationVersion >= 3;
+           const customerFacingItems = customerFacingModulesOnly
+             ? (modularItems || []).filter(
+                 (item: any) =>
+@@ -24862,58 +24862,58 @@ async function startServer() {
+               initialActivePatientQuantity: Number(
+                 offer.initial_active_patient_quantity || 1,
+               ),
+-              basePackage: sanitizePublicBasePackage(
+-                modularSnapshot.basePackage,
+-              ),
+-              items: customerFacingItems.map((item: any) => ({
+-                itemKey: sanitizeString(item.item_key, 80),
+-                publicName: sanitizeString(
+-                  item.public_name_snapshot,
+-                  120,
+-                ),
+-                description: sanitizeString(
+-                  item.public_description_snapshot,
+-                  4000,
+-                ),
+-                pricingMode: sanitizeString(
+-                  item.pricing_mode_snapshot,
+-                  40,
+-                ),
+-                quantity: Number(item.quantity || 0),
+-                limitQuantity:
+-                  item.limit_quantity == null
+-                    ? null
+-                    : Number(item.limit_quantity),
+-                includedQuantity:
+-                  item.included_quantity == null
+-                    ? null
+-                    : Number(item.included_quantity),
+-                grossRecurringAmountCents: Number(
+-                  item.gross_recurring_amount_cents || 0,
+-                ),
+-                promotionalRecurringAmountCents: Number(
+-                  item.recurring_amount_cents || 0,
+-                ),
+-                postPromotionRecurringAmountCents: Number(
+-                  item.post_promotion_recurring_amount_cents || 0,
+-                ),
+-                oneTimeAmountCents: Number(
+-                  item.one_time_amount_cents || 0,
+-                ),
+-                itemDiscountBasisPoints: Number(
+-                  item.item_discount_basis_points || 0,
+-                ),
+-                offerDiscount:
+-                  item.public_metadata?.offerDiscount
+-                  && typeof item.public_metadata.offerDiscount === "object"
+-                    ? sanitizePublicOfferDiscount(
+-                        item.public_metadata.offerDiscount,
+-                      )
+-                    : null,
+-                publicMetadata: sanitizePublicModularMetadata(
+-                  item.public_metadata,
+-                ),
+-              })),
++              commercialPresentationVersion: presentationVersion,
++              basePackage: compactCommercialPresentation
++                ? (() => {
++                    const safe = sanitizePublicBasePackage(modularSnapshot.basePackage);
++                    const capacity = safe?.capacity;
++                    return {
++                      name: safe?.name,
++                      limitQuantity: capacity?.totalContractedLimitPatients ?? safe?.limitQuantity ?? null,
++                      includedStorageMb: safe?.includedStorageMb ?? null,
++                      capacity: capacity
++                        ? {
++                            schemaVersion: capacity.schemaVersion,
++                            totalContractedLimitPatients: capacity.totalContractedLimitPatients,
++                            blockSizePatients: capacity.blockSizePatients ?? capacity.policy?.blockSizePatients ?? 10,
++                            gracePeriodDays: 0,
++                            billingAdjustment: 'next_cycle'
++                          }
++                        : null
++                    };
++                  })()
++                : sanitizePublicBasePackage(modularSnapshot.basePackage),
++              items: customerFacingItems.map((item: any) => {
++                const basic = {
++                  itemKey: sanitizeString(item.item_key, 80),
++                  publicName: sanitizeString(item.public_name_snapshot, 120),
++                  description: sanitizeString(item.public_description_snapshot, 4000),
++                  pricingMode: sanitizeString(item.pricing_mode_snapshot, 40),
++                  quantity: Number(item.quantity || 0),
++                  limitQuantity: item.limit_quantity == null ? null : Number(item.limit_quantity),
++                  includedQuantity: item.included_quantity == null ? null : Number(item.included_quantity),
++                  publicMetadata: compactCommercialPresentation
++                    ? {
++                        features: Array.isArray(item.public_metadata?.features)
++                          ? item.public_metadata.features.slice(0, 30).map((value: any) => sanitizeString(value, 240)).filter(Boolean)
++                          : []
++                      }
++                    : sanitizePublicModularMetadata(item.public_metadata),
++                };
++                if (compactCommercialPresentation) return basic;
++                return {
++                  ...basic,
++                  grossRecurringAmountCents: Number(item.gross_recurring_amount_cents || 0),
++                  promotionalRecurringAmountCents: Number(item.recurring_amount_cents || 0),
++                  postPromotionRecurringAmountCents: Number(item.post_promotion_recurring_amount_cents || 0),
++                  oneTimeAmountCents: Number(item.one_time_amount_cents || 0),
++                  itemDiscountBasisPoints: Number(item.item_discount_basis_points || 0),
++                  offerDiscount:
++                    item.public_metadata?.offerDiscount && typeof item.public_metadata.offerDiscount === "object"
++                      ? sanitizePublicOfferDiscount(item.public_metadata.offerDiscount)
++                      : null,
++                };
++              }),
+               promotionalMonthlyAmountCents: Number(
+                 modularSnapshot.promotionalRecurringRevenueCents || 0,
+               ),
+@@ -24941,12 +24941,12 @@ async function startServer() {
+               expiresAt: offer.expires_at,
+               status: offer.status,
+               acceptedAt: offer.accepted_at || null,
+-              commercialPhases: sanitizePublicCommercialPhases(
+-                modularSnapshot.commercialPhases,
+-              ),
+-              capacityBlockPhases: sanitizePublicCapacityBlockPhases(
+-                modularSnapshot.commercialPricing?.capacityBlockPhases,
+-              ),
++              commercialPhases: compactCommercialPresentation
++                ? []
++                : sanitizePublicCommercialPhases(modularSnapshot.commercialPhases),
++              capacityBlockPhases: compactCommercialPresentation
++                ? []
++                : sanitizePublicCapacityBlockPhases(modularSnapshot.commercialPricing?.capacityBlockPhases),
+               modularCheckoutEnabled:
+                 (offer as any).modular_checkout_enabled === true,
+               stripeReady: (() => {
+@@ -24958,9 +24958,11 @@ async function startServer() {
+                   return false;
+                 }
+               })(),
+-              trialDays: [0, 7, 14, 30].includes(Number((offer as any).trial_days || 0))
+-                ? Number((offer as any).trial_days || 0)
+-                : 0,
++              trialDays: compactCommercialPresentation
++                ? 0
++                : ([0, 7, 14, 30].includes(Number((offer as any).trial_days || 0))
++                    ? Number((offer as any).trial_days || 0)
++                    : 0),
+             },
+           });
+         }
+@@ -25067,7 +25069,7 @@ async function startServer() {
+             success: false,
+             error: "COMMERCIAL_VALUES_CONSENT_REQUIRED",
+             message:
+-              "Confirme os valores promocionais e os valores posteriores.",
++              "Confirme os módulos, a capacidade contratada e o valor mensal final.",
+           });
+         }
+         const loaded = await loadPublicSalesOffer(req.params?.token);
+@@ -25172,7 +25174,7 @@ async function startServer() {
+             return res.status(400).json({
+               success: false,
+               error: "MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED",
+-              message: "Preço, módulos, tenant, trial e ambiente são reconstruídos no servidor.",
++              message: "Preço, módulos, tenant e ambiente são reconstruídos no servidor. Períodos de teste não são aceitos em novas vendas.",
+             });
+           }
+           if (!offer.accepted_at) {
+@@ -26398,32 +26400,46 @@ async function startServer() {
+         ?? acceptedMonthlyAmountCents,
+       ) || acceptedMonthlyAmountCents),
+     );
+-    const capacityPriceLadder = acceptedCapacityLimitPatients <= 50
+-      ? [10, 20, 30, 40, 50]
+-          .filter((limitPatients) => limitPatients >= acceptedCapacityLimitPatients)
+-          .map((limitPatients) => {
+-            const additionalBlocks = Math.max(
+-              0,
+-              Math.ceil(
+-                (limitPatients - acceptedCapacityLimitPatients) / blockSizePatients,
+-              ),
+-            );
+-            return {
+-              limitPatients,
+-              monthlyAmountCents:
+-                acceptedMonthlyAmountCents + additionalBlocks * effectiveBlockPriceCents,
+-              postPromotionMonthlyAmountCents:
+-                acceptedPostPromotionMonthlyAmountCents +
+-                additionalBlocks * effectiveBlockPriceCents,
+-            };
+-          })
++    const standardCapacityTiers = [10, 20, 30, 40, 50] as const;
++    const bidirectionalStandardTiers =
++      presentationVersion >= SALES_CUSTOMER_FACING_PRESENTATION_VERSION
++      && blockSizePatients === 10
++      && standardCapacityTiers.includes(
++        acceptedCapacityLimitPatients as (typeof standardCapacityTiers)[number],
++      );
++    const minimumCapacityLimitPatients = bidirectionalStandardTiers ? 10 : acceptedCapacityLimitPatients;
++    const currentTierBlocks = bidirectionalStandardTiers
++      ? Math.max(0, Math.round((acceptedCapacityLimitPatients - minimumCapacityLimitPatients) / blockSizePatients))
++      : 0;
++    if (
++      bidirectionalStandardTiers
++      && (initialCapacityBlocks !== currentTierBlocks
++        || initialCapacityMonthlyCents !== currentTierBlocks * effectiveBlockPriceCents)
++    ) {
++      throw new Error("MODULAR_CAPACITY_STANDARD_TIER_SNAPSHOT_MISMATCH");
++    }
++    const capacityPriceLadder = bidirectionalStandardTiers
++      ? [10, 20, 30, 40, 50].map((limitPatients) => {
++          const deltaBlocks = Math.round(
++            (limitPatients - acceptedCapacityLimitPatients) / blockSizePatients,
++          );
++          return {
++            limitPatients,
++            monthlyAmountCents: Math.max(0,
++              acceptedMonthlyAmountCents + deltaBlocks * effectiveBlockPriceCents),
++            postPromotionMonthlyAmountCents: Math.max(0,
++              acceptedPostPromotionMonthlyAmountCents + deltaBlocks * effectiveBlockPriceCents),
++          };
++        })
+       : [{
+           limitPatients: acceptedCapacityLimitPatients,
+           monthlyAmountCents: acceptedMonthlyAmountCents,
+           postPromotionMonthlyAmountCents: acceptedPostPromotionMonthlyAmountCents,
+         }];
+     return {
+-      acceptedCapacityLimitPatients,
++      acceptedCapacityLimitPatients: minimumCapacityLimitPatients,
++      currentTierBlocks,
++      billingModel: bidirectionalStandardTiers ? "modular_capacity_v2" as const : "modular_capacity_v1" as const,
+       initialCapacityBlocks,
+       initialCapacityMonthlyCents,
+       blockSizePatients,
+@@ -26438,7 +26454,9 @@ async function startServer() {
+           sanitizeString(frozenResults?.input?.commercialCapacityBasis, 40) === "current_patients"
+             ? "current_patients"
+             : "projected_demand",
+-        acceptedCapacityLimitPatients,
++        acceptedCapacityLimitPatients: minimumCapacityLimitPatients,
++        initialAcceptedTierPatients: acceptedCapacityLimitPatients,
++        billingTierMode: bidirectionalStandardTiers ? "standard_10_bidirectional_v2" : "legacy_growth_v1",
+         acceptedMonthlyAmountCents,
+         acceptedPostPromotionMonthlyAmountCents,
+         capacityPriceLadder,
+@@ -26554,10 +26572,13 @@ async function startServer() {
+         sales_checkout_link_id: linkResult.data.id,
+         stripe_subscription_id: stripeSubscriptionId,
+         stripe_schedule_id: sanitizeString(linkResult.data.stripe_schedule_id, 200) || null,
+-        billing_model: "modular_capacity_v1",
++        billing_model: capacity.billingModel,
+         status: "active",
+         accepted_capacity_limit_patients: capacity.acceptedCapacityLimitPatients,
+         initial_capacity_blocks: capacity.initialCapacityBlocks,
++        billed_additional_blocks: capacity.billingModel === "modular_capacity_v2"
++          ? capacity.currentTierBlocks
++          : 0,
+         initial_capacity_monthly_cents: capacity.initialCapacityMonthlyCents,
+         block_size_patients: capacity.blockSizePatients,
+         block_price_cents: capacity.blockPriceCents,
+@@ -26573,7 +26594,9 @@ async function startServer() {
+     await patchTableSafely("clinics", { column: "id", value: organizationId }, {
+       billing_model: ACTIVE_PATIENT_BILLING_MODEL,
+       stripe_subscription_id: stripeSubscriptionId,
+-      current_active_patient_limit: capacity.acceptedCapacityLimitPatients,
++      current_active_patient_limit: capacity.billingModel === "modular_capacity_v2"
++        ? Number(capacity.sourceSnapshot.initialAcceptedTierPatients || capacity.acceptedCapacityLimitPatients)
++        : capacity.acceptedCapacityLimitPatients,
+       pending_billing_quantity: null,
+       pending_billing_status: null,
+       billing_sync_status: "modular_capacity_contract_ready",
+@@ -96120,6 +96143,21 @@ async function startServer() {
+           && typeof offer.simulation_snapshot.results === "object"
+             ? offer.simulation_snapshot.results
+             : {};
++        const commercialPresentationVersion = Number(
++          frozenResults?.commercialPresentationVersion
++          ?? snapshot?.commercialPresentationVersion
++          ?? 1,
++        );
++        if (
++          commercialPresentationVersion >= SALES_CUSTOMER_FACING_PRESENTATION_VERSION
++          && frozenTrialDays !== 0
++        ) {
++          return res.status(409).json({
++            success: false,
++            code: 'MODULAR_CHECKOUT_TRIAL_NOT_ALLOWED',
++            error: 'Novas propostas Verto não aceitam período de teste. Gere uma nova proposta antes de continuar.',
++          });
++        }
+         const phases = Array.isArray(snapshot.commercialPhases)
+           ? snapshot.commercialPhases
+           : Array.isArray(frozenResults.commercialPhases)
+diff --git a/services/stripeService.ts b/services/stripeService.ts
+index 2f30a25..70dc3a3 100644
+--- a/services/stripeService.ts
++++ b/services/stripeService.ts
+@@ -678,32 +678,60 @@ export async function getBillableActivePatientCount(params: {
+ }): Promise<number> {
+   const clinicId = toSafeString(params.clinicId, 120);
+   const organizationId = toSafeString(params.organizationId, 120);
+-  const scopeColumn = clinicId ? 'clinic_id' : 'organization_id';
+   const scopeValue = clinicId || organizationId;
+   if (!scopeValue) return 0;
+ 
+-  const runCount = async (includeArchivedAt: boolean) => {
+-    let query = params.supabase
+-      .from('patients')
+-      .select('id', { count: 'exact', head: true })
+-      .eq(scopeColumn, scopeValue)
+-      .eq('is_active', true)
+-      .is('deleted_at', null)
+-      .or(activePatientStatusFilter());
+-
+-    if (includeArchivedAt) {
+-      query = query.is('archived_at', null);
++  // Billing v2 canonical rule: a patient is billable for the month only when
++  // the patient is registered and has at least one valid appointment scheduled
++  // in that clinic month. The RPC performs the DISTINCT count in Postgres and
++  // persists the monthly snapshot once for audit/reuse, avoiding full patient
++  // loads and N+1 reads in application code.
++  if (clinicId) {
++    const rpc = await params.supabase.rpc('resolve_monthly_billable_patient_count_v1', {
++      p_clinic_id: clinicId,
++      p_billing_month: null,
++      p_persist_snapshot: true,
++      p_force_refresh: false
++    });
++    if (!rpc.error) {
++      return Math.max(0, Number(rpc.data || 0));
+     }
+-
+-    return query;
+-  };
+-
+-  let result = await runCount(true);
+-  if (result.error && extractMissingColumnName(result.error) === 'archived_at') {
+-    result = await runCount(false);
++    const code = toSafeString(rpc.error?.code, 30).toUpperCase();
++    const message = `${rpc.error?.message || ''} ${rpc.error?.details || ''}`.toLowerCase();
++    const unavailable =
++      ['PGRST202', '42883', '42P01'].includes(code) ||
++      message.includes('resolve_monthly_billable_patient_count_v1');
++    if (!unavailable) throw rpc.error;
+   }
+-  if (result.error) throw result.error;
+-  return Math.max(0, Number(result.count || 0));
++
++  // Compatibility fallback while the migration is not yet applied. This path
++  // is deliberately bounded to the current UTC month and reads only patient_id.
++  const now = new Date();
++  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
++  const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
++  const scopeColumn = clinicId ? 'clinic_id' : 'organization_id';
++  const appointmentResult = await params.supabase
++    .from('appointments')
++    .select('patient_id,status')
++    .eq(scopeColumn, scopeValue)
++    .gte('scheduled_at', monthStart)
++    .lt('scheduled_at', nextMonth)
++    .limit(10000);
++  if (appointmentResult.error) throw appointmentResult.error;
++  const blockedStatus = /cancel|deleted|archived|inactive|reject|recus|invalid/i;
++  const patientIds = Array.from(new Set((appointmentResult.data || [])
++    .filter((row: any) => row?.patient_id && !blockedStatus.test(String(row?.status || 'scheduled')))
++    .map((row: any) => toSafeString(row.patient_id, 120))
++    .filter(Boolean)));
++  if (patientIds.length === 0) return 0;
++  const patientResult = await params.supabase
++    .from('patients')
++    .select('id')
++    .eq(scopeColumn, scopeValue)
++    .in('id', patientIds)
++    .limit(Math.min(patientIds.length, 10000));
++  if (patientResult.error) throw patientResult.error;
++  return Math.max(0, (patientResult.data || []).length);
+ }
+ 
+ async function getClinicActivePatientLimitState(
+@@ -866,6 +894,7 @@ async function findSubscriptionForClinic(params: {
+ 
+ type ModularCapacityBillingContract = {
+   id: string;
++  billingModel: 'modular_capacity_v1' | 'modular_capacity_v2';
+   organizationId: string;
+   salesOfferId: string;
+   stripeSubscriptionId: string;
+@@ -900,6 +929,7 @@ async function readModularCapacityBillingContract(
+     .from('organization_billing_contracts')
+     .select([
+       'id',
++      'billing_model',
+       'organization_id',
+       'sales_offer_id',
+       'stripe_subscription_id',
+@@ -935,6 +965,9 @@ async function readModularCapacityBillingContract(
+   }
+   return {
+     id: toSafeString(data.id, 120),
++    billingModel: toSafeString(data.billing_model, 40) === 'modular_capacity_v2'
++      ? 'modular_capacity_v2'
++      : 'modular_capacity_v1',
+     organizationId: toSafeString(data.organization_id, 120),
+     salesOfferId: toSafeString(data.sales_offer_id, 120),
+     stripeSubscriptionId: toSafeString(data.stripe_subscription_id, 200),
+@@ -1136,8 +1169,10 @@ async function syncModularCapacityStripeAmount(params: {
+     params.subscription.items.data.find((item) => isCapacitySubscriptionItem(item, params.contract)) || null;
+   const currentPhase = resolveContractCapacityPhase(params.contract, Date.now());
+   const currentTargetAmount =
+-    currentPhase.initialBlocksRevenueCents
+-    + params.targetAdditionalBlocks * currentPhase.blockPriceCents;
++    params.contract.billingModel === 'modular_capacity_v2'
++      ? params.targetAdditionalBlocks * currentPhase.blockPriceCents
++      : currentPhase.initialBlocksRevenueCents
++        + params.targetAdditionalBlocks * currentPhase.blockPriceCents;
+   const currentPeriodEnd = Number((params.subscription as any)?.current_period_end || 0);
+   const effectiveDate = currentPeriodEnd > 0
+     ? new Date(currentPeriodEnd * 1000).toISOString()
+@@ -1178,8 +1213,10 @@ async function syncModularCapacityStripeAmount(params: {
+             : Date.now();
+           const contractPhase = resolveContractCapacityPhase(params.contract, phaseInstantMs);
+           const targetAmount =
+-            contractPhase.initialBlocksRevenueCents
+-            + params.targetAdditionalBlocks * contractPhase.blockPriceCents;
++            params.contract.billingModel === 'modular_capacity_v2'
++              ? params.targetAdditionalBlocks * contractPhase.blockPriceCents
++              : contractPhase.initialBlocksRevenueCents
++                + params.targetAdditionalBlocks * contractPhase.blockPriceCents;
+           const phasePriceId = targetAmount > 0
+             ? await createCapacityPrice({
+                 stripe: params.stripe,
+@@ -1276,6 +1313,18 @@ async function syncModularCapacityStripeAmount(params: {
+         { idempotencyKey }
+       );
+     }
++  } else if (
++    existingCapacityItem &&
++    currentTargetAmount <= 0 &&
++    params.contract.billingModel === 'modular_capacity_v2'
++  ) {
++    await params.stripe.subscriptionItems.del(
++      existingCapacityItem.id,
++      { proration_behavior: 'none' } as any,
++      { idempotencyKey }
++    );
++    subscriptionItemId = '';
++    currentPriceId = '';
+   } else if (!existingCapacityItem && currentTargetAmount > 0) {
+     const createdItem = await params.stripe.subscriptionItems.create(
+       {
+@@ -1343,6 +1392,119 @@ async function syncModularCapacityBillingContract(params: {
+     };
+   }
+ 
++  if (contract.billingModel === 'modular_capacity_v2') {
++    const baseLimit = contract.acceptedCapacityLimitPatients;
++    const blockSize = contract.blockSizePatients;
++    const automaticUpgradeMaxPatients = Math.max(
++      baseLimit,
++      toSafeInteger(contract.sourceSnapshot?.automaticUpgradeMaxPatients) || 50
++    );
++    const cappedPatients = Math.min(Math.max(activePatients, 1), automaticUpgradeMaxPatients);
++    const targetAdditionalBlocks = Math.max(
++      0,
++      Math.ceil(Math.max(cappedPatients - baseLimit, 0) / blockSize)
++    );
++    const targetLimit = baseLimit + targetAdditionalBlocks * blockSize;
++    const nowIso = new Date().toISOString();
++
++    if (targetAdditionalBlocks !== contract.billedAdditionalBlocks) {
++      const stripeSync = await syncModularCapacityStripeAmount({
++        stripe: params.stripe,
++        contract,
++        subscription,
++        targetAdditionalBlocks,
++        idempotencyKey: params.idempotencyKey
++      });
++      await patchModularCapacityBillingContract(params.supabase, contract.id, {
++        billed_additional_blocks: targetAdditionalBlocks,
++        last_active_patient_count: activePatients,
++        overage_started_at: null,
++        grace_expires_at: null,
++        last_capacity_sync_at: nowIso,
++        last_capacity_sync_error: null,
++        capacity_product_id: stripeSync.productId,
++        capacity_subscription_item_id: stripeSync.subscriptionItemId,
++        capacity_price_id: stripeSync.priceId,
++        stripe_schedule_id:
++          contract.stripeScheduleId || scheduleIdFromSubscription(subscription) || null
++      });
++      await patchClinicBillingSafely(params.supabase, params.clinicId, {
++        stripe_customer_id: toSafeString(String(subscription.customer || ''), 200) || undefined,
++        stripe_subscription_id: subscription.id,
++        stripe_subscription_item_id: stripeSync.subscriptionItemId || null,
++        stripe_price_id: stripeSync.priceId || null,
++        subscription_status: subscription.status,
++        billing_model: ACTIVE_PATIENT_BILLING_MODEL,
++        active_patient_count: activePatients,
++        current_active_patient_count: activePatients,
++        current_active_patient_limit: targetLimit,
++        pending_billing_quantity: targetLimit,
++        pending_billing_status: activePatients > automaticUpgradeMaxPatients
++          ? 'enterprise_review_required'
++          : 'scheduled_next_cycle',
++        pending_effective_date: stripeSync.effectiveDate,
++        billing_sync_status: activePatients > automaticUpgradeMaxPatients
++          ? 'enterprise_review_required'
++          : targetAdditionalBlocks > contract.billedAdditionalBlocks
++            ? 'capacity_upgrade_scheduled'
++            : 'capacity_downgrade_scheduled',
++        billing_sync_error: null,
++        last_billing_sync_at: nowIso,
++        updated_at: nowIso
++      });
++      params.logger.log('[Stripe Sync] Faixa mensal modular v2 sincronizada.', {
++        clinicId: params.clinicId,
++        subscriptionId: subscription.id,
++        activePatients,
++        previousLimit: baseLimit + contract.billedAdditionalBlocks * blockSize,
++        targetLimit,
++        trigger: params.trigger
++      });
++      return {
++        success: true,
++        activePatients,
++        billableQuantity: targetLimit,
++        synced: true,
++        subscriptionId: subscription.id,
++        subscriptionItemId: stripeSync.subscriptionItemId || undefined,
++        reason: activePatients > automaticUpgradeMaxPatients
++          ? 'enterprise_review_required'
++          : targetAdditionalBlocks > contract.billedAdditionalBlocks
++            ? 'capacity_upgrade_scheduled'
++            : 'capacity_downgrade_scheduled'
++      };
++    }
++
++    await patchModularCapacityBillingContract(params.supabase, contract.id, {
++      last_active_patient_count: activePatients,
++      last_capacity_sync_error: null
++    });
++    await patchClinicBillingSafely(params.supabase, params.clinicId, {
++      billing_model: ACTIVE_PATIENT_BILLING_MODEL,
++      stripe_subscription_id: subscription.id,
++      active_patient_count: activePatients,
++      current_active_patient_count: activePatients,
++      current_active_patient_limit: targetLimit,
++      billing_sync_status: activePatients > automaticUpgradeMaxPatients
++        ? 'enterprise_review_required'
++        : 'within_contracted_capacity',
++      billing_sync_error: null,
++      last_billing_sync_at: nowIso,
++      updated_at: nowIso
++    });
++    return {
++      success: true,
++      activePatients,
++      billableQuantity: targetLimit,
++      synced: true,
++      subscriptionId: subscription.id,
++      subscriptionItemId: contract.capacitySubscriptionItemId || undefined,
++      reason: activePatients > automaticUpgradeMaxPatients
++        ? 'enterprise_review_required'
++        : 'within_contracted_capacity'
++    };
++  }
++
+   const effectiveLimit =
+     contract.acceptedCapacityLimitPatients
+     + contract.billedAdditionalBlocks * contract.blockSizePatients;
+diff --git a/src/components/PublicSalesOffer.tsx b/src/components/PublicSalesOffer.tsx
+index 2733693..4281e1d 100644
+--- a/src/components/PublicSalesOffer.tsx
++++ b/src/components/PublicSalesOffer.tsx
+@@ -121,6 +121,7 @@ type PublicCapacityBlockPhase = {
+ 
+ export type ModularPublicOffer = {
+   offerType: 'modular';
++  commercialPresentationVersion?: number;
+   proposalName: string;
+   clinicName?: string | null;
+   leadName?: string | null;
+@@ -168,6 +169,93 @@ export const ModularOfferDetails = ({
+ }: {
+   offer: ModularPublicOffer;
+ }) => {
++  if (Number(offer.commercialPresentationVersion || 0) >= 3) {
++    const includedModules = offer.items.filter(
++      (item) => item.itemKey !== 'platform_foundation' && item.pricingMode !== 'one_time'
++    );
++    const contractedCapacity = Math.max(
++      10,
++      Number(
++        offer.basePackage?.capacity?.totalContractedLimitPatients ||
++        offer.basePackage?.limitQuantity ||
++        10
++      )
++    );
++    const monthlyAmount = Math.max(0, Number(offer.promotionalMonthlyAmountCents || 0));
++    const equivalentPerPatientCents = contractedCapacity > 0
++      ? Math.round(monthlyAmount / contractedCapacity)
++      : 0;
++    const nextTier = [10, 20, 30, 40, 50].find((tier) => tier > contractedCapacity) || null;
++
++    return (
++      <div className="mt-6 space-y-4">
++        <section className="overflow-hidden rounded-3xl border border-violet-100 bg-white shadow-sm">
++          <div className="bg-gradient-to-br from-violet-700 to-violet-600 px-5 py-5 text-white sm:px-6">
++            <p className="text-xs font-medium text-violet-100">Plano Verto para sua clínica</p>
++            <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
++              <div>
++                <p className="text-2xl font-semibold">Até {contractedCapacity} pacientes ativos</p>
++                <p className="mt-1 text-sm font-normal text-violet-100">
++                  Paciente ativo = paciente cadastrado com pelo menos uma sessão válida marcada no mês.
++                </p>
++              </div>
++              <div className="sm:text-right">
++                <p className="text-3xl font-semibold">
++                  {formatSalesCurrency(monthlyAmount, offer.currency)}
++                  <span className="text-sm font-normal text-violet-100">/mês</span>
++                </p>
++                <p className="mt-1 text-xs font-normal text-violet-100">
++                  Equivale a {formatSalesCurrency(equivalentPerPatientCents, offer.currency)} por paciente na capacidade contratada
++                </p>
++              </div>
++            </div>
++          </div>
++
++          <div className="p-5 sm:p-6">
++            <p className="text-xs font-medium text-slate-500">Incluído no plano</p>
++            <div className="mt-3 grid gap-2 sm:grid-cols-2">
++              {includedModules.map((item) => (
++                <div key={item.itemKey} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
++                  <div className="flex items-center gap-2">
++                    <Check size={15} className="shrink-0 text-emerald-600" />
++                    <p className="text-sm font-semibold text-slate-900">{item.publicName}</p>
++                  </div>
++                  {item.description ? (
++                    <p className="mt-1 pl-[23px] text-xs font-normal leading-5 text-slate-500">
++                      {item.description}
++                    </p>
++                  ) : null}
++                </div>
++              ))}
++            </div>
++
++            {offer.globalDiscountPercentage > 0 ? (
++              <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
++                <p className="text-xs font-medium text-emerald-700">Condição negociada</p>
++                <p className="mt-1 text-sm font-semibold text-emerald-950">
++                  {offer.globalDiscountPercentage.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}% de desconto recorrente neste contrato
++                </p>
++                <p className="mt-1 text-xs font-normal leading-5 text-emerald-800">
++                  Não há período de teste nem retorno automático para outro preço.
++                </p>
++              </div>
++            ) : null}
++
++            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
++              <p className="text-xs font-medium text-slate-500">Ajuste automático de capacidade</p>
++              <p className="mt-1 text-sm font-semibold text-slate-900">
++                Faixas de 10, 20, 30, 40 e 50 pacientes
++              </p>
++              <p className="mt-1 text-xs font-normal leading-5 text-slate-600">
++                A Verto ajusta a faixa para cima ou para baixo conforme os pacientes faturáveis do mês, sem cobrança proporcional no meio do ciclo.
++                {nextTier ? ` A próxima faixa acima é de ${nextTier} pacientes.` : ' Acima de 50 pacientes, a condição passa por revisão Enterprise.'}
++              </p>
++            </div>
++          </div>
++        </section>
++      </div>
++    );
++  }
+   const recurringItems = offer.items.filter(
+     (item) => item.pricingMode !== 'one_time'
+   );
+@@ -568,14 +656,7 @@ export const ModularOfferDetails = ({
+         {formatSalesCommercialDate(offer.expiresAt)}.
+       </div>
+ 
+-      {offer.trialDays > 0 ? (
+-        <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+-          <p className="text-sm font-semibold text-emerald-900">{offer.trialDays} dias gratuitos</p>
+-          <p className="mt-1 text-xs font-normal leading-5 text-emerald-800">
+-            O cartão é cadastrado na Stripe e a primeira cobrança ocorre após o período de teste, conforme esta proposta.
+-          </p>
+-        </div>
+-      ) : null}
++
+ 
+       <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">
+         <p className="text-sm font-medium text-slate-800">Contratação protegida pela Verto</p>
+@@ -1042,7 +1123,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
+                             className="mt-1 h-5 w-5 shrink-0 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                           />
+                           <span>
+-                            Declaro estar ciente dos valores promocionais e dos valores aplicáveis após o término de cada benefício.
++                            Declaro estar ciente dos módulos incluídos, da capacidade contratada e do valor mensal final desta proposta.
+                           </span>
+                         </label>
+                         <button
+diff --git a/src/components/SalesModularProposalBuilder.tsx b/src/components/SalesModularProposalBuilder.tsx
+index 3dbefca..9da94c2 100644
+--- a/src/components/SalesModularProposalBuilder.tsx
++++ b/src/components/SalesModularProposalBuilder.tsx
+@@ -51,7 +51,6 @@ import {
+ } from '../utils/salesModularEconomics';
+ import { filterSalesCurrentOperatingTechnicalBlockers } from '../utils/salesCurrentOperatingEconomics';
+ import type { SalesAssumptionSnapshot } from '../utils/salesProfitability';
+-import { normalizeSalesTrialDays } from '../utils/salesTrialContract';
+ import { buildSalesRecurringMoneyFlow } from '../utils/salesFinancialExplanation';
+ import {
+   ModularOfferDetails,
+@@ -135,8 +134,8 @@ const SALES_FUNCTIONAL_MODULE_KEYS = [
+ ] as const;
+ 
+ const SALES_PATIENT_CAPACITY_BLOCKS = [10, 20, 30, 40, 50] as const;
+-const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000;
+-const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000;
++const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 8000;
++const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 7000;
+ 
+ const isSalesFunctionalModuleItemKey = (value: string) =>
+   SALES_FUNCTIONAL_MODULE_KEYS.includes(
+@@ -530,6 +529,8 @@ export const SalesModularProposalBuilder = ({
+           commercialCapacityForDemand(patientQuantity) ||
+           Math.max(51, patientQuantity);
+         const initialBaseTier = customCapacityTier || recommendedTier;
++        const standardBlockCount =
++          initialCapacity <= 50 ? Math.max(0, (initialCapacity - 10) / 10) : null;
+         const initialInput: SalesModularProposalInput = {
+           commercialPricingMode: 'manual_module_prices',
+           commercialCapacityBasis: 'current_patients',
+@@ -540,13 +541,13 @@ export const SalesModularProposalBuilder = ({
+           basePackageTierId: initialBaseTier.id,
+           basePackageSelectionMode: customCapacityTier ? 'manual' : 'automatic',
+           customBasePackageLimit: customCapacityTier
+-            ? initialCapacity
++            ? initialCapacity <= 50 ? 10 : initialCapacity
+             : initialBaseTier.isCustom ||
+                 initialBaseTier.maximumQuantity === null
+-              ? initialCapacity
++              ? initialCapacity <= 50 ? 10 : initialCapacity
+               : null,
+-          customCapacityBlocks: null,
+-          customCapacitySelectionMode: 'automatic',
++          customCapacityBlocks: standardBlockCount,
++          customCapacitySelectionMode: initialCapacity <= 50 ? 'manual' : 'automatic',
+           lines: [
+             selectionForItem(
+               core,
+@@ -558,7 +559,7 @@ export const SalesModularProposalBuilder = ({
+           globalDiscountBasisPoints: 0,
+           discountDurationMonths: 0,
+           offerValidityDays: 14,
+-          trialDays: 7,
++          trialDays: 0,
+           onboardingInstallments: 1,
+           usageProfile: 'intensive',
+           driverOverrides: {},
+@@ -582,12 +583,8 @@ export const SalesModularProposalBuilder = ({
+         );
+         setInput({
+           ...initialInput,
+-          trialDays: frozenSimulation
+-            ? normalizeSalesTrialDays(
+-                frozenSimulation.modular_input_snapshot?.trialDays,
+-                0
+-              )
+-            : initialInput.trialDays
++          trialDays: 0,
++          discountDurationMonths: 0
+         });
+       } catch (loadError: any) {
+         if (cancelled) return;
+@@ -1001,12 +998,6 @@ export const SalesModularProposalBuilder = ({
+       ) || null,
+     [selectedSimulationId, simulations]
+   );
+-  const selectedSimulationTrialDays = selectedSimulation
+-    ? normalizeSalesTrialDays(
+-        selectedSimulation.modular_input_snapshot?.trialDays,
+-        0
+-      )
+-    : null;
+   const summaryPreview = selectedSimulation?.results_snapshot || preview;
+   const summaryInput = selectedSimulation?.modular_input_snapshot || input;
+   const summaryAssumptions = selectedSimulation
+@@ -1220,19 +1211,11 @@ export const SalesModularProposalBuilder = ({
+   if (useLegacyFallback) return <>{legacyFallback}</>;
+ 
+   const updateInput = (patch: Partial<SalesModularProposalInput>) => {
+-    const changesFrozenTrial =
+-      Object.prototype.hasOwnProperty.call(patch, 'trialDays') &&
+-      selectedSimulationId.length > 0;
+-    setInput((current) => (current ? { ...current, ...patch } : current));
+-    if (changesFrozenTrial) {
+-      setSelectedSimulationId('');
+-    }
+-    setPreparedOffer(null);
+-    setNotice(
+-      changesFrozenTrial
+-        ? 'Período de teste alterado. Salve e selecione um novo cenário para congelar essa condição antes de gerar a proposta.'
+-        : ''
++    setInput((current) =>
++      current ? { ...current, ...patch, trialDays: 0 } : current
+     );
++    setPreparedOffer(null);
++    setNotice('');
+   };
+ 
+   const changePatientQuantity = (patientQuantity: number) => {
+@@ -1274,11 +1257,11 @@ export const SalesModularProposalBuilder = ({
+       ...(selectedTier?.isCustom || selectedTier?.maximumQuantity === null
+         ? {
+             customBasePackageLimit:
+-              currentCapacity >= safeQuantity
+-                ? currentCapacity
+-                : automaticCapacity,
+-            customCapacityBlocks: null,
+-            customCapacitySelectionMode: 'automatic' as const
++              automaticCapacity <= 50 ? 10 : automaticCapacity,
++            customCapacityBlocks:
++              automaticCapacity <= 50 ? Math.max(0, (automaticCapacity - 10) / 10) : null,
++            customCapacitySelectionMode:
++              automaticCapacity <= 50 ? 'manual' as const : 'automatic' as const
+           }
+         : {})
+     });
+@@ -1322,9 +1305,9 @@ export const SalesModularProposalBuilder = ({
+     updateInput({
+       basePackageTierId: customTier.id,
+       basePackageSelectionMode: 'manual',
+-      customBasePackageLimit: nextCapacity,
+-      customCapacityBlocks: null,
+-      customCapacitySelectionMode: 'automatic',
++      customBasePackageLimit: nextCapacity <= 50 ? 10 : nextCapacity,
++      customCapacityBlocks: nextCapacity <= 50 ? Math.max(0, (nextCapacity - 10) / 10) : null,
++      customCapacitySelectionMode: nextCapacity <= 50 ? 'manual' : 'automatic',
+       lines
+     });
+     setError('');
+@@ -1553,7 +1536,7 @@ export const SalesModularProposalBuilder = ({
+         : 'manual');
+     setInput({
+       ...snapshotInput,
+-      trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
++      trialDays: 0,
+       commercialPricingMode: 'manual_module_prices',
+       commercialCapacityBasis: 'current_patients',
+       // Duplicar um cenário histórico cria uma nova composição comercial sem
+@@ -1840,8 +1823,8 @@ export const SalesModularProposalBuilder = ({
+     (item) => item.itemKey === 'clinical_core'
+   );
+   const coreMarginTraffic = moduleMarginTrafficLight(
+-    coreEconomics?.postPromotionMarginBasisPoints ??
+-      coreResult?.postPromotion.ebitdaMarginBasisPoints
++    coreResult?.commercialPricing.contributionMarginBasisPoints ??
++      coreEconomics?.postPromotionMarginBasisPoints
+   );
+   const customPerPatientPricing =
+     input?.commercialPricingMode === 'manual_module_prices' &&
+@@ -1866,7 +1849,12 @@ export const SalesModularProposalBuilder = ({
+     ] || null;
+   const currentCommercialCapacity = Math.max(
+     0,
+-    Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
++    Number(
++      preview?.basePackage.capacity?.totalContractedLimitPatients ||
++      preview?.basePackage.limitQuantity ||
++      input?.customBasePackageLimit ||
++      0
++    )
+   );
+   const nextStandardCommercialCapacity =
+     currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
+@@ -2115,9 +2103,9 @@ export const SalesModularProposalBuilder = ({
+                   <div className="text-sm font-medium text-slate-700">
+                     Capacidade contratada
+                     <div className="mt-1 flex min-h-11 items-center rounded-xl border border-slate-200 bg-slate-50 px-3 font-normal text-slate-900">
+-                      {Number(input.customBasePackageLimit || 0) > 50
+-                        ? `Enterprise · ${Number(input.customBasePackageLimit || 0)} pacientes`
+-                        : `${Number(input.customBasePackageLimit || 0)} pacientes`}
++                      {currentCommercialCapacity > 50
++                        ? `Enterprise · ${currentCommercialCapacity} pacientes`
++                        : `${currentCommercialCapacity} pacientes`}
+                     </div>
+                   </div>
+                 </div>
+@@ -2132,7 +2120,7 @@ export const SalesModularProposalBuilder = ({
+                   >
+                     {SALES_PATIENT_CAPACITY_BLOCKS.map((capacity) => {
+                       const selected =
+-                        Number(input.customBasePackageLimit || 0) === capacity;
++                        currentCommercialCapacity === capacity;
+                       const disabled = currentPackageDemand > capacity;
+                       return (
+                         <button
+@@ -2155,10 +2143,10 @@ export const SalesModularProposalBuilder = ({
+                     <button
+                       type="button"
+                       role="radio"
+-                      aria-checked={Number(input.customBasePackageLimit || 0) > 50}
++                      aria-checked={currentCommercialCapacity > 50}
+                       onClick={() => selectCommercialCapacity('enterprise')}
+                       className={`min-h-11 rounded-xl border px-3 text-sm font-medium transition ${
+-                        Number(input.customBasePackageLimit || 0) > 50
++                        currentCommercialCapacity > 50
+                           ? 'border-violet-300 bg-violet-600 text-white'
+                           : 'border-slate-200 bg-white text-slate-700 hover:border-violet-200 hover:bg-violet-50'
+                       }`}
+@@ -2853,8 +2841,8 @@ export const SalesModularProposalBuilder = ({
+                   clínica contratará; nenhum módulo é incluído por dependência comercial.
+                 </p>
+                 <p className="mt-2 text-xs font-normal text-slate-500">
+-                  Semáforo de margem por módulo: verde a partir de 70%, amarelo-laranja
+-                  entre 50% e 69,99% e vermelho abaixo de 50%.
++                  Semáforo de margem por módulo: verde a partir de 80%, amarelo-laranja
++                  entre 70% e 79,99% e vermelho abaixo de 70%.
+                 </p>
+                 <div className="mt-4 space-y-3">
+                   {catalog.items
+@@ -2889,8 +2877,8 @@ export const SalesModularProposalBuilder = ({
+                         economicsItem.itemKey === item.itemKey
+                     );
+                     const marginTraffic = moduleMarginTrafficLight(
+-                      moduleEconomics?.postPromotionMarginBasisPoints ??
+-                        resultLine?.postPromotion.ebitdaMarginBasisPoints
++                      resultLine?.commercialPricing.contributionMarginBasisPoints ??
++                        moduleEconomics?.postPromotionMarginBasisPoints
+                     );
+                     return (
+                       <div
+@@ -3532,9 +3520,12 @@ export const SalesModularProposalBuilder = ({
+                 <h2 className="text-base font-semibold text-slate-900">
+                   Condição comercial
+                 </h2>
+-                <div className="mt-4 grid gap-4 sm:grid-cols-3">
++                <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
++                  O desconto informado vira o preço recorrente negociado deste contrato. Não há período de teste nem retorno automático para outro preço.
++                </p>
++                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                   <label className="text-sm font-medium text-slate-700">
+-                    Desconto global
++                    Desconto negociado
+                     <div className="relative mt-1">
+                       <input
+                         type="number"
+@@ -3543,64 +3534,22 @@ export const SalesModularProposalBuilder = ({
+                         step="0.01"
+                         value={input.globalDiscountBasisPoints / 100}
+                         onChange={(event) => {
+-                          const basisPoints = Math.round(
++                          const basisPoints = Math.max(0, Math.min(10_000, Math.round(
+                             Number(event.target.value) * 100
+-                          );
++                          )));
+                           updateInput({
+                             globalDiscountBasisPoints: basisPoints,
+-                            discountDurationMonths:
+-                              basisPoints > 0
+-                                ? Math.max(1, input.discountDurationMonths || 6)
+-                                : 0
++                            discountDurationMonths: 0,
++                            trialDays: 0
+                           });
+                         }}
+                         className="min-h-11 w-full rounded-xl border border-slate-200 px-3 pr-8 font-normal"
+                       />
+                       <span className="absolute right-3 top-3 text-slate-400">%</span>
+                     </div>
+-                  </label>
+-                  <label className="text-sm font-medium text-slate-700">
+-                    Duração
+-                    <select
+-                      value={input.discountDurationMonths}
+-                      disabled={input.globalDiscountBasisPoints === 0}
+-                      onChange={(event) =>
+-                        updateInput({
+-                          discountDurationMonths: Number(event.target.value)
+-                        })
+-                      }
+-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal disabled:bg-slate-100"
+-                    >
+-                      {[1, 3, 6, 12, 18, 24, 36].map((months) => (
+-                        <option key={months} value={months}>
+-                          {months} meses
+-                        </option>
+-                      ))}
+-                    </select>
+-                  </label>
+-                  <label className="text-sm font-medium text-slate-700">
+-                    Período de teste
+-                    <select
+-                      value={input.trialDays ?? 0}
+-                      onChange={(event) =>
+-                        updateInput({
+-                          trialDays: Number(event.target.value) as 0 | 7 | 14 | 30
+-                        })
+-                      }
+-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
+-                    >
+-                      <option value={0}>Sem teste</option>
+-                      <option value={7}>7 dias</option>
+-                      <option value={14}>14 dias</option>
+-                      <option value={30}>30 dias</option>
+-                    </select>
+-                    {selectedSimulationTrialDays !== null ? (
+-                      <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
+-                        Cenário selecionado: {selectedSimulationTrialDays > 0
+-                          ? `${selectedSimulationTrialDays} dias de teste`
+-                          : 'sem período de teste'}.
+-                      </span>
+-                    ) : null}
++                    <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
++                      A margem é recalculada sobre o valor efetivamente negociado. Meta estrutural: 80% de margem de contribuição.
++                    </span>
+                   </label>
+                   <label className="text-sm font-medium text-slate-700">
+                     Validade
+@@ -4583,7 +4532,12 @@ export const SalesModularProposalBuilder = ({
+               ] || null;
+               const currentCommercialCapacity = Math.max(
+                 0,
+-                Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
++                Number(
++                  preview?.basePackage.capacity?.totalContractedLimitPatients ||
++                  preview?.basePackage.limitQuantity ||
++                  input?.customBasePackageLimit ||
++                  0
++                )
+               );
+               const nextStandardCommercialCapacity =
+                 currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
+@@ -4598,6 +4552,9 @@ export const SalesModularProposalBuilder = ({
+                 preview && nextStandardCommercialCapacity && currentCapacityBlockPhase?.blockPriceCents != null
+                   ? preview.promotionalRecurringRevenueCents + currentCapacityBlockPhase.blockPriceCents
+                   : null;
++              const consolidatedContributionTraffic = moduleMarginTrafficLight(
++                preview?.promotional.contributionMarginBasisPoints,
++              );
+               return (
+             <aside className="min-w-0 space-y-4 lg:sticky lg:top-[104px] lg:self-start">
+               <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+@@ -4637,8 +4594,7 @@ export const SalesModularProposalBuilder = ({
+                       </p>
+                       {input.globalDiscountBasisPoints > 0 ? (
+                         <p className="mt-1 text-xs font-normal text-slate-300">
+-                          Depois: {currency(preview.postPromotionRecurringRevenueCents)}
+-                          /mês
++                          Desconto negociado recorrente: {percent(input.globalDiscountBasisPoints)}
+                         </p>
+                       ) : null}
+                     </div>
+@@ -4663,6 +4619,15 @@ export const SalesModularProposalBuilder = ({
+                           {selectedCommercialModuleNames.join(' · ') || 'Nenhum módulo selecionado'}
+                         </dd>
+                       </div>
++                      <div className={`col-span-2 rounded-xl border p-3 ${consolidatedContributionTraffic.className}`}>
++                        <dt className="font-normal opacity-80">Margem de contribuição consolidada</dt>
++                        <dd className="mt-1 text-sm font-semibold">
++                          {percent(preview.promotional.contributionMarginBasisPoints)} · meta 80%
++                        </dd>
++                        <p className="mt-1 text-xs font-normal leading-5 opacity-80">
++                          Sempre recalculada sobre o preço efetivamente negociado. Indicador interno; não é enviado ao cliente.
++                        </p>
++                      </div>
+                       {nextStandardCommercialCapacity ? (
+                         <div className="col-span-2 rounded-xl border border-violet-200 bg-violet-50/60 p-3">
+                           <dt className="font-normal text-violet-700">Próximo upgrade automático</dt>
+diff --git a/src/utils/salesModularProposal.ts b/src/utils/salesModularProposal.ts
+index 7720fbf..bb826a6 100644
+--- a/src/utils/salesModularProposal.ts
++++ b/src/utils/salesModularProposal.ts
+@@ -198,7 +198,7 @@ export type SalesModularProposalInput = {
+   globalDiscountBasisPoints: number;
+   discountDurationMonths: number;
+   offerValidityDays: number;
+-  trialDays?: 0 | 7 | 14 | 30;
++  trialDays?: 0;
+   onboardingInstallments?: number;
+   usageProfile: SalesUsageProfile;
+   driverOverrides?: SalesModularDriverOverrides;
+@@ -1191,10 +1191,7 @@ export function validateSalesModularProposalInput(
+     !Number.isInteger(input.discountDurationMonths) ||
+     input.discountDurationMonths < 0 ||
+     input.discountDurationMonths > 36 ||
+-    (input.globalDiscountBasisPoints === 0 &&
+-      input.discountDurationMonths !== 0) ||
+-    (input.globalDiscountBasisPoints > 0 &&
+-      input.discountDurationMonths === 0)
++    (input.globalDiscountBasisPoints === 0 && input.discountDurationMonths !== 0)
+   ) {
+     errors.push('discountDurationMonths');
+   }
+@@ -1205,7 +1202,7 @@ export function validateSalesModularProposalInput(
+   ) {
+     errors.push('offerValidityDays');
+   }
+-  if (![0, 7, 14, 30].includes(Number(input.trialDays ?? 0))) {
++  if (Number(input.trialDays ?? 0) !== 0) {
+     errors.push('trialDays');
+   }
+   if (
+@@ -3104,13 +3101,21 @@ export function calculateSalesModularProposal(
+   );
+   const postPeriod = calculatePeriod(
+     [
+-      platformFoundationPeriodSource,
+-      ...resolved.map((line) => ({
++      {
++        ...platformFoundationPeriodSource,
++        netRevenueCents:
++          input.globalDiscountBasisPoints > 0 && input.discountDurationMonths === 0
++            ? platformFoundationRecurringAmountCents - foundationGlobalDiscountCents
++            : platformFoundationRecurringAmountCents
++      },
++      ...resolved.map((line, index) => ({
+         itemKey: line.item.itemKey,
+         netRevenueCents:
+           line.item.billingInterval === 'one_time'
+             ? 0
+-            : line.postPromotionRecurringRevenueCents,
++            : input.globalDiscountBasisPoints > 0 && input.discountDurationMonths === 0
++              ? line.promotionalItemRevenueCents - globalAllocations[index]
++              : line.postPromotionRecurringRevenueCents,
+         grossRevenueCents:
+           line.item.billingInterval === 'one_time'
+             ? 0
+@@ -4789,16 +4794,19 @@ export function calculateSalesModularProposal(
+         intensiveValues.refundChargebackBasisPoints,
+       taxPercentageBasisPoints: intensiveValues.revenueTaxBasisPoints
+     });
++    const firstYearDiscountMonths =
++      input.globalDiscountBasisPoints > 0 && input.discountDurationMonths === 0
++        ? 12
++        : Math.min(12, input.discountDurationMonths);
+     const firstYearMaximumDiscountCents =
+       promotionalMinimumPrice === null
+         ? null
+         : Math.max(
+             0,
+             intensivePostPeriod.consolidated.recurringRevenueCents * 12 -
+-              promotionalMinimumPrice *
+-                Math.min(12, input.discountDurationMonths) -
++              promotionalMinimumPrice * firstYearDiscountMonths -
+               (postMinimumPrice || promotionalMinimumPrice) *
+-                Math.max(0, 12 - input.discountDurationMonths)
++                Math.max(0, 12 - firstYearDiscountMonths)
+           );
+     economics = {
+       policy: profitabilityPolicy,
+diff --git a/supabase/migrations/20260901223000_sales_monthly_billable_patients_and_bidirectional_capacity_v2.sql b/supabase/migrations/20260901223000_sales_monthly_billable_patients_and_bidirectional_capacity_v2.sql
+new file mode 100644
+index 0000000..0bd3cf2
+--- /dev/null
++++ b/supabase/migrations/20260901223000_sales_monthly_billable_patients_and_bidirectional_capacity_v2.sql
+@@ -0,0 +1,233 @@
++-- Verto commercial billing v2
++-- 1) Billable patient = registered patient with at least one valid appointment in the clinic month.
++-- 2) Persist one monthly billing snapshot per clinic/month for audit/reuse.
++-- 3) Allow new modular capacity contracts to move bidirectionally across 10/20/30/40/50 tiers.
++-- Historical modular_capacity_v1 contracts remain untouched.
++
++begin;
++
++create table if not exists public.organization_monthly_billable_patient_snapshots (
++  id uuid primary key default gen_random_uuid(),
++  organization_id uuid not null references public.clinics(id) on delete cascade,
++  billing_month date not null,
++  timezone text not null,
++  billable_patient_count integer not null check (billable_patient_count >= 0),
++  patient_ids uuid[] not null default '{}'::uuid[],
++  rule_version text not null default 'scheduled_session_month_v1',
++  is_final boolean not null default false,
++  observed_at timestamptz not null default now(),
++  finalized_at timestamptz,
++  created_at timestamptz not null default now(),
++  updated_at timestamptz not null default now(),
++  unique (organization_id, billing_month)
++);
++
++create index if not exists idx_org_monthly_billable_patient_snapshots_month
++  on public.organization_monthly_billable_patient_snapshots (billing_month, organization_id);
++
++alter table public.organization_monthly_billable_patient_snapshots enable row level security;
++revoke all on table public.organization_monthly_billable_patient_snapshots from public, anon, authenticated;
++grant select, insert, update, delete on table public.organization_monthly_billable_patient_snapshots to service_role;
++
++create or replace function public.resolve_monthly_billable_patient_count_v1(
++  p_clinic_id uuid,
++  p_billing_month date default null,
++  p_persist_snapshot boolean default true,
++  p_force_refresh boolean default false
++)
++returns integer
++language plpgsql
++security definer
++set search_path = pg_catalog, public
++as $function$
++declare
++  v_timezone text := 'America/Sao_Paulo';
++  v_month date;
++  v_start timestamptz;
++  v_end timestamptz;
++  v_patient_ids uuid[] := '{}'::uuid[];
++  v_count integer := 0;
++begin
++  if p_clinic_id is null then
++    return 0;
++  end if;
++
++  select coalesce(nullif(trim(coalesce(to_jsonb(c)->>'timezone', '')), ''), 'America/Sao_Paulo')
++    into v_timezone
++  from public.clinics c
++  where c.id = p_clinic_id;
++
++  if not found then
++    return 0;
++  end if;
++
++  v_month := coalesce(
++    p_billing_month,
++    date_trunc('month', now() at time zone v_timezone)::date
++  );
++  v_start := (v_month::timestamp at time zone v_timezone);
++  v_end := ((v_month + interval '1 month')::timestamp at time zone v_timezone);
++
++  -- Hot-path reads reuse the monthly snapshot. The scheduled reconciler is the
++  -- canonical refresh point, so application calls do not repeatedly aggregate
++  -- appointments for the same clinic/month (registre 1x, leia várias).
++  if not p_force_refresh then
++    select snapshot.billable_patient_count
++      into v_count
++    from public.organization_monthly_billable_patient_snapshots snapshot
++    where snapshot.organization_id = p_clinic_id
++      and snapshot.billing_month = v_month
++    limit 1;
++    if found then
++      return coalesce(v_count, 0);
++    end if;
++  end if;
++
++  select coalesce(array_agg(distinct a.patient_id order by a.patient_id), '{}'::uuid[])
++    into v_patient_ids
++  from public.appointments a
++  join public.patients p
++    on p.id = a.patient_id
++   and p.clinic_id = p_clinic_id
++  where a.clinic_id = p_clinic_id
++    and a.patient_id is not null
++    and a.scheduled_at >= v_start
++    and a.scheduled_at < v_end
++    and coalesce((to_jsonb(a)->>'deleted_at'), '') = ''
++    and coalesce((to_jsonb(a)->>'is_active')::boolean, true) = true
++    and lower(coalesce(a.status, 'scheduled')) not in (
++      'cancelled','canceled','cancelada','cancelado','cancelled_by_clinic',
++      'cancelado_pela_clinica','cancelled_by_patient','cancelado_pelo_paciente',
++      'deleted','archived','inactive','rejected','recusado','recusada','invalid'
++    )
++    and coalesce((to_jsonb(p)->>'deleted_at'), '') = '';
++
++  v_count := coalesce(array_length(v_patient_ids, 1), 0);
++
++  if p_persist_snapshot then
++    insert into public.organization_monthly_billable_patient_snapshots (
++      organization_id,
++      billing_month,
++      timezone,
++      billable_patient_count,
++      patient_ids,
++      rule_version,
++      is_final,
++      observed_at,
++      updated_at
++    ) values (
++      p_clinic_id,
++      v_month,
++      v_timezone,
++      v_count,
++      v_patient_ids,
++      'scheduled_session_month_v1',
++      false,
++      now(),
++      now()
++    )
++    on conflict (organization_id, billing_month) do update
++      set timezone = excluded.timezone,
++          billable_patient_count = excluded.billable_patient_count,
++          patient_ids = excluded.patient_ids,
++          rule_version = excluded.rule_version,
++          observed_at = excluded.observed_at,
++          updated_at = now()
++      where public.organization_monthly_billable_patient_snapshots.is_final = false;
++  end if;
++
++  return v_count;
++end;
++$function$;
++
++revoke all on function public.resolve_monthly_billable_patient_count_v1(uuid, date, boolean, boolean)
++  from public, anon, authenticated;
++grant execute on function public.resolve_monthly_billable_patient_count_v1(uuid, date, boolean, boolean)
++  to service_role;
++
++-- The scheduled reconciler now uses the same canonical monthly rule as runtime reads.
++create or replace function public.reconcile_active_patient_billing_sync_queue(
++  p_trigger text default 'scheduled_reconciliation'
++)
++returns integer
++language plpgsql
++security definer
++set search_path = pg_catalog, public
++as $function$
++declare
++  v_count integer;
++begin
++  with billable_counts as (
++    select
++      clinic.id as clinic_id,
++      public.resolve_monthly_billable_patient_count_v1(clinic.id, null, true, true) as active_patient_count
++    from public.clinics clinic
++    where nullif(coalesce(to_jsonb(clinic)->>'stripe_subscription_id', ''), '') is not null
++      and coalesce(lower(to_jsonb(clinic)->>'billing_model'), '') <> 'demo'
++  ), reconciled as (
++    insert into public.active_patient_billing_sync_queue as queue_row (
++      clinic_id,
++      desired_active_patient_count,
++      queue_version,
++      status,
++      attempts,
++      next_attempt_at,
++      trigger,
++      created_at,
++      updated_at
++    )
++    select
++      billable_counts.clinic_id,
++      billable_counts.active_patient_count,
++      1,
++      'pending',
++      0,
++      now(),
++      coalesce(nullif(trim(p_trigger), ''), 'scheduled_reconciliation'),
++      now(),
++      now()
++    from billable_counts
++    on conflict (clinic_id) do update
++    set
++      desired_active_patient_count = excluded.desired_active_patient_count,
++      queue_version = case
++        when queue_row.desired_active_patient_count is distinct from excluded.desired_active_patient_count
++          then queue_row.queue_version + 1
++        else queue_row.queue_version
++      end,
++      status = case
++        when queue_row.desired_active_patient_count is distinct from excluded.desired_active_patient_count
++          then case when queue_row.status = 'processing' then 'processing' else 'pending' end
++        else queue_row.status
++      end,
++      attempts = case
++        when queue_row.desired_active_patient_count is distinct from excluded.desired_active_patient_count
++             and queue_row.status <> 'processing'
++          then 0
++        else queue_row.attempts
++      end,
++      next_attempt_at = case
++        when queue_row.desired_active_patient_count is distinct from excluded.desired_active_patient_count then now()
++        else queue_row.next_attempt_at
++      end,
++      trigger = excluded.trigger,
++      updated_at = now()
++    returning clinic_id
++  )
++  select count(*) into v_count from reconciled;
++
++  return coalesce(v_count, 0);
++end;
++$function$;
++
++-- Permit the new bidirectional contract only for newly provisioned sales.
++alter table public.organization_billing_contracts
++  drop constraint if exists organization_billing_contracts_billing_model_check;
++
++alter table public.organization_billing_contracts
++  add constraint organization_billing_contracts_billing_model_check
++  check (billing_model in ('modular_capacity_v1', 'modular_capacity_v2'));
++
++notify pgrst, 'reload schema';
++
++commit;
+diff --git a/tests/salesCapacityAutoUpgrade20260830.regression.test.mjs b/tests/salesCapacityAutoUpgrade20260830.regression.test.mjs
+index 9814bc7..339c59d 100644
+--- a/tests/salesCapacityAutoUpgrade20260830.regression.test.mjs
++++ b/tests/salesCapacityAutoUpgrade20260830.regression.test.mjs
+@@ -73,7 +73,8 @@ assert.match(
+   server,
+   /presentationVersion >= SALES_CUSTOMER_FACING_PRESENTATION_VERSION[\s\S]*\? 0/
+ );
+-assert.match(server, /billing_model: "modular_capacity_v1"/);
++assert.match(server, /billing_model: capacity\.billingModel/);
++assert.match(server, /billingModel: bidirectionalStandardTiers \? "modular_capacity_v2"/);
+ assert.match(capacityMigration, /check \(billing_model in \('modular_capacity_v1'\)\)/);
+ assert.match(capacityMigration, /billing_adjustment text not null default 'next_cycle'/);
+ assert.match(capacityMigration, /blocks_clinical_access boolean not null default false/);
+diff --git a/tests/salesRecurringTieredCommercialModel20260901.regression.test.mjs b/tests/salesRecurringTieredCommercialModel20260901.regression.test.mjs
+new file mode 100644
+index 0000000..d773edb
+--- /dev/null
++++ b/tests/salesRecurringTieredCommercialModel20260901.regression.test.mjs
+@@ -0,0 +1,115 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const builder = readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
++const publicOffer = readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
++const engine = readFileSync('src/utils/salesModularProposal.ts', 'utf8');
++const server = readFileSync('server.ts', 'utf8');
++const stripeService = readFileSync('services/stripeService.ts', 'utf8');
++const migration = readFileSync(
++  'supabase/migrations/20260901223000_sales_monthly_billable_patients_and_bidirectional_capacity_v2.sql',
++  'utf8',
++);
++
++// New proposals use the explicit standard capacity bands and keep the internal
++// economic target visible to the owner without turning margin into a sales gate.
++assert.match(builder, /SALES_PATIENT_CAPACITY_BLOCKS = \[10, 20, 30, 40, 50\]/);
++assert.match(builder, /SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 8000/);
++assert.match(builder, /SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 7000/);
++assert.match(builder, /Margem de contribuição consolidada/);
++assert.match(builder, /meta 80%/);
++assert.match(builder, /Indicador interno; não é enviado ao cliente/);
++assert.match(builder, /Desconto negociado recorrente/);
++assert.doesNotMatch(builder, />\s*Período de teste\s*</);
++
++// New sales cannot reintroduce trials through a crafted request. Historical
++// fields remain readable for backwards compatibility, but v3 checkout fails closed.
++assert.match(engine, /trialDays\?: 0/);
++assert.match(engine, /Number\(input\.trialDays \?\? 0\) !== 0/);
++assert.match(server, /trialDays: 0/);
++assert.match(server, /MODULAR_CHECKOUT_TRIAL_NOT_ALLOWED/);
++assert.match(server, /commercialPresentationVersion >= SALES_CUSTOMER_FACING_PRESENTATION_VERSION/);
++
++// Customer-facing v3 does not receive per-module commercial economics. The
++// public experience shows only included modules, contracted band and final total.
++assert.match(server, /const compactCommercialPresentation = presentationVersion >= 3/);
++assert.match(server, /if \(compactCommercialPresentation\) return basic/);
++assert.match(server, /commercialPhases: compactCommercialPresentation[\s\S]{0,40}?\? \[\]/);
++assert.match(server, /capacityBlockPhases: compactCommercialPresentation[\s\S]{0,40}?\? \[\]/);
++assert.match(publicOffer, /Plano Verto para sua clínica/);
++assert.match(publicOffer, /Até \{contractedCapacity\} pacientes ativos/);
++assert.match(publicOffer, /Faixas de 10, 20, 30, 40 e 50 pacientes/);
++assert.match(publicOffer, /desconto recorrente neste contrato/);
++
++// Billable patient is monthly appointment-driven, DISTINCT by patient and
++// persisted as one auditable snapshot. Cancelled/invalid appointments do not
++// count; no-show remains a scheduled session and is not excluded by this rule.
++assert.match(migration, /organization_monthly_billable_patient_snapshots/);
++assert.match(migration, /array_agg\(distinct a\.patient_id/);
++assert.match(migration, /a\.scheduled_at >= v_start/);
++assert.match(migration, /a\.scheduled_at < v_end/);
++assert.match(migration, /'cancelled','canceled','cancelada','cancelado'/);
++assert.doesNotMatch(
++  migration.match(/lower\(coalesce\(a\.status,[\s\S]*?\)\s+and coalesce\(\(to_jsonb\(p\)/)?.[0] || '',
++  /no_show|missed|faltou/,
++);
++assert.match(migration, /unique \(organization_id, billing_month\)/);
++assert.match(migration, /if not p_force_refresh then/);
++assert.match(migration, /resolve_monthly_billable_patient_count_v1\(clinic\.id, null, true, true\)/);
++assert.match(stripeService, /p_force_refresh: false/);
++assert.match(migration, /is_final boolean not null default false/);
++assert.match(migration, /where public\.organization_monthly_billable_patient_snapshots\.is_final = false/);
++assert.match(migration, /revoke all on table public\.organization_monthly_billable_patient_snapshots from public, anon, authenticated/);
++assert.match(migration, /grant[\s\S]{0,120}?organization_monthly_billable_patient_snapshots to service_role/);
++assert.match(stripeService, /resolve_monthly_billable_patient_count_v1/);
++assert.match(stripeService, /\.select\('patient_id,status'\)/);
++assert.match(stripeService, /Array\.from\(new Set/);
++
++// New contracts are bidirectional while v1 remains upgrade-only for historical
++// customers. Stripe adjustments explicitly disable mid-cycle proration.
++assert.match(server, /billingModel: bidirectionalStandardTiers \? "modular_capacity_v2"/);
++assert.match(server, /standardCapacityTiers = \[10, 20, 30, 40, 50\]/);
++assert.match(server, /MODULAR_CAPACITY_STANDARD_TIER_SNAPSHOT_MISMATCH/);
++assert.match(migration, /'modular_capacity_v1', 'modular_capacity_v2'/);
++const v2Branch = stripeService.match(
++  /if \(contract\.billingModel === 'modular_capacity_v2'\) \{[\s\S]*?\n  const effectiveLimit =/
++)?.[0] || '';
++assert.match(v2Branch, /targetAdditionalBlocks/);
++assert.match(v2Branch, /capacity_upgrade_scheduled/);
++assert.match(v2Branch, /capacity_downgrade_scheduled/);
++assert.doesNotMatch(v2Branch, /Math\.max\(\s*contract\.billedAdditionalBlocks,/);
++const v1Branch = stripeService.slice(stripeService.indexOf('const effectiveLimit ='));
++assert.match(v1Branch, /Math\.max\(\s*contract\.billedAdditionalBlocks,/);
++assert.match(stripeService, /proration_behavior: 'none'/);
++
++const targetTier = (activePatients) => {
++  const baseLimit = 10;
++  const blockSize = 10;
++  const cappedPatients = Math.min(Math.max(activePatients, 1), 50);
++  const blocks = Math.max(0, Math.ceil(Math.max(cappedPatients - baseLimit, 0) / blockSize));
++  return baseLimit + blocks * blockSize;
++};
++assert.equal(targetTier(0), 10);
++assert.equal(targetTier(10), 10);
++assert.equal(targetTier(11), 20);
++assert.equal(targetTier(20), 20);
++assert.equal(targetTier(21), 30);
++assert.equal(targetTier(31), 40);
++assert.equal(targetTier(41), 50);
++assert.equal(targetTier(50), 50);
++assert.equal(targetTier(51), 50);
++
++// Preserve the Stripe payment hotfix already validated in staging/main.
++const scheduleBlock = server.match(
++  /const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
++)?.[0] || '';
++assert.match(
++  scheduleBlock,
++  /subscriptionSchedules\.create\(\n\s*\{ from_subscription: subscriptionId \},/,
++);
++assert.doesNotMatch(
++  scheduleBlock,
++  /subscriptionSchedules\.create\(\s*\{\s*from_subscription:[\s\S]{0,240}?metadata\s*:/,
++);
++
++console.log('salesRecurringTieredCommercialModel20260901.regression.test.mjs: OK');
+diff --git a/tests/salesSuperAdminCommercialModel20260830.regression.test.mjs b/tests/salesSuperAdminCommercialModel20260830.regression.test.mjs
+index 12d606d..e52ab7a 100644
+--- a/tests/salesSuperAdminCommercialModel20260830.regression.test.mjs
++++ b/tests/salesSuperAdminCommercialModel20260830.regression.test.mjs
+@@ -24,8 +24,8 @@ assert.match(server, /PROPOSAL_CAPACITY_BLOCK_INVALID/);
+ assert.match(server, /contractedCapacity > 50/);
+ assert.match(server, /contractedCapacity < requestedDemand/);
+ 
+-assert.match(builder, /SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000/);
+-assert.match(builder, /SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000/);
++assert.match(builder, /SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 8000/);
++assert.match(builder, /SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 7000/);
+ assert.match(builder, /border-emerald-200/);
+ assert.match(builder, /border-amber-200/);
+ assert.match(builder, /border-rose-200/);

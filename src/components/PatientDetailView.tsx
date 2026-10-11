@@ -12,6 +12,7 @@ import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
+import { AbaReinforcerCatalogPanel } from './AbaReinforcerCatalogPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
 import { PatientEvolutionTimelinePanel } from './PatientEvolutionTimelinePanel';
@@ -194,8 +195,19 @@ const isUuidLike = (value: any) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
 
 
+const patientPhotoViewUrl = (rawPath: unknown) => {
+  const value = String(rawPath || '').trim();
+  if (!value || value.includes('..')) return '';
+  if (value.startsWith('/api/storage/patient-photos/view?')) return value;
+  const path = value.startsWith('patient-photos/')
+    ? value.slice('patient-photos/'.length)
+    : value;
+  return path ? `/api/storage/patient-photos/view?path=${encodeURIComponent(path)}` : '';
+};
+
 const patientPhotoSource = (patient: any) => String(
-  patient?.profilePicture
+  patientPhotoViewUrl(patient?.profilePicturePath || patient?.profile_picture_path)
+  || patient?.profilePicture
   || patient?.profile_picture
   || patient?.profilePictureUrl
   || patient?.profile_picture_url
@@ -756,6 +768,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     'school',
     'files',
   ];
+  // Adult evaluation charts are common to ABA and conventional profiles.
+  // Receptionists must never inherit clinical charts through the generic tab list.
+  const canViewAdultEvaluationCharts = !isKidsProfile
+    && !['receptionist', 'reception'].includes(String(userRole || '').trim().toLowerCase())
+    && (!(capabilities instanceof Set || Array.isArray(capabilities))
+      || hasCapability('clinical.history.view')
+      || hasCapability('treatment_plan.view')
+      || hasCapability('aba.analytics.view'));
   const allowedTabsSet = useMemo(() => {
     const tabsFromProps =
       !Array.isArray(allowedTabs) || allowedTabs.length === 0
@@ -766,15 +786,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
     const filteredByProfile = tabsFromProps.filter((tab: string) => {
       if (tab === 'session') return hasAnySessionSurface;
-      if (tab === 'aba-charts') return hasAbaSessionSurface;
+      if (tab === 'aba-charts') return hasAbaSessionSurface || canViewAdultEvaluationCharts;
       return true;
     });
 
     return new Set(filteredByProfile as PatientDetailTab[]);
-  }, [allowedTabs, hasAbaSessionSurface, hasAnySessionSurface]);
+  }, [allowedTabs, canViewAdultEvaluationCharts, hasAbaSessionSurface, hasAnySessionSurface]);
   const canAccessTab = (tab: PatientDetailTab) =>
     allowedTabsSet.has(tab);
-  const canOpenAnamnesis = canAccessTab('history') && canAccessTab('notes');
+  const canViewAnamnesis =
+    canAccessTab('history') &&
+    canAccessTab('notes') &&
+    hasCapability('clinical.anamnesis.view');
+  const canEditAnamnesis =
+    canViewAnamnesis &&
+    hasCapability('clinical.anamnesis.edit');
+  // During F5 the coordinator may render before server-backed capabilities
+  // have hydrated. Do not fire clinical chart requests from that transient
+  // empty capability set. Backend authorization remains authoritative.
+  const hasClinicalChartCapabilityContext = capabilities instanceof Set
+    || Array.isArray(capabilities)
+    || (capabilities && typeof capabilities.has === 'function');
+  const canRequestClinicalCharts = !hasClinicalChartCapabilityContext
+    || (hasCapability('clinical.record.view')
+      && (hasCapability('treatment_plan.view') || hasCapability('aba.analytics.view')));
   const getSessionFallbackTab = () =>
     allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
 
@@ -788,11 +823,11 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   }, [initialTab, patient?.id, allowedTabsSet, hasAbaSessionSurface]);
 
   useEffect(() => {
-    if (openAnamnesisOnLoad) {
+    if (openAnamnesisOnLoad && canEditAnamnesis) {
       setShowAnamnesis(true);
       onAnamnesisOpenConsumed?.();
     }
-  }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id]);
+  }, [openAnamnesisOnLoad, onAnamnesisOpenConsumed, patient?.id, canEditAnamnesis]);
 
   const resolvePatientProfessionalId = resolvePatientPrimaryProfessionalId;
 
@@ -825,7 +860,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   ]);
 
   const loadAnamnesisFlow = async () => {
-    if (!patient?.id || !canOpenAnamnesis) return null;
+    if (!patient?.id || !canViewAnamnesis) return null;
     try {
       const result = await dataService.getPatientAnamnesisFlow(String(patient.id));
       if (result?.success) {
@@ -841,7 +876,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     void loadAnamnesisFlow();
-  }, [patient?.id, canOpenAnamnesis]);
+  }, [patient?.id, canViewAnamnesis]);
 
   const getAnamnesisStatusLabel = () => {
     const requestStatus = String(anamnesisFlow?.request?.status || '').toUpperCase();
@@ -1578,6 +1613,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     'PORTAL'
   ).toUpperCase() === 'CLINIC' ? 'CLINIC' : 'PORTAL';
   const portalPatientPhotoSource = String(
+    patientPhotoViewUrl(patient?.portalProfilePicturePath || patient?.portal_profile_picture_path) ||
     patient?.portalProfilePicture ||
     patient?.portal_profile_picture ||
     patient?.portalProfilePictureUrl ||
@@ -1586,7 +1622,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   ).trim();
   const resolvedPatientPhotoSource = patientPhotoOverride || (
     patientPhotoPolicy === 'PORTAL'
-      ? (portalPatientPhotoSource || patientPhotoSource(patient))
+      ? portalPatientPhotoSource
       : patientPhotoSource(patient)
   );
   const normalizedPatientPhotoRole = String(userRole || resolvedClinicContext?.role || clinicContext?.role || '').trim().toLowerCase();
@@ -1623,7 +1659,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
 
       const updatedPatient = {
-        ...patient,
+        id: patient.id,
         profilePicture: upload.url,
         profile_picture: upload.url,
         profilePicturePath: upload.path || null,
@@ -1633,7 +1669,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       if (updateResult?.success === false) {
         throw new Error(updateResult?.error || updateResult?.message || 'Não foi possível salvar a foto do paciente.');
       }
-      setPatientPhotoOverride(String(upload.url));
+      setPatientPhotoOverride(patientPhotoViewUrl(upload.path) || String(upload.url));
     } catch (error: any) {
       setPatientPhotoError(error?.message || 'Não foi possível salvar a foto do paciente.');
     } finally {
@@ -5114,16 +5150,30 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const d2 = comparisonDate2 || fallbackDates[fallbackDates.length - 1] || fallbackDates[0] || '';
     if (!d1 || !d2) return [];
 
+    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
+    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
+
     const scoredEvents = kidsReportScoredRows
       .map((h: any) => {
         const ts = new Date(h?.created_at || h?.date || 0).getTime() || 0;
         const title = String(h?.title || h?.taskTitle || h?.task_data?.title || '').trim();
-        const score = Math.max(0, Math.min(1, Number(h?.score ?? 0) || 0));
+        const rawScore = Number(h?.score ?? 0) || 0;
+        const score = isVbMappProtocol
+          ? Math.max(0, Math.min(1, rawScore))
+          : Math.max(0, rawScore);
+        const rawMaxScore = Number(
+          h?.maxScore ??
+          h?.max_score ??
+          h?.task_data?.maxScore ??
+          h?.task_data?.max_score
+        );
+        const eventMaxScore = Number.isFinite(rawMaxScore) && rawMaxScore > 0 ? rawMaxScore : null;
         return {
           ...h,
           _timestamp: ts,
           _title: title,
           _score: score,
+          _maxScore: eventMaxScore,
           _domain: String(h?.domain || h?.domainName || h?.task_data?.domain || h?.task_data?.domainName || '').trim()
         };
       })
@@ -5134,9 +5184,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const parsed = new Date(`${dateKey}T23:59:59.999`).getTime();
       return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
     };
-
-    const isVbMappProtocol = /vb[\s-]?mapp/i.test(String(selectedProto?.title || ''));
-    const vbmappCriterion = Number((selectedProto as any)?.masteryCriterion ?? (selectedProto as any)?.vbmapp_mastery_criterion ?? 5) || 5;
 
     const getDomainScoresForDate = (date: string) => {
       const cutoffTs = resolveCutoffTimestamp(date);
@@ -5158,13 +5205,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             const matchesSkill = domainTasks.some((task: any) => isSameClinicalTask(task.name, event?._title || ''));
             return matchesDomain || matchesSkill;
           })
-          .map((event: any) => ({
-            title: event?._title || '',
-            score: event?._score,
-            maxScore: 1,
-            consecutive_successes: event?.consecutive_successes,
-            created_at: event?.created_at || event?.date || null
-          }));
+          .map((event: any) => {
+            const matchedTask = domainTasks.find((task: any) =>
+              isSameClinicalTask(task.name, event?._title || '')
+            );
+            const maxScore = isVbMappProtocol
+              ? 1
+              : Math.max(1, Number(event?._maxScore ?? matchedTask?.maxScore ?? 1) || 1);
+            return {
+              title: event?._title || '',
+              score: event?._score,
+              maxScore,
+              consecutive_successes: event?.consecutive_successes,
+              created_at: event?.created_at || event?.date || null
+            };
+          });
 
         return calculateDomainMastery(domainEvents, domainTasks, {
           mode: 'latest',
@@ -6055,7 +6110,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               category: String(targetProtocol?.category || (planType === 'task' ? 'evaluation' : 'intervention')).toLowerCase() === 'intervention' ? 'intervention' : 'evaluation',
               protocolId: String(targetProtocolId),
               domainId: String(targetDomainId),
-              skill: finalSkill,
+              skill: { ...finalSkill, id: String(finalSkill.id) },
               idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${String(targetProtocolId)}:${String(targetDomainId)}:${String(finalSkill.id)}`
             });
             if (!persisted?.success || !persisted?.data?.protocol) {
@@ -6105,7 +6160,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               domainId: reusableDomainId,
               domainName: newDomainName,
               ageGroup: patientAgeYears !== null && patientAgeYears >= 60 ? 'senior' : 'adult',
-              skill: finalSkill,
+              skill: { ...finalSkill, id: String(finalSkill.id) },
               idempotencyKey: `adult-task-protocol:${String(patient?.id || '')}:${reusableProtocolId}:${reusableDomainId}:${String(finalSkill.id)}`
             });
             if (!persisted?.success || !persisted?.data?.protocol) {
@@ -6506,74 +6561,89 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return message && scheduleDate && scheduleTime; 
   }; 
   const handleSaveTaskEdit = () => { if (editingTask && editingTask.title) { onUpdateTask(editingTask.id, { title: editingTask.title, description: editingTask.description }); setEditingTask(null); } }; 
-  const handleUpdateAnamnesis = (updatedData: any) => {
+  const handleUpdateAnamnesis = async (updatedData: any) => {
     if (isPreparingAnamnesisSave || showAnamnesisFileModal) return;
     setIsPreparingAnamnesisSave(true);
-    const normalizedBirthDate = String(updatedData?.dataNascimento || '').trim();
-    const normalizedCep = String(updatedData?.cep || '').trim();
-    const normalizedAddress = {
-      logradouro: String(updatedData?.logradouro || '').trim() || null,
-      numero: String(updatedData?.numero || '').trim() || null,
-      complemento: String(updatedData?.complemento || '').trim() || null,
-      bairro: String(updatedData?.bairro || '').trim() || null,
-      cidade: String(updatedData?.cidade || '').trim() || null,
-    };
-    const normalizedGuardian = Boolean(updatedData?.menorDeIdade)
-      ? {
-          nome: String(updatedData?.responsavelNome || '').trim() || null,
-          dataNascimento: String(updatedData?.responsavelDataNascimento || '').trim() || null,
-          cpf: String(updatedData?.responsavelCpf || '').trim() || null,
-          telefone: String(updatedData?.responsavelTelefone || '').trim() || null,
+    try {
+      const normalizedBirthDate = String(updatedData?.dataNascimento || '').trim();
+      const normalizedCep = String(updatedData?.cep || '').trim();
+      const normalizedAddress = {
+        logradouro: String(updatedData?.logradouro || '').trim() || null,
+        numero: String(updatedData?.numero || '').trim() || null,
+        complemento: String(updatedData?.complemento || '').trim() || null,
+        bairro: String(updatedData?.bairro || '').trim() || null,
+        cidade: String(updatedData?.cidade || '').trim() || null,
+      };
+      const normalizedGuardian = Boolean(updatedData?.menorDeIdade)
+        ? {
+            nome: String(updatedData?.responsavelNome || '').trim() || null,
+            dataNascimento: String(updatedData?.responsavelDataNascimento || '').trim() || null,
+            cpf: String(updatedData?.responsavelCpf || '').trim() || null,
+            telefone: String(updatedData?.responsavelTelefone || '').trim() || null,
+          }
+        : null;
+      const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
+      if (!onUpdatePatient) {
+        alert('Não há um serviço disponível para confirmar o salvamento. A ficha permanece aberta.');
+        return;
+      }
+      {
+        const patientUpdateResult = await onUpdatePatient({
+          id: patient.id,
+          name: String(updatedData?.nome || '').trim() || patient?.name,
+          socialName: String(updatedData?.nomeSocial || '').trim() || null,
+          phone: String(updatedData?.telefone || '').trim() || null,
+          email: String(updatedData?.email || '').trim().toLowerCase() || null,
+          cpf: String(updatedData?.cpf || '').trim() || null,
+          age: typeof recalculatedAge === 'number' ? recalculatedAge : patient?.age,
+          gender: String(updatedData?.genero || '').trim() || null,
+          dataNascimento: normalizedBirthDate || null,
+          birthDate: normalizedBirthDate || null,
+          cep: normalizedCep || null,
+          address: normalizedAddress,
+          notes: String(updatedData?.outrasInformacoes || '').trim() || null,
+          isMinor: Boolean(updatedData?.menorDeIdade),
+          guardian: normalizedGuardian,
+          diagnosis: updatedData.motivoConsulta,
+          anamnesisData: updatedData,
+          anamnesisPending: false,
+          lastAnamnesisAt: new Date().toISOString()
+        });
+        if (patientUpdateResult?.success !== true || patientUpdateResult?.pending === true || patientUpdateResult?.offline === true || patientUpdateResult?.queued === true) {
+          if (!patientUpdateResult?.error) {
+            alert('Não foi possível confirmar a persistência da anamnese. A ficha permanece aberta para nova tentativa.');
+          }
+          return;
         }
-      : null;
-    const recalculatedAge = calculateAgeFromBirthDate(normalizedBirthDate);
-    if (onUpdatePatient) {
-      onUpdatePatient({
-        id: patient.id,
-        name: String(updatedData?.nome || '').trim() || patient?.name,
-        socialName: String(updatedData?.nomeSocial || '').trim() || null,
-        phone: String(updatedData?.telefone || '').trim() || null,
-        email: String(updatedData?.email || '').trim().toLowerCase() || null,
-        cpf: String(updatedData?.cpf || '').trim() || null,
-        age: typeof recalculatedAge === 'number' ? recalculatedAge : patient?.age,
-        gender: String(updatedData?.genero || '').trim() || null,
-        dataNascimento: normalizedBirthDate || null,
-        birthDate: normalizedBirthDate || null,
-        cep: normalizedCep || null,
-        address: normalizedAddress,
-        notes: String(updatedData?.outrasInformacoes || '').trim() || null,
-        isMinor: Boolean(updatedData?.menorDeIdade),
-        guardian: normalizedGuardian,
-        diagnosis: updatedData.motivoConsulta,
-        anamnesisData: updatedData,
-        anamnesisPending: false,
-        lastAnamnesisAt: new Date().toISOString()
-      });
-    }
+      }
 
-    const fichePayload = buildAnamnesisDocumentHtml(updatedData, anamnesisFileDate);
-    const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${new Date().toISOString().slice(0, 10)}.pdf`;
-    setPendingAnamnesisPayload(fichePayload);
-    setPendingAnamnesisData(updatedData);
-    setAnamnesisFileName(defaultName);
-    setAnamnesisFileDate(new Date().toISOString().slice(0, 10));
-    setShowAnamnesis(false);
-    setShowAnamnesisFileModal(true);
-    setIsPreparingAnamnesisSave(false);
-    void dataService.submitPatientAnamnesis(String(patient.id), updatedData, anamnesisFlow?.request?.id || null)
-      .then((result) => {
-        if (result?.success) {
-          void loadAnamnesisFlow();
-        }
-      })
-      .catch((error) => console.warn('Falha ao sincronizar resposta da anamnese:', error));
-    onAddActivityLog?.(
-      "Ficha de anamnese salva",
-      `A ficha de anamnese do paciente ${patient.name} foi registrada e anexada aos arquivos do prontuário.`,
-      "clinical",
-    );
-  }; 
-  
+      const submissionResult = await dataService.submitPatientAnamnesis(
+        String(patient.id),
+        updatedData,
+        anamnesisFlow?.request?.id || null
+      );
+      if (submissionResult?.success !== true || submissionResult?.pending === true || submissionResult?.offline === true || submissionResult?.queued === true) {
+        alert(submissionResult?.error || 'A anamnese ainda não foi confirmada no servidor. A ficha permanece aberta até o salvamento definitivo.');
+        return;
+      }
+
+      const referenceDate = new Date().toISOString().slice(0, 10);
+      const fichePayload = buildAnamnesisDocumentHtml(updatedData, referenceDate);
+      const defaultName = `Ficha_Anamnese_${patient.name.replace(/\s+/g, "_")}_${referenceDate}.pdf`;
+      setPendingAnamnesisPayload(fichePayload);
+      setPendingAnamnesisData(updatedData);
+      setAnamnesisFileName(defaultName);
+      setAnamnesisFileDate(referenceDate);
+      setShowAnamnesis(false);
+      setShowAnamnesisFileModal(true);
+      void loadAnamnesisFlow();
+    } catch (error: any) {
+      alert(error?.message || 'Não foi possível confirmar a persistência da anamnese. A ficha permanece aberta para nova tentativa.');
+    } finally {
+      setIsPreparingAnamnesisSave(false);
+    }
+  };
+
   const handleUnlinkPatient = () => {
     if (onUpdatePatient) {
       // When unlinking, we keep the history but remove the clinic association
@@ -10744,7 +10814,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </h1>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <span className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Paciente</span>
-                    {canOpenAnamnesis && (
+                    {canViewAnamnesis && (
                       <span
                         className={`rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
                           getAnamnesisStatusLabel().includes('revisada')
@@ -10757,7 +10827,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         {getAnamnesisStatusLabel()}
                       </span>
                     )}
-                    {canOpenAnamnesis && anamnesisFlowMessage && (
+                    {canViewAnamnesis && anamnesisFlowMessage && (
                       <span className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                         {anamnesisFlowMessage}
                       </span>
@@ -10814,7 +10884,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <MessageCircle size={15} /> WhatsApp
               </a>
 
-              {canOpenAnamnesis && (
+              {canEditAnamnesis && (
                 <button
                   id="anamnesis-btn"
                   onClick={() => setShowAnamnesis(true)}
@@ -10828,7 +10898,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canOpenAnamnesis && (
+              {canEditAnamnesis && (
                 <button
                   onClick={() => void handleSendAnamnesisRequest()}
                   disabled={isSendingAnamnesisRequest}
@@ -10842,7 +10912,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canOpenAnamnesis && hasSubmittedAnamnesisFlow && (
+              {canViewAnamnesis && hasSubmittedAnamnesisFlow && (
                 <button
                   onClick={openSubmittedAnamnesisForFiles}
                   className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-center text-[11px] font-medium leading-tight text-indigo-700 transition-colors hover:bg-indigo-100 sm:flex-none"
@@ -10851,7 +10921,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canOpenAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
+              {canEditAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
                 <button
                   onClick={() => void handleReviewAnamnesisFlow()}
                   disabled={isReviewingAnamnesis}
@@ -11272,7 +11342,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <section className={`space-y-3 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#0d192b]' : 'border-slate-200 bg-white'}`} aria-labelledby="patient-session-reports-heading">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                     <div>
-                      <h2 id="patient-session-reports-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Relatórios de sessão</h2>
+                      <h2 id="patient-session-reports-heading" className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>{isKidsProfile ? 'Relatórios de sessão' : 'Linha do tempo — sessões realizadas'}</h2>
                       <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Abra sessões finalizadas para revisar tentativas, retificações e complementos clínicos.</p>
                     </div>
                     {completedSessionReports.length > 0 && (
@@ -11285,18 +11355,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     <div className={`rounded-xl border px-4 py-3 text-sm ${isPanelDark ? 'border-amber-400/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>{completedSessionReportsError}</div>
                   ) : completedSessionReports.length > 0 ? (
                     <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-                      {completedSessionReports.slice(0, 6).map((session: any) => {
+                      {completedSessionReports.map((session: any) => {
                         const endedAt = session?.ended_at || session?.actual_end_at || session?.updated_at || session?.started_at || session?.created_at;
                         const endedDate = endedAt ? new Date(endedAt) : null;
                         const dateLabel = endedDate && !Number.isNaN(endedDate.getTime())
                           ? endedDate.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
                           : 'Data não informada';
                         const duration = Number(session?.duration_minutes ?? session?.actual_duration_minutes ?? (Number(session?.duration_seconds || 0) / 60));
+                        const professionalName = String(session?.professional_name || session?.professionalName || session?.therapist_name || session?.therapistName || session?.professional?.name || '').trim();
+                        const evolutionText = [session?.evolution_note, session?.evolutionNote, session?.clinical_note, session?.clinicalNote, session?.note, session?.notes]
+                          .find((value) => typeof value === 'string' && value.trim()) || '';
                         return (
-                          <div key={`session-report-${session.id}`} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50/70'}`}>
+                          <div key={`session-report-${session.id}`} data-testid="adult-completed-session-timeline-row" className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${isPanelDark ? 'border-slate-700 bg-slate-900/70' : 'border-slate-100 bg-slate-50/70'}`}>
                             <div className="min-w-0">
                               <p className={`text-sm font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-800'}`}>{dateLabel}</p>
-                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>{Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} min` : 'Sessão finalizada'}{session?.room_name ? ` · ${session.room_name}` : ''}</p>
+                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Concluída · {Number.isFinite(duration) && duration > 0 ? `${Math.round(duration)} min` : 'Duração não informada'}{session?.room_name ? ` · ${session.room_name}` : ''}</p>
+                              <p className={`mt-1 text-xs ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Profissional: {professionalName || 'Não informado'}</p>
+                              {evolutionText && <p className={`mt-2 whitespace-pre-wrap text-xs leading-5 ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>Evolução: {evolutionText}</p>}
                             </div>
                             <button type="button" onClick={() => openCompletedSessionReport(session.id)} className="min-h-10 shrink-0 rounded-xl bg-[#7a32fc] px-4 py-2 text-sm font-semibold text-white hover:opacity-90">Abrir relatório</button>
                           </div>
@@ -12030,6 +12105,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       isDark={isPanelDark}
                       onStartSession={(planContext: any) => requestSessionStart('fullscreen', planContext)}
                     />
+                  )}
+                  {therapeuticPlanMode === 'pts' && hasAbaClinicalProfile && (
+                    <AbaReinforcerCatalogPanel patientId={String(patient?.id || '')} isDark={isPanelDark} />
                   )}
                   {therapeuticPlanMode === 'pei' && (
                   <details open className={`overflow-hidden rounded-2xl border ${isPanelDark ? 'border-slate-700 bg-slate-900/35' : 'border-slate-200 bg-white'}`}>
@@ -12851,7 +12929,50 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
  
           </div> 
         ) : activeTab === 'aba-charts' ? (
-          <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} />
+          canRequestClinicalCharts ? <div className="space-y-5">
+            {!isKidsProfile && (
+              <section data-testid="adult-protocol-evaluation-charts" className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                <h2 className="text-base font-semibold">Avaliação por protocolo — adulto</h2>
+                <p className="mt-1 text-xs text-slate-500">Comparativo por domínio e por aplicação; não mistura pontuações de protocolos diferentes.</p>
+                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <label className="text-xs font-semibold">Protocolo
+                    <select className="mt-1 w-full rounded-xl border p-2 text-sm" value={selectedChartProtocolId} onChange={(event) => { setHasUserChangedChartProtocol(true); setSelectedChartProtocolId(event.target.value); }}>
+                      {planProtocolCatalog.map((protocol: any) => <option key={protocol.id} value={protocol.id}>{protocol.title}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold">Data base
+                    <select className="mt-1 w-full rounded-xl border p-2 text-sm" value={comparisonDate1} onChange={(event) => setComparisonDate1(event.target.value)}>
+                      <option value="">Selecione...</option>
+                      {adultProtocolSnapshotDates.map((date: any) => <option key={date.key} value={date.key}>{date.label}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold">Data de comparação
+                    <select className="mt-1 w-full rounded-xl border p-2 text-sm" value={comparisonDate2} onChange={(event) => setComparisonDate2(event.target.value)}>
+                      <option value="">Selecione...</option>
+                      {adultProtocolSnapshotDates.map((date: any) => <option key={date.key} value={date.key}>{date.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+                <div className="mt-4 min-w-0">
+                  <ComparisonBarChart data={adultDomainComparisonData} title={`Comparativo por Domínio (${selectedChartProtocol?.title || 'Protocolo'})`} maxScore={100} />
+                </div>
+              </section>
+            )}
+            {isKidsProfile ? (
+              <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+            ) : hasAbaClinicalProfile ? (
+              <details className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700" data-testid="adult-aba-intervention-charts-optional">
+                <summary className="cursor-pointer text-sm font-medium">Gráficos de intervenção ABA (complementares à avaliação)</summary>
+                <div className="mt-4">
+                  <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={abaV2Enabled} showAbaV3Details={abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+                </div>
+              </details>
+            ) : null}
+          </div> : (
+            <p role="status" className="rounded-2xl border border-slate-200 p-4 text-sm text-slate-600">
+              Gráficos clínicos indisponíveis para as permissões atuais. Aguarde a atualização do seu acesso ou consulte a administração da clínica.
+            </p>
+          )
         ) : activeTab === 'session' && hasAbaSessionSurface ? (
           null
         ) : activeTab === 'session' && hasConventionalSessionSurface ? (

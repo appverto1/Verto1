@@ -45,7 +45,7 @@ import {
   type ClinicalOutcomeSeriesSummary,
 } from '../utils/clinicalOutcomeAnalytics';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
-import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope } from '../utils/clinicalOutcomePlanScope';
+import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope, unscopedBehaviorSeriesBelongsToSpecialty } from '../utils/clinicalOutcomePlanScope';
 import { ClinicalPlanAnalyticsShell, type AnalyticsAxis } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
@@ -263,6 +263,8 @@ const isCollectionVolumeSeries = (series: ClinicalOutcomeSeriesSummary) => {
     || label === 'oportunidades'
     || label === 'sessões';
 };
+
+const isLegacyUnversionedSeries = (series: ClinicalOutcomeSeriesSummary) => series.observations.some((row) => clean(row?.metadata?.historyVersionStatus) === 'LEGACY_UNVERSIONED');
 
 const isHistoricalOnlySeries = (series: ClinicalOutcomeSeriesSummary) => {
   const sourceLabel = clinicalOutcomeSourceLabel(series.source).toLocaleLowerCase('pt-BR');
@@ -508,7 +510,7 @@ function SeriesChart({ series, isDark, axis, compact = false }: { series: Clinic
             }}
           />
           {!categoricalMode && reference.targetMin !== null && reference.targetMax !== null && (
-            <ReferenceArea y1={reference.targetMin} y2={reference.targetMax} fill={isDark ? '#8B5CF6' : '#7C3AED'} fillOpacity={isDark ? 0.08 : 0.06} label={{ value: 'Faixa-alvo', fontSize: 9 }} />
+            <ReferenceArea y1={reference.targetMin} y2={reference.targetMax} label={{ value: 'Faixa-alvo', fontSize: 9 }} />
           )}
           {!categoricalMode && reference.targetValue !== null && (
             <ReferenceLine y={reference.targetValue} stroke={isDark ? '#A78BFA' : '#7C3AED'} strokeDasharray="6 4" label={{ value: reference.criterionLabel || 'Meta', fontSize: 9, position: 'insideTopRight' }} />
@@ -644,7 +646,10 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
   const planScopeIndex = useMemo(() => buildClinicalOutcomePlanScopeIndex(data.programs || []), [data.programs]);
   const selectedPlan = specialtyPlans.find((plan) => String(plan.id) === scopeId) || null;
   const selectedPlanSeries = useMemo(() => selectedPlan
-    ? summaries.filter((series) => clinicalOutcomeSeriesBelongsToPlanScope(series, selectedPlan.id, planScopeIndex))
+    ? summaries.filter((series) =>
+      clinicalOutcomeSeriesBelongsToPlanScope(series, selectedPlan.id, planScopeIndex)
+      || unscopedBehaviorSeriesBelongsToSpecialty(series, selectedPlan.specialty)
+    )
     : [], [planScopeIndex, selectedPlan, summaries]);
   const ptsPlanSeries = useMemo(() => activePts
     ? summaries.filter((series) => clinicalOutcomeSeriesBelongsToPlanScope(series, activePts.id, planScopeIndex))
@@ -725,6 +730,21 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
         }
       }
     }
+    // A PTS goal may explicitly link a specialty plan even when historical
+    // observations reference only that plan (without the PTS goal id).
+    // Reuse the already authorized canonical series; never infer links from
+    // a matching specialty name or read another patient's/clinic's data.
+    const linkedPlanIds = new Set(ptsGoalRows.flatMap((row) => row.contributions
+      .filter((contribution) => Boolean(contribution.link && contribution.specialtyPlan?.id))
+      .map((contribution) => String(contribution.specialtyPlan.id))));
+    if (linkedPlanIds.size > 0) {
+      for (const series of summaries) {
+        if (isHistoricalOnlySeries(series)) continue;
+        if (Array.from(linkedPlanIds).some((id) => clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex))) {
+          unique.set(series.key, series);
+        }
+      }
+    }
     // Comportamentos interferentes são evidência longitudinal do paciente e não
     // pertencem semanticamente a uma especialidade. Na visão multidisciplinar do PTS,
     // preserve-os mesmo quando o legado ainda não carrega planId/goalId/programId.
@@ -733,7 +753,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
       if (isClinicalOutcomeInterferingBehaviorSeries(series)) unique.set(series.key, series);
     }
     return Array.from(unique.values());
-  }, [ptsGoalRows, ptsPlanSeries, summaries]);
+  }, [planScopeIndex, ptsGoalRows, ptsPlanSeries, summaries]);
   const ptsUnstructuredTargetGroups = useMemo(() => (
     buildClinicalTargetGroups(ptsAnalyticsSeries).filter((group) => group.clinicalSeries.length > 0)
   ), [ptsAnalyticsSeries]);
@@ -1054,6 +1074,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
                           <span className={`rounded-full border px-2 py-0.5 text-[10px] ${evidenceTone(series, isPanelDark)}`}>
                             {series.stale ? 'Sem evidência recente' : clinicalOutcomeEvidenceLabel(series.evidenceState)}
                           </span>
+                          {isLegacyUnversionedSeries(series) && <span className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] text-slate-500">Histórico sem versão</span>}
                           {group.historicalSeries.length > 0 && group.series.some((item) => !isHistoricalOnlySeries(item) && !isCollectionVolumeSeries(item)) && (
                             <span title="Histórico anterior disponível" className={`inline-flex items-center gap-1 text-[10px] ${isPanelDark ? 'text-slate-500' : 'text-slate-400'}`}>
                               <History size={11} /> Histórico

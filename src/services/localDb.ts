@@ -1,8 +1,8 @@
 import Dexie, { Table } from 'dexie';
-import { isQueuedRecordForSession } from '../utils/sessionAutoFinalization';
+import { hasUnresolvedSessionPredecessor, isQueuedRecordForSession, isSessionCompletionQueueRecord, queuedSessionId } from '../utils/sessionAutoFinalization';
+import { ensureFreshSession, getSupabase } from '../lib/supabase';
 
 type SessionSyncOptions = { force?: boolean; sessionId?: string; entityIds?: string[] };
-import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   OFFLINE_SYNC_MAX_RETRIES,
   isIdempotentConflictPayload,
@@ -703,6 +703,45 @@ const runOfflineSync = async (options: SessionSyncOptions) => {
     const blockedEntities = new Set<string>();
 
     for (const record of pending) {
+      // Reinforcer events are also durable clinical writes. Replay their
+      // authenticated RPC before sending a queued session completion; otherwise
+      // the server would reject them as SESSION_CLOSED. Other RPC intents remain
+      // under their own feature adapters, never forwarded as generic HTTP.
+      if (record.endpoint === 'supabase-rpc:record_aba_reinforcer_delivery_authenticated_v1') {
+        try {
+          const sessionId = String(record.data?.sessionId || '').trim();
+          if (sessionId) {
+            const { flushReinforcerDeliveries } = await import('./abaReinforcers');
+            await flushReinforcerDeliveries(sessionId);
+          }
+        } catch (error) {
+          // The encrypted outbox row remains pending; completion is held by
+          // hasUnresolvedSessionPredecessor until this write is confirmed.
+          console.warn('Reforçador pendente de sincronização; encerramento preservado na fila.', error);
+        } finally {
+          (record as any).data = null;
+        }
+        continue;
+      }
+      if (record.endpoint.startsWith('supabase-rpc:')) {
+        (record as any).data = null;
+        continue;
+      }
+
+      // Session completion is a causal barrier. Never let it overtake an earlier
+      // clinical mutation from the same session, otherwise the server can close
+      // the session and reject the still-pending trial as SESSION_CLOSED.
+      if (isSessionCompletionQueueRecord(record)) {
+        const completionSessionId = queuedSessionId(record);
+        const sessionQueue = completionSessionId
+          ? await getSessionQueuedRecords(completionSessionId)
+          : [];
+        if (!completionSessionId || hasUnresolvedSessionPredecessor(record, sessionQueue)) {
+          (record as any).data = null;
+          continue;
+        }
+      }
+
       const syncEntityKey = `${record.type}:${entityIdForRecord(record)}`;
       if (blockedEntities.has(syncEntityKey)) {
         (record as any).data = null;

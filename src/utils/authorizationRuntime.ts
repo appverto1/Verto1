@@ -156,6 +156,10 @@ export function isAdditionalCapabilityCompatibleWithRoleScope(
   // patient/case/own-resource scoped. Finance, TISS, team administration,
   // clinic settings and multiclinic access cannot be introduced by override.
   if (role === 'supervisor' || role === 'therapist') {
+    // Editing anamnesis is supervisory/management authority, not a generic
+    // case-scoped grant. A therapist receives it only through the server-backed
+    // canSupervise overlay, never from an old or forged permission override.
+    if (role === 'therapist' && (capability === 'clinical.anamnesis.view' || capability === 'clinical.anamnesis.edit')) return false;
     return (
       capability.startsWith('patient.') ||
       capability.startsWith('clinical.') ||

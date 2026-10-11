@@ -4,6 +4,7 @@ import { filterPatientFilesForActor } from '../src/utils/patientFileAccess';
 
 type SchoolRouteDeps = {
   supabase: any;
+  deploymentEnv?: 'staging' | 'production' | null;
   noStoreDynamicResponse: any;
   checkAuth: any;
   requireClinicCapability: (capability: any) => any;
@@ -97,7 +98,19 @@ const deterministicUuid = (value: string) => {
 };
 
 export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDeps) {
-  const { supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, resolvePatientListScopedPatientIds, portalActionLimiter, sanitizeString, currentClinicId } = deps;
+  const { supabase, deploymentEnv, noStoreDynamicResponse, checkAuth, requireClinicCapability, resolvePatientListScopedPatientIds, portalActionLimiter, sanitizeString, currentClinicId } = deps;
+  const withNotificationEnvironment = (row: any) => {
+    if (deploymentEnv !== 'staging' && deploymentEnv !== 'production') {
+      throw new Error('NOTIFICATION_ENV_NOT_CONFIGURED');
+    }
+    const metadata = row?.metadata && typeof row.metadata === 'object' ? row.metadata : {};
+    return {
+      ...row,
+      deployment_env: deploymentEnv,
+      idempotency_key: `${deploymentEnv}:${String(row?.idempotency_key || '').replace(/^(staging|production):/, '')}`,
+      metadata: { ...metadata, deploymentEnv },
+    };
+  };
 
   const pagination = (req: any, defaultSize = 25) => {
     const page = Math.max(1, Math.min(100000, Number(req.query?.page || 1) || 1));
@@ -228,9 +241,9 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
       idempotency_key: `school:${meeting.id}:${suffix}:professional:${professionalId}`,
       metadata: { schoolMeetingId: meeting.id, schoolId: meeting.school_id, patientIds, administrativeOnly: true }
     }));
-    const rows = [...familyRows, ...professionalRows];
+    const rows = [...familyRows, ...professionalRows].map(withNotificationEnvironment);
     if (rows.length) {
-      const result = await supabase.from('portal_notifications').upsert(rows, { onConflict: 'idempotency_key', ignoreDuplicates: true });
+      const result = await supabase.from('portal_notifications').upsert(rows, { onConflict: 'deployment_env,idempotency_key', ignoreDuplicates: true });
       if (result.error) throw result.error;
     }
   };
@@ -693,7 +706,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
   });
 
   app.get('/api/patients/:patientId/school-consents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const result=await supabase.from('school_consents').select(`${SCHOOL_CONSENT_COLUMNS},patient_school_enrollments(id,school_id,school_unit_id),schools:patient_school_enrollments(schools(id,display_name))`).eq('organization_id',scope.organizationId).eq('patient_id',patientId).order('effective_at',{ascending:false});if(result.error)throw result.error;res.json({success:true,data:result.data||[],current:(result.data||[]).filter((c:any)=>c.is_current)});}catch(error){errorResponse(res,error);} });
-  app.post('/api/patients/:patientId/school-consents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body=req.body||{};const result=await rpc('school_record_consent_v2',scope,{p_patient_id:patientId,p_payload:body},body);const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const status=String(body.status||'PENDING').toUpperCase();const notification=await supabase.from('portal_notifications').upsert({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:status==='PENDING'?'SCHOOL_CONSENT_PENDING':'SCHOOL_CONSENT_UPDATED',title:status==='PENDING'?'Autorização escolar pendente':'Autorização escolar atualizada',message:'O status de uma autorização escolar foi atualizado.',idempotency_key:`school:consent:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{consentType:body.consentType,status,administrativeOnly:true}},{onConflict:'idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
+  app.post('/api/patients/:patientId/school-consents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async (req:any,res:any)=>{try{const scope=await workspace(req);const patientId=sanitizeString(req.params.patientId,120);const allowed=await canAccessPatients(scope,[patientId]);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');const body=req.body||{};const result=await rpc('school_record_consent_v2',scope,{p_patient_id:patientId,p_payload:body},body);const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const status=String(body.status||'PENDING').toUpperCase();const notification=await supabase.from('portal_notifications').upsert(withNotificationEnvironment({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:status==='PENDING'?'SCHOOL_CONSENT_PENDING':'SCHOOL_CONSENT_UPDATED',title:status==='PENDING'?'Autorização escolar pendente':'Autorização escolar atualizada',message:'O status de uma autorização escolar foi atualizado.',idempotency_key:`school:consent:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{consentType:body.consentType,status,administrativeOnly:true}}),{onConflict:'deployment_env,idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
 
   app.get('/api/schools/patients/search', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async (req:any,res:any)=>{
     try{
@@ -887,8 +900,8 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
             organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:referral.responsible_user_id,recipient_email:null,patient_id:referral.patient_id,
             type:'SCHOOL_TASK_ASSIGNED',title:'Novo encaminhamento escolar',message:sanitizeString(referral.title,180),
             idempotency_key:`school:${meetingId}:task:${referral.id}`,metadata:{schoolMeetingId:meetingId,schoolId:meeting.school_id,taskId:taskByReferral.get(String(referral.id)).id,administrativeOnly:true}
-          }));
-          if(notificationRows.length){const notifications=await supabase.from('portal_notifications').upsert(notificationRows,{onConflict:'idempotency_key',ignoreDuplicates:true});if(notifications.error)throw notifications.error;}
+          })).map(withNotificationEnvironment);
+          if(notificationRows.length){const notifications=await supabase.from('portal_notifications').upsert(notificationRows,{onConflict:'deployment_env,idempotency_key',ignoreDuplicates:true});if(notifications.error)throw notifications.error;}
         }
         if(taskError)throw taskError;
       }
@@ -902,7 +915,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
   });
 
   app.get('/api/school-documents', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.view'), async(req:any,res:any)=>{try{const scope=await workspace(req);const requestedSchoolId=sanitizeString(req.query?.schoolId,120);if(requestedSchoolId)await ensureSchoolVisible(scope,requestedSchoolId);let query=supabase.from('school_document_links').select(SCHOOL_DOCUMENT_COLUMNS).eq('organization_id',scope.organizationId).is('archived_at',null);for(const [q,c] of [['schoolId','school_id'],['unitId','school_unit_id'],['meetingId','meeting_id'],['patientId','patient_id']] as any[]){const v=sanitizeString(req.query?.[q],120);if(v)query=query.eq(c,v);}const result=await query.order('created_at',{ascending:false}).limit(200);if(result.error)throw result.error;const patientRows=(result.data||[]).filter((r:any)=>r.patient_id);const allowed=await canAccessPatients(scope,patientRows.map((r:any)=>r.patient_id));const visible=(result.data||[]).filter((r:any)=>{ if(!r.patient_id)return true; if(scope.role==='receptionist')return false; return allowed.has(String(r.patient_id)); });const docIds=uniq(visible.map((r:any)=>r.document_id));const files=docIds.length?await supabase.from('patient_files').select('id,file_name,mime_type,file_size_bytes,created_at,patient_id,uploaded_by,access_scope,patient_portal_visible,metadata').in('id',docIds):{data:[]};if(files.error)throw files.error;const visibleFiles=await filterPatientFilesForActor({supabase,rows:files.data||[],actorId:scope.actorId,actorRole:scope.role,logger:console});const fileMap=new Map(visibleFiles.map((f:any)=>[String(f.id),f]));res.json({success:true,data:visible.filter((link:any)=>fileMap.has(String(link.document_id))).map((link:any)=>({...link,document:fileMap.get(String(link.document_id))||null}))});}catch(error){errorResponse(res,error);} });
-  app.post('/api/school-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const schoolId=sanitizeString(body.schoolId,120);if(schoolId)await ensureSchoolVisible(scope,schoolId);const patientId=sanitizeString(body.patientId,120);if(patientId){if(scope.role==='receptionist')throw new Error('ACCESS_DENIED');const allowed=await canAccessPatients(scope,[patientId],true);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');}const result=await rpc('school_link_document_v2',scope,{p_payload:body},body);if(patientId){const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const notification=await supabase.from('portal_notifications').upsert({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:'SCHOOL_DOCUMENT_ADDED',title:'Documento escolar adicionado',message:'Um novo documento escolar foi vinculado.',idempotency_key:`school:document:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{schoolId:body.schoolId||null,meetingId:body.meetingId||null,administrativeOnly:true}},{onConflict:'idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
+  app.post('/api/school-documents', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const schoolId=sanitizeString(body.schoolId,120);if(schoolId)await ensureSchoolVisible(scope,schoolId);const patientId=sanitizeString(body.patientId,120);if(patientId){if(scope.role==='receptionist')throw new Error('ACCESS_DENIED');const allowed=await canAccessPatients(scope,[patientId],true);if(!allowed.has(patientId))throw new Error('PATIENT_ACCESS_DENIED');}const result=await rpc('school_link_document_v2',scope,{p_payload:body},body);if(patientId){const patient=await supabase.from('patients').select('id,email,responsible_user_id').eq('id',patientId).eq('clinic_id',scope.clinicId).maybeSingle();if(patient.data){const notification=await supabase.from('portal_notifications').upsert(withNotificationEnvironment({organization_id:scope.organizationId,clinic_id:scope.clinicId,recipient_user_id:patient.data.responsible_user_id||null,recipient_email:patient.data.email||null,patient_id:patientId,type:'SCHOOL_DOCUMENT_ADDED',title:'Documento escolar adicionado',message:'Um novo documento escolar foi vinculado.',idempotency_key:`school:document:${safeIdempotencyKey(body.idempotencyKey)}`,metadata:{schoolId:body.schoolId||null,meetingId:body.meetingId||null,administrativeOnly:true}}),{onConflict:'deployment_env,idempotency_key',ignoreDuplicates:true});if(notification.error)throw notification.error;}}res.status(201).json(result);}catch(error){errorResponse(res,error);} });
   app.patch('/api/school-documents/:linkId', portalActionLimiter, noStoreDynamicResponse, checkAuth, requireClinicCapability('school.meetings.manage'), async(req:any,res:any)=>{try{const scope=await workspace(req);const body=req.body||{};const result=await rpc('school_update_document_v2',scope,{p_link_id:sanitizeString(req.params.linkId,120),p_payload:body},body);res.json(result);}catch(error){errorResponse(res,error);} });
 
   app.get('/api/school-migration-review', noStoreDynamicResponse, checkAuth, requireClinicCapability('school.manage'), async(req:any,res:any)=>{

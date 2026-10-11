@@ -135,6 +135,8 @@ const SALES_FUNCTIONAL_MODULE_KEYS = [
 ] as const;
 
 const SALES_PATIENT_CAPACITY_BLOCKS = [10, 20, 30, 40, 50] as const;
+const SALES_ESSENTIAL_PATIENT_LIMIT = 50;
+const SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50;
 const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000;
 const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000;
 
@@ -148,10 +150,31 @@ const commercialCapacityForDemand = (patientQuantity: number) =>
     (capacity) => patientQuantity <= capacity
   ) ?? null;
 
+const commercialPlanLabelForCapacity = (capacity: number) => {
+  const safeCapacity = Math.max(
+    SALES_ESSENTIAL_PATIENT_LIMIT,
+    Math.floor(Number(capacity) || SALES_ESSENTIAL_PATIENT_LIMIT)
+  );
+  if (safeCapacity <= SALES_ESSENTIAL_PATIENT_LIMIT) {
+    return 'Plano Essencial · 1 a 50 pacientes';
+  }
+  const enterpriseBlock = Math.ceil(
+    (safeCapacity - SALES_ESSENTIAL_PATIENT_LIMIT) /
+      SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+  );
+  const startsAt =
+    SALES_ESSENTIAL_PATIENT_LIMIT +
+    (enterpriseBlock - 1) * SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS +
+    1;
+  return `Enterprise ${enterpriseBlock} · ${startsAt} a ${safeCapacity} pacientes`;
+};
+
 // New exact-seat offers use the Essencial 1–50 / Enterprise 50-seat bands.
 // Keep historical block-based offer capacity selection unchanged.
-const commercialCapacityForExactDemand = (patientQuantity: number) =>
-  Math.ceil(Math.max(1, Math.floor(Number(patientQuantity) || 1)) / 50) * 50;
+const commercialCapacityForExactDemand = (patientQuantity: number) => {
+  const demand = Math.max(1, Math.floor(Number(patientQuantity) || 1));
+  return Math.ceil(demand / SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS) * SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS;
+};
 
 const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
   if (marginBasisPoints == null) {
@@ -247,6 +270,148 @@ const selectionForItem = (
         : undefined,
     customOneTimeAmountCents: item.itemKey === 'onboarding' ? 0 : null
   };
+};
+
+const normalizeBuilderInputForCalculation = (
+  input: SalesModularProposalInput,
+  catalog: SalesPricingCatalogSnapshot
+): SalesModularProposalInput => {
+  if (input.exactPerPatientBilling !== true) return input;
+  const coreItem = catalog.items.find(
+    (item) => item.itemKey === 'clinical_core'
+  );
+  const baseTier = coreItem?.tiers.find(
+    (tier) => tier.id === input.basePackageTierId
+  );
+  if (!coreItem || !baseTier) return input;
+
+  const patientQuantity = input.patientQuantity;
+  const rawCapacity = Number(input.customBasePackageLimit || 0);
+  const validCommercialCapacity =
+    Number.isInteger(rawCapacity) &&
+    rawCapacity >= SALES_ESSENTIAL_PATIENT_LIMIT &&
+    rawCapacity >= patientQuantity &&
+    rawCapacity % SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS === 0;
+  const customBasePackageLimit =
+    input.commercialPricingMode === 'manual_module_prices' &&
+    (baseTier.isCustom || baseTier.maximumQuantity === null)
+      ? validCommercialCapacity
+        ? rawCapacity
+        : commercialCapacityForExactDemand(patientQuantity)
+      : input.customBasePackageLimit;
+
+  const lines = input.lines.map((line) => {
+    const item = catalog.items.find(
+      (candidate) => candidate.itemKey === line.itemKey
+    );
+    if (!item) return line;
+
+    let normalized: SalesModularLineSelection = { ...line };
+    if (item.itemKey === 'clinical_core') {
+      normalized = {
+        ...normalized,
+        tierId: baseTier.id,
+        quantity: patientQuantity
+      };
+    } else if (
+      item.pricingMode === 'package_limit' &&
+      item.itemKey !== 'insurance_tiss'
+    ) {
+      const selectedTier = item.tiers.find(
+        (tier) => tier.id === normalized.tierId
+      );
+      const selectedTierFits =
+        Boolean(selectedTier) &&
+        Number(selectedTier?.minimumQuantity || 0) <= patientQuantity &&
+        (
+          selectedTier?.maximumQuantity === null ||
+          patientQuantity <= Number(selectedTier?.maximumQuantity)
+        );
+      const compatibleTier = selectedTierFits
+        ? selectedTier
+        : itemTierForQuantity(item, patientQuantity);
+      normalized = {
+        ...normalized,
+        tierId: compatibleTier?.id || normalized.tierId || null,
+        quantity: patientQuantity
+      };
+    }
+
+    if (
+      input.commercialPricingMode === 'manual_module_prices' &&
+      item.billingInterval !== 'one_time'
+    ) {
+      const editMode =
+        normalized.pricingEditMode === 'monthly_total'
+          ? 'monthly_total'
+          : 'per_patient';
+      if (editMode === 'per_patient') {
+        normalized = {
+          ...normalized,
+          pricingEditMode: editMode,
+          proposedPricePerPatientCents:
+            typeof normalized.proposedPricePerPatientCents === 'number' &&
+            Number.isFinite(normalized.proposedPricePerPatientCents) &&
+            normalized.proposedPricePerPatientCents >= 0
+              ? Math.round(normalized.proposedPricePerPatientCents)
+              : null,
+          customRecurringAmountCents: null
+        };
+      } else {
+        normalized = {
+          ...normalized,
+          pricingEditMode: editMode,
+          proposedPricePerPatientCents: null,
+          customRecurringAmountCents:
+            typeof normalized.customRecurringAmountCents === 'number' &&
+            Number.isFinite(normalized.customRecurringAmountCents) &&
+            normalized.customRecurringAmountCents >= 0
+              ? Math.round(normalized.customRecurringAmountCents)
+              : null
+        };
+      }
+    }
+
+    return normalized;
+  });
+
+  return {
+    ...input,
+    customBasePackageLimit,
+    lines
+  };
+};
+
+const proposalCalculationErrorMessage = (
+  rawCode: string | null,
+  catalog: SalesPricingCatalogSnapshot | null
+) => {
+  if (!rawCode) return null;
+  if (rawCode === SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE) {
+    return rawCode;
+  }
+  const [code, detail = ''] = rawCode.split(':');
+  const itemKey = detail.split('.')[0];
+  const itemName =
+    catalog?.items.find((item) => item.itemKey === itemKey)?.publicName ||
+    itemKey ||
+    'módulo';
+  if (code === 'PRICING_TIER_NOT_FOUND') {
+    return `A faixa comercial de ${itemName} ficou inconsistente. Revise o módulo e tente novamente.`;
+  }
+  if (code === 'PRICING_PACKAGE_LIMIT_EXCEEDED') {
+    return `A faixa de ${itemName} não comporta a quantidade atual de pacientes.`;
+  }
+  if (code === 'PROPOSAL_SIMULATION_INVALID') {
+    return `Há um valor comercial incompleto ou inconsistente em ${itemName}.`;
+  }
+  if (code === 'PRICING_TOTAL_MISMATCH') {
+    return 'O resumo financeiro ficou inconsistente durante o recálculo. Revise os valores da proposta.';
+  }
+  if (code === 'PROPOSAL_PRICE_PER_PATIENT_MISSING') {
+    return 'Informe o preço por paciente de todos os módulos selecionados.';
+  }
+  return `Não foi possível recalcular a proposta. Código: ${code || 'PROPOSAL_CALCULATION_FAILED'}.`;
 };
 
 const ratingStyle: Record<SalesModularProposalResult['rating'], string> = {
@@ -656,7 +821,7 @@ export const SalesModularProposalBuilder = ({
       setNotice(
         nextLimit > 50
           ? `A quantidade atual exige capacidade Enterprise de ${nextLimit} pacientes.`
-          : `A capacidade foi ajustada para o bloco de ${nextLimit} pacientes para comportar os pacientes atuais.`
+          : `A proposta está no Plano Essencial, com faixa de 1 a 50 pacientes.`
       );
       return;
     }
@@ -763,27 +928,65 @@ export const SalesModularProposalBuilder = ({
     }
   }, [catalog, input]);
 
+  const calculationInput = useMemo(
+    () =>
+      input && catalog
+        ? normalizeBuilderInputForCalculation(input, catalog)
+        : input,
+    [catalog, input]
+  );
   const hasValidVersionedProfitabilityPolicy = Boolean(
     catalog?.hasVersionedProfitabilityPolicy === true &&
       validateSalesProfitabilityPolicy(catalog.profitabilityPolicy)
   );
   const proposalRequiresVersionedProfitabilityPolicy =
-    salesModularProposalRequiresVersionedProfitabilityPolicy(input, catalog);
+    salesModularProposalRequiresVersionedProfitabilityPolicy(
+      calculationInput,
+      catalog
+    );
   const profitabilityPolicyRequired = Boolean(
     catalog?.status === 'active' &&
       proposalRequiresVersionedProfitabilityPolicy &&
       !hasValidVersionedProfitabilityPolicy
   );
-  const preview = useMemo(() => {
-    if (!input || !catalog || !assumptions || profitabilityPolicyRequired) {
-      return null;
+  const previewComputation = useMemo(() => {
+    if (!calculationInput || !catalog || !assumptions) {
+      return { preview: null, errorCode: null };
+    }
+    if (profitabilityPolicyRequired) {
+      return {
+        preview: null,
+        errorCode: SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE
+      };
     }
     try {
-      return calculateSalesModularProposal(input, catalog, assumptions);
-    } catch {
-      return null;
+      return {
+        preview: calculateSalesModularProposal(
+          calculationInput,
+          catalog,
+          assumptions
+        ),
+        errorCode: null
+      };
+    } catch (calculationError: any) {
+      return {
+        preview: null,
+        errorCode: String(
+          calculationError?.message || 'PROPOSAL_CALCULATION_FAILED'
+        ).slice(0, 220)
+      };
     }
-  }, [assumptions, catalog, input, profitabilityPolicyRequired]);
+  }, [
+    assumptions,
+    calculationInput,
+    catalog,
+    profitabilityPolicyRequired
+  ]);
+  const preview = previewComputation.preview;
+  const previewErrorMessage = proposalCalculationErrorMessage(
+    previewComputation.errorCode,
+    catalog
+  );
   const promotionalMoneyFlow = useMemo(() => {
     if (!preview || !assumptions || !input) return null;
     return buildSalesRecurringMoneyFlow({
@@ -1019,7 +1222,8 @@ export const SalesModularProposalBuilder = ({
       )
     : null;
   const summaryPreview = selectedSimulation?.results_snapshot || preview;
-  const summaryInput = selectedSimulation?.modular_input_snapshot || input;
+  const summaryInput =
+    selectedSimulation?.modular_input_snapshot || calculationInput;
   const selectedLegacyBilling = Boolean(
     selectedSimulation &&
     selectedSimulation.modular_input_snapshot?.exactPerPatientBilling !== true
@@ -1406,7 +1610,7 @@ export const SalesModularProposalBuilder = ({
   };
 
   const saveSimulation = async () => {
-    if (!input || !catalog || !assumptions || !preview) return;
+    if (!calculationInput || !catalog || !assumptions || !preview) return;
     if (!hasValidVersionedProfitabilityPolicy) {
       setError(SALES_PROFITABILITY_POLICY_REQUIRED_MESSAGE);
       return;
@@ -1425,7 +1629,7 @@ export const SalesModularProposalBuilder = ({
             catalogVersionId: catalog.id,
             assumptionSetId: assumptions.id,
             scenarioName,
-            input,
+            input: calculationInput,
             internalJustification,
             approveCommercialException,
             commercialExceptionConfirmed: approveCommercialException,
@@ -1888,10 +2092,8 @@ export const SalesModularProposalBuilder = ({
     Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
   );
   const nextStandardCommercialCapacity =
-    currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
-      ? SALES_PATIENT_CAPACITY_BLOCKS.find(
-          (capacity) => capacity > currentCommercialCapacity
-        ) || null
+    currentCommercialCapacity > 0
+      ? currentCommercialCapacity + SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
       : null;
   const selectedCommercialModuleNames = input && catalog
     ? input.lines
@@ -1907,7 +2109,10 @@ export const SalesModularProposalBuilder = ({
     nextStandardCommercialCapacity &&
     currentCapacityBlockPhase?.blockPriceCents != null
       ? preview.promotionalRecurringRevenueCents +
-        currentCapacityBlockPhase.blockPriceCents
+        Math.round(
+          currentCapacityBlockPhase.blockPriceCents /
+            SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+        )
       : null;
 
   return (
@@ -2055,7 +2260,7 @@ export const SalesModularProposalBuilder = ({
                     <p className="mt-1 text-sm font-normal text-slate-500">
                       A faixa comercial é automática: Essencial de 1 a 50 pacientes;
                       Enterprise acima de 50. Em propostas de cobrança exata,
-                      a mensalidade usa pacientes ativos e preços dos módulos.
+                      o valor mensal depende apenas dos pacientes ativos e dos módulos contratados.
                       Custos compartilhados continuam apenas no cálculo interno.
                     </p>
                   </div>
@@ -4617,9 +4822,9 @@ export const SalesModularProposalBuilder = ({
                 Number(input?.customBasePackageLimit || preview?.basePackage.limitQuantity || 0)
               );
               const nextStandardCommercialCapacity =
-                currentCommercialCapacity > 0 && currentCommercialCapacity <= 50
-                  ? SALES_PATIENT_CAPACITY_BLOCKS.find((capacity) => capacity > currentCommercialCapacity) || null
-                  : null;
+    currentCommercialCapacity > 0
+      ? currentCommercialCapacity + SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+      : null;
               const selectedCommercialModuleNames = preview
                 ? preview.lines
                     .filter((line) => isSalesFunctionalModuleItemKey(line.itemKey))
@@ -4627,7 +4832,10 @@ export const SalesModularProposalBuilder = ({
                 : [];
               const nextCommercialMonthlyAmountCents =
                 preview && nextStandardCommercialCapacity && currentCapacityBlockPhase?.blockPriceCents != null
-                  ? preview.promotionalRecurringRevenueCents + currentCapacityBlockPhase.blockPriceCents
+                  ? preview.promotionalRecurringRevenueCents + Math.round(
+                    currentCapacityBlockPhase.blockPriceCents /
+                      SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
+                  )
                   : null;
               return (
             <aside className="min-w-0 space-y-4 lg:sticky lg:top-[104px] lg:self-start">
@@ -4683,9 +4891,7 @@ export const SalesModularProposalBuilder = ({
                       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                         <dt className="font-normal text-slate-500">Plano da proposta</dt>
                         <dd className="mt-1 text-sm font-semibold text-slate-900">
-                          {currentCommercialCapacity > 50
-                            ? `Enterprise · ${currentCommercialCapacity}`
-                            : `Até ${currentCommercialCapacity} pacientes`}
+                          {commercialPlanLabelForCapacity(currentCommercialCapacity)}
                         </dd>
                       </div>
                       <div className="col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -4712,7 +4918,7 @@ export const SalesModularProposalBuilder = ({
                         <div className="col-span-2 rounded-xl border border-amber-200 bg-amber-50 p-3">
                           <dt className="font-normal text-amber-700">Próximo passo</dt>
                           <dd className="mt-1 font-medium leading-5 text-amber-950">
-                            A partir do 51º paciente, a conta entra em revisão Enterprise; nenhum preço é criado automaticamente.
+                            A partir do 51º paciente, a conta entra em Enterprise e recebe sinalização comercial; a cobrança continua usando o mesmo preço por paciente já contratado.
                           </dd>
                         </div>
                       ) : null}
@@ -5420,9 +5626,18 @@ export const SalesModularProposalBuilder = ({
                     ) : null}
                   </>
                 ) : (
-                  <p className="mt-4 text-sm text-slate-500">
-                    Complete faixas e valores personalizados para calcular.
-                  </p>
+                  <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                    <p className="font-medium">
+                      {previewErrorMessage
+                        ? 'Não foi possível calcular a proposta'
+                        : 'Complete faixas e valores personalizados para calcular.'}
+                    </p>
+                    {previewErrorMessage ? (
+                      <p className="mt-1 text-xs leading-5">
+                        {previewErrorMessage}
+                      </p>
+                    ) : null}
+                  </div>
                 )}
               </section>
 

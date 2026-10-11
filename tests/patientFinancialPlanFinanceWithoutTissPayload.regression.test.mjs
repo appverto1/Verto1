@@ -12,7 +12,15 @@ const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx', '
 
 // Execute the real serializer implementation instead of reproducing it in the test.
 const patientFinancialPlanModule = { exports: {} };
+const specialtyModule = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('src/utils/clinicalSpecialties.ts', 'utf8'), {
+  compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+}).outputText, { module: specialtyModule, exports: specialtyModule.exports });
 const utilContext = {
+  require(name) {
+    assert.equal(name, './clinicalSpecialties');
+    return specialtyModule.exports;
+  },
   module: patientFinancialPlanModule,
   exports: patientFinancialPlanModule.exports,
   console,

@@ -35,6 +35,7 @@ import {
   resolvePatientPortalKind,
 } from './utils/patientProfileType';
 import { normalizePatientInsuranceEligibility } from './utils/patientInsuranceEligibility';
+import { hasExplicitPatientTissOperationalPatch, omitImplicitPatientTissOperationalFields } from './utils/patientInsuranceCorePatch';
 import {
   getPeiHistoryProgressMarker,
   getPeiProgressResetMarker,
@@ -1490,7 +1491,7 @@ export default function App() {
     );
     const handleOnline = () => {
       setIsOnline(true);
-      if (canSyncCurrentUser) void syncOfflineData();
+      if (canSyncCurrentUser) void syncOfflineData({ force: true });
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -2303,6 +2304,7 @@ export default function App() {
   const [therapistNotes, setTherapistNotes] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const historyRef = useRef<any[]>([]);
+  const taskCompletionInFlightRef = useRef<Set<string>>(new Set());
   const [tasks, setTasks] = useState<any[]>([]);
   const [patientAssignedTaskCount, setPatientAssignedTaskCount] = useState(0);
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
@@ -4424,7 +4426,7 @@ export default function App() {
         });
         const clinicalPortalEnabled = portalHasModule('clinical_core');
         const [historyRes, notesRes] = await Promise.allSettled([
-          clinicalPortalEnabled ? dataService.getPatientSelfHistory() : Promise.resolve({ success: true, data: [] }),
+          clinicalPortalEnabled ? dataService.getPatientSelfHistory(resolvedContextPatientId) : Promise.resolve({ success: true, data: [] }),
           clinicalPortalEnabled
             ? dataService.getNotesByEmail(portalContext?.resolvedPatientEmail || user.email)
             : Promise.resolve({ success: true, data: [] })
@@ -6183,6 +6185,21 @@ export default function App() {
       'convenioTitularRelacao',
       'convenioElegibilidadeObs',
     ].some((key) => Object.prototype.hasOwnProperty.call(updatedData || {}, key));
+    const hasExplicitTissOperationalPatch = hasExplicitPatientTissOperationalPatch(updatedData);
+    const patientPhotoPatchKeys = [
+      'profilePicture',
+      'profile_picture',
+      'profilePicturePath',
+      'profile_picture_path',
+    ] as const;
+    const hasPatientPhotoPatch = patientPhotoPatchKeys.some((key) =>
+      Object.prototype.hasOwnProperty.call(updatedData || {}, key)
+    );
+    const isPatientPhotoOnlyPatch =
+      hasPatientPhotoPatch &&
+      Object.keys(updatedData || {}).every((key) =>
+        key === 'id' || patientPhotoPatchKeys.includes(key as (typeof patientPhotoPatchKeys)[number])
+      );
     const updatedProfileType = normalizePatientProfileType(
       updatedData?.patientProfileType ||
         updatedData?.panelType ||
@@ -6197,7 +6214,9 @@ export default function App() {
     const requestedPatientCategory = String(updatedData?.group ?? updatedData?.grupo ?? '').trim().toLowerCase();
     const mustConfirmPatientCategory = ['infantil', 'adolescente', 'adulto', 'idoso'].includes(requestedPatientCategory);
     const syncedAnamnesisData =
-      anamnesisData !== undefined
+      isPatientPhotoOnlyPatch
+        ? undefined
+        : anamnesisData !== undefined
         ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, anamnesisData)
         : currentPatient?.anamnesisData
           ? buildPatientAnamnesisSnapshot(mergedIdentityPatient, currentPatient.anamnesisData)
@@ -6276,6 +6295,11 @@ export default function App() {
           ...buildPatientAnamnesisSnapshot(mergedIdentityPatient, syncedAnamnesisData),
           anamnese: syncedAnamnesisData || {},
         });
+      }
+      // A finance-only save must not echo legacy insurance-card/TISS fields
+      // from the previously loaded anamnesis into a new protected mutation.
+      if (!hasExplicitTissOperationalPatch) {
+        recordPayloadForAtomicSave = omitImplicitPatientTissOperationalFields(recordPayloadForAtomicSave);
       }
     }
 
@@ -6382,7 +6406,23 @@ export default function App() {
           'management',
         );
       } else {
-        const patientUpdatePayload = {
+        const patientPhotoPatch = {
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profilePicture')
+            ? { profilePicture: updatedData.profilePicture }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profile_picture')
+            ? { profile_picture: updatedData.profile_picture }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profilePicturePath')
+            ? { profilePicturePath: updatedData.profilePicturePath }
+            : {}),
+          ...(Object.prototype.hasOwnProperty.call(updatedData || {}, 'profile_picture_path')
+            ? { profile_picture_path: updatedData.profile_picture_path }
+            : {}),
+        };
+        const patientUpdatePayload = isPatientPhotoOnlyPatch
+          ? patientPhotoPatch
+          : {
           name: preserveCurrentFullName ? undefined : updatedData.name,
           socialName: updatedData.socialName || updatedData.nomeSocial,
           email: updatedData.email,
@@ -6450,7 +6490,8 @@ export default function App() {
                 ? updatedData.responsibleProfessionalId
                 : (typeof updatedData?.therapist_id !== 'undefined' ? updatedData.therapist_id : updatedData?.professional_id)),
           clinic_id: updatedData.clinic_id,
-          status: updatedData.status
+          status: updatedData.status,
+          ...patientPhotoPatch,
         };
         const updateResult = await dataService.updatePatient(
           String(updatedData.id),
@@ -7080,6 +7121,19 @@ export default function App() {
   };
 
   const handleCompleteTask = async (t: any, e: number | null, n: string) => {
+    const taskCompletionLockKey = String(
+      t?.assignedTaskId ||
+      t?.legacyTaskId ||
+      t?.task_data?.legacyTaskId ||
+      t?.task_data?.legacy_task_id ||
+      t?.id ||
+      ''
+    ).trim();
+    if (taskCompletionLockKey && taskCompletionInFlightRef.current.has(taskCompletionLockKey)) {
+      return { success: false, pending: true, error: 'Esta tarefa já está sendo processada.' };
+    }
+    if (taskCompletionLockKey) taskCompletionInFlightRef.current.add(taskCompletionLockKey);
+    try {
     const identity = resolvePatientIdentityForPortal(t);
     const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
     const portalKind = resolvePatientPortalKind(user);
@@ -7198,6 +7252,9 @@ export default function App() {
     }Anotações do Paciente: ${n || 'Nenhuma observação.'}`;
     await handleAddNote(targetPatientId, noteText, 'private', 'Evolução');
     return { success: true, data: newHistoryItem };
+    } finally {
+      if (taskCompletionLockKey) taskCompletionInFlightRef.current.delete(taskCompletionLockKey);
+    }
   };
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
     const targetPatient = allPatients.find(p => p.id === pid);
@@ -7291,6 +7348,14 @@ export default function App() {
       sessionReferenceDate: sessionMeta?.sessionReferenceDate || sessionStartedAt.slice(0, 10),
       targetId: sessionTargetKey || null,
       target_id: sessionTargetKey || null,
+      protocol_id: matchedProtocol?.category === 'evaluation' ? (matchedProtocol?.id || null) : null,
+      protocol_title: matchedProtocol?.category === 'evaluation' ? (matchedProtocol?.title || matchedProtocol?.name || null) : null,
+      domain_id: matchedProtocol?.category === 'evaluation' ? (matchedDomain?.id || null) : null,
+      domain_name: matchedProtocol?.category === 'evaluation' ? (matchedDomain?.name || matchedDomain?.title || null) : null,
+      skill_id: matchedProtocol?.category === 'evaluation' ? (matchedSkill?.id || null) : null,
+      skill_name: matchedProtocol?.category === 'evaluation' ? (matchedSkill?.name || title || null) : null,
+      max_score: matchedProtocol?.category === 'evaluation' ? Math.max(1, Number(matchedSkill?.maxScore ?? matchedSkill?.max_score ?? skillMaxScore ?? 1) || 1) : null,
+      task_data: matchedProtocol?.category === 'evaluation' ? { evidence_kind: 'protocol_assessment' } : undefined,
       collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
       created_at: recordedAt
@@ -7308,6 +7373,19 @@ export default function App() {
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
+    const assessmentProtocol = matchedProtocol?.category === 'evaluation' ? matchedProtocol : null;
+    const assessmentEvidence = assessmentProtocol
+      ? {
+          evidence_kind: 'protocol_assessment',
+          protocol_id: String(assessmentProtocol?.id || '').trim() || null,
+          protocol_title: String(assessmentProtocol?.title || assessmentProtocol?.name || '').trim() || null,
+          domain_id: String(matchedDomain?.id || '').trim() || null,
+          domain_name: String(matchedDomain?.name || matchedDomain?.title || '').trim() || null,
+          skill_id: String(matchedSkill?.id || '').trim() || null,
+          skill_name: String(matchedSkill?.name || title || '').trim() || null,
+          max_score: Math.max(1, Number(matchedSkill?.maxScore ?? matchedSkill?.max_score ?? skillMaxScore ?? 1) || 1)
+        }
+      : null;
     let sourceHistoryId: any = newId;
     try {
       const historyResult = await dataService.addHistoryItem({
@@ -7320,6 +7398,16 @@ export default function App() {
         icon: "🎯",
         collection_type: sessionMeta?.collectionType || sessionMeta?.trialType || null,
         collectionType: sessionMeta?.collectionType || sessionMeta?.trialType || null,
+        ...(assessmentEvidence ? {
+          protocol_id: assessmentEvidence.protocol_id,
+          protocol_title: assessmentEvidence.protocol_title,
+          domain_id: assessmentEvidence.domain_id,
+          domain_name: assessmentEvidence.domain_name,
+          skill_id: assessmentEvidence.skill_id,
+          skill_name: assessmentEvidence.skill_name,
+          max_score: assessmentEvidence.max_score,
+          task_data: assessmentEvidence
+        } : {}),
         created_at: recordedAt
       });
       sourceHistoryId = historyResult?.data?.id || newId;
@@ -7973,15 +8061,24 @@ export default function App() {
     return { success: true, pending: false, data: historySaveResult?.data || newHistoryItem };
   };
 
-  const handleLogout = async () => {
+  const handleLogout = async (reason: 'manual' | 'expired' = 'manual') => {
     manualLogoutInProgressRef.current = true;
+    if (reason === 'expired') {
+      // An expired server session cannot authorize uploads or activity logs.
+      // Hide the protected UI immediately; encrypted pending mutations remain durable.
+      setUser(null);
+      setClinicStateHydrated(false);
+      resetWorkspaceScopedState();
+    }
     const signingOutUserId = String(user?.id || '').trim();
     try {
-      await onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
-      await Promise.race([
-        syncOfflineData(),
-        new Promise((resolve) => setTimeout(resolve, 2500))
-      ]);
+      if (reason !== 'expired') {
+        await onAddActivityLog("Logout do Sistema", "O profissional encerrou a sessÃ£o com seguranÃ§a.", "system");
+        await Promise.race([
+          syncOfflineData(),
+          new Promise((resolve) => setTimeout(resolve, 2500))
+        ]);
+      }
 
       const supabase = await getSupabase();
       const { data: { session } } = await supabase.auth.getSession();
@@ -8025,6 +8122,8 @@ export default function App() {
     setProfilePicture(null);
     if (isRunningStandalone()) {
       window.history.replaceState({}, document.title, '/entrar');
+    } else if (reason === 'expired') {
+      window.history.replaceState({}, document.title, '/');
     }
     setUser(null);
     setShowWorkspacePicker(false);
@@ -8032,6 +8131,20 @@ export default function App() {
       manualLogoutInProgressRef.current = false;
     }, 1200);
   };
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const handleServerSessionExpired = () => {
+      if (manualLogoutInProgressRef.current) return;
+      void handleLogout('expired');
+    };
+
+    window.addEventListener('verto:server-session-expired', handleServerSessionExpired);
+    return () => {
+      window.removeEventListener('verto:server-session-expired', handleServerSessionExpired);
+    };
+  }, [user?.id]);
 
   const handleAccessContextSelect = async (context: AccessContextOption) => {
     if (!context?.id || selectingAccessContextId) return;

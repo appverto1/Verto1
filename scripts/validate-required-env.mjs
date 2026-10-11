@@ -67,8 +67,16 @@ if (supabaseUrl && !isValidUrl(supabaseUrl)) {
   errors.push('SUPABASE_URL: formato invalido de URL.');
 }
 
+const deploymentEnvRaw = String(process.env.VERTO_DEPLOYMENT_ENV || '').trim().toLowerCase();
+const deploymentEnv = ['staging', 'production'].includes(deploymentEnvRaw) ? deploymentEnvRaw : '';
+if (process.env.VERTO_DEPLOYMENT_ENV && !deploymentEnv) {
+  errors.push('VERTO_DEPLOYMENT_ENV: use apenas staging ou production.');
+}
 
 if (isDeployEnvironment()) {
+  if (!deploymentEnv) {
+    errors.push('VERTO_DEPLOYMENT_ENV: obrigatoria em deploy e deve ser staging ou production.');
+  }
   const appBaseUrl = String(process.env.VERTO_APP_BASE_URL || '').trim();
   if (!appBaseUrl) {
     errors.push('VERTO_APP_BASE_URL: obrigatoria em deploy para links, convites e callbacks.');
@@ -76,6 +84,19 @@ if (isDeployEnvironment()) {
     errors.push('VERTO_APP_BASE_URL: formato invalido de URL.');
   } else if (new URL(appBaseUrl).protocol !== 'https:') {
     errors.push('VERTO_APP_BASE_URL: deve utilizar HTTPS em deploy.');
+  }
+
+  const railwayEnvironment = String(process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT || '').trim().toLowerCase();
+  const appHost = appBaseUrl && isValidUrl(appBaseUrl) ? new URL(appBaseUrl).hostname.toLowerCase() : '';
+  const nonProductionHints = ['staging', 'stage', 'preview', 'test', 'dev', 'localhost', '127.0.0.1'];
+  if (deploymentEnv === 'production' && appHost && nonProductionHints.some((hint) => appHost.includes(hint))) {
+    errors.push('VERTO_DEPLOYMENT_ENV=production conflita com o hostname configurado em VERTO_APP_BASE_URL.');
+  }
+  if (deploymentEnv === 'production' && railwayEnvironment && ['staging', 'stage', 'preview', 'test', 'dev'].some((hint) => railwayEnvironment.includes(hint))) {
+    errors.push('VERTO_DEPLOYMENT_ENV=production conflita com o ambiente Railway identificado como nao-producao.');
+  }
+  if (deploymentEnv === 'staging' && railwayEnvironment && ['production', 'prod'].some((hint) => railwayEnvironment.includes(hint))) {
+    errors.push('VERTO_DEPLOYMENT_ENV=staging conflita com o ambiente Railway identificado como producao.');
   }
 
   const expectedProjectRef = String(process.env.SUPABASE_EXPECTED_PROJECT_REF || '').trim();

@@ -148,7 +148,7 @@ assert.match(app, /dataService\.selectAccessContext\(/);
 assert.match(app, /getLastActiveAccessContextId\(candidateUser\?\.id\)/);
 assert.match(app, /Preferência local nunca ativa um tenant por conta própria/);
 assert.match(app, /Trabalhar/);
-assert.match(app, /Meu cuidado/);
+assert.match(app, /Cuidar de mim/);
 assert.match(dataService, /fetch\('\/api\/access-contexts\/select'/);
 assert.match(dataService, /body: JSON\.stringify\(\{ accessContextId: safeAccessContextId \}\)/);
 assert.match(dataService, /\[404, 405\]\.includes\(response\.status\) && safeFallbackClinicId/);
@@ -190,5 +190,15 @@ assert.doesNotMatch(
   'desvincular uma clínica não pode reescrever a identidade global da conta',
 );
 assert.doesNotMatch(unlinkRoute, /auth\.admin\.deleteUser|deleteUser\(/);
+
+// P0: admitir conta profissional preexistente em B não remove vínculos de A.
+assert.match(migration, /insert into public\.clinic_memberships[\s\S]*?on conflict \(user_id, clinic_id\)/i);
+assert.doesNotMatch(
+  migration,
+  /delete from public\.clinic_memberships[\s\S]*?v_actor_user_id/i,
+  'aceite do convite não pode apagar memberships de outras clínicas',
+);
+assert.match(accessContextRoute, /ACCESS_CONTEXT_NOT_AUTHORIZED/);
+assert.doesNotMatch(acceptRoute, /req\.body\?\.(?:clinicId|clinic_id|role|professionalId)/);
 
 console.log('clinicReinviteAccess.test.ts: ok');

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import {validateCandidateManifest} from './factory-recovery-controls.mjs';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
@@ -9,6 +10,30 @@ const passes = [];
 const pass = (label) => passes.push(label);
 const fail = (label, detail = '') => failures.push({ label, detail });
 
+// Contract v3 #267: gate scope comes from the committed contract template; facts come from Git.
+const factoryCatalog=JSON.parse(readFileSync(join(root,'docs/factory/BLOCKER_CATALOG_V1.json'),'utf8'));
+const template=factoryCatalog.contract_manifest;
+if(template?.contract_version===3&&(process.env.GITHUB_REF_NAME===template.branch||spawnSync('git',['branch','--show-current'],{cwd:root,encoding:'utf8'}).stdout.trim()===template.branch)){
+  const git=args=>{const result=spawnSync('git',args,{cwd:root,encoding:'utf8'});if(result.status!==0)throw new Error(`manifest Git read failed: ${args[0]}`);return result.stdout;};
+  try{
+    const head=git(['rev-parse','HEAD']).trim(),tree=git(['rev-parse','HEAD^{tree}']).trim(),staging=git(['rev-parse','origin/staging']).trim();
+    if(staging!==template.base_sha)throw new Error('manifest baseline differs from factual staging');
+    if(process.env.GITHUB_SHA&&process.env.GITHUB_SHA!==head)throw new Error('manifest candidate differs from exact runner SHA');
+    const entries=new Map(git(['ls-tree','-r','-z','HEAD']).split('\0').filter(Boolean).map(line=>{const at=line.indexOf('\t'),[mode,,blob_sha]=line.slice(0,at).split(' ');return [line.slice(at+1),{mode,blob_sha}];}));
+    const changed=git(['diff','--name-status','--no-renames','-z',template.base_sha,'HEAD']).split('\0').filter(Boolean),paths=[];
+    for(let index=0;index<changed.length;index+=2){
+      const status={A:'added',M:'modified',D:'removed'}[changed[index]],path=changed[index+1];
+      if(!status||!path)throw new Error('invalid factual changed-path entry');
+      paths.push({path,status,...(status==='removed'?{mode:null,blob_sha:null}:entries.get(path))});
+    }
+    const manifest={schema_version:'FACTORY_CANDIDATE_MANIFEST_V1',issue:267,contract_version:3,branch:template.branch,base_sha:staging,head_sha:head,tree_sha:tree,paths};
+    const result=validateCandidateManifest(manifest,manifest,template.authorized_paths);
+    if(!result.valid)throw new Error(JSON.stringify(result.problems));
+    console.log('[factory-candidate-manifest] '+JSON.stringify(manifest));
+    pass('Factory contract v3 factual SHA/tree/path manifest');
+  }catch(error){fail('Factory contract v3 factual SHA/tree/path manifest',String(error.message));}
+}
+
 const requireFile = (path) => {
   const absolute = join(root, path);
   if (!existsSync(absolute)) {
@@ -18,6 +43,23 @@ const requireFile = (path) => {
   pass(`arquivo obrigatório: ${path}`);
   return readFileSync(absolute, 'utf8');
 };
+
+const dockerRuntimeCheck = spawnSync(process.execPath, ['scripts/check-docker-runtime-imports.mjs'], {
+  cwd: root,
+  encoding: 'utf8',
+  timeout: 20_000,
+  env: { ...process.env, NODE_ENV: 'test' },
+});
+if (dockerRuntimeCheck.stdout) process.stdout.write(dockerRuntimeCheck.stdout);
+if (dockerRuntimeCheck.stderr) process.stderr.write(dockerRuntimeCheck.stderr);
+if (dockerRuntimeCheck.status === 0) {
+  pass('Docker runner contém toda a árvore de imports server-side');
+} else {
+  fail(
+    'Docker runner contém toda a árvore de imports server-side',
+    String(dockerRuntimeCheck.stderr || dockerRuntimeCheck.stdout || `status=${dockerRuntimeCheck.status}`).trim().slice(0, 1200),
+  );
+}
 
 const requiredMigrations = [
   'supabase/migrations/20260826143000_pts_document_lineage_events_v2.sql',
@@ -133,12 +175,22 @@ if (secretHits.length === 0) pass('nenhum secret óbvio versionado');
 else fail('nenhum secret óbvio versionado', secretHits.join('; '));
 
 const criticalTests = [
+  'tests/factoryRecoveryControls.regression.test.mjs',
+  'tests/factoryAuthorizedTarget.regression.test.mjs',
+  'tests/factoryPostMergeConsistency.regression.test.mjs',
+  'tests/factoryBlockerCatalog.regression.test.mjs',
   'tests/security.regression.test.mjs',
   'tests/goLiveHardening.test.mjs',
   'tests/distributedSessionSafety.regression.test.mjs',
   'tests/productionSessionPersistence.regression.test.mjs',
+  'tests/backgroundWorkerEconomyMode.test.ts',
+  'tests/supabaseSchemaSelectGuard.test.ts',
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',
+  'tests/therapeuticPlanCaseProfessionalCapability.regression.test.ts',
   'tests/therapeuticPlanSessionContext.regression.test.mjs',
+  'tests/sessionSpecialtyIsolation.test.ts',
+  'tests/clinicSchedulingActiveMembership.regression.test.mjs',
+  'tests/abaMeasurementV3CollectionUi.test.mjs',
   'tests/patientCaseTeamCoordinatorAuthority.regression.test.mjs',
   'tests/patientCaseTeamManagerRemoval.regression.test.mjs',
   'tests/patientCaseTeamPrimaryPointerNullable.regression.test.mjs',
@@ -148,12 +200,65 @@ const criticalTests = [
   'tests/ptsTherapeuticDashboard.test.mjs',
   'tests/clinicCanonicalTimeZone.regression.test.mjs',
   'tests/abaSessionClinicalDateTimezone.regression.test.mjs',
+  'tests/abaReinforcersRuntime.regression.test.mjs',
+  'tests/sessionCompletionMissingSessionRecovery.regression.test.mjs',
+  'tests/sessionLifecycleRecovery.regression.test.mjs',
+  'tests/sessionAutoFinalization.regression.test.mjs',
+  'tests/sessionOfflineLifecycleP0.regression.test.mjs',
+  'tests/clinicalMeasurementV3RouteModularization.regression.test.mjs',
   'tests/patientDirectoryOrdering.regression.test.mjs',
   'tests/progressReportFilters.regression.test.mjs',
+  'tests/anamnesisSavePersistenceConfirmation.regression.test.mjs',
+  'tests/anamnesisPortalReadOnlyStatus.regression.test.mjs',
+  'tests/anamnesisProfessionalCapability.regression.test.mjs',
+  'tests/authorizationRoleMatrixE2E.regression.test.ts',
+  'tests/supervisorPatientScopeE2E.regression.test.mjs',
+  'tests/clinicalGraphRoleScopeP0.regression.test.ts',
+  'tests/existingProfessionalInAppInvitation.test.mjs',
+  'tests/clinicReinviteAccess.test.ts',
+  'tests/teamManagementTenantRefresh.regression.test.mjs',
+  'tests/patientSelfTenantIsolation.regression.test.mjs',
+  'tests/sessionExpiredCleanLogout.regression.test.mjs',
+  'tests/patientTaskCompletionIdempotency.regression.test.mjs',
+  'tests/p0WellbeingProductionReconciliation.regression.test.mjs',
+  'tests/agendaPortalActionsP0.regression.test.mjs',
+  'tests/p0ContextAuthAgendaBatch05.test.ts',
+  'tests/p0BackendAppointmentFinalization.test.ts',
+  'tests/p0AppointmentReminderClaimIntegrity.test.ts',
+  'tests/abaLegacyProtocolApplicationsP0.regression.test.mjs',
+  'tests/receptionAuthorizationFirstRender.regression.test.mjs',
+  'tests/familyDiaryPersistence.regression.test.mjs',
+  'tests/abaLegacyAssessmentEvidence.regression.test.mjs',
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
+  'tests/clinicalOutcomePlanScope.regression.test.ts',
+  'tests/p1ClinicalChartHydration.regression.test.mjs',
+  'tests/p1AdultChartsSessionFinancial.regression.test.mjs',
+  'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
+  'tests/p000PediatricSessionRoute.regression.test.mjs',
+  'tests/p000PatientCategoryPersistence.regression.test.mjs',
+  'tests/p000PediatricTargetCollection.regression.test.mjs',
+  'tests/p000PtsActivationOptionalAndCas.regression.test.mjs',
+  'tests/p1AdultClinicalFinancialScopes.regression.test.mjs',
+  'tests/clinicalPlanAnalyticsSessionNavigation.regression.test.mjs',
+  'tests/planPtsSessionGraphIntegrationP0.regression.test.mjs',
+  'tests/contextualGuidedTutorialP0.regression.test.mjs',
+  'tests/p0AbaV3TutorialTasks26to28.regression.test.mjs',
+  'tests/p0Financial403ScopeAndGraphs.regression.test.ts',
+  'tests/p1DashboardRestoreDevicePush.regression.test.mjs',
+  'tests/p1PushAnamnesisLote03to07.regression.test.mjs',
+  'tests/p1AnamnesisEditorDocumentsCharts.regression.test.mjs',
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',
+  'tests/salesSuperAdminCommercialModel20260830.regression.test.mjs',
+  'tests/salesExactPerPatientBillingP0000.test.ts',
+  'tests/salesExactPerPatientStripeQuantityP0000.test.ts',
+  'tests/salesExactPatientCheckoutUiP0000.regression.test.mjs',
+  'tests/modulePurchaseEligibility.test.ts',
+  'tests/moduleSubscriptionUpgrade.test.ts',
+  'tests/moduleSubscriptionUpgradeExecution.test.ts',
+  'tests/moduleUpgradeV5S1Finalization.regression.test.mjs',
+  'tests/moduleUpgradeV5S1Http.test.ts',
 ];
 
 for (const testFile of criticalTests) {
@@ -161,12 +266,18 @@ for (const testFile of criticalTests) {
     fail(`teste: ${testFile}`, 'arquivo não encontrado');
     continue;
   }
-  const result = spawnSync(process.execPath, [testFile], {
+  const command = testFile.endsWith('.mjs') ? process.execPath : 'tsx';
+  const commandLabel = testFile.endsWith('.mjs') ? 'node' : 'tsx';
+  console.log(`\n[critical-test] run: ${commandLabel} ${testFile}`);
+  const result = spawnSync(command, [testFile], {
     cwd: root,
     encoding: 'utf8',
     timeout: 20_000,
     env: { ...process.env, NODE_ENV: 'test' },
   });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  console.log(`[critical-test] exit_code=${result.status ?? 1} test=${testFile}`);
   if (result.status === 0) {
     pass(`teste: ${testFile}`);
   } else {

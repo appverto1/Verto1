@@ -5,6 +5,7 @@ import {
   getLatestTypeUpdate,
   getRecordById,
   getRecordsByType,
+  getSessionQueuedRecords,
   discardFailedOfflineEntityMutations,
   markRecordSyncStatus,
   markRecordSyncFailure,
@@ -20,6 +21,7 @@ import {
 import { isAbaV2Enabled, isAbaV3UiEnabled } from '../utils/featureFlags';
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
 import { isIdempotentConflictPayload } from '../utils/offlineSyncResilience';
+import { isDurableDeferredSessionRecord, isSessionCompletionQueueRecord } from '../utils/sessionAutoFinalization';
 import { normalizePatientProfileType } from '../utils/patientProfileType';
 import {
   mirrorPatientInsuranceEligibilityAliases,
@@ -522,6 +524,29 @@ async function fetchNoStoreJsonWithRetry(
   return await safeNoStoreJson(response, staleError);
 }
 
+const SERVER_SESSION_EXPIRED_EVENT = 'verto:server-session-expired';
+const SERVER_SESSION_EXPIRED_CODES = new Set(['SERVER_SESSION_REQUIRED', 'SESSION_REVOKED']);
+let lastServerSessionExpiryDispatchAt = 0;
+
+async function notifyServerSessionExpiredIfNeeded(response: Response) {
+  if (response.status !== 401 || typeof window === 'undefined') return;
+
+  let payload: any = null;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return;
+  }
+
+  const code = String(payload?.code || payload?.error_code || payload?.error || '').trim().toUpperCase();
+  if (!SERVER_SESSION_EXPIRED_CODES.has(code)) return;
+
+  const now = Date.now();
+  if (now - lastServerSessionExpiryDispatchAt < 5000) return;
+  lastServerSessionExpiryDispatchAt = now;
+  window.dispatchEvent(new CustomEvent(SERVER_SESSION_EXPIRED_EVENT, { detail: { code } }));
+}
+
 async function fetchWithAuthRetry(url: string, init: RequestInit) {
   let response = await fetch(url, init);
   if (response.status !== 401) return response;
@@ -531,6 +556,12 @@ async function fetchWithAuthRetry(url: string, init: RequestInit) {
     ...(await getAuthHeaders(true))
   };
   response = await fetch(url, { ...init, headers: retryHeaders });
+
+  // Only a second authoritative 401 may expire the UI session. The first 401
+  // remains refreshable and must never force a logout by itself.
+  if (response.status === 401) {
+    await notifyServerSessionExpiredIfNeeded(response);
+  }
   return response;
 }
 
@@ -954,9 +985,9 @@ function createIdempotencyKey(scope: string, entityId?: string) {
 }
 
 let lastOfflineMutationTimestamp = 0;
-function nextOfflineMutationTimestamp() {
+function nextOfflineMutationTimestamp(minimumExclusive = 0) {
   const now = Date.now();
-  lastOfflineMutationTimestamp = Math.max(now, lastOfflineMutationTimestamp + 1);
+  lastOfflineMutationTimestamp = Math.max(now, lastOfflineMutationTimestamp + 1, Number(minimumExclusive || 0) + 1);
   return lastOfflineMutationTimestamp;
 }
 
@@ -1036,8 +1067,8 @@ function buildAbaIntegrityFields(input: any = {}, options: { includeRawPayload?:
 }
 
 // Helper to handle offline-first saving
-async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string; requireServerAck?: boolean } = {}) {
-  const idempotencyKey = createIdempotencyKey(`${method}:${endpoint}`, id);
+async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoint: string, method: 'POST' | 'PATCH' | 'PUT' | 'DELETE' = 'POST', options: { queueEntityId?: string; requireServerAck?: boolean; deferSync?: boolean; idempotencyKey?: string; causalAfter?: number } = {}) {
+  const idempotencyKey = String(options?.idempotencyKey || data?.idempotencyKey || '').trim() || createIdempotencyKey(`${method}:${endpoint}`, id);
   // Ordinary offline-first mutations get their own durable outbox row. Reusing
   // an id while a prior request is in-flight can let an older response
   // acknowledge/delete a newer edit. Server-context mutations deliberately skip
@@ -1065,7 +1096,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         data: payloadWithIdempotency,
         type,
         sync_status: 'pending',
-        last_updated: nextOfflineMutationTimestamp(),
+        last_updated: nextOfflineMutationTimestamp(options?.causalAfter),
         retry_count: 0,
         last_attempt_at: null,
         next_retry_at: null,
@@ -1077,6 +1108,18 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
     } catch (offlineError) {
       console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
     }
+  }
+
+  if (options?.deferSync === true) {
+    return {
+      success: locallyPersisted,
+      offline: true,
+      pending: locallyPersisted,
+      durable: locallyPersisted,
+      deferred: locallyPersisted,
+      data: payloadWithIdempotency,
+      error: locallyPersisted ? undefined : 'Não foi possível preservar esta alteração na fila local.'
+    };
   }
 
   // 2. Try to sync with server
@@ -2564,7 +2607,7 @@ export const dataService = {
         from: params.from,
         to: params.to
       });
-      const response = await fetch(endpoint, {
+      const response = await fetchWithAuthRetry(endpoint, {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
@@ -2604,27 +2647,64 @@ export const dataService = {
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
-  async getPatientSelfHistory() {
+  async getPatientSelfHistory(patientId?: string) {
+    const canonicalPatientId = String(patientId || '').trim();
+    const mergePendingLocalHistory = async (remoteData: any[]) => {
+      const local = await getRecordsByType('history');
+      const pendingLocal = local
+        .filter((record) => record.sync_status !== 'synced')
+        .filter((record) => {
+          const localPatientId = String(record?.data?.patient_id || record?.data?.patientId || '').trim();
+          return Boolean(canonicalPatientId) && localPatientId === canonicalPatientId;
+        })
+        .map((record) => ({ ...record.data, sync_status: record.sync_status || 'pending' }));
+      const byId = new Map<string, any>();
+      for (const row of Array.isArray(remoteData) ? remoteData : []) {
+        const id = String(row?.id || '').trim();
+        if (id) byId.set(id, row);
+      }
+      for (const row of pendingLocal) {
+        const id = String(row?.id || '').trim();
+        if (id && !byId.has(id)) byId.set(id, row);
+      }
+      return Array.from(byId.values()).sort((a: any, b: any) =>
+        new Date(b?.created_at || b?.date || 0).getTime() - new Date(a?.created_at || a?.date || 0).getTime()
+      );
+    };
+
     try {
-      const response = await fetch(endpointWithLimit('/api/patient/self/history', 20), {
+      const response = await fetchWithAuthRetry(endpointWithLimit('/api/patient/self/history', 20), {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });
-      if (response.ok) {
-        const result = await response.json();
-        return result;
+      const result = await safeJson(response);
+      if (response.ok && result?.success !== false) {
+        return {
+          ...result,
+          data: await mergePendingLocalHistory(Array.isArray(result?.data) ? result.data : [])
+        };
       }
     } catch (error) {
       console.log('Fetching patient self history from local storage...');
     }
+
     const local = await getRecordsByType('history');
+    if (canonicalPatientId) {
+      return {
+        success: true,
+        data: local
+          .filter((record) => String(record?.data?.patient_id || record?.data?.patientId || '').trim() === canonicalPatientId)
+          .map((record) => ({ ...record.data, sync_status: record.sync_status }))
+      };
+    }
+
     const profileResponse = await this.getCurrentUserProfile();
     const selfEmail = String(profileResponse?.data?.email || '').trim().toLowerCase();
     return {
       success: true,
       data: local
-        .filter(r => String(r?.data?.patient_email || '').trim().toLowerCase() === selfEmail)
-        .map(r => r.data)
+        .filter((record) => String(record?.data?.patient_email || '').trim().toLowerCase() === selfEmail)
+        .map((record) => ({ ...record.data, sync_status: record.sync_status }))
     };
   },
 
@@ -2676,6 +2756,64 @@ export const dataService = {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ id: String(sessionId), ...(payload || {}) });
     const safeSessionId = String(sessionId || '').trim();
     const completionEndpoint = `/api/aba/sessions/${encodeURIComponent(safeSessionId)}/complete`;
+    const completionEntityId = `session-completion:${safeSessionId}`;
+
+    const readSessionQueue = () => getSessionQueuedRecords(safeSessionId);
+    const queueCompletion = async (sessionQueue: any[]) => {
+      const existingCompletion = sessionQueue.find((record) => isSessionCompletionQueueRecord(record));
+      if (existingCompletion) {
+        if (!isDurableDeferredSessionRecord(existingCompletion)) {
+          return {
+            success: false,
+            pending: false,
+            durable: true,
+            status: 409,
+            code: 'SESSION_COMPLETION_QUEUE_REQUIRES_REVIEW',
+            error: existingCompletion.last_error || 'O encerramento local precisa de revisão antes de sincronizar.'
+          };
+        }
+        return {
+          success: true,
+          offline: true,
+          pending: true,
+          durable: true,
+          queued: true,
+          data: existingCompletion.data || payload
+        };
+      }
+
+      const causalAfter = sessionQueue.reduce(
+        (max, record) => Math.max(max, Number(record?.last_updated || 0)),
+        0
+      );
+      return await saveOfflineFirst(
+        completionEntityId,
+        {
+          ...(payload || {}),
+          session_id: safeSessionId,
+          sessionId: safeSessionId
+        },
+        'aba',
+        completionEndpoint,
+        'POST',
+        {
+          queueEntityId: completionEntityId,
+          deferSync: true,
+          idempotencyKey: String(payload?.idempotencyKey || '').trim() || undefined,
+          causalAfter
+        }
+      );
+    };
+
+    const queuedBeforeCompletion = await readSessionQueue();
+    const existingCompletion = queuedBeforeCompletion.find((record) => isSessionCompletionQueueRecord(record));
+    if (existingCompletion) return await queueCompletion(queuedBeforeCompletion);
+
+    const earlierClinicalWrites = queuedBeforeCompletion.filter((record) => !isSessionCompletionQueueRecord(record));
+    if (earlierClinicalWrites.length > 0 || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+      return await queueCompletion(queuedBeforeCompletion);
+    }
+
     const requestCompletion = async () => {
       const response = await fetchClinical(
         completionEndpoint,
@@ -2697,81 +2835,99 @@ export const dataService = {
       return { response, result };
     };
 
-    let completionAttempt = await requestCompletion();
-    const missingServerSession =
-      completionAttempt.response.status === 404 &&
-      completionAttempt.result?.code === 'SESSION_COMPLETION_NOT_FOUND' &&
-      completionAttempt.result?.missingResource === 'session' &&
-      completionAttempt.result?.recoverable === true;
+    try {
+      let completionAttempt = await requestCompletion();
+      const missingServerSession =
+        completionAttempt.response.status === 404 &&
+        completionAttempt.result?.code === 'SESSION_COMPLETION_NOT_FOUND' &&
+        completionAttempt.result?.missingResource === 'session' &&
+        completionAttempt.result?.recoverable === true;
 
-    if (missingServerSession) {
-      const recoveryStartedAt = String(
-        payload?.started_at ||
-        payload?.startedAt ||
-        payload?.summary?.startedAt ||
-        ''
-      ).trim();
-      if (!recoveryStartedAt) {
-        return {
-          success: false,
-          status: 409,
-          code: 'SESSION_COMPLETION_SESSION_RECOVERY_CONTEXT_MISSING',
-          error: 'A sessão não foi encontrada no servidor e o horário de início não está disponível para uma recuperação segura.'
-        };
+      if (missingServerSession) {
+        const recoveryStartedAt = String(
+          payload?.started_at ||
+          payload?.startedAt ||
+          payload?.summary?.startedAt ||
+          ''
+        ).trim();
+        if (!recoveryStartedAt) {
+          return {
+            success: false,
+            status: 409,
+            code: 'SESSION_COMPLETION_SESSION_RECOVERY_CONTEXT_MISSING',
+            error: 'A sessão não foi encontrada no servidor e o horário de início não está disponível para uma recuperação segura.'
+          };
+        }
+
+        const recoveryAppointmentId = payload?.appointment_id || payload?.appointmentId || undefined;
+        const recoveryTherapistId = payload?.therapist_id || payload?.therapistId || undefined;
+        const recoveryResult = await dataService.saveAbaSession({
+          id: safeSessionId,
+          patient_id: payload?.patient_id || payload?.patientId,
+          patientId: payload?.patientId || payload?.patient_id,
+          clinic_id: payload?.clinic_id || payload?.clinicId,
+          clinicId: payload?.clinicId || payload?.clinic_id,
+          appointment_id: recoveryAppointmentId,
+          appointmentId: recoveryAppointmentId,
+          therapist_id: recoveryTherapistId,
+          therapistId: recoveryTherapistId,
+          professional_id: recoveryTherapistId,
+          professionalId: recoveryTherapistId,
+          scheduled_start: payload?.scheduled_start || payload?.scheduledStart || payload?.scheduled_start_at || payload?.scheduledStartAt,
+          scheduled_start_at: payload?.scheduled_start_at || payload?.scheduledStartAt || payload?.scheduled_start || payload?.scheduledStart,
+          scheduled_end: payload?.scheduled_end || payload?.scheduledEnd || payload?.scheduled_end_at || payload?.scheduledEndAt,
+          scheduled_end_at: payload?.scheduled_end_at || payload?.scheduledEndAt || payload?.scheduled_end || payload?.scheduledEnd,
+          scheduled_duration_minutes: payload?.scheduled_duration_minutes || payload?.scheduledDurationMinutes,
+          actual_start: recoveryStartedAt,
+          actual_start_at: recoveryStartedAt,
+          started_at: recoveryStartedAt,
+          startedAt: recoveryStartedAt,
+          reference_date: payload?.reference_date || payload?.referenceDate,
+          referenceDate: payload?.referenceDate || payload?.reference_date,
+          status: 'active',
+          source: recoveryAppointmentId ? 'appointment' : 'verto_web',
+          clientSource: recoveryAppointmentId ? 'appointment' : 'verto_web'
+        });
+
+        const recoveryConfirmed =
+          recoveryResult?.success === true &&
+          recoveryResult?.pending !== true &&
+          recoveryResult?.offline !== true;
+        if (!recoveryConfirmed) {
+          return {
+            success: false,
+            status: recoveryResult?.status || 503,
+            code: recoveryResult?.code || 'SESSION_COMPLETION_SESSION_RECOVERY_PENDING',
+            retryable: Boolean(recoveryResult?.pending || recoveryResult?.offline),
+            error: recoveryResult?.error || 'A sessão ainda está sendo sincronizada com o servidor. Tente encerrar novamente em instantes.'
+          };
+        }
+
+        completionAttempt = await requestCompletion();
       }
 
-      const recoveryAppointmentId = payload?.appointment_id || payload?.appointmentId || undefined;
-      const recoveryTherapistId = payload?.therapist_id || payload?.therapistId || undefined;
-      const recoveryResult = await dataService.saveAbaSession({
-        id: safeSessionId,
-        patient_id: payload?.patient_id || payload?.patientId,
-        patientId: payload?.patientId || payload?.patient_id,
-        clinic_id: payload?.clinic_id || payload?.clinicId,
-        clinicId: payload?.clinicId || payload?.clinic_id,
-        appointment_id: recoveryAppointmentId,
-        appointmentId: recoveryAppointmentId,
-        therapist_id: recoveryTherapistId,
-        therapistId: recoveryTherapistId,
-        professional_id: recoveryTherapistId,
-        professionalId: recoveryTherapistId,
-        scheduled_start: payload?.scheduled_start || payload?.scheduledStart || payload?.scheduled_start_at || payload?.scheduledStartAt,
-        scheduled_start_at: payload?.scheduled_start_at || payload?.scheduledStartAt || payload?.scheduled_start || payload?.scheduledStart,
-        scheduled_end: payload?.scheduled_end || payload?.scheduledEnd || payload?.scheduled_end_at || payload?.scheduledEndAt,
-        scheduled_end_at: payload?.scheduled_end_at || payload?.scheduledEndAt || payload?.scheduled_end || payload?.scheduledEnd,
-        scheduled_duration_minutes: payload?.scheduled_duration_minutes || payload?.scheduledDurationMinutes,
-        actual_start: recoveryStartedAt,
-        actual_start_at: recoveryStartedAt,
-        started_at: recoveryStartedAt,
-        startedAt: recoveryStartedAt,
-        reference_date: payload?.reference_date || payload?.referenceDate,
-        referenceDate: payload?.referenceDate || payload?.reference_date,
-        status: 'active',
-        source: recoveryAppointmentId ? 'appointment' : 'verto_web',
-        clientSource: recoveryAppointmentId ? 'appointment' : 'verto_web'
-      });
+      if (completionAttempt.response.ok) return completionAttempt.result;
 
-      const recoveryConfirmed =
-        recoveryResult?.success === true &&
-        recoveryResult?.pending !== true &&
-        recoveryResult?.offline !== true;
-      if (!recoveryConfirmed) {
-        return {
-          success: false,
-          status: recoveryResult?.status || 503,
-          code: recoveryResult?.code || 'SESSION_COMPLETION_SESSION_RECOVERY_PENDING',
-          retryable: Boolean(recoveryResult?.pending || recoveryResult?.offline),
-          error: recoveryResult?.error || 'A sessão ainda está sendo sincronizada com o servidor. Tente encerrar novamente em instantes.'
-        };
+      const retryableCompletion =
+        completionAttempt.response.status === 408 ||
+        completionAttempt.response.status === 429 ||
+        completionAttempt.response.status >= 500;
+      if (retryableCompletion) {
+        return await queueCompletion(await readSessionQueue());
       }
 
-      // Retry exactly once, only after the canonical session-start contract confirms
-      // the same session id on the server. Appointment-not-found errors are never healed here.
-      completionAttempt = await requestCompletion();
+      return { success: false, status: completionAttempt.response.status, ...completionAttempt.result };
+    } catch (error: any) {
+      const queued = await queueCompletion(await readSessionQueue());
+      if (queued?.success) return queued;
+      return {
+        success: false,
+        offline: true,
+        pending: false,
+        durable: false,
+        error: error?.message || queued?.error || 'Não foi possível preservar o encerramento da sessão.'
+      };
     }
-
-    return completionAttempt.response.ok
-      ? completionAttempt.result
-      : { success: false, status: completionAttempt.response.status, ...completionAttempt.result };
   },
 
   async reopenAppointmentNoShow(appointmentId: string, payload: any) {
@@ -2802,7 +2958,7 @@ export const dataService = {
       { method: 'GET', credentials: 'include' },
       {
         helperName: 'getActiveConventionalSession',
-        operation: 'read',
+        operation: 'detail',
         table: 'appointments,notes',
         hasExplicitColumns: true,
         requiresPatientOrSession: true
@@ -3403,7 +3559,7 @@ export const dataService = {
         cache: 'no-store'
       }, {
         helperName: 'consumePortalMilestoneCelebration',
-        operation: 'update',
+        operation: 'write',
         table: 'patient_milestone_celebration_receipts,notes',
         hasExplicitColumns: true,
         requiresPatientOrSession: false
@@ -3481,9 +3637,36 @@ export const dataService = {
         hasExplicitColumns: true,
         requiresPatientOrSession: false
       });
-      return await safeJson(response);
+      const result = await safeJson(response);
+      if (result?.success || response.status < 500) return result;
+      // A 5xx can happen after the status was committed (e.g. notification
+      // acknowledgement). One read-back avoids a duplicate POST and false failure.
+      const persisted = await dataService.getPortalAppointmentDetail(appointmentId);
+      const appointment = persisted?.data?.appointment || persisted?.data?.item;
+      const status = String(appointment?.status || '').trim().toUpperCase();
+      const patientResponse = String(
+        appointment?.patient_confirmation_status || appointment?.patientConfirmationStatus ||
+        appointment?.patient_response || appointment?.patientResponse || ''
+      ).trim().toUpperCase();
+      if (persisted?.success && (status === 'CONFIRMED' || patientResponse === 'CONFIRMED')) {
+        return { success: true, appointment, item: appointment, message: 'Sessão confirmada.', recoveredFromReadback: true };
+      }
+      return { ...result, error: 'Não foi possível confirmar a sessão agora. Verifique o estado antes de tentar novamente.' };
     } catch {
-      return { success: false, error: 'Não foi possível confirmar a sessão agora.' };
+      // Do not retry the write: the server may have persisted the confirmation.
+      try {
+        const persisted = await dataService.getPortalAppointmentDetail(appointmentId);
+        const appointment = persisted?.data?.appointment || persisted?.data?.item;
+        const status = String(appointment?.status || '').trim().toUpperCase();
+        const patientResponse = String(
+          appointment?.patient_confirmation_status || appointment?.patientConfirmationStatus ||
+          appointment?.patient_response || appointment?.patientResponse || ''
+        ).trim().toUpperCase();
+        if (persisted?.success && (status === 'CONFIRMED' || patientResponse === 'CONFIRMED')) {
+          return { success: true, appointment, item: appointment, message: 'Sessão confirmada.', recoveredFromReadback: true };
+        }
+      } catch { /* read-back may also be unavailable */ }
+      return { success: false, error: 'Não foi possível verificar a confirmação agora. Atualize a sessão antes de tentar novamente.' };
     }
   },
 
@@ -4451,6 +4634,8 @@ export const dataService = {
       professionalId: options.professionalId,
       payerId: options.payerId,
       serviceType: options.serviceType,
+      plan: options.plan,
+      financialContextType: options.financialContextType,
       readinessStatus: options.readinessStatus,
       appointmentStatus: options.appointmentStatus,
       onlyPending: options.onlyPending ? 'true' : undefined,
@@ -4928,6 +5113,27 @@ export const dataService = {
     }
   },
 
+  async reissueTissOfficialDocument(documentId: string, payload: any = {}) {
+    try {
+      const response = await fetchClinical(`/api/tiss/official-documents/${encodeURIComponent(String(documentId))}/reissue`, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'reissueTissOfficialDocument',
+        operation: 'write',
+        table: 'tiss_official_documents,tiss_official_document_tracking,tiss_official_guide_tracking,tiss_official_tracking_events,appointment_tiss_pre_guides,tiss_revenue_cycle_events',
+        hasExplicitColumns: true,
+        requiresPatientOrSession: false
+      });
+      return await safeNoStoreJson(response, 'A reemissão do XML TISS oficial voltou do cache. Tente novamente.');
+    } catch {
+      return { success: false, error: 'Não foi possível reemitir o XML TISS oficial agora.' };
+    }
+  },
+
   async getTissRevenueCycleEvents(options: any = {}) {
     const endpoint = endpointWithQuery('/api/tiss/revenue-cycle/events', {
       preGuideId: options.preGuideId,
@@ -5329,6 +5535,8 @@ export const dataService = {
       professionalId: options.professionalId,
       payerId: options.payerId,
       serviceType: options.serviceType,
+      plan: options.plan,
+      financialContextType: options.financialContextType,
       readinessStatus: options.readinessStatus,
       appointmentStatus: options.appointmentStatus,
       onlyPending: options.onlyPending ? 'true' : undefined,
@@ -6891,6 +7099,25 @@ export const dataService = {
     return result;
   },
 
+  async saveAbaV3TargetExposure(input: any) {
+    // NO_OPPORTUNITY is a target exposure, not an incorrect/zero-scored trial.
+    // Reuse the same durable ABA V3 outbox so temporary offline state can replay.
+    const clientEventId = String(input?.clientEventId || crypto.randomUUID()).trim();
+    const data = {
+      patient_id: input?.patientId,
+      session_id: input?.sessionId,
+      target_id: input?.targetId,
+      status: 'NO_OPPORTUNITY',
+      client_event_id: clientEventId,
+    };
+    const result = await saveOfflineFirst(
+      clientEventId, data, 'aba_v3', '/api/aba/v3/target-exposures', 'POST',
+      { queueEntityId: String(input?.sessionId || '') + ':' + String(input?.targetId || '') }
+    );
+    if (result?.success && result?.pending !== true) notifyClinicalOutcomesChanged(String(data.patient_id || ''));
+    return result;
+  },
+
   async saveAbaV3TrialRevision(input: any) {
     const originalTrialId = String(input?.original_trial_id || input?.originalTrialId || '').trim();
     const originalClientEventId = String(input?.original_client_event_id || input?.originalClientEventId || '').trim();
@@ -7190,6 +7417,82 @@ export const dataService = {
       return { ...result, success: true };
     } catch (error: any) {
       return { success: false, error: error?.message || 'Não foi possível carregar as métricas clínicas V3.', data: { targets: [] } };
+    }
+  },
+
+  // Patient-scoped ABA catalog uses verified backend session and cannot be
+  // queried from browser as anon against the service-only Supabase RPCs.
+  async getAbaPatientReinforcers(patientId: string, includeInactive = false) {
+    const safeId = String(patientId || '').trim();
+    if (!safeId) return { success: false, code: 'ABA_REINFORCER_PATIENT_REQUIRED', data: [] };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(safeId)}/reinforcers?includeInactive=${includeInactive ? 'true' : 'false'}`,
+        { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) {
+        return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE', data: [] };
+      }
+      return { success: true, data: Array.isArray(body?.data) ? body.data : [] };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: [] };
+    }
+  },
+
+  async saveAbaPatientReinforcer(patientId: string, input: any) {
+    const safeId = String(patientId || '').trim();
+    if (!safeId) return { success: false, code: 'ABA_REINFORCER_PATIENT_REQUIRED', data: null };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(safeId)}/reinforcers`,
+        { method: 'POST', headers: await getNoStoreAuthHeaders(), credentials: 'include', body: JSON.stringify(input || {}) }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) {
+        return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
+      }
+      return { success: true, data: body?.data || null };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
+    }
+  },
+
+  async getAbaReinforcerSessionBundle(patientId: string, sessionId: string) {
+    const patient = String(patientId || '').trim();
+    const session = String(sessionId || '').trim();
+    if (!patient || !session) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED', data: null };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(patient)}/reinforcer-sessions/${encodeURIComponent(session)}`,
+        { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include' }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) {
+        return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
+      }
+      return { success: true, data: body?.data || null };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
+    }
+  },
+
+  async recordAbaReinforcerDelivery(patientId: string, sessionId: string, payload: any) {
+    const patient = String(patientId || '').trim();
+    const session = String(sessionId || '').trim();
+    if (!patient || !session) return { success: false, code: 'ABA_REINFORCER_SCOPE_REQUIRED', data: null };
+    try {
+      const response = await fetchWithAuthRetry(
+        `/api/clinical-measurement-v3/patients/${encodeURIComponent(patient)}/reinforcer-sessions/${encodeURIComponent(session)}/deliveries`,
+        { method: 'POST', headers: await getNoStoreAuthHeaders(), credentials: 'include', body: JSON.stringify(payload || {}) }
+      );
+      const body = await safeJson(response);
+      if (!response.ok || body?.success === false) {
+        return { success: false, status: response.status, code: body?.error || 'ABA_REINFORCER_UNAVAILABLE', data: null };
+      }
+      return { success: true, data: body?.data || null };
+    } catch {
+      return { success: false, code: 'ABA_REINFORCER_UNAVAILABLE', data: null };
     }
   },
 
@@ -8044,7 +8347,10 @@ export const dataService = {
     try {
       const response = await fetchWithAuthRetry(`/api/assigned-tasks/${taskId}/complete`, {
         method: 'POST',
-        headers: await getAuthHeaders(),
+        headers: {
+          ...(await getAuthHeaders()),
+          'X-Idempotency-Key': `assigned-task-completion:${String(taskId)}`
+        },
         credentials: 'include',
         body: JSON.stringify(payload)
       });
@@ -9322,7 +9628,7 @@ export const dataService = {
 
   async getClinicAuthorizationContext() {
     try {
-      const response = await fetch('/api/clinic/authorization/me', {
+      const response = await fetchWithAuthRetry('/api/clinic/authorization/me', {
         headers: await getAuthHeaders(),
         credentials: 'include'
       });

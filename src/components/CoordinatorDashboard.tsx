@@ -57,6 +57,8 @@ import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
 import { TutorialOverlay } from "./Tutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
+import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
+import { BillingCommunicationNotifications } from "./BillingCommunicationNotifications";
 import { ClinicAnnouncementsPanel } from "./ClinicAnnouncementsPanel";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
@@ -189,6 +191,7 @@ type DashboardTab =
   | "settings"
   | "logs"
   | "billing"
+  | "billingUpdates"
   | "flow"
   | "birthdays";
 
@@ -627,6 +630,7 @@ interface CoordinatorDashboardProps {
     txt: string,
     visibility: string,
     subject?: string,
+    options?: { mentionUserIds?: string[] },
   ) => void;
   onUpdateProfile: (updates: any) => Promise<any> | void;
   onUpdatePatient?: (patient: any) => Promise<any> | any;
@@ -806,38 +810,63 @@ export function CoordinatorDashboard({
       setAuthorizationHydrated(true);
       return () => { cancelled = true; };
     }
-    void dataService.getClinicAuthorizationContext().then((result: any) => {
+
+    const applyFailClosedAuthorization = () => {
       if (cancelled) return;
-      if (result?.success && Array.isArray(result?.data?.capabilities)) {
-        setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
-        const nextMode = result?.data?.moduleAccessMode === "legacy_full" ? "legacy_full" : "contract";
-        setModuleAccessMode(nextMode);
-        setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
-        setOrganizationModules(new Set(
-          Array.isArray(result?.data?.modules)
-            ? result.data.modules
-                .map((value: any) => String(value || '').trim())
-                .filter((value: string): value is OrganizationModuleKey =>
-                  ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
-                )
-            : [],
-        ));
-      }
+      // Authorization hydration failures must fail closed for optional modules
+      // while preserving the mandatory clinical baseline.
+      setEffectiveCapabilities(
+        new Set(filterCapabilitiesByOrganizationModules(baseCapabilities, 'contract', new Set<OrganizationModuleKey>())),
+      );
+      setModuleAccessMode('contract');
+      setOrganizationModules(new Set());
       setAuthorizationHydrated(true);
-    }).catch(() => {
-      if (!cancelled) {
-        // Authorization hydration failures must fail closed for optional modules
-        // while preserving the mandatory clinical baseline.
-        setEffectiveCapabilities(
-          new Set(filterCapabilitiesByOrganizationModules(baseCapabilities, 'contract', new Set<OrganizationModuleKey>())),
-        );
-        setModuleAccessMode('contract');
-        setOrganizationModules(new Set());
-        setAuthorizationHydrated(true);
+    };
+
+    const hydrateAuthorization = async () => {
+      // First login/context selection can race the server-side session refresh.
+      // Retry exactly once so an entitled receptionist does not need F5 to see
+      // modules that the canonical authorization endpoint already allows.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let result: any;
+        try {
+          result = await dataService.getClinicAuthorizationContext();
+        } catch {
+          result = { success: false };
+        }
+        if (cancelled) return;
+
+        if (result?.success && Array.isArray(result?.data?.capabilities)) {
+          setEffectiveCapabilities(new Set(result.data.capabilities.map((value: any) => String(value || '').trim()).filter(Boolean)));
+          const nextMode = result?.data?.moduleAccessMode === "legacy_full" ? "legacy_full" : "contract";
+          setModuleAccessMode(nextMode);
+          setEntitlementVersion(Math.max(1, Number(result?.data?.entitlementVersion || 1)));
+          setOrganizationModules(new Set(
+            Array.isArray(result?.data?.modules)
+              ? result.data.modules
+                  .map((value: any) => String(value || '').trim())
+                  .filter((value: string): value is OrganizationModuleKey =>
+                    ["clinical_core", "appointments_communication", "financial_management", "insurance_tiss", "school_management"].includes(value),
+                  )
+              : [],
+          ));
+          setAuthorizationHydrated(true);
+          return;
+        }
       }
-    });
+
+      applyFailClosedAuthorization();
+    };
+
+    void hydrateAuthorization();
     return () => { cancelled = true; };
-  }, [baseCapabilities, normalizedRole, user?.activeWorkspaceId, user?.clinicId]);
+  }, [
+    baseCapabilities,
+    normalizedRole,
+    user?.activeAccessContextId,
+    user?.activeWorkspaceId,
+    user?.clinicId,
+  ]);
 
   const hasCapability = useCallback(
     (capability: string) => effectiveCapabilities.has(capability),
@@ -879,7 +908,8 @@ export function CoordinatorDashboard({
     if (!userId) return null;
     return `verto:dashboard:resume:${userId}:${workspaceId}`;
   }, [user?.id, user?.activeWorkspaceId, user?.clinicId]);
-  const hasRestoredDashboardStateRef = useRef(false);
+  const hasRestoredDashboardStateRef = useRef('');
+  const skipDashboardResumeSaveRef = useRef(false);
 
   const legacyCapabilityRequirements: Record<string, readonly string[]> = {
     "medical-records": ["clinical.record.view"],
@@ -917,6 +947,7 @@ export function CoordinatorDashboard({
     settings: null,
     logs: "clinic-settings",
     billing: "billing-management",
+    billingUpdates: null,
     flow: "engagement-widgets",
     birthdays: "engagement-widgets",
     agenda: "agenda-multi-view",
@@ -953,6 +984,7 @@ export function CoordinatorDashboard({
     if (tabId === "professionalProfile") return isClinicBaseRole(normalizedRole);
     if (tabId === "settings") return hasCapability("clinic.settings.view");
     if (tabId === "billing") return hasCapability("clinic.settings.view");
+    if (tabId === "billingUpdates") return hasCapability("communication.billing_updates.view");
     if (tabId === "financial") return canAccessClinicFinance;
     if (tabId === "closure" || tabId === "conference") return hasCapability("billing.preguide.view");
     const capability = capabilityForTab(tabId);
@@ -980,6 +1012,7 @@ export function CoordinatorDashboard({
     | "settings"
     | "logs"
     | "billing"
+    | "billingUpdates"
     | "flow"
     | "birthdays"
   >("dashboard");
@@ -1756,6 +1789,7 @@ export function CoordinatorDashboard({
     settings: "Configurações da Clínica",
     logs: "Log de Atividades",
     billing: "Assinatura e Cobrança",
+    billingUpdates: "Atualizações do faturamento",
   };
   const professionalDailyMessages = [
     "Cada marco registrado hoje é um capítulo na história de superação de alguém.",
@@ -2045,11 +2079,23 @@ export function CoordinatorDashboard({
     return { period, firstName };
   }, [user?.name]);
   useEffect(() => {
-    if (!dashboardResumeKey || hasRestoredDashboardStateRef.current) return;
-    hasRestoredDashboardStateRef.current = true;
+    // Authorization must be hydrated before validating the previously saved tab.
+    // A-B-A clinic switches must independently restore their own scoped state.
+    if (!dashboardResumeKey || !authorizationHydrated || hasRestoredDashboardStateRef.current === dashboardResumeKey) return;
+    hasRestoredDashboardStateRef.current = dashboardResumeKey;
+    skipDashboardResumeSaveRef.current = true;
     try {
       const raw = localStorage.getItem(dashboardResumeKey);
-      if (!raw) return;
+      if (!raw) {
+        setActiveTab("dashboard");
+        setTabHistory(["dashboard"]);
+        setSelectedPatientId(null);
+        setPatientSessionReportId("");
+        setPatientOpenTab("history");
+        setPatientReturnTab("patients");
+        setView("home");
+        return;
+      }
       const state = JSON.parse(raw || "{}");
       const nextTab = String(state?.activeTab || "dashboard") as typeof activeTab;
       const nextView = String(state?.view || "home");
@@ -2073,7 +2119,7 @@ export function CoordinatorDashboard({
         setTabHistory(["dashboard"]);
       }
 
-      if (nextView === "patient" && nextPatientId) {
+      if (nextView === "patient" && nextPatientId && canAccessTab("patients")) {
         setSelectedPatientId(nextPatientId);
         setPatientReturnTab(canAccessTab(nextPatientReturnTab) ? nextPatientReturnTab : "patients");
         if (
@@ -2089,15 +2135,32 @@ export function CoordinatorDashboard({
         setPatientSessionReportId(nextSessionReportId);
         setView("patient");
       } else {
+        setSelectedPatientId(null);
+        setPatientSessionReportId("");
+        setPatientOpenTab("history");
+        setPatientReturnTab("patients");
         setView("home");
       }
     } catch (error) {
       console.warn("Falha ao restaurar contexto do painel:", error);
+      // Invalid persisted state must not leak a previous clinic patient view.
+      setActiveTab("dashboard");
+      setTabHistory(["dashboard"]);
+      setSelectedPatientId(null);
+      setPatientSessionReportId("");
+      setPatientOpenTab("history");
+      setPatientReturnTab("patients");
+      setView("home");
     }
-  }, [dashboardResumeKey, activeTab]);
+  }, [dashboardResumeKey, authorizationHydrated]);
 
   useEffect(() => {
-    if (!dashboardResumeKey) return;
+    if (!dashboardResumeKey || !authorizationHydrated || hasRestoredDashboardStateRef.current !== dashboardResumeKey) return;
+    // The first effect pass still closes over the old dashboard state.
+    if (skipDashboardResumeSaveRef.current) {
+      skipDashboardResumeSaveRef.current = false;
+      return;
+    }
     try {
       localStorage.setItem(
         dashboardResumeKey,
@@ -2114,7 +2177,7 @@ export function CoordinatorDashboard({
     } catch (error) {
       console.warn("Falha ao persistir contexto do painel:", error);
     }
-  }, [dashboardResumeKey, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId, patientReturnTab]);
+  }, [dashboardResumeKey, authorizationHydrated, activeTab, tabHistory, view, selectedPatientId, patientOpenTab, patientSessionReportId, patientReturnTab]);
 
   useEffect(() => {
     if (view !== "patient" || !selectedPatientId || !onOpenPatientDetails) {
@@ -4393,6 +4456,31 @@ export function CoordinatorDashboard({
     () => (rooms || []).filter((room: any) => room?.is_active !== false && room?.isActive !== false),
     [rooms],
   );
+
+  const [sessionRoomsLoading, setSessionRoomsLoading] = useState(false);
+  const [sessionRoomsError, setSessionRoomsError] = useState("");
+  useEffect(() => {
+    if (!isAddSessionModalOpen || !workspaceScopeKey) return;
+    const requestSeq = ++roomCanonicalRequestSeqRef.current;
+    let cancelled = false;
+    setSessionRoomsLoading(true);
+    setSessionRoomsError("");
+    // P1-25: reopening Agenda must not require visiting Rooms configuration
+    // before the canonical clinic_rooms list is read.
+    void dataService.getClinicRooms().then((result: any) => {
+      if (cancelled || roomCanonicalRequestSeqRef.current !== requestSeq) return;
+      if (!result?.success || !Array.isArray(result.data)) {
+        setSessionRoomsError("Não foi possível atualizar as salas cadastradas da clínica.");
+        return;
+      }
+      setRooms(result.data);
+    }).catch(() => {
+      if (!cancelled) setSessionRoomsError("Não foi possível atualizar as salas cadastradas da clínica.");
+    }).finally(() => {
+      if (!cancelled && roomCanonicalRequestSeqRef.current === requestSeq) setSessionRoomsLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [isAddSessionModalOpen, workspaceScopeKey, setRooms]);
 
   const sessionDurationMinutes = useMemo(
     () =>
@@ -9318,7 +9406,7 @@ export function CoordinatorDashboard({
   const financialDashboard = useMemo(() => {
     const clinicPatientIds = new Set((allPatients || []).map((patient: any) => String(patient?.id)));
     const patientById = new Map((allPatients || []).map((patient: any) => [String(patient?.id), patient]));
-    const chargeReadModelById = new Map(patientFinanceChargeRows.map((charge: any) => [String(charge?.id || ''), charge]));
+    const chargeReadModelById = new Map<string, any>(patientFinanceChargeRows.map((charge: any): [string, any] => [String(charge?.id || ''), charge]));
     const ledgerItemsByPaymentId = new Map<string, any[]>();
     (patientFinanceLedger?.items || []).forEach((item: any) => {
       if (item?.active === false) return;
@@ -10938,6 +11026,12 @@ export function CoordinatorDashboard({
         badge: "BETA",
         children: [
           {
+            id: "billing-updates",
+            label: "Atualizações do faturamento",
+            icon: MessageCircle,
+            tab: "billingUpdates",
+          },
+          {
             id: "finance-dashboard",
             label: "Dashboard financeiro",
             icon: LayoutDashboard,
@@ -11327,6 +11421,20 @@ export function CoordinatorDashboard({
     return alerts;
   })();
 
+  const openBillingCommunicationThread = (threadId: string) => {
+    const cleanThreadId = String(threadId || "").trim();
+    if (!cleanThreadId || !hasCapability("communication.billing_updates.view")) return;
+    try {
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set("billingThread", cleanThreadId);
+      window.history.replaceState(window.history.state, "", nextUrl.toString());
+    } catch {
+      // The panel remains reachable even when URL state is unavailable.
+    }
+    navigateToTab("billingUpdates");
+    setView("home");
+  };
+
   const openClinicalMentionNotification = (notification: any) => {
     const patientId = String(notification?.patientId || '').trim();
     const timelineItemId = String(notification?.timelineItemId || '').trim();
@@ -11478,6 +11586,13 @@ export function CoordinatorDashboard({
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
               <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+              {hasCapability("communication.billing_updates.view") && (
+                <BillingCommunicationNotifications
+                  clinicId={workspaceScopeKey}
+                  themeMode={theme}
+                  onOpenThread={openBillingCommunicationThread}
+                />
+              )}
               <SettingsMenu
                 user={user}
                 onLogout={onLogout}
@@ -11815,6 +11930,13 @@ export function CoordinatorDashboard({
             </button>
 
             <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+            {hasCapability("communication.billing_updates.view") && (
+              <BillingCommunicationNotifications
+                clinicId={workspaceScopeKey}
+                themeMode={theme}
+                onOpenThread={openBillingCommunicationThread}
+              />
+            )}
             <SettingsMenu
               user={user}
               onLogout={onLogout}
@@ -12492,6 +12614,20 @@ export function CoordinatorDashboard({
                       [member.name]: duration,
                     }))
                   }
+                />
+              </motion.div>
+            )}
+            {hasCapability("communication.billing_updates.view") && activeTab === "billingUpdates" && (
+              <motion.div
+                key={`billing-updates:${workspaceScopeKey}`}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+              >
+                <BillingCommunicationPanel
+                  clinicId={workspaceScopeKey}
+                  clinicName={String(user?.activeWorkspaceName || user?.clinicName || user?.clinic?.name || "Clínica atual")}
+                  canManage={hasCapability("communication.billing_updates.manage")}
                 />
               </motion.div>
             )}
@@ -15938,6 +16074,7 @@ export function CoordinatorDashboard({
                     onChange={(e) => setSessionRoom(e.target.value)}
                   >
                     <option value="">Selecione...</option>
+                    {sessionRoomsLoading && <option value="" disabled>Atualizando salas da clínica...</option>}
                     {activeClinicRooms.map((room: any) => {
                       const roomSpecialties = Array.isArray(room.specialties)
                         ? room.specialties.join(", ")
@@ -15949,6 +16086,7 @@ export function CoordinatorDashboard({
                       );
                     })}
                   </select>
+                  {sessionRoomsError && <p role="alert" className="mt-1 text-xs text-amber-700">{sessionRoomsError}</p>}
                 </div>
               ) : sessionLocationType === "online" ? (
                 <div>

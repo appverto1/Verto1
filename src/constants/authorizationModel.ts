@@ -184,6 +184,9 @@ export const CAPABILITY_CATALOG = [
 
   { key: 'communication.reminders.send', label: 'Enviar lembretes de consulta', domain: 'communication', delegable: true },
   { key: 'communication.clinic_notifications.manage', label: 'Gerenciar notificações da clínica', domain: 'communication', delegable: true },
+  { key: 'communication.billing_updates.view', label: 'Visualizar atualizações de faturamento', domain: 'communication', delegable: true, sensitive: true },
+  { key: 'communication.billing_updates.write', label: 'Criar e responder atualizações de faturamento', domain: 'communication', delegable: true, sensitive: true },
+  { key: 'communication.billing_updates.manage', label: 'Arquivar e reabrir atualizações de faturamento', domain: 'communication', delegable: true, sensitive: true },
 
   { key: 'reports.dashboard.view', label: 'Visualizar dashboard da unidade', domain: 'reports', delegable: true },
   { key: 'reports.productivity.view', label: 'Visualizar produtividade dos profissionais', domain: 'reports', delegable: true, sensitive: true },
@@ -212,6 +215,7 @@ const internal = (...keys: CapabilityKey[]) => keys;
 export const SUPERVISION_CAPABILITY_OVERLAY = internal(
   'team.case.manage','team.patient_primary.manage',
   'patient.demographics.view',
+  'clinical.anamnesis.view','clinical.anamnesis.edit',
   'treatment_plan.create','treatment_plan.edit','treatment_plan.approve','treatment_goal.manage',
   'aba.program.create','aba.program.edit','aba.maintenance.manage',
   'calendar.team.view',
@@ -232,7 +236,7 @@ const COORDINATOR_DEFAULTS = internal(
   'finance.payments.view','finance.payments.receive','finance.payments.edit','finance.delinquency.view','finance.entries.view','finance.entries.manage','finance.reports.view','finance.indicators.view',
   'billing.sessions.view','billing.preguide.view','billing.preguide.manage','billing.mapping.manage','billing.tuss.manage','billing.antiglosa.view','billing.antiglosa.manage','billing.batch.create','billing.xml.generate','billing.xml.validate','billing.xml.export','billing.operator_return.manage','billing.amount.submitted','billing.amount.paid','billing.denial.manage','billing.financial_settlement',
   'patient.files.view','patient.files.upload','patient.files.archive','documents.patient_share',
-  'communication.reminders.send','communication.clinic_notifications.manage',
+  'communication.reminders.send','communication.clinic_notifications.manage','communication.billing_updates.view','communication.billing_updates.write','communication.billing_updates.manage',
   'reports.dashboard.view','reports.productivity.view','reports.appointments.view','reports.billing.view','reports.clinical.indicators','reports.view','reports.generate','reports.export',
 );
 
@@ -253,7 +257,9 @@ export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, read
   therapist: internal(
     'team.view',
     'patient.list','patient.birthdays.view','patient.documents.registration.view',
-    'clinical.record.view','clinical.history.view','clinical.evolution.create','clinical.evolution.own_edit','clinical.evolution.team_view','clinical.notes.create','clinical.documents.view','clinical.documents.upload','clinical.anamnesis.view','clinical.anamnesis.edit',
+    'clinical.record.view','clinical.history.view','clinical.evolution.create','clinical.evolution.own_edit','clinical.evolution.team_view','clinical.notes.create','clinical.documents.view','clinical.documents.upload',
+    // Creation is scoped by patient case-team membership and the responsible
+    // professional's registered specialty in the backend, not by this grant.
     'treatment_plan.view','treatment_plan.create','treatment_goal.view',
     'school.view','school.meetings.manage',
     'aba.program.view','aba.trial.record','aba.behavior.record','aba.analytics.view','aba.mastery.view','aba.suggestions.view','aba.suggestions.apply','aba.next_session.view',
@@ -272,6 +278,7 @@ export const ROLE_DEFAULT_CAPABILITIES: Record<ClinicBaseRole | PortalRole, read
     'patient.list','patient.demographics.view','patient.contacts.view','patient.documents.registration.view',
     'patient.insurance.view','patient.insurance.edit','patient.insurance.card.view','patient.insurance.authorization.view','patient.insurance.authorization.edit','patient.insurance.eligibility.view',
     'billing.sessions.view','billing.preguide.view','billing.preguide.manage','billing.mapping.manage','billing.tuss.manage','billing.antiglosa.view','billing.antiglosa.manage','billing.batch.create','billing.xml.generate','billing.xml.validate','billing.xml.export','billing.operator_return.manage','billing.amount.submitted','billing.amount.paid','billing.denial.manage','billing.financial_settlement',
+    'communication.billing_updates.view','communication.billing_updates.write',
   ),
   patient: [
     'portal.view','portal.self_data.view','portal.appointments.view','portal.attendance.confirm','portal.reschedule.request','portal.cancel.request','portal.notifications.view','portal.notification_preferences.manage','portal.appointment_volume.view',

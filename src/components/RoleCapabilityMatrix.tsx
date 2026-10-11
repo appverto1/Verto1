@@ -160,7 +160,7 @@ function CapabilityAssignmentDialog({ capability, onClose }: CapabilityAssignmen
     setError(null);
     setSuccess(null);
     try {
-      const memberIds = Array.from(selectedIds);
+      const memberIds: string[] = Array.from(selectedIds, (memberId) => String(memberId));
       const result: any = await dataService.updateClinicCapabilityMembers(
         capability.key,
         memberIds,
@@ -316,7 +316,7 @@ export function RoleCapabilityMatrix({
     () => CAPABILITY_CATALOG.filter((item) => moduleAllowsCapability(moduleAccessMode, organizationModules, item.key)),
     [moduleAccessMode, organizationModules],
   );
-  const sections = Array.from(new Set(visibleCatalog.map((item) => item.domain)));
+  const sections: string[] = Array.from(new Set<string>(visibleCatalog.map((item) => String(item.domain))));
   const defaults = new Map(ROLES.map((role) => [role, getDefaultCapabilitiesForRole(role)]));
 
   return (

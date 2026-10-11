@@ -262,12 +262,14 @@ export const AnamnesisModal = ({
   maxSavedTemplates = 5
 }: AnamnesisModalProps) => {
   const [profileType, setProfileType] = useState<AnamnesisProfileType>('adult');
+  const isTemplateManager = initialData?.manageTemplate === true;
   const [view, setView] = useState<ModalView>('fill');
   const [templateState, setTemplateState] = useState<AnamnesisTemplate>(getDefaultAnamnesisTemplate());
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [isSavingTemplate, setIsSavingTemplate] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [questionEditors, setQuestionEditors] = useState<Record<string, QuestionEditorDraft>>({});
+  const [questionErrors, setQuestionErrors] = useState<Record<string, string>>({});
   const [templateDirty, setTemplateDirty] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [templateName, setTemplateName] = useState('Ficha personalizada');
@@ -333,7 +335,7 @@ export const AnamnesisModal = ({
       initialData?.formType === 'child' || (typeof initialData?.idade === 'number' && initialData.idade <= 12) ? 'child' : 'adult';
     setProfileType(inferredProfile);
 
-    const nextView: ModalView = canEditTemplate && (initialData?.manageTemplate === true || initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional') ? 'template' : 'fill';
+    const nextView: ModalView = isTemplateManager || (canEditTemplate && (initialData?.nome === 'Template da Clínica' || initialData?.nome === 'Template Profissional')) ? 'template' : 'fill';
     setView(nextView);
 
     const normalizedSource = normalizeAnamnesisTemplate(sourceTemplate);
@@ -500,6 +502,8 @@ export const AnamnesisModal = ({
   };
 
   const handleSubmitForm = () => {
+    // O editor de modelos nunca constitui preenchimento associado a um paciente.
+    if (isTemplateManager) return;
     const profileQuestions = profileTemplate.questions.filter((question) => question.active);
     for (const question of profileQuestions) {
       if (!question.required) continue;
@@ -656,6 +660,7 @@ export const AnamnesisModal = ({
   };
 
   const cancelQuestionEdit = (sectionId: string) => {
+    setQuestionErrors((prev) => ({ ...prev, [sectionId]: '' }));
     setQuestionEditors((prev) => {
       if (!prev[sectionId]) return prev;
       const next = { ...prev };
@@ -673,13 +678,18 @@ export const AnamnesisModal = ({
     const options = isChoiceType ? normalizeOptions(draftQuestion.optionsText) : [];
 
     if (!draftQuestion.label.trim()) {
+      setQuestionErrors((prev) => ({ ...prev, [sectionId]: 'Escreva o texto da pergunta antes de confirmar.' }));
       showFeedback('error', 'Informe o texto da pergunta.');
+      focusQuestionEditor(sectionId);
       return;
     }
-    if (isChoiceType && options.length === 0) {
-      showFeedback('error', 'Perguntas de múltipla escolha precisam de opções.');
+    if (isChoiceType && new Set(options.map((value) => value.trim().toLocaleLowerCase('pt-BR'))).size < 2) {
+      setQuestionErrors((prev) => ({ ...prev, [sectionId]: 'Informe pelo menos duas opções diferentes, separadas por vírgula.' }));
+      showFeedback('error', 'Perguntas de múltipla escolha exigem pelo menos duas opções.');
+      focusQuestionEditor(sectionId);
       return;
     }
+    setQuestionErrors((prev) => ({ ...prev, [sectionId]: '' }));
 
     updateTemplateProfile((profile) => {
       const exists = profile.questions.some((question) => question.id === draftQuestion.id);
@@ -756,7 +766,11 @@ export const AnamnesisModal = ({
   const saveTemplate = async () => {
     if (!canEditTemplate || !onTemplateSave) return;
     if (Object.keys(questionEditors).length > 0) {
-      showFeedback('info', 'Confirme ou cancele as perguntas em edição antes de salvar a ficha.');
+      const firstSectionId = Object.keys(questionEditors)[0];
+      showFeedback('error', 'Existe uma pergunta incompleta. Confirme-a ou cancele a edição na seção destacada.');
+      setQuestionErrors((prev) => ({ ...prev, [firstSectionId]: 'Confirme ou cancele esta pergunta antes de salvar a ficha.' }));
+      setExpandedSections((prev) => ({ ...prev, [firstSectionId]: true }));
+      focusQuestionEditor(firstSectionId);
       return;
     }
     const cleanName = templateName.trim();
@@ -834,7 +848,7 @@ export const AnamnesisModal = ({
     markTemplateDirty(true);
     setView('template');
     setExpandedSections({ personalizadas: true });
-    showFeedback('info', 'Ficha em branco criada. Adicione seções/perguntas e salve para persistir.');
+    showFeedback('info', 'Nova ficha independente criada no editor. A ficha anterior permanece salva e não será sobrescrita. Adicione perguntas e salve para criar este modelo.');
   };
 
   const resetTemplate = async () => {
@@ -892,8 +906,8 @@ export const AnamnesisModal = ({
       <div className="w-full max-w-6xl max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-3rem)] overflow-y-auto rounded-3xl bg-white shadow-2xl">
         <div className="sticky top-0 z-20 bg-white border-b border-slate-200 px-5 sm:px-8 py-4 flex items-center justify-between">
           <div>
-            <h2 className="text-xl sm:text-3xl font-bold text-slate-900">Ficha de Anamnese</h2>
-            <p className="text-sm text-slate-500">Modelo editável por perfil com versionamento.</p>
+            <h2 className="text-xl sm:text-3xl font-bold text-slate-900">{isTemplateManager ? 'Modelos de anamnese' : 'Ficha de Anamnese'}</h2>
+            <p className="text-sm text-slate-500">{isTemplateManager ? 'Configure o modelo aqui. O preenchimento acontece exclusivamente no prontuário de um paciente.' : 'Modelo editável por perfil com versionamento.'}</p>
           </div>
           <button onClick={handleCloseModal} className="rounded-xl border border-slate-200 p-2 text-slate-500 hover:text-slate-700">
             <X size={20} />
@@ -931,6 +945,7 @@ export const AnamnesisModal = ({
                   Nova ficha do zero
                 </button>
               </div>
+              <p className="text-xs text-slate-600" role="note">Criar uma nova ficha não altera nem substitui as fichas anteriores. Cada modelo fica salvo separadamente.</p>
 
               {savedTemplates.length > 0 && (
                 <div className="flex gap-2 overflow-x-auto pb-1">
@@ -1068,7 +1083,7 @@ export const AnamnesisModal = ({
             >
               Criança
             </button>
-            {canEditTemplate && (
+            {canEditTemplate && !isTemplateManager && (
               <>
                 <div className="mx-1 h-6 w-px bg-slate-200" />
                 <button
@@ -1087,7 +1102,9 @@ export const AnamnesisModal = ({
             )}
           </div>
 
-          {view === 'template' && canEditTemplate ? (
+          {isTemplateManager && !canEditTemplate ? (
+            <p role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">Sem permissão para editar modelos de anamnese.</p>
+          ) : view === 'template' && canEditTemplate ? (
             <div className="space-y-4">
               <div className="flex justify-end">
                 <button
@@ -1177,11 +1194,22 @@ export const AnamnesisModal = ({
                             <div id={`anamnesis-question-editor-${section.id}`} className="rounded-xl border border-[#7a32fc]/30 bg-[#7a32fc]/5 p-3 space-y-2">
                               <h4 className="font-semibold text-slate-800">{questionEditor.editingQuestionId === 'new' ? 'Nova pergunta' : 'Editar pergunta'}</h4>
                               <input
-                                className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
+                                aria-label="Texto da pergunta"
+                                aria-invalid={Boolean(questionErrors[section.id] && !draftQuestion.label.trim())}
+                                aria-describedby={questionErrors[section.id] ? `question-error-${section.id}` : undefined}
+                                className={`w-full rounded-lg border px-3 py-2 text-sm bg-white text-slate-900 ${questionErrors[section.id] && !draftQuestion.label.trim() ? 'border-red-500' : 'border-slate-200'}`}
                                 placeholder="Texto da pergunta"
                                 value={draftQuestion.label}
-                                onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, label: event.target.value }))}
+                                onChange={(event) => {
+                                  setQuestionErrors((prev) => ({ ...prev, [section.id]: '' }));
+                                  updateQuestionDraft(section.id, (prev) => ({ ...prev, label: event.target.value }));
+                                }}
                               />
+                              {questionErrors[section.id] && (
+                                <p id={`question-error-${section.id}`} role="alert" className="text-xs font-semibold text-red-700">
+                                  {questionErrors[section.id]}
+                                </p>
+                              )}
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <select
                                   className="rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white text-slate-900"
@@ -1213,8 +1241,14 @@ export const AnamnesisModal = ({
                                   rows={2}
                                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm resize-none bg-white text-slate-900"
                                   placeholder="Opções separadas por vírgula"
+                                  aria-label="Opções da pergunta"
+                                  aria-invalid={Boolean(questionErrors[section.id] && draftQuestion.label.trim())}
+                                  aria-describedby={questionErrors[section.id] ? `question-error-${section.id}` : undefined}
                                   value={draftQuestion.optionsText}
-                                  onChange={(event) => updateQuestionDraft(section.id, (prev) => ({ ...prev, optionsText: event.target.value }))}
+                                  onChange={(event) => {
+                                    setQuestionErrors((prev) => ({ ...prev, [section.id]: '' }));
+                                    updateQuestionDraft(section.id, (prev) => ({ ...prev, optionsText: event.target.value }));
+                                  }}
                                 />
                               )}
                               <div className="flex items-center gap-2">

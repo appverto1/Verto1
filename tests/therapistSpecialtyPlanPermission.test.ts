@@ -89,6 +89,7 @@ assert.match(server, /mode === 'interdisciplinary' && String\(req\.effectiveClin
 assert.match(server, /if \(!canManageAny && responsibleProfessionalId !== actorId\)/);
 assert.match(server, /if \(participantProfessionalIds\.some\(\(id\) => !activeByProfessional\.has\(id\)\)\)/);
 assert.match(server, /if \(participantSpecialties\.some\(\(specialty\) => !specialty\)\)/);
+assert.match(server, /\/api\/protocol-import-requests\/:requestId\/revoke'[\s\S]{0,180}requireClinicCapability\('aba.program.edit'\)/);
 assert.match(server, /\/api\/aba\/patients\/:patientId\/therapeutic-plans\/:planId\/pts-draft'[\s\S]{0,180}requireClinicCapability\('treatment_plan.edit'\)/);
 
 console.log('therapistSpecialtyPlanPermission.test.ts: ok');

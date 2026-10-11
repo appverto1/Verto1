@@ -7,6 +7,11 @@ const ptsDashboard = fs.readFileSync('src/components/PtsTherapeuticDashboard.tsx
 const planPanel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
 const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260826183000_patient_case_team_coordinator_authority_v2.sql', 'utf8');
+const caseTeamRoles = fs.readFileSync('src/utils/patientProfessionalLinks.ts', 'utf8');
+const readRouteStart = server.indexOf("app.get('/api/aba/patients/:patientId/therapeutic-plan'");
+const readRouteEnd = server.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-plans'", readRouteStart);
+assert.ok(readRouteStart >= 0 && readRouteEnd > readRouteStart, 'rotas de leitura e criação dos planos devem existir');
+const planReadRoute = server.slice(readRouteStart, readRouteEnd);
 
 assert.match(
   migration,
@@ -34,9 +39,19 @@ assert.match(
   'mutação deve permanecer explicitamente limitada ao tenant/paciente',
 );
 assert.match(
-  server,
-  /\.in\('role', \['therapist', 'supervisor', 'coordinator', 'director'\]\)/,
-  'read model do plano deve reconhecer todos os papéis clínicos válidos da equipe do caso',
+  caseTeamRoles,
+  /PATIENT_CASE_TEAM_MEMBERSHIP_ROLES\s*=\s*\[[\s\S]*?'therapist'[\s\S]*?'supervisor'[\s\S]*?'coordinator'[\s\S]*?'director'/,
+  'os quatro papéis clínicos devem permanecer na definição canônica compartilhada',
+);
+assert.match(
+  planReadRoute,
+  /\.in\('role', Array\.from\(PATIENT_CASE_TEAM_MEMBERSHIP_ROLES\)\)/,
+  'read model do plano deve consultar os papéis clínicos canônicos sem fixar um subconjunto local',
+);
+assert.match(
+  planReadRoute,
+  /planEligible =[\s\S]*?hasActiveClinicalMembership[\s\S]*?Boolean\(membershipSpecialty\)[\s\S]*?canWritePlan/,
+  'somente membros clínicos ativos e elegíveis devem alimentar o planejamento',
 );
 assert.match(
   ptsDashboard,

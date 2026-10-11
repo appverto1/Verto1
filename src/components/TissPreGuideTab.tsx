@@ -908,6 +908,9 @@ export function TissPreGuideTab({
   const [officialTrackingAction, setOfficialTrackingAction] = useState<"sent" | "return" | null>(null);
   const [officialTrackingDocument, setOfficialTrackingDocument] = useState<TissOfficialDocumentRow | null>(null);
   const [officialTrackingSaving, setOfficialTrackingSaving] = useState(false);
+  const [officialReissueSaving, setOfficialReissueSaving] = useState(false);
+  const [officialReissueDocument, setOfficialReissueDocument] = useState<TissOfficialDocumentRow | null>(null);
+  const [officialReissueReason, setOfficialReissueReason] = useState("");
   const [officialSentForm, setOfficialSentForm] = useState({
     sentAt: "",
     sentChannel: "portal",
@@ -1736,6 +1739,34 @@ export function TissPreGuideTab({
       setMessage(result.message || "Acompanhamento da guia atualizado.");
     } finally {
       setOfficialGuideTrackingSaving(false);
+    }
+  };
+
+  const reissueOfficialDocument = async () => {
+    if (!officialReissueDocument?.id || officialReissueSaving) return;
+    const reason = officialReissueReason.trim();
+    if (reason.length < 8) {
+      setError("Informe uma justificativa com pelo menos 8 caracteres para reemitir o XML.");
+      return;
+    }
+    setOfficialReissueSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result = await dataService.reissueTissOfficialDocument(officialReissueDocument.id, { reason });
+      if (!result?.success || !result.data) {
+        setError(result?.error || "Não foi possível reemitir o XML TISS oficial.");
+        return;
+      }
+      setOfficialDocumentDetail(result.data);
+      setCreatedOfficialDocument(result.data);
+      setHighlightedOfficialDocumentId(String(result.data.id || ""));
+      setOfficialReissueDocument(null);
+      setOfficialReissueReason("");
+      setMessage(result.message || "XML TISS reemitido como novo documento; o anterior foi preservado.");
+      await Promise.all([loadRows(), loadOfficialDocuments(true)]);
+    } finally {
+      setOfficialReissueSaving(false);
     }
   };
 
@@ -3536,6 +3567,10 @@ export function TissPreGuideTab({
                     </div>
                   </details>
                   <div className="flex flex-wrap justify-end gap-2">
+                    <button type="button" onClick={() => { setOfficialReissueDocument(officialDocumentDetail); setOfficialReissueReason(""); setError(""); }} disabled={officialReissueSaving} className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-white px-3 py-2 text-sm text-violet-700 hover:bg-violet-50 disabled:opacity-60">
+                      <RefreshCw size={15} />
+                      Reemitir XML
+                    </button>
                     <button type="button" onClick={() => void downloadOfficialDocument(officialDocumentDetail)} className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-3 py-2 text-sm text-white">
                       <Download size={15} />
                       Baixar XML
@@ -3545,6 +3580,36 @@ export function TissPreGuideTab({
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {officialReissueDocument && (
+        <div className="fixed inset-0 z-[165] flex items-end justify-center bg-slate-950/45 p-4 sm:items-center" role="dialog" aria-modal="true" aria-label="Reemitir XML TISS oficial">
+          <div className="w-full max-w-xl rounded-lg bg-white shadow-xl">
+            <header className="flex items-start justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Reemitir XML oficial</h2>
+                <p className="mt-1 text-sm text-slate-500">O lote atual será preservado no histórico e um novo documento imutável será criado.</p>
+              </div>
+              <button type="button" onClick={() => { if (!officialReissueSaving) setOfficialReissueDocument(null); }} className="rounded-md p-2 text-slate-500 hover:bg-slate-100" aria-label="Fechar reemissão"><X size={18} /></button>
+            </header>
+            <div className="space-y-3 px-5 py-4">
+              <div className="rounded-md border border-violet-100 bg-violet-50 px-3 py-2 text-sm text-violet-800">
+                Lote {fieldValue(officialReissueDocument.batchNumber)} · {fieldValue(officialReissueDocument.payerName, "Operadora")}
+              </div>
+              <label className="block text-sm font-medium text-slate-700">Justificativa da reemissão
+                <textarea value={officialReissueReason} onChange={(event) => setOfficialReissueReason(event.target.value)} maxLength={1200} className="mt-1 min-h-28 w-full rounded-md border border-slate-200 px-3 py-2 text-sm" placeholder="Explique por que um novo XML precisa ser emitido." />
+              </label>
+              <p className="text-xs text-slate-500">Mínimo de 8 caracteres. O XML anterior não será alterado nem apagado.</p>
+            </div>
+            <footer className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <button type="button" onClick={() => { if (!officialReissueSaving) setOfficialReissueDocument(null); }} className="rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">Cancelar</button>
+              <button type="button" onClick={() => void reissueOfficialDocument()} disabled={officialReissueSaving || officialReissueReason.trim().length < 8} className="inline-flex items-center gap-2 rounded-md bg-violet-600 px-3 py-2 text-sm text-white disabled:opacity-60">
+                {officialReissueSaving ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                Criar novo XML
+              </button>
+            </footer>
           </div>
         </div>
       )}

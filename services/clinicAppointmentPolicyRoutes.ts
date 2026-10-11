@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import type { Express } from 'express';
+import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
+import { registerHelpCenterRoutes } from './helpCenterRoutes';
 
 type ClinicAppointmentPolicyRouteDeps = {
   supabase: any;
@@ -217,4 +219,22 @@ export function registerClinicAppointmentPolicyRoutes(
       }
     }
   );
+
+  registerModulePurchaseEligibilityRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    sanitizeString,
+    currentClinicId
+  });
+
+  registerHelpCenterRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    currentClinicId,
+    actionLimiter: portalActionLimiter
+  });
 }

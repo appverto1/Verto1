@@ -18,6 +18,7 @@ export function PtsEventForm({
   onCancel,
   onSubmit,
 }: {
+  key?: React.Key;
   kind: PtsEventKind;
   clinicTimeZone?: string;
   isDark?: boolean;

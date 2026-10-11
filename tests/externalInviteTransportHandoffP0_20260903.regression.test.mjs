@@ -43,8 +43,7 @@ assert.doesNotMatch(handoffBlock, /rawToken[^\n]*(console|log)|console[^\n]*rawT
 assert.match(server, /resolveExternalEvolutionInvitationCredential\(req, res, publicId, rawActivationToken\)/);
 assert.match(server, /transport: 'COOKIE'/);
 assert.match(server, /transport: 'BODY'/);
-assert.match(server, /RAILWAY_ENVIRONMENT_NAME|RAILWAY_ENVIRONMENT/);
-assert.doesNotMatch(server, /VERTO_DEPLOYMENT_ENV/);
+assert.match(server, /VERTO_DEPLOYMENT_ENV/);
 assert.match(server, /inviteTransport/);
 assert.match(server, /tokenState/);
 assert.match(server, /externalSessionState/);

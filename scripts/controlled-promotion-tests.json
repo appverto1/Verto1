@@ -73,5 +73,7 @@
   "helpCenterRoutes.test.ts",
   "helpCenterManifest.test.ts",
   "helpCenterIntegration.test.ts",
-  "helpTutorialSupport.test.ts"
+  "helpTutorialSupport.test.ts",
+  "patientFinancialPlanFinanceWithoutTissPayload.regression.test.mjs",
+  "patientFinancialPlanTissPreservationOnGenericFinancialSave.regression.test.mjs"
 ]
