@@ -5,3 +5,9 @@
 - GitHub connector reports `server.ts` Git blob `b5460aa69d3cee3ff6ec96849f61537974007997` (4,761,919 bytes) but returns an empty content string. Prior upload attempts failed h2. Therefore do not guess handler bodies.
 - First commit adds a branch-restricted GitHub Actions probe that uses a **real checkout** plus TypeScript AST to inventory the health and readiness handlers and small top-level helper declarations. No code is rewritten by the probe.
 - A subsequent reversible extraction will be accepted only after verifying the exact source, scope and test contracts; needs CI tests. No merge, deploy or staging change.
+
+## Applied extraction
+- Original readiness route: 49 lines, at ~28647 in baseline. All original statement text preserved, with new lazy dependency accessor.
+- Exact baseline Git SHA verified, unique AST route verified, replacement reversed byte-for-byte in memory before writing.
+- Source wrote only server.ts and services/readyRouteHandler.ts; tests were committed to the feature branch before running.
+- Need Node 20 focused tests, build, staging CI and no deployment before accepting.

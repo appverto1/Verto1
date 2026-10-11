@@ -1,3 +1,4 @@
+import { createReadyRouteHandler } from './services/readyRouteHandler';
 import express from 'express';
 import { canManageAppointmentActionInClinic, resolveAuthenticatedCalendarScope } from './services/appointmentTenantGuards';
 import path from 'path';
@@ -28644,55 +28645,16 @@ async function startServer() {
     return res.json(cleanObject({ status: 'ok', release }));
   });
 
-  app.get('/api/ready', async (_req, res) => {
-    const release = deploymentReleaseId();
-    const checks = {
-      supabase: false,
-      otpStorage: false,
-      sessionStore: !isProd,
-      distributedRuntimeState: !requiresDistributedRuntimeState()
-    };
-
-    try {
-      const { error } = await supabase
-        .from('users')
-        .select('id')
-        .limit(1);
-      checks.supabase = !error;
-    } catch {
-      checks.supabase = false;
-    }
-
-    try {
-      checks.otpStorage = await ensureOtpTableAvailability(true);
-    } catch {
-      checks.otpStorage = false;
-    }
-
-    if (sessionPool) {
-      try {
-        await sessionPool.query('select 1');
-        checks.sessionStore = true;
-      } catch {
-        checks.sessionStore = false;
-      }
-    }
-
-    if (requiresDistributedRuntimeState()) {
-      try {
-        checks.distributedRuntimeState = await checkDistributedRuntimeState(supabase);
-      } catch {
-        checks.distributedRuntimeState = false;
-      }
-    }
-
-    const ready = checks.supabase && checks.otpStorage && checks.sessionStore && checks.distributedRuntimeState;
-    return res.status(ready ? 200 : 503).json(cleanObject({
-      status: ready ? 'ready' : 'not_ready',
-      release,
-      ...(isProd ? {} : { checks })
-    }));
-  });
+  app.get('/api/ready', createReadyRouteHandler(() => ({
+    deploymentReleaseId,
+    supabase,
+    ensureOtpTableAvailability,
+    sessionPool,
+    requiresDistributedRuntimeState,
+    checkDistributedRuntimeState,
+    isProd,
+    cleanObject,
+  })));
 
   app.get('/api/health/details', async (_req, res) => {
     if (isProd) {
