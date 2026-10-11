@@ -8,4 +8,5 @@
 - Server.ts lines: 102031 → 101730 (301 lines removed).
 - Run Node 20 focused authorization and API tests, standalone `tsc`, Vite build and full staging CI; do not merge before all required gates succeed.
 - The one-use branch-only writer and workflow are removed before PR; no privileged workflow is merged into staging.
-- Branch: `refactor/backend-tuss-mappings-route-batch-20261011`; PR, merge, deploy unconfirmed at initial checkpoint. Verify the real current state and append after PR.
+- Branch: `refactor/backend-tuss-mappings-route-batch-20261011`. Branch commit `c6c60d21dd6356ac083780438f77df87fae4e046`; [PR #391](https://github.com/appverto1/Verto1/pull/391) opened against staging, no merge/deploy at this checkpoint.
+- [Scoped GitHub Actions #38178286047](https://github.com/appverto1/Verto1/actions/runs/38178286047) passed original blob guard, byte-reversible extraction, Node20 9 HTTP tests, isolated TypeScript check and Vite build. Check final CI for PR #391 before considering merge; never reuse/duplicate this extraction.
