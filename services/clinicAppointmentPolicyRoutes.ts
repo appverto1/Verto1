@@ -1,4 +1,4 @@
-import crypto from 'crypto';
+import { payloadHash } from './appointmentPolicyPayloadHash';
 import type { Express } from 'express';
 import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
 import { registerHelpCenterRoutes } from './helpCenterRoutes';
@@ -16,19 +16,7 @@ type ClinicAppointmentPolicyRouteDeps = {
   currentClinicId: (user: any) => string | null;
 };
 
-const stableValue = (value: any): any => {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') {
-    return Object.keys(value).sort().reduce((result: any, key) => {
-      if (value[key] !== undefined) result[key] = stableValue(value[key]);
-      return result;
-    }, {});
-  }
-  return value;
-};
 
-const payloadHash = (value: any) =>
-  crypto.createHash('sha256').update(JSON.stringify(stableValue(value))).digest('hex');
 
 export function registerClinicAppointmentPolicyRoutes(
   app: Express,
