@@ -3,12 +3,45 @@ import express from 'express';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import { registerHelpCenterRoutes } from '../services/helpCenterRoutes';
+import { buildHelpContext } from '../services/helpContext';
+import { createHash } from 'node:crypto';
 import { publishedTutorialHelpProjection, TUTORIAL_ARTICLES } from '../services/helpTutorialCatalog';
 import { findSupportTopics, pausedSupportQuery } from '../src/help/helpSupport';
 import { CAPABILITY_CATALOG } from '../src/constants/authorizationModel';
 import { createSensitiveApiMutationProtectionMiddleware } from '../src/utils/sensitiveApiMutationProtection.mjs';
 
 const caps=CAPABILITY_CATALOG.map(c=>c.key),modules=['clinical_core','appointments_communication','financial_management','insurance_tiss'];
+const resolvedContext = buildHelpContext({
+  session: { user: { id: 'untrusted-session', clinicId: 'clinic-a', role: 'therapist' } },
+  authorizationContext: {
+    userId: 'authorized-user', membershipId: 'membership-a', role: 'DIRECTOR',
+    clinicName: 'Authorized Clinic', capabilities: new Set(['clinic.view', 'calendar.attendance.confirm']),
+    modules: ['financial_management', 'clinical_core'],
+  },
+}, user => user.clinicId);
+assert.deepEqual({
+  clinicId: resolvedContext.clinicId, clinicName: resolvedContext.clinicName,
+  audience: resolvedContext.audience, capabilities: resolvedContext.capabilities,
+  modules: resolvedContext.modules, userId: resolvedContext.userId,
+  membershipId: resolvedContext.membershipId,
+}, {
+  clinicId: 'clinic-a', clinicName: 'Authorized Clinic', audience: 'director',
+  capabilities: ['clinic.view', 'calendar.attendance.confirm'],
+  modules: ['financial_management', 'clinical_core'],
+  userId: 'authorized-user', membershipId: 'membership-a',
+});
+assert.equal(resolvedContext.contextKey, createHash('sha256')
+  .update(JSON.stringify(['authorized-user', 'clinic-a', 'membership-a', 'director',
+    ['calendar.attendance.confirm', 'clinic.view'], ['clinical_core', 'financial_management']])).digest('hex'));
+assert.notEqual(resolvedContext.contextKey, buildHelpContext({
+  session: { user: { id: 'untrusted-session', clinicId: 'clinic-b', role: 'therapist' } },
+  authorizationContext: {
+    userId: 'authorized-user', membershipId: 'membership-a', role: 'DIRECTOR',
+    clinicName: 'Authorized Clinic', capabilities: new Set(['clinic.view', 'calendar.attendance.confirm']),
+    modules: ['financial_management', 'clinical_core'],
+  },
+}, user => user.clinicId).contextKey, 'clinic swap invalidates the help authorization snapshot');
+
 assert.equal(new Set(TUTORIAL_ARTICLES.flatMap(a=>a.requiredCapabilities).filter(c=>!caps.includes(c as any))).size,0);
 for(const role of ['director','coordinator','therapist','supervisor','receptionist']){
   const articles=publishedTutorialHelpProjection(role,caps,modules);

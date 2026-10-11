@@ -1,0 +1,12 @@
+# Backend modularization — Help Center authorization context
+
+- Date: 2026-10-11.
+- Baseline: `staging` commit `e78a05511dfd03b82d32d92d44f4231004d71a64`; `services/helpCenterRoutes.ts` original blob `21b4444b2d44d99e2c9a8253719869d03b55fabe`; test original blob `0018baf62c99c1f076724fe820e4da5dee8132b4`.
+- Slice: move the unchanged `setValues` normalization and `helpContext` role/tenant/capability/contextKey SHA-256 construction to `services/helpContext.ts`. Keep all route registrations, middleware ordering, session and authorization lookup, status codes, Supabase queries/RPCs, payloads, support permissions, media authorization and save semantics in `services/helpCenterRoutes.ts`.
+- Files: `services/helpContext.ts` (new), `services/helpCenterRoutes.ts`, `tests/helpTutorialSupport.test.ts`, this checkpoint.
+- Regression: add direct assertions for authorization-context precedence, capability/module snapshot hash, and clinic-change invalidation to the existing `tests/helpTutorialSupport.test.ts` suite. Existing HTTP adversarial cases cover invalid session, tenant swap, permission changes, CSRF, invalid payload, idempotent save, errors 400/401/403/404/409/503 and tutorial media gates.
+- Before commit: JavaScript source roundtrip comparison against the fetched original file and checks of preserved middleware/RPC/media/response segments succeeded; test execution remains pending GitHub Actions CI.
+- Branch: `refactor/backend-help-context-20261011` based directly on `staging`. Implementation commit and PR: to be recorded after GitHub creates them. Merge: no. Staging deploy: no. Production: untouched.
+- Existing overlap avoided: consolidated backend modularization PR #381 includes PRs #369–#380; none changes the Help Center files in this slice. Do not merge duplicated ancestor PRs separately.
+- Progress: this slice 1/1 implementation (100%) upon commit; global `server.ts` reduction remains 0/102,066 lines (0%) on staging. PR #381 proposes a separate -1,076 lines (1.054% of original) **only on its unmerged branch**, not in staging. A factual total-backend completion percentage cannot be computed without a bounded inventory of required extractions.
+- Follow-up: review the required CI on this PR; once integration is authorized, prefer merging the consolidated server-route candidate once, then choose another disjoint safe extraction from the updated baseline. No issues/factory prerequisites.
