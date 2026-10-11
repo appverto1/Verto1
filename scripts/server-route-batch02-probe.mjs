@@ -75,3 +75,13 @@ for(const [method,path] of keys){
  const free=[...refs].filter(x=>!locals.has(x)&&!runtimeGlobals.has(x)).sort();
  console.log('[batch02-deps] '+JSON.stringify({method,path,handlerLines:s.slice(handler.getStart(sf),handler.end).split('\n').length,free,types:[...types],locals:[...locals].slice(0,25)}));
 }
+
+
+for(const name of ['ResolvedClinicCapabilityContext','NewFeatureKey','PortalProfessionalWorkingSchedule','ClinicBaseRole']){
+ const all=[];
+ for(const stmt of sf.statements){
+ if((ts.isTypeAliasDeclaration(stmt)||ts.isInterfaceDeclaration(stmt))&&stmt.name.text===name)all.push({at:sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line+1,body:stmt.getText(sf).slice(0,6000)});
+ if(ts.isImportDeclaration(stmt)&&stmt.importClause?.namedBindings?.getText(sf).includes(name))all.push({at:sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line+1,body:stmt.getText(sf)});
+ }
+ console.log('[batch02-type] '+JSON.stringify({name,matches:all.slice(0,5)}));
+}
