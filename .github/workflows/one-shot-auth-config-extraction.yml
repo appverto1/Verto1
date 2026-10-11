@@ -1,0 +1,25 @@
+name: Scoped one-shot auth config extraction
+on:
+  push:
+    branches:
+      - refactor/backend-auth-config-route-20261011
+permissions:
+  contents: write
+concurrency:
+  group: verto-auth-config-one-shot
+  cancel-in-progress: false
+jobs:
+  scoped-extraction:
+    if: github.ref == 'refs/heads/refactor/backend-auth-config-route-20261011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node scripts/one-shot-auth-config-extraction.mjs
