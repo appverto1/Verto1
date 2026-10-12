@@ -1,0 +1,178 @@
+{
+  "baseCommit": "8556cb75276323e5f316cab358714ceab64ead3b",
+  "originalGitBlob": "10a3505c621159e8b51242836a5d9a280fa54a95",
+  "originalLines": 100632,
+  "expectedServerLines": 100113,
+  "module": "services/clinicFinancialReadHandlers.ts",
+  "routes": [
+    {
+      "method": "get",
+      "path": "/api/private-pricing/catalog",
+      "factory": "createPrivatePricingCatalogReadHandler",
+      "dependencies": [
+        "sanitizeString",
+        "currentClinicId",
+        "isUuid",
+        "supabase",
+        "PRIVATE_PATIENT_AGREEMENT_SELECT",
+        "PRIVATE_PRICE_RULE_SELECT",
+        "TUSS_SERVICE_CATALOG_SELECT",
+        "CLINIC_PAYER_SELECT",
+        "privateSessionPricingErrorResponse"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 70
+    },
+    {
+      "method": "get",
+      "path": "/api/private-pricing/appointments/:appointmentId/snapshot",
+      "factory": "createPrivatePricingSnapshotReadHandler",
+      "dependencies": [
+        "sanitizeString",
+        "currentClinicId",
+        "isUuid",
+        "supabase",
+        "PRIVATE_FINANCIAL_SNAPSHOT_SELECT",
+        "privateSessionPricingErrorResponse"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 23
+    },
+    {
+      "method": "get",
+      "path": "/api/patient-finance/ledger",
+      "factory": "createPatientFinanceLedgerReadHandler",
+      "dependencies": [
+        "sanitizeString",
+        "currentClinicId",
+        "isUuid",
+        "supabase",
+        "PATIENT_FINANCE_CHARGE_SELECT",
+        "patientFinanceErrorResponse",
+        "PATIENT_FINANCE_APPOINTMENT_SELECT",
+        "PATIENT_FINANCE_POLICY_SELECT",
+        "PRIVATE_FINANCIAL_SNAPSHOT_SELECT",
+        "extractMissingColumnName",
+        "PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "APPOINTMENT_BILLING_CONTEXT_SELECT"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 195
+    },
+    {
+      "method": "get",
+      "path": "/api/patient-finance/transactions/:transactionId/document",
+      "factory": "createPatientFinanceTransactionDocumentReadHandler",
+      "dependencies": [
+        "sanitizeString",
+        "currentClinicId",
+        "isUuid",
+        "supabase",
+        "sanitizeReceiptUrl",
+        "patientFinanceErrorResponse"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 48
+    },
+    {
+      "method": "get",
+      "path": "/api/patient-finance/policy",
+      "factory": "createPatientFinancePolicyReadHandler",
+      "dependencies": [
+        "sanitizeString",
+        "currentClinicId",
+        "isUuid",
+        "supabase",
+        "PATIENT_FINANCE_POLICY_SELECT",
+        "hasMissingFinancialSchema",
+        "patientFinanceErrorResponse"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 17
+    },
+    {
+      "method": "get",
+      "path": "/api/payments",
+      "factory": "createPaymentsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "fetchPaymentsWithSchemaFallback",
+        "hasGlobalClinicAccess",
+        "parseBoundedListLimit",
+        "sendRouteDbError",
+        "requestIdForLogs",
+        "supabase"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 21
+    },
+    {
+      "method": "get",
+      "path": "/api/financial/professional-payments",
+      "factory": "createProfessionalPaymentsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "fetchProfessionalPaymentsWithSchemaFallback",
+        "hasGlobalClinicAccess",
+        "parseBoundedListLimit",
+        "hasMissingFinancialSchema",
+        "sendRouteDbError",
+        "requestIdForLogs",
+        "supabase"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 23
+    },
+    {
+      "method": "get",
+      "path": "/api/financial/expenses",
+      "factory": "createFinancialExpensesReadHandler",
+      "dependencies": [
+        "clinicExpenseScope",
+        "clinicExpenseMonthBounds",
+        "supabase",
+        "clinicExpenseSchemaMissing",
+        "fetchFinancialEntriesWithSchemaFallback",
+        "FINANCIAL_ENTRY_SELECT",
+        "MAX_CLINIC_EXPENSE_ROWS",
+        "CLINIC_EXPENSE_RULE_SELECT",
+        "sanitizeString",
+        "sendRouteDbError",
+        "requestIdForLogs"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 89
+    },
+    {
+      "method": "get",
+      "path": "/api/financial/entries",
+      "factory": "createFinancialEntriesReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "fetchFinancialEntriesWithSchemaFallback",
+        "hasGlobalClinicAccess",
+        "parseBoundedListLimit",
+        "hasMissingFinancialSchema",
+        "sendRouteDbError",
+        "requestIdForLogs",
+        "supabase"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 23
+    },
+    {
+      "method": "get",
+      "path": "/api/financial/feature-survey",
+      "factory": "createFinancialFeatureSurveyReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "supabase",
+        "FINANCIAL_FEEDBACK_SELECT"
+      ],
+      "originalHandlerStatements": 1,
+      "sourceLines": 21
+    }
+  ]
+}

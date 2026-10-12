@@ -14,6 +14,8 @@ const testFiles = [
   'tests/clinicalMeasurementV3PlanOutcomesRoutes.test.ts',
   'tests/clinicAnnouncementDelivery.test.ts',
   'tests/reminderClinicLogoAssets.test.ts',
+  'tests/clinicFinancialReadHandlersSourceParity.test.mjs',
+  'tests/clinicFinancialReadHandlers.test.ts',
 ];
 
 for (const file of testFiles) {
