@@ -16,6 +16,8 @@ const testFiles = [
   'tests/reminderClinicLogoAssets.test.ts',
   'tests/clinicFinancialReadHandlersSourceParity.test.mjs',
   'tests/clinicFinancialReadHandlers.test.ts',
+  'tests/ownerAdminReadHandlersSourceParity.test.mjs',
+  'tests/ownerAdminReadHandlers.test.ts',
   'tests/tissPayerReadHandlersSourceParity.test.mjs',
   'tests/tissPayerReadHandlers.test.ts',
 ];

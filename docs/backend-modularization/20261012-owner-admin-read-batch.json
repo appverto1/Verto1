@@ -1,0 +1,105 @@
+{
+  "originalGitBlob": "3b221575a18e3b01df24286168743e70bee8e06b",
+  "baseCommit": "66c4188729196ff846ecd33e07b2c9d309c7528d",
+  "originalLines": 99382,
+  "expectedServerLines": 99101,
+  "module": "services/ownerAdminReadHandlers.ts",
+  "routes": [
+    {
+      "method": "get",
+      "path": "/api/owner/stats",
+      "factory": "createOwnerStatsHandler",
+      "dependencies": [
+        "loadOwnerSaasClients",
+        "buildOwnerFinancialOverviewFromLedger",
+        "sanitizeString"
+      ],
+      "sourceLines": 23
+    },
+    {
+      "method": "get",
+      "path": "/api/owner/clients",
+      "factory": "createOwnerClientsHandler",
+      "dependencies": [
+        "loadOwnerSaasClients",
+        "sanitizeString"
+      ],
+      "sourceLines": 9
+    },
+    {
+      "method": "get",
+      "path": "/api/owner/financial-overview",
+      "factory": "createOwnerFinancialOverviewHandler",
+      "dependencies": [
+        "buildOwnerFinancialOverviewFromLedger",
+        "sanitizeString"
+      ],
+      "sourceLines": 35
+    },
+    {
+      "method": "get",
+      "path": "/api/owner/financial-feature-surveys",
+      "factory": "createOwnerFinancialSurveysHandler",
+      "dependencies": [
+        "supabase"
+      ],
+      "sourceLines": 12
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/demo/sandboxes",
+      "factory": "createAdminDemoSandboxesHandler",
+      "dependencies": [
+        "supabase",
+        "extractMissingColumnName",
+        "isMissingRelationError",
+        "sanitizeString",
+        "logRouteDbError"
+      ],
+      "sourceLines": 40
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/stats",
+      "factory": "createAdminStatsHandler",
+      "dependencies": [
+        "supabase"
+      ],
+      "sourceLines": 38
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/clients",
+      "factory": "createAdminClientsHandler",
+      "dependencies": [
+        "supabase",
+        "USER_PROFILE_SELECT",
+        "parseBoundedListLimit"
+      ],
+      "sourceLines": 14
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/verto-protocols",
+      "factory": "createAdminVertoProtocolsHandler",
+      "dependencies": [
+        "supabase",
+        "CANONICAL_PROTOCOL_SELECT",
+        "sanitizeString",
+        "sanitizeClinicalPayload"
+      ],
+      "sourceLines": 31
+    },
+    {
+      "method": "get",
+      "path": "/api/owner/leads/recovery",
+      "factory": "createOwnerRecoveryLeadsHandler",
+      "dependencies": [
+        "supabase",
+        "sanitizeString",
+        "sanitizeEmail"
+      ],
+      "sourceLines": 89
+    }
+  ]
+}
