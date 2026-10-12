@@ -1,0 +1,21 @@
+# Backend modularization — GET /api/health
+
+- Date: 2026-10-11; base staging 5fc564ba5b11bef1f21b56e4f81fd6c43e587f60, server original blob aa914fac455bbd82fab898843cdee795acccf33a.
+- Extract exactly one public health handler into services/healthRouteHandler.ts. Preserve original callback source byte-for-byte, middleware order, release ID evaluation at request time, cleanObject and payload, and placement between /api/config and /api/ready.
+- Checked full server roundtrip and unique route registration. Add HTTP regression tests to existing pre-main runner for 200 payload, cleanObject, and once-per-request release lookup.
+- One-shot GitHub Action validates old SHA, performs source roundtrip, tests and build, removes its own workflow/script and commits only five expected source files.
+- Distinct from proposed PRs #381, #383, #387, #388, but each edits server.ts; merge requires updated comparison. No factory/Issues, schema, permissions, financial, Stripe, Supabase/Railway traffic or production changes.
+- Branch refactor/backend-health-route-20261011. Pull request and final validation results recorded in PR description after GitHub confirmation.
+- Server lines: 101730 to 101728 (candidate only). Staging remains unchanged until explicit merge; no reliable overall backend percent.
+
+## Merge final verificado — 2026-10-12
+
+- **Status factual: MERGED em `staging`**. PR [#392](https://github.com/appverto1/Verto1/pull/392) encerrado como merged em 2026-10-12T14:40:14Z; merge commit `7ce812efbdd92221309b13110e74a04057231a74`. `staging` verificado nesse SHA após a operação. Production branch `main` não foi alterada por esta tarefa.
+- Branch de implementação `refactor/backend-health-route-20261011` (head final `ec285e04ccf937144dfae5562b9133688639ea23`). Mudança funcional em `server.ts` + `services/healthRouteHandler.ts`; regressão `tests/healthRouteHandler.test.ts`; registro do teste em `scripts/pre-main-gate.mjs`; este checkpoint. Cinco arquivos no PR.
+- Verificação independente do diff no código efetivo: `server.ts` 101730 → 101728 linhas, exatamente um `app.get('/api/health'` e uma importação nova; reconstrução inversa dos dois trechos modificados resulta no texto original byte a byte. Resposta inalterada: HTTP 200 e `cleanObject({ status: 'ok', release: deploymentReleaseId() })` executado a cada requisição. A ordem entre `/api/config` e `/api/ready` e a ausência de middleware adicional foram preservadas.
+- GitHub Actions `staging-gate` do PR [run #38194467122](https://github.com/appverto1/Verto1/actions/runs/38194467122): concluído com sucesso em Node 20, `npm ci`, typecheck ratchet, `npm run build`, tutorial isolation e `pre-main` regression. Teste direcionado de 200/payload/duas requisições registrado na suíte. Nenhum teste de runtime executado localmente pelo relator desta integração.
+- Checks: PR head `staging-gate=success`, `reconciliation-gate=skipped` (condição de release não aplicável); PR classificado pelo GitHub como `mergeable_state=clean` e `mergeable=true` imediatamente antes do merge, base igual ao `staging` confirmado. CI pós-merge disparado e ainda `in_progress` na primeira consulta, não confundir com validação de deploy.
+- Deploy e smoke em ambiente remoto: **não verificados**; não há afirmação de publicação em Railway nem de verificação de endpoint ao vivo. Nenhuma alteração direta em produção, Stripe, Resend, banco, RLS, autorizações, pacientes, agendamentos ou persistência.
+- Progresso desta fatia: **1 de 1 extrações integradas (100%)**. Indicador estritamente físico do entrypoint: redução de **2 / 101730 linhas = 0,001966%** nesta execução; desde o checkpoint de 102066 linhas registrado antes das extrações anteriores, **338 / 102066 ≈ 0,331%** menos linhas no `server.ts`. Isso **não** é porcentagem de conclusão arquitetural do backend.
+- Próxima fatia: escolher uma única rota não coberta por PRs abertos após novo exame de `staging`; candidata `POST /api/auth/password/recovery/bootstrap`, previamente bloqueada pelo limite de escrita de 4,7 MB. Não duplicar extrações de #392 nem reintroduzir código removido.
+- Registro de pós-merge realizado em branch documental `docs/backend-health-route-merge-checkpoint-20261012` e entregue em PR próprio, sem modificação funcional adicional.

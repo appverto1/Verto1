@@ -12,6 +12,7 @@ const serviceWorker = fs.readFileSync('public/sw.js', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 const cron = fs.readFileSync('services/cronService.ts', 'utf8');
 const reminderBranding = fs.readFileSync('services/appointmentReminderBranding.ts', 'utf8');
+const reminderLogoAssets = fs.readFileSync('services/reminderClinicLogoAssets.ts', 'utf8');
 
 const section = (source: string, start: string, end: string): string => {
   const startIndex = source.indexOf(start);
@@ -83,9 +84,10 @@ assert.doesNotMatch(serviceWorker, /brandLogo \|\| payloadIcon/);
 assert.match(cron, /createAppointmentReminderBrandingService/);
 assert.match(cron, /buildStableClinicNotificationLogoUrl/);
 assert.match(cron, /verifyStableClinicNotificationLogoSignature/);
-assert.match(reminderBranding, /createHmac\('sha256', secret\)/);
-assert.match(reminderBranding, /\/api\/public\/notification-assets\/clinic-logo/);
-assert.doesNotMatch(reminderBranding, /createSignedUrl\(/);
+assert.match(reminderLogoAssets, /createHmac\('sha256', secret\)/);
+assert.match(reminderLogoAssets, /\/api\/public\/notification-assets\/clinic-logo/);
+assert.doesNotMatch(reminderLogoAssets, /createSignedUrl\(/);
+assert.match(reminderBranding, /createReminderClinicLogoAssetsService\(deps\)/);
 
 const reminderCron = section(cron, 'for (const appointment of appointments)', 'if (result.sent > 0)');
 assert.match(reminderCron, /resolveReminderClinicBranding\(options, appointment\.clinicId\)/);
