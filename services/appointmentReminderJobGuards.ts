@@ -4,6 +4,8 @@
  * Compare the durable appointment, patient and schedule before producing
  * a portal notification or sending push; never trust stale queued payloads.
  */
+import { normalizeId, UUID, validInstant, responded } from './appointmentReminderClaimPrimitives';
+
 type QueuedAppointmentJob = {
   source_id?: unknown; clinic_id?: unknown; patient_id?: unknown;
   scheduled_for?: unknown; notification_kind?: unknown;
@@ -17,15 +19,6 @@ type PersistedAppointment = {
   patient_confirmation_status?: unknown;
 };
 type PersistedPatient = { id?: unknown; clinic_id?: unknown; is_active?: unknown; deleted_at?: unknown };
-
-const normalizeId = (value: unknown) => typeof value === 'string' ? value.trim().toLowerCase() : '';
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const validInstant = (value: unknown): number | null => {
-  if (typeof value !== 'string' || value.length > 80 || !/\d{4}-\d\d-\d\d/.test(value)) return null;
-  const instant = Date.parse(value);
-  return Number.isFinite(instant) ? instant : null;
-};
-const responded = new Set(['confirmed', 'confirmado', 'accepted', 'cancelled', 'canceled', 'cancel_requested', 'cancellation_requested', 'reschedule_requested', 'rescheduled', 'rejected']);
 
 export function validateClaimedAppointmentReminder(
   job: QueuedAppointmentJob,

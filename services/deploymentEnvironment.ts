@@ -1,11 +1,11 @@
-import crypto from 'crypto';
+import { clean, parseHttpUrl, hasEnvironmentHint, vapidPublicKeyFingerprint } from './deploymentEnvironmentHelpers';
+export { vapidPublicKeyFingerprint };
 
 export type VertoDeploymentEnvironment = 'staging' | 'production';
 
 const ALLOWED_DEPLOYMENT_ENVIRONMENTS = new Set<VertoDeploymentEnvironment>(['staging', 'production']);
 const NON_PRODUCTION_HOST_HINTS = ['staging', 'stage', 'preview', 'test', 'dev', 'localhost', '127.0.0.1'];
 
-const clean = (value: unknown, maxLength = 500) => String(value ?? '').trim().slice(0, maxLength);
 
 export function normalizeVertoDeploymentEnvironment(value: unknown): VertoDeploymentEnvironment | null {
   const normalized = clean(value, 40).toLowerCase();
@@ -37,27 +37,8 @@ export function requireVertoDeploymentEnvironment(
   return resolved;
 }
 
-export function vapidPublicKeyFingerprint(value: unknown): string | null {
-  const publicKey = clean(value, 2000);
-  if (!publicKey) return null;
-  return crypto.createHash('sha256').update(publicKey).digest('hex').slice(0, 24);
-}
 
-function parseHttpUrl(value: unknown): URL | null {
-  const raw = clean(value, 1000);
-  if (!raw) return null;
-  try {
-    const parsed = new URL(raw);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed : null;
-  } catch {
-    return null;
-  }
-}
 
-function hasEnvironmentHint(value: unknown, hints: string[]) {
-  const normalized = clean(value, 240).toLowerCase();
-  return Boolean(normalized && hints.some((hint) => normalized.includes(hint)));
-}
 
 export function validateVertoDeploymentConfiguration(params: {
   env?: NodeJS.ProcessEnv;

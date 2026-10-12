@@ -1,0 +1,23 @@
+# Backend modularization: consolidated candidate batch 01
+
+Date: 2026-10-11. Target base `staging` at `e78a05511dfd03b82d32d92d44f4231004d71a64` (tree `5a49fa47d6ba5067985a5a138afac4bdc672e2dc`).
+
+## Scope, traceability and invariants
+- This **single atomic candidate** combines PRs [#369](https://github.com/appverto1/Verto1/pull/369), [#370](https://github.com/appverto1/Verto1/pull/370), [#371](https://github.com/appverto1/Verto1/pull/371), [#372](https://github.com/appverto1/Verto1/pull/372), [#373](https://github.com/appverto1/Verto1/pull/373), [#374](https://github.com/appverto1/Verto1/pull/374), [#375](https://github.com/appverto1/Verto1/pull/375), [#376](https://github.com/appverto1/Verto1/pull/376), [#377](https://github.com/appverto1/Verto1/pull/377) and [#378](https://github.com/appverto1/Verto1/pull/378) on a fresh Git tree without merging or deploying.
+- All 10 original branches share the same `staging` base; all 44 changed file paths are disjoint. The consolidated tree references their **exact original Git blob SHA values**, without rewriting or changing any of those 44 paths.
+- Changes: 20 TypeScript service modules, 14 regression/test files and 10 individual evidence/checkpoint documents, plus this integration checkpoint. Includes updated structural regressions for clinical target catalog, push/announcement idempotency and signed notification-logo branding.
+- Original source PRs must **not** be independently merged after accepting this consolidated batch, since this branch already includes their complete changes. Maintain source PR references for audit. Do not close/merge original PRs in this execution.
+- `server.ts` is unchanged. The Git blob SHA must remain `b5460aa69d3cee3ff6ec96849f61537974007997` (4,761,919 bytes, ~102,066 lines). No real staging/prod writes or smoke tests. No route, SQL, cost or billing behavior should change.
+- Individual PR staging CI runs passed, but **the combined candidate must pass its own Node 20 staging gate**. The new `.test.ts` files are included but not presumed independently run by that gate. The integration test result must be checked against the final commit.
+- Functional boundaries: clinical V3 catalog and plan outcomes read routes; announcement delivery separate from cron; push subscription parser; reminder/brand signing; school stable hash; deployment identity helpers; runtime hash/date primitives; conservative SELECT column parsing; cron reminder source parsing.
+- Count-based progress: 10/10 of the identified **first-batch source PRs assembled** into one candidate (100% batch assembly). No merge to `staging`; direct `server.ts` shrinkage = 0/102,066 lines = **0%**. The denominator for overall application modularization remains undefined and cannot be reported as a factual overall completion percentage.
+- Follow-up: validate combined CI and new test coverage; optional safe merge needs explicit instruction. Later establish a transport that supports modifying `server.ts` directly before claiming entrypoint shrinkage.
+
+Branch: `refactor/backend-modularization-batch01-20261011` based on `e78a05511dfd03b82d32d92d44f4231004d71a64`. Consolidation PR and final CI status to be recorded in PR body after verification; no merge or deploy.
+
+## Integrated test execution hardening
+
+- A dedicated `scripts/backend-modularization-batch01-regressions.mjs` enumerates **all 10 new TypeScript regression test files** introduced by source PRs #369–#378. Each file runs in its own Node 20 process using `node --import tsx`, with a 120-second process timeout and fail-fast errors.
+- `.github/workflows/staging-ci.yml` now executes the suite as a **required step** in the existing `staging-gate` after the tutorial isolation step and before the pre-main ratchet. Existing gates are unchanged.
+- Before this follow-up commit, CI checked build/typecheck/pre-main but did not prove execution of these 10 tests. Do not infer this new step is passing until GitHub Actions verifies the final commit.
+- This follow-up changes **only test infrastructure and this checkpoint**, not any of the exact 44 original source PR file blobs or `server.ts`.

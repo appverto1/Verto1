@@ -1,0 +1,168 @@
+{
+  "oldGitBlob": "a301111eac512996c2a019b728e080b9aa54b63a",
+  "previousLines": 102028,
+  "newLines": 100990,
+  "removedLines": 1038,
+  "totalRoutes": 12,
+  "handlerLines": 1052,
+  "routes": [
+    {
+      "path": "/api/clinic/authorization/me",
+      "method": "get",
+      "factory": "createClinicAuthorizationMeHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 3,
+      "middleware": [
+        "checkAuth"
+      ],
+      "lines": 35,
+      "bodySHA256": "7dc6ef9a0aa5e88db7f133e18e671bf76854bd3505e9c0a6b588e795a49cb65d"
+    },
+    {
+      "path": "/api/user/feature-access",
+      "method": "get",
+      "factory": "createUserFeatureAccessReadHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 3,
+      "middleware": [
+        "checkAuth"
+      ],
+      "lines": 40,
+      "bodySHA256": "c5ab401f75d3248faf3e8e5e48383ee360e8b0a757aa1a369d91571d677a18c2"
+    },
+    {
+      "path": "/api/user/feature-access/:featureKey",
+      "method": "post",
+      "factory": "createUserFeatureAccessWriteHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 3,
+      "middleware": [
+        "checkAuth"
+      ],
+      "lines": 37,
+      "bodySHA256": "073dc2d48617469aa502ecd79da1c897b29de14f346bd9aced92d8398b4b33ed"
+    },
+    {
+      "path": "/api/clinic/authorization/capabilities/:permissionKey/members",
+      "method": "get",
+      "factory": "createClinicCapabilityMembersReadHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 4,
+      "middleware": [
+        "checkAuth",
+        "requireClinicCapability('team.permissions.manage')"
+      ],
+      "lines": 113,
+      "bodySHA256": "2cb3cfc13be888372779c89398136c66b717eab443a6938880d73bf80362ce99"
+    },
+    {
+      "path": "/api/clinic/authorization/capabilities/:permissionKey/members",
+      "method": "patch",
+      "factory": "createClinicCapabilityMembersWriteHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 5,
+      "middleware": [
+        "portalActionLimiter",
+        "checkAuth",
+        "requireClinicCapability('team.permissions.manage')"
+      ],
+      "lines": 134,
+      "bodySHA256": "d6af5e30df65debfebf286b058d9727f1671d0a745659c3c94c979a11d9a94f6"
+    },
+    {
+      "path": "/api/clinic/members/:memberId/authorization",
+      "method": "get",
+      "factory": "createClinicMemberAuthorizationReadHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 4,
+      "middleware": [
+        "checkAuth",
+        "requireClinicCapability('team.permissions.manage')"
+      ],
+      "lines": 123,
+      "bodySHA256": "f7c922591a1f85d613735fc48af265d1ebbf292e9ce8bb92b3a8a96f6bc68f69"
+    },
+    {
+      "path": "/api/clinic/members/:memberId/authorization",
+      "method": "patch",
+      "factory": "createClinicMemberAuthorizationWriteHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 5,
+      "middleware": [
+        "portalActionLimiter",
+        "checkAuth",
+        "requireClinicCapability('team.permissions.manage')"
+      ],
+      "lines": 116,
+      "bodySHA256": "3f796f33a8ebd3ffc4981c7c49c1a82bd08fb4b045d26a79c47f97261445f892"
+    },
+    {
+      "path": "/api/clinic/members",
+      "method": "get",
+      "factory": "createClinicMembersReadHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 4,
+      "middleware": [
+        "checkAuth",
+        "requireClinicCapability('team.view')"
+      ],
+      "lines": 114,
+      "bodySHA256": "d3201d5f420c7e851eda3c13c3214cdbcfa630c9ff93c4bc56a73b7f16918aae"
+    },
+    {
+      "path": "/api/clinic/members/:memberId/supervision-eligibility",
+      "method": "patch",
+      "factory": "createClinicSupervisionEligibilityWriteHandler",
+      "module": "services/clinicAccessMembershipHandlers.ts",
+      "arguments": 5,
+      "middleware": [
+        "portalActionLimiter",
+        "checkAuth",
+        "requireClinicCapability('team.supervision.manage')"
+      ],
+      "lines": 74,
+      "bodySHA256": "953fe74fbc4f5e76013eca878f4e496ed2cd5f9ff2a19f824172984b3a0491d2"
+    },
+    {
+      "path": "/api/clinic/members/:memberId/work-schedule",
+      "method": "get",
+      "factory": "createClinicWorkScheduleReadHandler",
+      "module": "services/clinicWorkScheduleHandlers.ts",
+      "arguments": 4,
+      "middleware": [
+        "checkAuth",
+        "requireAnyClinicCapability('calendar.team.view', 'calendar.own.view')"
+      ],
+      "lines": 37,
+      "bodySHA256": "ac7a45bc962651e9402417e385a938c4409130f8d7c2578aa40a75f094d9b683"
+    },
+    {
+      "path": "/api/clinic/members/:memberId/work-schedule",
+      "method": "patch",
+      "factory": "createClinicWorkScheduleWriteHandler",
+      "module": "services/clinicWorkScheduleHandlers.ts",
+      "arguments": 5,
+      "middleware": [
+        "portalActionLimiter",
+        "checkAuth",
+        "requireAnyClinicCapability('team.edit', 'calendar.own.view')"
+      ],
+      "lines": 85,
+      "bodySHA256": "dd6290afe4c71f284a8d29d47302db4dd1d726015a9770335cd9da372a5f4f96"
+    },
+    {
+      "path": "/api/clinic/members/:memberId/work-schedule/apply",
+      "method": "post",
+      "factory": "createClinicWorkScheduleApplyHandler",
+      "module": "services/clinicWorkScheduleHandlers.ts",
+      "arguments": 5,
+      "middleware": [
+        "portalActionLimiter",
+        "checkAuth",
+        "requireClinicCapability('team.edit')"
+      ],
+      "lines": 144,
+      "bodySHA256": "20795f0a45814a54b715071ce7de7e9dd06fb90ee7bbc3e7c9c24a93bd297590"
+    }
+  ]
+}

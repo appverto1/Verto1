@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const agenda = fs.readFileSync('src/components/Calendar.tsx', 'utf8');
 const cron = fs.readFileSync('services/clinicAnnouncementCronService.ts', 'utf8');
+const delivery = fs.readFileSync('services/clinicAnnouncementDelivery.ts', 'utf8');
 const reminderCron = fs.readFileSync('services/cronService.ts', 'utf8');
 const auth = fs.readFileSync('src/constants/authorizationModel.ts', 'utf8');
 
@@ -31,12 +32,12 @@ assert.match(reminderCron, /onConflict: 'deployment_env,idempotency_key'/);
 
 // Retries of a partially delivered clinic announcement cannot deliver push
 // again to a recipient whose previous push_status was SENT.
-assert.match(cron, /pushStatus: sanitizeText\(row\?\.push_status, 30\)\.toUpperCase\(\)/);
-assert.match(cron, /pendingPushRecipients = recipients\.filter\(\(recipient: any\) => recipient\.pushStatus !== 'SENT'\)/);
-assert.match(cron, /recipients: pendingPushRecipients\.map/);
-assert.match(cron, /for \(const recipient of pendingPushRecipients\)/);
-assert.match(cron, /let pushSentCount = previouslySentPushCount/);
-assert.match(cron, /materialize_clinic_announcement_portal_notifications_v1/);
+assert.match(delivery, /pushStatus: sanitizeText\(row\?\.push_status, 30\)\.toUpperCase\(\)/);
+assert.match(delivery, /pendingPushRecipients = recipients\.filter\(\(recipient: any\) => recipient\.pushStatus !== 'SENT'\)/);
+assert.match(delivery, /recipients: pendingPushRecipients\.map/);
+assert.match(delivery, /for \(const recipient of pendingPushRecipients\)/);
+assert.match(delivery, /let pushSentCount = previouslySentPushCount/);
+assert.match(delivery, /materialize_clinic_announcement_portal_notifications_v1/);
 assert.match(cron, /claim_due_clinic_announcements_v1/);
 
 console.log('therapistCalendarScopeAndAnnouncements.regression.test.mjs: ok');
