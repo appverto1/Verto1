@@ -32,7 +32,7 @@ function dbMock(data:any=null) {
  const tables:string[]=[];
  const query=()=>({
   select(){return this;},eq(key:string,value:unknown){filters.push([key,value]);return this;},
-  order(){return this;},limit(){return this;},in(){return this;},
+  order(){return this;},limit(){return this;},in(){return this;},range(){return this;},gte(){return this;},lte(){return this;},overlaps(){return this;},
   async maybeSingle(){return {data,error:null};},
   then(resolve:any,reject?:any){return Promise.resolve({data,error:null,count:0}).then(resolve,reject);}
  });
@@ -123,6 +123,7 @@ function dbMock(data:any=null) {
   isOptionalTissPreGuideColumn:()=>false,extractMissingColumnName:()=>null
  }));
  const res=response();await handler(request(),res);
- assert.equal(res.statusCode,500,'unexpected mock query shape should not falsely report success');
+ assert.equal(res.statusCode,200,'TISS pre-guide list returns a successful scoped page');
+ assert.ok(db.filters.some(([key,value])=>key==='organization_id'&&value===OTHER),'TISS pre-guide list uses currentClinicId for tenant scope');
 }
 console.log('PASS: 8 TISS/payer handler scenarios (clinic isolation, denial, invalid IDs, session identity, invalid period).');
