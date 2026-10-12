@@ -1,0 +1,61 @@
+name: One-shot guarded TISS/payer read extraction
+
+on:
+  push:
+    branches:
+      - refactor/backend-tiss-payer-read-batch-20261012
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-tiss-payer-read-extraction
+  cancel-in-progress: false
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout isolated feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Guard original source and branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/refactor/backend-tiss-payer-read-batch-20261012"
+          test "$(git hash-object server.ts)" = "ec019c5b9a6e88bc5ae9fb10081442ed88a17e4d"
+          test ! -e services/tissPayerReadHandlers.ts
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install exact dependencies
+        run: npm ci
+      - name: Extract 20 original handlers and verify byte reconstruction
+        run: node scripts/one-shot-tiss-payer-extract.mjs
+      - name: Verify exact route/AST equivalence and tenant regression scenarios
+        run: |
+          node tests/tissPayerReadHandlersSourceParity.test.mjs
+          node --import tsx tests/tissPayerReadHandlers.test.ts
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Production frontend build
+        run: npm run build
+      - name: Guard changed paths and publish feature branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -- scripts/one-shot-tiss-payer-extract.mjs
+          git add -- server.ts services/tissPayerReadHandlers.ts docs/backend-modularization/20261012-tiss-payer-read-batch-manifest.json docs/backend-modularization/20261012-tiss-payer-read-batch.md tests/tissPayerReadHandlersSourceParity.test.mjs tests/tissPayerReadHandlers.test.ts scripts/backend-modularization-batch01-regressions.mjs
+          git diff --cached --check
+          git diff --cached --name-only > "$RUNNER_TEMP/tiss-paths.txt"
+          cat "$RUNNER_TEMP/tiss-paths.txt"
+          node -e "const fs=require('fs');const allowed=new Set(['server.ts','services/tissPayerReadHandlers.ts','docs/backend-modularization/20261012-tiss-payer-read-batch-manifest.json','docs/backend-modularization/20261012-tiss-payer-read-batch.md','tests/tissPayerReadHandlersSourceParity.test.mjs','tests/tissPayerReadHandlers.test.ts','scripts/backend-modularization-batch01-regressions.mjs','scripts/one-shot-tiss-payer-extract.mjs']);const bad=fs.readFileSync(process.env.RUNNER_TEMP+'/tiss-paths.txt','utf8').trim().split('\n').filter(p=>p&&!allowed.has(p));if(bad.length){console.error(bad);process.exit(1)}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor(backend): extract twenty TISS and payer GET handlers with AST parity"
+          git push origin "HEAD:refs/heads/refactor/backend-tiss-payer-read-batch-20261012"
