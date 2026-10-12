@@ -1,0 +1,12 @@
+# Disabled recovery bootstrap — technical checkpoint (2026-10-12)
+
+- State: **BLOCKED — extraction not applied**. No route, auth, response, middleware, DB or deployment change was persisted.
+- Starting point: `staging` commit `5fc564ba5b11bef1f21b56e4f81fd6c43e587f60`, `server.ts` blob `aa914fac455bbd82fab898843cdee795acccf33a` (101,730 lines; 4,738,955 Git object bytes). The branch originated at the same commit.
+- Target: `POST /api/auth/password/recovery/bootstrap` at original line 29,835; fixed HTTP 410 JSON response; next route `POST /api/auth/password/recovery/email/request` starts at original line 29,843. No dependency injection or DB changes needed.
+- Proposed isolated edit (not persisted): import `disabledPasswordRecoveryBootstrapHandler` from `services/disabledPasswordRecoveryBootstrapHandler.ts`; keep `app.post('/api/auth/password/recovery/bootstrap', handler)` in the original route order, preserving its path for source-contract tests. New module returns the unchanged 410 JSON with `success:false` and the unchanged Portuguese message.
+- In-memory static tests **passed**: unique source/import anchors, original JSON/status anchors, route ordering, absence of duplicate route, byte-exact round-trip (rewritten source reversed back to the exact original), predicted `server.ts` lines 101,730 → 101,725.
+- Actual write **failed**: GitHub Git Data `create_blob` rejected the 4.7 MB replacement payload with `h2 protocol error: error reading a body from connection`. A previous attempt through GitHub contents update also failed with HTTP/2. This is a tooling/transport blocker, not a failing software test.
+- Runtime tests, `tsc`, build, lint and deploy: **not run**. No PR or merge; no contact with production. Do **not** mark the slice as extracted or count it toward progress.
+- Branch: `refactor/backend-disabled-recovery-bootstrap-20261012`. This checkpoint alone may be committed, but is not an extraction or PR candidate.
+- Next: use an authorized GitHub writer or checked-out working copy capable of modifying and committing `server.ts`; re-check the exact staging SHA before applying. Then add targeted HTTP 410 regression, run `tsx`/typecheck/build and CI, review diff, and open one PR targeting `staging`. If the baseline changed, abandon the obsolete anchors and re-inspect. Do not bypass write restrictions.
+- Adjacent open PRs reviewed (as of this attempt): #395, #394, #393, #392, #388–#369; none is this route's extraction. Avoid their patches when selecting future slices.
