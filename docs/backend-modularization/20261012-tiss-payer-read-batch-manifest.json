@@ -1,0 +1,386 @@
+{
+  "baseCommit": "5c871886748de10185567193d3391b827c77b908",
+  "originalGitBlob": "ec019c5b9a6e88bc5ae9fb10081442ed88a17e4d",
+  "originalLines": 100113,
+  "expectedServerLines": 99382,
+  "module": "services/tissPayerReadHandlers.ts",
+  "routes": [
+    {
+      "method": "get",
+      "path": "/api/admin/tiss/provider-profile",
+      "factory": "createTissProviderProfileReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "payerSafeError",
+        "fetchTissPreGuideProfile",
+        "CLINIC_TISS_PROFILE_SELECT",
+        "sendNoStoreJson"
+      ],
+      "sourceLines": 11
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/tiss/payer-profiles/:payerId",
+      "factory": "createTissPayerProfileReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "payerSafeError",
+        "fetchTissPreGuideProfile",
+        "PAYER_TISS_PROFILE_SELECT",
+        "fetchPayerForAdmin",
+        "sendNoStoreJson"
+      ],
+      "sourceLines": 13
+    },
+    {
+      "method": "get",
+      "path": "/api/patients/tiss-authorizations",
+      "factory": "createPatientTissAuthorizationsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "sanitizeTextField",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "PATIENT_PAYER_AUTHORIZATION_SELECT",
+        "canAccessPatientBillingInCurrentClinic",
+        "fetchPayerForAdmin",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "hydratePatientPayerAuthorizations"
+      ],
+      "sourceLines": 44
+    },
+    {
+      "method": "get",
+      "path": "/api/patients/:patientId/tiss-authorizations",
+      "factory": "createPatientTissAuthorizationReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "sanitizeTextField",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "PATIENT_PAYER_AUTHORIZATION_SELECT",
+        "canAccessPatientBillingInCurrentClinic",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "hydratePatientPayerAuthorizations"
+      ],
+      "sourceLines": 33
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/professional-profile/me",
+      "factory": "createTissOwnProfessionalProfileReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "payerSafeError",
+        "fetchTissPreGuideProfile",
+        "sendNoStoreJson",
+        "PROFESSIONAL_BILLING_PROFILE_SELECT"
+      ],
+      "sourceLines": 18
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/tiss/professional-profiles",
+      "factory": "createTissProfessionalProfilesReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "PROFESSIONAL_BILLING_PROFILE_SELECT"
+      ],
+      "sourceLines": 23
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/tiss/professional-profiles/:professionalId",
+      "factory": "createTissProfessionalProfileReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "payerSafeError",
+        "fetchTissPreGuideProfile",
+        "sendNoStoreJson",
+        "PROFESSIONAL_BILLING_PROFILE_SELECT",
+        "assertProfessionalBillingProfileScope"
+      ],
+      "sourceLines": 14
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/pre-guides",
+      "factory": "createTissPreGuidesReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "tissPreGuideQuickFilterCodes",
+        "APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT",
+        "APPOINTMENT_TISS_PRE_GUIDE_LIST_BASE_SELECT",
+        "extractMissingColumnName",
+        "isOptionalTissPreGuideColumn",
+        "serializeTissPreGuide"
+      ],
+      "sourceLines": 89
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/official-documents",
+      "factory": "createTissOfficialDocumentsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "sanitizeTextField",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "TISS_OFFICIAL_DOCUMENT_SELECT",
+        "TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT",
+        "serializeTissOfficialDocument",
+        "serializeTissOfficialTracking",
+        "normalizeNonNegativeCents",
+        "normalizeTissXmlCompetenceMonth"
+      ],
+      "sourceLines": 70
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/official-documents/tracking",
+      "factory": "createTissDocumentTrackingListReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "TISS_OFFICIAL_DOCUMENT_TRACKING_SELECT",
+        "OFFICIAL_XML_TRACKING_STATUSES",
+        "serializeTissOfficialTracking"
+      ],
+      "sourceLines": 34
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/xml-drafts",
+      "factory": "createTissXmlDraftsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "TISS_XML_DRAFT_SELECT",
+        "normalizeTissXmlCompetenceMonth",
+        "serializeTissXmlDraft"
+      ],
+      "sourceLines": 36
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/xml-drafts/:draftId",
+      "factory": "createTissXmlDraftReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "TISS_XML_DRAFT_DETAIL_SELECT",
+        "serializeTissXmlDraft"
+      ],
+      "sourceLines": 22
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/revenue-cycle/events",
+      "factory": "createTissRevenueEventsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "TISS_REVENUE_CYCLE_EVENT_SELECT",
+        "serializeTissRevenueCycleEvent"
+      ],
+      "sourceLines": 35
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/billing-batch-drafts",
+      "factory": "createTissBillingBatchDraftsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "TISS_BILLING_BATCH_DRAFT_SELECT",
+        "normalizeTissXmlCompetenceMonth",
+        "serializeTissBillingBatchDraft"
+      ],
+      "sourceLines": 38
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/billing-batch-drafts/:batchId",
+      "factory": "createTissBillingBatchDraftReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "TISS_BILLING_BATCH_DRAFT_SELECT",
+        "serializeTissBillingBatchDraft"
+      ],
+      "sourceLines": 22
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/pre-guides/coverage",
+      "factory": "createTissPreGuidesCoverageReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "sanitizeTextField",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "parseBoundedListLimit",
+        "parseClosureDateRange",
+        "fetchClosurePeriodAppointmentRows",
+        "loadOrganizationRowsByAppointmentIds",
+        "APPOINTMENT_BILLING_CONTEXT_SELECT",
+        "mergeBillingContextMetadata",
+        "resolveTissPreGuideEligibilityContextsInBatch",
+        "evaluateTissPreGuideEligibility"
+      ],
+      "sourceLines": 136
+    },
+    {
+      "method": "get",
+      "path": "/api/tiss/pre-guides/:appointmentId",
+      "factory": "createTissPreGuideReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "isMissingRelationError",
+        "sendNoStoreJson",
+        "APPOINTMENT_TISS_PRE_GUIDE_SELECT",
+        "APPOINTMENT_TISS_PRE_GUIDE_BASE_SELECT",
+        "extractMissingColumnName",
+        "isOptionalTissPreGuideColumn",
+        "serializeTissPreGuide"
+      ],
+      "sourceLines": 33
+    },
+    {
+      "method": "get",
+      "path": "/api/payer-options",
+      "factory": "createPayerOptionsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "hasMissingFinancialSchema",
+        "parseBoundedListLimit",
+        "normalizePayerType"
+      ],
+      "sourceLines": 33
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/payers",
+      "factory": "createAdminPayersReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "isUuid",
+        "supabase",
+        "payerSafeError",
+        "hasMissingFinancialSchema",
+        "parseBoundedListLimit",
+        "CLINIC_PAYER_SELECT",
+        "serializePayer"
+      ],
+      "sourceLines": 25
+    },
+    {
+      "method": "get",
+      "path": "/api/admin/payers/:payerId/requirements",
+      "factory": "createAdminPayerRequirementsReadHandler",
+      "dependencies": [
+        "currentClinicId",
+        "sanitizeString",
+        "supabase",
+        "payerSafeError",
+        "fetchPayerForAdmin",
+        "hasMissingFinancialSchema",
+        "serializePayer",
+        "CLINIC_PAYER_REQUIREMENT_SELECT",
+        "serializePayerRequirement"
+      ],
+      "sourceLines": 23
+    }
+  ]
+}
