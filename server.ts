@@ -36,6 +36,7 @@ import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/st
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
 import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
+import { createHealthRouteHandler } from './services/healthRouteHandler';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
 import { startAppointmentNoShowCron } from './services/appointmentNoShowService';
@@ -28641,10 +28642,7 @@ async function startServer() {
   // Security hardening:
   // - Production must not expose internal env/integration details.
   // - Detailed diagnostics are available only outside production.
-  app.get('/api/health', async (_req, res) => {
-    const release = deploymentReleaseId();
-    return res.json(cleanObject({ status: 'ok', release }));
-  });
+  app.get('/api/health', createHealthRouteHandler({ deploymentReleaseId, cleanObject }));
 
   app.get('/api/ready', async (_req, res) => {
     const release = deploymentReleaseId();
