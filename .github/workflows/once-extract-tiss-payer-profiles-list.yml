@@ -1,0 +1,49 @@
+name: One-time TISS payer profiles read extraction
+on:
+  push:
+    branches:
+      - refactor/backend-tiss-payer-profiles-read-20261012
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-time-tiss-payer-profiles-read
+  cancel-in-progress: false
+
+jobs:
+  extract-and-validate:
+    if: github.repository == 'appverto1/Verto1' && github.ref == 'refs/heads/refactor/backend-tiss-payer-profiles-read-20261012'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Verify baseline and extract one TISS GET route
+        run: |
+          git fetch --no-tags origin staging:refs/remotes/origin/staging
+          node scripts/.once-extract-tiss-payer-profiles-list.mjs
+      - name: Install dependencies
+        run: npm ci
+      - name: Focused TISS payer profile list HTTP regression
+        run: node --import tsx tests/tissPayerProfilesListRoute.test.ts
+      - name: Isolated service TypeScript validation
+        run: npx tsc --noEmit --skipLibCheck --esModuleInterop --target ES2022 --module ESNext --moduleResolution bundler services/tissPayerProfilesListRoute.ts
+      - name: Production bundle build without deployment
+        run: npm run build
+      - name: Remove privileged one-use writer, inspect diff, and publish feature branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -- scripts/.once-extract-tiss-payer-profiles-list.mjs .github/workflows/once-extract-tiss-payer-profiles-list.yml
+          git add -- server.ts
+          git diff --cached --check
+          git diff --cached --stat
+          git -c user.name='Verto Backend Modularization' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'refactor(backend): extract TISS payer profiles list GET route'
+          git push origin HEAD:refs/heads/refactor/backend-tiss-payer-profiles-read-20261012
