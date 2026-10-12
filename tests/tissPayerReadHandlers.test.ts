@@ -67,7 +67,7 @@ function dbMock(data:any=null) {
  }));
  const res=response();await handler(request({params:{patientId:VALID}}),res);
  assert.equal(res.statusCode,404);
- assert.deepEqual(db.filters,[['organization_id',CLINIC],['patient_id',VALID]],'query is scoped to active clinic');
+ assert.equal(db.tables.length,0,'denied patient access must short-circuit before any DB query');
 }
 {
  let recorded:any=null;
