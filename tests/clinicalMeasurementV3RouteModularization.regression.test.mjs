@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const entrypoint = readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
 const planRoutes = readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8');
 const catalogRoutes = readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8');
+const targetCatalogRoutes = readFileSync('services/clinicalMeasurementV3TargetCatalogRoutes.ts', 'utf8');
 const shared = readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
 
@@ -16,7 +17,9 @@ assert.match(planRoutes, /\/api\/clinical-measurement-v3\/patients\/:patientId\/
 assert.match(planRoutes, /\/api\/clinical-measurement-v3\/patients\/:patientId\/plan-outcomes/);
 assert.doesNotMatch(planRoutes, /\/catalog|\/targets\/:targetId\/view/);
 
-assert.match(catalogRoutes, /\/api\/clinical-measurement-v3\/patients\/:patientId\/catalog/);
+assert.match(catalogRoutes, /registerClinicalMeasurementV3TargetCatalogRoutes\(app, deps\)/);
+assert.match(targetCatalogRoutes, /\/api\/clinical-measurement-v3\/patients\/:patientId\/catalog/);
+assert.doesNotMatch(catalogRoutes, /app\.get\('\/api\/clinical-measurement-v3\/patients\/:patientId\/catalog/);
 assert.match(catalogRoutes, /\/api\/clinical-measurement-v3\/patients\/:patientId\/targets\/:targetId\/view/);
 assert.doesNotMatch(catalogRoutes, /\/plan-measurements|\/plan-outcomes/);
 

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { Express } from 'express';
+import { payloadHash } from './schoolPayloadHash';
 import { filterPatientFilesForActor } from '../src/utils/patientFileAccess';
 import { createSchoolErrorResponse } from './schoolErrorResponse';
 
@@ -16,15 +17,6 @@ type SchoolRouteDeps = {
 };
 
 
-const stableValue = (value: any): any => {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') return Object.keys(value).sort().reduce((acc: any, key) => {
-    if (value[key] !== undefined) acc[key] = stableValue(value[key]);
-    return acc;
-  }, {});
-  return value;
-};
-const payloadHash = (payload: any) => crypto.createHash('sha256').update(JSON.stringify(stableValue(payload))).digest('hex');
 const safeIdempotencyKey = (value: any) => String(value || '').trim().slice(0, 180);
 const safeArray = (value: any) => Array.isArray(value) ? value : [];
 const uniq = (values: any[]) => Array.from(new Set(values.map(String).filter(Boolean)));

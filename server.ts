@@ -1,3 +1,4 @@
+import { createReadyRouteHandler } from './services/readyRouteHandler';
 import express from 'express';
 import { registerTissPayerProfilesListRoute } from './services/tissPayerProfilesListRoute';
 import { registerTussMappingRoutes } from './services/tussMappingRoutes';
@@ -28645,55 +28646,16 @@ async function startServer() {
   // - Detailed diagnostics are available only outside production.
   app.get('/api/health', createHealthRouteHandler({ deploymentReleaseId, cleanObject }));
 
-  app.get('/api/ready', async (_req, res) => {
-    const release = deploymentReleaseId();
-    const checks = {
-      supabase: false,
-      otpStorage: false,
-      sessionStore: !isProd,
-      distributedRuntimeState: !requiresDistributedRuntimeState()
-    };
-
-    try {
-      const { error } = await supabase
-        .from('users')
-        .select('id')
-        .limit(1);
-      checks.supabase = !error;
-    } catch {
-      checks.supabase = false;
-    }
-
-    try {
-      checks.otpStorage = await ensureOtpTableAvailability(true);
-    } catch {
-      checks.otpStorage = false;
-    }
-
-    if (sessionPool) {
-      try {
-        await sessionPool.query('select 1');
-        checks.sessionStore = true;
-      } catch {
-        checks.sessionStore = false;
-      }
-    }
-
-    if (requiresDistributedRuntimeState()) {
-      try {
-        checks.distributedRuntimeState = await checkDistributedRuntimeState(supabase);
-      } catch {
-        checks.distributedRuntimeState = false;
-      }
-    }
-
-    const ready = checks.supabase && checks.otpStorage && checks.sessionStore && checks.distributedRuntimeState;
-    return res.status(ready ? 200 : 503).json(cleanObject({
-      status: ready ? 'ready' : 'not_ready',
-      release,
-      ...(isProd ? {} : { checks })
-    }));
-  });
+  app.get('/api/ready', createReadyRouteHandler(() => ({
+    deploymentReleaseId,
+    supabase,
+    ensureOtpTableAvailability,
+    sessionPool,
+    requiresDistributedRuntimeState,
+    checkDistributedRuntimeState,
+    isProd,
+    cleanObject,
+  })));
 
   app.get('/api/health/details', async (_req, res) => {
     if (isProd) {

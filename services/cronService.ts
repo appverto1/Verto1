@@ -22,6 +22,7 @@ import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment,
 import { createClinicAnnouncementCronService } from './clinicAnnouncementCronService';
 import { createAppointmentReminderBrandingService } from './appointmentReminderBranding';
 import { validateClaimedAppointmentReminder } from './appointmentReminderJobGuards';
+import { parseReminderSourcePayload } from './reminderSourcePayload';
 export type { ClinicAnnouncementDispatchSummary } from './clinicAnnouncementCronService';
 
 dayjs.extend(utc);
@@ -119,17 +120,6 @@ const sanitizeEmail = (value: unknown) => {
   return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
 };
 
-const parseReminderSourcePayload = (value: unknown): Record<string, any> => {
-  if (!value) return {};
-  if (typeof value === 'object') return value as Record<string, any>;
-  if (typeof value !== 'string') return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
 
 const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
 
