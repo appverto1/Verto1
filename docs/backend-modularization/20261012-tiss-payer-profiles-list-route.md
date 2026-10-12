@@ -6,5 +6,7 @@
 - Files: `server.ts`, `services/tissPayerProfilesListRoute.ts`, `tests/tissPayerProfilesListRoute.test.ts`, this document. Expected entrypoint lines: 101730 → 101710 (−20).
 - Safety: unique original route anchor; guarded baseline `server.ts` blob; exact copied route body; byte-exact round-trip back to baseline. Checks fail closed if staging drifts.
 - Targeted HTTP test covers missing auth, module denial, capability denial, invalid clinic ID, two clinic-scoped queries (forged client header ignored), optional column fallback, missing table and expected 500. All DB activity is in-memory mocked; no live DB or real tenant used.
-- Branch: `refactor/backend-tiss-payer-profiles-read-20261012`; pending actual commit/PR result and CI verification. No merge or deployment authorized.
+- Feature branch: `refactor/backend-tiss-payer-profiles-read-20261012`; guarded extractor implementation commit `773e7a54a72781f5d32d5aa1da3ba5800f223117`; [PR #395](https://github.com/appverto1/Verto1/pull/395) **opened against staging**.
+- Verified Node 20 [one-use writer run #38198582772](https://github.com/appverto1/Verto1/actions/runs/38198582772): **success** on unique-route/original blob/byte-equivalence check, `npm ci`, targeted HTTP regressions, isolated TypeScript `tsc`, `npm run build`, diff inspection, one-use writer/workflow cleanup and branch-only commit/push. Effective PR file set is exactly the four listed files.
+- Full staging PR CI/typecheck ratchet pending verification; merge **not performed**, deployment **not performed**. Staging baseline remains unchanged at this checkpoint. Recheck before merging.
 - Next: choose a separate non-overlapping TISS read endpoint, only after re-inspecting staging/PRs and checkpoint. Do not repeat this extraction.
