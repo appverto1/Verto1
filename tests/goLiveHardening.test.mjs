@@ -44,7 +44,18 @@ for (const route of [
   assert.match(routeBoundary, /checkAuth/);
   assert.match(routeBoundary, /requireClinicModule\('insurance_tiss'\)/);
   assert.doesNotMatch(routeBoundary, /session\.billing_evidence\.generate|session\.start|requireAnyClinicCapability/);
-  assert.match(routeBoundary, /req\.session\.user\?\.id/);
+  if (route.includes("app.get(")) {
+    assert.match(routeBoundary, /createTissOwnProfessionalProfileReadHandler/);
+    const movedProfileRead = read('services/tissPayerReadHandlers.ts');
+    const start = movedProfileRead.indexOf('export function createTissOwnProfessionalProfileReadHandler');
+    const end = movedProfileRead.indexOf('// GET ', start + 1);
+    assert.ok(start >= 0, 'GET factory de perfil profissional precisa existir');
+    const handlerSource = movedProfileRead.slice(start, end < 0 ? undefined : end);
+    assert.match(handlerSource, /req\.session\.user\?\.id/, 'GET deve continuar limitado à identidade da sessão');
+    assert.match(handlerSource, /currentClinicId\(req\.session\.user\)/, 'GET deve continuar limitado à clínica ativa');
+  } else {
+    assert.match(routeBoundary, /req\.session\.user\?\.id/, 'PATCH continua usando usuário da sessão');
+  }
 }
 
 
