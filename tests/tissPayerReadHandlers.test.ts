@@ -120,7 +120,7 @@ function dbMock(data:any=null) {
   payerSafeError,sendNoStoreJson,supabase:db,
   APPOINTMENT_TISS_PRE_GUIDE_LIST_SELECT:'id',APPOINTMENT_TISS_PRE_GUIDE_LIST_BASE_SELECT:'id',
   tissPreGuideQuickFilterCodes:{},hasMissingFinancialSchema:()=>false,isMissingRelationError:()=>false,
-  isOptionalTissPreGuideColumn:()=>false,extractMissingColumnName:()=>null
+  isOptionalTissPreGuideColumn:()=>false,extractMissingColumnName:()=>null,serializeTissPreGuide:(row:any)=>row
  }));
  const res=response();await handler(request(),res);
  assert.equal(res.statusCode,200,'TISS pre-guide list returns a successful scoped page');
