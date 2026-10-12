@@ -1,0 +1,22 @@
+name: Scoped one-shot ABA drain status extraction
+on:
+  push:
+    branches: [refactor/backend-aba-drain-status-20261011]
+permissions:
+  contents: write
+concurrency:
+  group: verto-aba-drain-one-shot
+  cancel-in-progress: false
+jobs:
+  scoped-extraction:
+    if: github.ref == 'refs/heads/refactor/backend-aba-drain-status-20261011'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: node scripts/one-shot-aba-drain-status.mjs
