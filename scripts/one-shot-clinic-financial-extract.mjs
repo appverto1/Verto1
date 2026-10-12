@@ -84,9 +84,10 @@ const docs=[
 '',
 ];
 fs.writeFileSync(docsPath,docs.join('\n'));
-const ciPath='.github/workflows/staging-ci.yml';
-const ci=fs.readFileSync(ciPath,'utf8');
-const anchor='      - name: Verto pre-main regression ratchet';
-assert.equal(ci.split(anchor).length,2,'unique CI anchor');
-fs.writeFileSync(ciPath,ci.replace(anchor,'      - name: Financial read handler extraction parity and tenant checks\n        run: |\n          node tests/clinicFinancialReadHandlersSourceParity.test.mjs\n          node --import tsx tests/clinicFinancialReadHandlers.test.ts\n\n'+anchor));
+const runnerPath='scripts/backend-modularization-batch01-regressions.mjs';
+const runner=fs.readFileSync(runnerPath,'utf8');
+const runnerAnchor="  'tests/reminderClinicLogoAssets.test.ts',";
+assert.equal(runner.split(runnerAnchor).length,2,'existing deterministic CI runner changed');
+fs.writeFileSync(runnerPath,runner.replace(runnerAnchor,
+  runnerAnchor+"\n  'tests/clinicFinancialReadHandlersSourceParity.test.mjs',\n  'tests/clinicFinancialReadHandlers.test.ts',"));
 console.log('Extracted 10 exact GET handlers, source line delta −519, byte-reconstruction PASS.');
