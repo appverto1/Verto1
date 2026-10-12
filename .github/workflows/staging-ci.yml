@@ -110,6 +110,20 @@ jobs:
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
 
+      - name: Backend modularization batch 01 regression tests
+        run: node scripts/backend-modularization-batch01-regressions.mjs
+
+      - name: Server readiness extraction regression tests
+        run: |
+          node --import tsx tests/serverReadyRouteHandler.test.ts
+          node tests/serverReadyRouteExtraction.regression.test.mjs
+
+      - name: Clinic access and work schedule batch 02 regressions
+        run: |
+          node tests/serverRouteBatch02.regression.test.mjs
+          node tests/serverRouteBatch02SourceParity.test.mjs
+          node --import tsx tests/clinicRouteBatch02Handlers.test.ts
+
       - name: Verto pre-main regression ratchet
         shell: bash
         env:

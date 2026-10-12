@@ -1,4 +1,11 @@
 import crypto from 'crypto';
+import {
+  sanitizeText,
+  normalizePushSubscription,
+  type PushSubscriptionInput,
+  type NormalizedPushSubscription,
+} from './pushSubscriptionNormalization';
+export { normalizePushSubscription };
 import webpush from 'web-push';
 import {
   buildPatientReminderNotificationPayload,
@@ -8,22 +15,6 @@ import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
 import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 
 type Logger = Pick<Console, 'log' | 'warn' | 'error'>;
-
-type PushSubscriptionInput = {
-  endpoint?: string;
-  keys?: {
-    p256dh?: string;
-    auth?: string;
-  };
-};
-
-type NormalizedPushSubscription = {
-  endpoint: string;
-  keys: {
-    p256dh: string;
-    auth: string;
-  };
-};
 
 export type AppointmentPushSubscriptionEntry = {
   row: any;
@@ -99,9 +90,6 @@ type SendAppointmentNotificationParams = {
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const sanitizeText = (value: unknown, maxLength = 240) =>
-  String(value ?? '').trim().slice(0, maxLength);
 
 const sanitizeBrandLogoText = (value: unknown) => {
   const text = String(value ?? '').trim();
@@ -179,34 +167,6 @@ const hashPushRenewalToken = (value: unknown) => {
 };
 
 const createPushRenewalToken = () => crypto.randomBytes(32).toString('base64url');
-
-const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
-  if (!value) return null;
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof value === 'object') return value;
-  return null;
-};
-
-export const normalizePushSubscription = (rowOrSubscription: any): NormalizedPushSubscription | null => {
-  if (rowOrSubscription?.invalidated_at) return null;
-  const direct = safeJsonSubscription(rowOrSubscription);
-  const embedded = safeJsonSubscription(rowOrSubscription?.subscription);
-  const source = embedded || direct || {};
-  const endpoint = sanitizeText(source?.endpoint || rowOrSubscription?.endpoint, 2000);
-  const p256dh = sanitizeText(source?.keys?.p256dh || rowOrSubscription?.p256dh, 2000);
-  const auth = sanitizeText(source?.keys?.auth || rowOrSubscription?.auth, 2000);
-  if (!endpoint || !p256dh || !auth) return null;
-  return {
-    endpoint,
-    keys: { p256dh, auth }
-  };
-};
 
 export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams): Promise<string[]> {
   const ids = new Set<string>();
