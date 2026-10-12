@@ -76,6 +76,8 @@ jobs:
           set -euo pipefail
           git rm -- scripts/one-shot-clinic-financial-extract.mjs .github/workflows/one-shot-clinic-financial-extract.yml
           git add -- server.ts services/clinicFinancialReadHandlers.ts docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json docs/backend-modularization/20261012-clinic-financial-read-batch.md tests/clinicFinancialReadHandlersSourceParity.test.mjs tests/clinicFinancialReadHandlers.test.ts .github/workflows/staging-ci.yml
+          sed -i 's/[[:blank:]]*$//' services/clinicFinancialReadHandlers.ts
+          git add -- services/clinicFinancialReadHandlers.ts
           git diff --cached --check
           git diff --cached --name-only > "$RUNNER_TEMP/changed.txt"
           cat "$RUNNER_TEMP/changed.txt"
