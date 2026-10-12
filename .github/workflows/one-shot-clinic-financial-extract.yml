@@ -1,0 +1,86 @@
+name: One-shot verified clinic financial handler extraction
+
+on:
+  push:
+    branches:
+      - refactor/backend-financial-read-batch-20261012
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-financial-read-extraction
+  cancel-in-progress: false
+
+jobs:
+  guarded-extraction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout isolated feature branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate branch and original source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/refactor/backend-financial-read-batch-20261012"
+          test "$(git hash-object server.ts)" = "10a3505c621159e8b51242836a5d9a280fa54a95"
+          test ! -e services/clinicFinancialReadHandlers.ts
+
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Extract original source with byte-exact safety guard
+        run: node scripts/one-shot-clinic-financial-extract.mjs
+
+      - name: AST route and tenant HTTP regressions
+        run: |
+          node tests/clinicFinancialReadHandlersSourceParity.test.mjs
+          node --import tsx tests/clinicFinancialReadHandlers.test.ts
+
+      - name: Production build
+        run: npm run build
+
+      - name: Guard TypeScript diagnostics against original staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          npm run typecheck > "$RUNNER_TEMP/typecheck-new.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/typecheck-new.log"
+          if [ "$result" -ne 0 ]; then
+            git worktree add --detach "$RUNNER_TEMP/typecheck-original" 8556cb75276323e5f316cab358714ceab64ead3b
+            (
+              cd "$RUNNER_TEMP/typecheck-original"
+              npm ci --prefer-offline --no-audit
+              npm run typecheck > "$RUNNER_TEMP/typecheck-original.log" 2>&1 || true
+            )
+            node scripts/typecheck-ratchet.mjs --candidate "$RUNNER_TEMP/typecheck-new.log" --baseline "$RUNNER_TEMP/typecheck-original.log" --output "$RUNNER_TEMP/typecheck-added.log"
+            test ! -s "$RUNNER_TEMP/typecheck-added.log" || { cat "$RUNNER_TEMP/typecheck-added.log"; exit 1; }
+          fi
+
+      - name: Verify only expected files and publish branch-only commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -- scripts/one-shot-clinic-financial-extract.mjs .github/workflows/one-shot-clinic-financial-extract.yml
+          git add -- server.ts services/clinicFinancialReadHandlers.ts docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json docs/backend-modularization/20261012-clinic-financial-read-batch.md tests/clinicFinancialReadHandlersSourceParity.test.mjs tests/clinicFinancialReadHandlers.test.ts .github/workflows/staging-ci.yml
+          git diff --cached --check
+          git diff --cached --name-only > "$RUNNER_TEMP/changed.txt"
+          cat "$RUNNER_TEMP/changed.txt"
+          node -e "const fs=require('fs'); const allowed=new Set(['server.ts','services/clinicFinancialReadHandlers.ts','docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json','docs/backend-modularization/20261012-clinic-financial-read-batch.md','tests/clinicFinancialReadHandlersSourceParity.test.mjs','tests/clinicFinancialReadHandlers.test.ts','.github/workflows/staging-ci.yml','scripts/one-shot-clinic-financial-extract.mjs','.github/workflows/one-shot-clinic-financial-extract.yml']);const bad=fs.readFileSync(process.env.RUNNER_TEMP+'/changed.txt','utf8').trim().split('\n').filter(p=>p&&!allowed.has(p));if(bad.length){console.error(bad);process.exit(1)}}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor(backend): extract ten financial GET handlers with regression guards"
+          git push origin "HEAD:refs/heads/refactor/backend-financial-read-batch-20261012"
