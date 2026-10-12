@@ -183,6 +183,7 @@ const criticalTests = [
   'tests/goLiveHardening.test.mjs',
   'tests/distributedSessionSafety.regression.test.mjs',
   'tests/productionSessionPersistence.regression.test.mjs',
+  'tests/abaV3DrainStatusHandler.test.ts',
   'tests/backgroundWorkerEconomyMode.test.ts',
   'tests/supabaseSchemaSelectGuard.test.ts',
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',
