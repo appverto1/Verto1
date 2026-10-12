@@ -51,14 +51,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm -- scripts/one-shot-clinic-financial-extract.mjs .github/workflows/one-shot-clinic-financial-extract.yml
-          git add -- server.ts services/clinicFinancialReadHandlers.ts docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json docs/backend-modularization/20261012-clinic-financial-read-batch.md tests/clinicFinancialReadHandlersSourceParity.test.mjs tests/clinicFinancialReadHandlers.test.ts .github/workflows/staging-ci.yml
+          git rm -- scripts/one-shot-clinic-financial-extract.mjs
+          git add -- server.ts services/clinicFinancialReadHandlers.ts docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json docs/backend-modularization/20261012-clinic-financial-read-batch.md tests/clinicFinancialReadHandlersSourceParity.test.mjs tests/clinicFinancialReadHandlers.test.ts scripts/backend-modularization-batch01-regressions.mjs
           sed -i 's/[[:blank:]]*$//' services/clinicFinancialReadHandlers.ts
           git add -- services/clinicFinancialReadHandlers.ts
           git diff --cached --check
           git diff --cached --name-only > "$RUNNER_TEMP/changed.txt"
           cat "$RUNNER_TEMP/changed.txt"
-          node -e "const fs=require('fs'); const allowed=new Set(['server.ts','services/clinicFinancialReadHandlers.ts','docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json','docs/backend-modularization/20261012-clinic-financial-read-batch.md','tests/clinicFinancialReadHandlersSourceParity.test.mjs','tests/clinicFinancialReadHandlers.test.ts','.github/workflows/staging-ci.yml','scripts/one-shot-clinic-financial-extract.mjs','.github/workflows/one-shot-clinic-financial-extract.yml']);const bad=fs.readFileSync(process.env.RUNNER_TEMP+'/changed.txt','utf8').trim().split('\n').filter(p=>p&&!allowed.has(p));if(bad.length){console.error(bad);process.exit(1)}"
+          node -e "const fs=require('fs'); const allowed=new Set(['server.ts','services/clinicFinancialReadHandlers.ts','docs/backend-modularization/20261012-clinic-financial-read-batch-manifest.json','docs/backend-modularization/20261012-clinic-financial-read-batch.md','tests/clinicFinancialReadHandlersSourceParity.test.mjs','tests/clinicFinancialReadHandlers.test.ts','scripts/backend-modularization-batch01-regressions.mjs','scripts/one-shot-clinic-financial-extract.mjs','.github/workflows/one-shot-clinic-financial-extract.yml']);const bad=fs.readFileSync(process.env.RUNNER_TEMP+'/changed.txt','utf8').trim().split('\n').filter(p=>p&&!allowed.has(p));if(bad.length){console.error(bad);process.exit(1)}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "refactor(backend): extract ten financial GET handlers with regression guards"
