@@ -37,9 +37,9 @@ const mocks:any={
  await fn({session:{user:{role:'responsible',id:'actor'}}},r);
  assert.equal(r.code,200);assert.deepEqual(r.payload,{success:true,data:[]});assert.equal(dbCalls,0);
 }
-for(const fn of [createPortalAppointmentDetailHandler,createPortalRescheduleSlotsHandler]){
+for(const factory of [createPortalAppointmentDetailHandler,createPortalRescheduleSlotsHandler]){
+ const fn=factory(()=>mocks);
  const r=responder();await fn({params:{appointmentId:'foreign'},session:{user:{id:'actor'}}},r);
- console.log('DEBUG',fn.name,JSON.stringify({code:r.code,payload:r.payload}));
  assert.equal(r.code,404);assert.equal(r.payload.error,'PORTAL_ERROR_404');assert.equal(dbCalls,0);
 }
 {
