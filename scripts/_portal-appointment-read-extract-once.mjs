@@ -135,6 +135,7 @@ assert.ok(updated.split('\n').length < source.split('\n').length-250, 'insuffici
 assert.ok(moduleText.includes('const scopedNotificationAppointmentIds = Array.from(new Set('), 'expected original notification ID set');
 moduleText = moduleText.replace('const scopedNotificationAppointmentIds = Array.from(new Set(', 'const scopedNotificationAppointmentIds = Array.from(new Set<string>(');
 // The <string> parameter is erased by TypeScript, restoring the original server.ts inference.
+moduleText = moduleText.trimEnd() + '\n';
 const parsed=ts.createSourceFile('portalAppointmentReadHandlers.ts',moduleText,ts.ScriptTarget.ES2022,true,ts.ScriptKind.TS);
 assert.equal(parsed.parseDiagnostics.length,0, 'generated module must parse');
 assert.ok(!fs.existsSync('services/portalAppointmentReadHandlers.ts'), 'module already exists');
