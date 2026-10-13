@@ -106,7 +106,7 @@ for (const route of routes) {
   updated = updated.replace(original, registration);
   const factory = 'export function ' + route.name + '(getDeps: () => any) {\n'
     + '  return async (req: any, res: any) => {\n'
-    + '    const { ' + deps.join(', ') + ' } = getDeps();'
+    + '    const { ' + deps.join(', ') + ' } = getDeps() as { sanitizeString: (value: any, max?: number) => string } & Record<string, any>;'
     + payload + '\n  };\n}\n\n';
   moduleText += factory.replace(/^[ \t]+$/gm, '');
   manifest.push({
