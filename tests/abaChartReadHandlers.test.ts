@@ -11,19 +11,21 @@ const deps = ["supabase","resolveAbaChartPatientScope","isUuid","parseAbaChartPa
 const factory = '  const abaChartReadHandlers = createAbaChartReadHandlers(() => ({ ' + deps.join(', ') + ' }));\n';
 const imp = "import { createAbaChartReadHandlers } from './services/abaChartReadHandlers';\n";
 assert.ok(current.startsWith(imp));
+assert.ok(!current.includes('abaChartReadHandlers.session-changes'), 'route names with hyphens must use bracket access');
 // Compare the historical ABA extraction against its merge commit; subsequent
 // independent server.ts extractions must not invalidate this source fixture.
 const abaExtractionMerge = 'b8928ebe3ee93a2ed5557307b4459d2fc6479e37';
 const historicalExtracted = execFileSync('git', ['show', abaExtractionMerge + ':server.ts'], { encoding: 'utf8', maxBuffer: 12000000 });
 assert.ok(historicalExtracted.startsWith(imp), 'ABA extraction import at historical merge');
-let recovered = historicalExtracted.replace(imp,'').replace(factory,'');
+let recovered = historicalExtracted.replace('abaChartReadHandlers.session-changes', "abaChartReadHandlers['session-changes']").replace(imp,'').replace(factory,'');
 for (const route of [...routes].reverse()) {
   const pattern = new RegExp("^  app\\.get\\('/api/aba/patients/:patientId/charts/" + route + "'[^\\n]*?async \\(req: any, res\\) => \\{\\n([\\s\\S]*?)^  \\}\\);", 'gm');
   const matches = [...original.matchAll(pattern)];
   assert.equal(matches.length,1,route + ' baseline route count');
   const raw = matches[0][0], body = matches[0][1];
   const header = raw.slice(0,raw.indexOf('\n'));
-  const replacement = header.replace(/async \(req: any, res\) => \{$/, 'abaChartReadHandlers.' + route + ');');
+  const accessor = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(route) ? '.' + route : "['" + route + "']";
+  const replacement = header.replace(/async \(req: any, res\) => \{$/, 'abaChartReadHandlers' + accessor + ');');
   assert.equal(current.split(replacement).length-1,1,route + ' original middleware and registration');
   const extracted = new RegExp('^    // ORIGINAL_BEGIN ' + route + '\\n([\\s\\S]*?)^    // ORIGINAL_END ' + route,'m').exec(service);
   assert.ok(extracted,route);

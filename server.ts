@@ -84768,7 +84768,7 @@ async function startServer() {
 
   app.get('/api/aba/patients/:patientId/charts/maintenance', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, abaChartReadHandlers.maintenance);
 
-  app.get('/api/aba/patients/:patientId/charts/session-changes', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, abaChartReadHandlers.session-changes);
+  app.get('/api/aba/patients/:patientId/charts/session-changes', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, abaChartReadHandlers['session-changes']);
 
   app.get('/api/aba/patients/:patientId/charts/overview', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.analytics.view'), checkPatientAccess, abaChartReadHandlers.overview);
 
