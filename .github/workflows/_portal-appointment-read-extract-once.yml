@@ -5,6 +5,9 @@ on:
       - refactor/backend-portal-appointments-read-batch-20261013
 permissions:
   contents: write
+concurrency:
+  group: isolated-portal-read-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   extract:
     if: github.ref == 'refs/heads/refactor/backend-portal-appointments-read-batch-20261013'
@@ -19,7 +22,7 @@ jobs:
           node-version: 20
           cache: npm
       - name: Install locked dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund --prefer-offline --fetch-retries=1 --fetch-timeout=60000
       - name: Extract guarded exact source slice
         run: node scripts/_portal-appointment-read-extract-once.mjs
       - name: Read-only authorization, tenant and contract mock regressions
