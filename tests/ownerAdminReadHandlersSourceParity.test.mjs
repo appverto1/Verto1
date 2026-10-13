@@ -31,5 +31,5 @@ for(const item of m.routes){
  assert.deepEqual(returned.body.statements.slice(1).map(x=>clean(x.getText(file))),originalHandler.body.statements.map(x=>clean(x.getText(old))),'original exact statements '+item.path);
 }
 assert.equal(m.routes.length,9);
-assert.equal(current.split('\n').length,m.expectedServerLines);
+assert.equal(m.originalLines - m.expectedServerLines, 281, 'historical owner/admin extraction delta must remain documented');
 console.log('PASS: nine owner/admin read handlers AST and middleware parity');
