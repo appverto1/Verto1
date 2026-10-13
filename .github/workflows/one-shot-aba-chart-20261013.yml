@@ -1,0 +1,41 @@
+name: One-shot ABA chart read extraction 20261013
+on:
+  push:
+    branches:
+      - refactor/backend-aba-chart-reads-20261013
+permissions:
+  contents: write
+jobs:
+  extract:
+    if: github.repository == 'appverto1/Verto1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Generate exact-source extraction
+        run: node scripts/.one-shot-aba-chart-20261013.mjs
+      - name: Install dependencies
+        run: npm ci --no-audit
+      - name: Focused parity and mock regression
+        run: npx --no-install tsx tests/abaChartReadHandlers.test.ts
+      - name: Production build
+        run: npm run build
+      - name: Verify whitespace and no temporary executable in final commit
+        run: |
+          git diff --check
+          git rm .github/workflows/one-shot-aba-chart-20261013.yml scripts/.one-shot-aba-chart-20261013.mjs
+          git add server.ts services/abaChartReadHandlers.ts tests/abaChartReadHandlers.test.ts scripts/pre-main-gate.mjs docs/backend-modularization/20261013-aba-chart-read-batch.md
+          git diff --cached --check
+      - name: Commit output to isolated branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refactor(backend): extract six ABA chart GET handlers (-389 server lines)"
+          git push origin HEAD:refactor/backend-aba-chart-reads-20261013
