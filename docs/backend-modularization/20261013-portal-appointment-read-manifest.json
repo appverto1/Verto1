@@ -1,0 +1,89 @@
+{
+  "date": "2026-10-13",
+  "base": "52e2686c21d284ee0e948f9827b4719032a328e6",
+  "originalBlob": "36af849f70c27af3bb1a47d8130e5266d60ea9be",
+  "resultBlob": null,
+  "originalServerLines": 99101,
+  "newServerLines": 98804,
+  "removedLines": 297,
+  "service": "services/portalAppointmentReadHandlers.ts",
+  "routes": [
+    {
+      "method": "get",
+      "path": "/api/portal/appointments",
+      "factory": "createPortalAppointmentsListHandler",
+      "originalHeader": "  app.get('/api/portal/appointments', noStoreDynamicResponse, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {",
+      "originalLines": 234,
+      "sha256": "851d43a1e9abc90d19dcd7f229c0c87c6c216e6181d2a6cefc28b74e002b7760",
+      "dependencies": [
+        "sanitizeString",
+        "getPortalPatientIdsForUser",
+        "isUuid",
+        "isResponsiblePortalRole",
+        "sanitizeEmail",
+        "currentClinicId",
+        "readPortalPatientContexts",
+        "extractMissingColumnName",
+        "sanitizeIsoDateTime",
+        "parseBoundedListLimit",
+        "queryPortalAppointmentsWithSchemaFallback",
+        "supabase",
+        "hasMissingFinancialSchema",
+        "deploymentEnv",
+        "buildCalendarAppointmentStart",
+        "isMissingRelationError",
+        "canPortalUserAccessPatient",
+        "readClinicBrandingForFamilyView",
+        "readClinicPatientReschedulePolicies",
+        "parseAppointmentSourcePayloadForFamilyView",
+        "serializePortalAppointmentForFamilyView",
+        "portalSafeError"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/api/portal/appointments/:appointmentId",
+      "factory": "createPortalAppointmentDetailHandler",
+      "originalHeader": "  app.get('/api/portal/appointments/:appointmentId', checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {",
+      "originalLines": 97,
+      "sha256": "07548380ceef4e4dce9bf97232801699a1151abadfe888279a4939dda98b0b13",
+      "dependencies": [
+        "fetchPortalAppointmentForUser",
+        "portalSafeError",
+        "sanitizeString",
+        "supabase",
+        "APPOINTMENT_ACTION_REQUEST_SELECT",
+        "SESSION_SIGNATURE_SELECT",
+        "APPOINTMENT_STATUS_AUDIT_SELECT",
+        "APPOINTMENT_CLOSURE_CHECK_SELECT",
+        "CLOSURE_ABA_SESSION_SELECT",
+        "hasMissingFinancialSchema",
+        "serializePortalAppointmentForFamilyView",
+        "buildPortalAppointmentHistory",
+        "PORTAL_SESSION_CONSENT_TEXT",
+        "PORTAL_SESSION_CONSENT_TEXT_VERSION"
+      ]
+    },
+    {
+      "method": "get",
+      "path": "/api/portal/appointments/:appointmentId/reschedule-slots",
+      "factory": "createPortalRescheduleSlotsHandler",
+      "originalHeader": "  app.get('/api/portal/appointments/:appointmentId/reschedule-slots', portalActionLimiter, noStoreDynamicResponse, checkAuth, requirePatientPortalModule('appointments_communication'), async (req: any, res) => {",
+      "originalLines": 16,
+      "sha256": "7c78591628276ceda9db5da0c9f8054460622d60b8ba29a8bcbd50174552b3d9",
+      "dependencies": [
+        "fetchPortalAppointmentForUser",
+        "portalSafeError",
+        "readClinicPatientReschedulePolicy",
+        "patientRescheduleDisabledResponse",
+        "normalizeOperationalAppointmentStatus",
+        "isAppointmentTerminalForPortalAction",
+        "buildPortalRescheduleAvailabilityForAppointment"
+      ]
+    }
+  ],
+  "ci": "pending",
+  "pr": "pending",
+  "merge": "pending",
+  "deploy": "pending"
+}
