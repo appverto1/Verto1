@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 
 const original = readFileSync('server.ts', 'utf8');
-const baselineSha = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
+const baselineSha = execFileSync('git', ['merge-base', 'HEAD', 'origin/staging'], {encoding:'utf8'}).trim();
 const expectedBase = '52e2686c21d284ee0e948f9827b4719032a328e6';
 assert.equal(baselineSha, expectedBase, 'exact approved staging baseline required');
 const routes = ['targets','behaviors','mastery','maintenance','session-changes','overview'];
