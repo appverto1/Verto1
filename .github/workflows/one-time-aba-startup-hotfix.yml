@@ -1,0 +1,56 @@
+name: One-time staging ABA startup hotfix
+on:
+  push:
+    branches:
+      - hotfix/staging-aba-chart-session-changes-startup-20261013
+    paths:
+      - .github/workflows/one-time-aba-startup-hotfix.yml
+permissions:
+  contents: write
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Apply minimal source and regression fixes
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const replaceOnce = (s, oldText, newText) => {
+            if (s.split(oldText).length !== 2) throw Error('Expected exactly one occurrence: ' + oldText);
+            return s.replace(oldText, newText);
+          };
+          const file = 'server.ts';
+          const oldSource = fs.readFileSync(file, 'utf8');
+          const newSource = replaceOnce(oldSource, 'abaChartReadHandlers.session-changes', "abaChartReadHandlers['session-changes']");
+          if (newSource.replace("abaChartReadHandlers['session-changes']", 'abaChartReadHandlers.session-changes') !== oldSource) throw Error('Unexpected server changes');
+          fs.writeFileSync(file, newSource);
+          const testFile = 'tests/abaChartReadHandlers.test.ts';
+          let test = fs.readFileSync(testFile, 'utf8');
+          test = replaceOnce(test, 'assert.ok(current.startsWith(imp));', "assert.ok(current.startsWith(imp));\nassert.ok(!current.includes('abaChartReadHandlers.session-changes'), 'route names with hyphens must use bracket access');");
+          test = replaceOnce(test, "let recovered = historicalExtracted.replace(imp,'').replace(factory,'');", "let recovered = historicalExtracted.replace('abaChartReadHandlers.session-changes', \"abaChartReadHandlers['session-changes']\").replace(imp,'').replace(factory,'');");
+          test = replaceOnce(test, "  const replacement = header.replace(/async \\(req: any, res\\) => \\{$/, 'abaChartReadHandlers.' + route + ');');", "  const accessor = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(route) ? '.' + route : \"['\" + route + \"']\";\n  const replacement = header.replace(/async \\(req: any, res\\) => \\{$/, 'abaChartReadHandlers' + accessor + ');');");
+          fs.writeFileSync(testFile, test);
+          NODE
+      - name: Install dependencies and test regression
+        run: |
+          npm ci --no-audit
+          node --import tsx tests/abaChartReadHandlers.test.ts
+          npm run build
+      - name: Commit only the two code files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- server.ts tests/abaChartReadHandlers.test.ts
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "fix(staging): repair ABA session-changes startup registration"
+          git push origin HEAD:refs/heads/hotfix/staging-aba-chart-session-changes-startup-20261013
