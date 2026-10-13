@@ -11,7 +11,12 @@ const deps = ["supabase","resolveAbaChartPatientScope","isUuid","parseAbaChartPa
 const factory = '  const abaChartReadHandlers = createAbaChartReadHandlers(() => ({ ' + deps.join(', ') + ' }));\n';
 const imp = "import { createAbaChartReadHandlers } from './services/abaChartReadHandlers';\n";
 assert.ok(current.startsWith(imp));
-let recovered = current.replace(imp,'').replace(factory,'');
+// Compare the historical ABA extraction against its merge commit; subsequent
+// independent server.ts extractions must not invalidate this source fixture.
+const abaExtractionMerge = 'b8928ebe3ee93a2ed5557307b4459d2fc6479e37';
+const historicalExtracted = execFileSync('git', ['show', abaExtractionMerge + ':server.ts'], { encoding: 'utf8', maxBuffer: 12000000 });
+assert.ok(historicalExtracted.startsWith(imp), 'ABA extraction import at historical merge');
+let recovered = historicalExtracted.replace(imp,'').replace(factory,'');
 for (const route of [...routes].reverse()) {
   const pattern = new RegExp("^  app\\.get\\('/api/aba/patients/:patientId/charts/" + route + "'[^\\n]*?async \\(req: any, res\\) => \\{\\n([\\s\\S]*?)^  \\}\\);", 'gm');
   const matches = [...original.matchAll(pattern)];
@@ -25,7 +30,7 @@ for (const route of [...routes].reverse()) {
   assert.equal(extracted![1],body,route + ' byte-for-byte handler body parity');
   recovered = recovered.replace(replacement,raw);
 }
-assert.equal(recovered,original,'exact full-source roundtrip');
+assert.equal(recovered,original,'exact historical ABA full-source roundtrip');
 const resp=()=>({code:200,payload:null as any,status(code:number){this.code=code;return this;},json(payload:any){this.payload=payload;return this;}});
 let dbCalls=0;
 const invalid=createAbaChartReadHandlers(()=>({resolveAbaChartPatientScope:()=>({patientId:'invalid'}),isUuid:()=>false,supabase:{from:()=>{dbCalls++;throw Error('not allowed');}}}));
