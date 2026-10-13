@@ -39,6 +39,7 @@ const mocks:any={
 }
 for(const fn of [createPortalAppointmentDetailHandler,createPortalRescheduleSlotsHandler]){
  const r=responder();await fn({params:{appointmentId:'foreign'},session:{user:{id:'actor'}}},r);
+ console.log('DEBUG',fn.name,JSON.stringify({code:r.code,payload:r.payload}));
  assert.equal(r.code,404);assert.equal(r.payload.error,'PORTAL_ERROR_404');assert.equal(dbCalls,0);
 }
 {
