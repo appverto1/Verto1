@@ -246,6 +246,7 @@ const criticalTests = [
   'tests/contextualGuidedTutorialP0.regression.test.mjs',
   'tests/p0AbaV3TutorialTasks26to28.regression.test.mjs',
   'tests/p0Financial403ScopeAndGraphs.regression.test.ts',
+  'tests/patientFinanceSessionReadability.regression.test.mjs',
   'tests/p1DashboardRestoreDevicePush.regression.test.mjs',
   'tests/p1PushAnamnesisLote03to07.regression.test.mjs',
   'tests/p1AnamnesisEditorDocumentsCharts.regression.test.mjs',
