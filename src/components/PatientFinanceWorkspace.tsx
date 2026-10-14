@@ -30,6 +30,7 @@ import {
   PATIENT_FINANCIAL_STATUS_LABELS,
   buildPatientFinancialAppointmentRows,
   buildPatientFinancialChargeRows,
+  patientFinanceClinicalStatusLabel,
   patientFinancialTransactionLabel,
   resolvePatientFinancialStatus,
   type PatientFinancialStatus
@@ -923,24 +924,68 @@ export function PatientFinanceWorkspace({
       </div>
 
       {activeView === 'appointments' && (
-        <div className="overflow-hidden rounded-3xl border border-slate-100 bg-white shadow-sm">
-          <div className="hidden grid-cols-[150px_minmax(170px,1.2fr)_minmax(130px,1fr)_minmax(130px,1fr)_110px_110px_110px_130px_80px] gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3 text-[11px] font-medium text-slate-500 xl:grid">
-            <span>Sessão</span><span>Paciente / serviço</span><span>Profissional</span><span>Valores</span><span>Vencimento</span><span>Status</span><span>Método</span><span>Saldo</span><span>Ações</span>
+        <section aria-label="Sessões e situação financeira" className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+            <p className="text-sm font-semibold text-slate-800">Sessões por atendimento</p>
+            <p className="text-xs text-slate-500">{filteredAppointments.length} sessão(ões) nos filtros selecionados</p>
           </div>
-          <div className="divide-y divide-slate-100">
+          <div className="hidden grid-cols-[155px_minmax(170px,1.2fr)_minmax(145px,1fr)_minmax(185px,1.2fr)_minmax(145px,1fr)_52px] gap-5 px-5 py-2 text-xs font-semibold text-slate-500 xl:grid">
+            <span>Data e situação</span>
+            <span>Paciente e especialidade</span>
+            <span>Profissional</span>
+            <span>Valores e pagamento</span>
+            <span>Financeiro</span>
+            <span className="sr-only">Ações</span>
+          </div>
+          <div className="space-y-3">
             {filteredAppointments.map((row: any) => (
-              <div key={row.appointmentId} className="grid gap-3 px-4 py-4 text-sm xl:grid-cols-[150px_minmax(170px,1.2fr)_minmax(130px,1fr)_minmax(130px,1fr)_110px_110px_110px_130px_80px] xl:items-center">
-                <div><p className="font-medium text-slate-800">{row.appointmentDateLabel}</p><p className="mt-1 text-xs text-slate-400">{row.clinicalStatus}</p></div>
-                <div><p className="font-medium text-slate-900">{row.patientName}</p><p className="mt-1 text-xs text-slate-500">{row.serviceType}</p></div>
-                <p className="text-slate-600">{row.professionalName}</p>
-                <div className="text-xs text-slate-500"><p>Cobrado: <span className="text-slate-800">{currency(row.total)}</span></p><p>Pago: <span className="text-emerald-700">{currency(row.paid)}</span></p></div>
-                <p className="text-slate-600">{row.dueDateLabel}</p>
-                <StatusBadge status={row.status} />
-                <p className="text-slate-600">{methodLabel(row.method)}</p>
-                <p className={`font-semibold ${row.balance > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{currency(row.balance)}</p>
-                <div className="relative group">
-                  <button type="button" className="rounded-lg border border-slate-200 p-2 text-slate-500 hover:border-violet-200 hover:text-violet-600" aria-label="Ações financeiras"><ChevronDown size={16} /></button>
-                  <div className="invisible absolute right-0 top-9 z-20 w-52 rounded-xl border border-slate-100 bg-white p-1.5 opacity-0 shadow-xl transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
+              <article key={row.appointmentId} className="grid gap-x-5 gap-y-4 rounded-2xl border border-slate-200 bg-white px-5 py-5 text-sm shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50/20 sm:px-6 xl:grid-cols-[155px_minmax(170px,1.2fr)_minmax(145px,1fr)_minmax(185px,1.2fr)_minmax(145px,1fr)_52px] xl:items-center">
+                <div className="min-w-0 space-y-2">
+                  <p className="font-semibold leading-relaxed text-slate-900">{row.appointmentDateLabel}</p>
+                  <span className="inline-flex max-w-full items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
+                    {patientFinanceClinicalStatusLabel(row.clinicalStatus)}
+                  </span>
+                </div>
+                <div className="min-w-0 space-y-1.5">
+                  <p className="break-words font-semibold text-slate-900">{row.patientName}</p>
+                  <p className="break-words text-sm text-slate-600">{row.serviceType}</p>
+                </div>
+                <div className="min-w-0">
+                  <p className="mb-1 text-xs text-slate-400 xl:hidden">Profissional</p>
+                  <p className="break-words leading-relaxed text-slate-700">{row.professionalName}</p>
+                </div>
+                <div className="min-w-0 space-y-2">
+                  {row.chargeId ? (
+                    <>
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <span className="text-xs text-slate-500">Cobrado</span>
+                        <span className="font-semibold tabular-nums text-slate-900">{currency(row.total)}</span>
+                      </div>
+                      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                        <span className="text-xs text-slate-500">Recebido</span>
+                        <span className="font-medium tabular-nums text-emerald-700">{currency(row.paid)}</span>
+                      </div>
+                      <p className="text-xs text-slate-500">{methodLabel(row.method)}</p>
+                    </>
+                  ) : (
+                    <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+                      Cobrança ainda não gerada
+                    </p>
+                  )}
+                </div>
+                <div className="min-w-0 space-y-2.5">
+                  <StatusBadge status={row.status} />
+                  <div>
+                    <p className="text-xs text-slate-500">Saldo pendente</p>
+                    <p className={`mt-1 text-base font-semibold tabular-nums ${row.balance > 0 ? 'text-rose-600' : 'text-slate-800'}`}>
+                      {row.chargeId ? currency(row.balance) : '—'}
+                    </p>
+                  </div>
+                  <p className="text-xs leading-relaxed text-slate-500">Vencimento: {row.dueDateLabel}</p>
+                </div>
+                <div className="relative group flex justify-end xl:justify-center">
+                  <button type="button" className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition-colors hover:border-violet-300 hover:text-violet-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-500" aria-label={`Ações financeiras da sessão de ${row.patientName}, ${row.appointmentDateLabel}`} aria-haspopup="menu"><ChevronDown size={18} /></button>
+                  <div className="invisible absolute right-0 top-11 z-30 w-56 rounded-xl border border-slate-200 bg-white p-1.5 opacity-0 shadow-xl transition group-focus-within:visible group-focus-within:opacity-100 group-hover:visible group-hover:opacity-100">
                     {!row.chargeId ? <button onClick={() => openOperation('charge', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Criar cobrança</button> : null}
                     {row.chargeId && row.balance > 0 ? <button onClick={() => openOperation('payment', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Registrar pagamento</button> : null}
                     {row.chargeId && row.balance > 0 ? <button onClick={() => openOperation('partial_payment', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Pagamento parcial</button> : null}
@@ -955,11 +1000,11 @@ export function PatientFinanceWorkspace({
                     {row.chargeId ? <button onClick={() => setExpandedChargeId(row.chargeId)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Ver composição e histórico</button> : null}
                   </div>
                 </div>
-              </div>
+              </article>
             ))}
-            {!filteredAppointments.length && <p className="p-6 text-sm text-slate-500">Nenhuma sessão corresponde aos filtros selecionados.</p>}
+            {!filteredAppointments.length && <p className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Nenhuma sessão corresponde aos filtros selecionados.</p>}
           </div>
-        </div>
+        </section>
       )}
 
       {(activeView === 'charges' || activeView === 'pending') && (
