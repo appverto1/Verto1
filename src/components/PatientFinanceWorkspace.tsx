@@ -629,6 +629,7 @@ export function PatientFinanceWorkspace({
           charge: 'PAYMENT',
           payment: 'PAYMENT',
           partial_payment: 'PARTIAL_PAYMENT',
+          split_payment: 'PARTIAL_PAYMENT', // Recebimento misto é processado antecipadamente, em transações separadas.
           discount: 'DISCOUNT',
           courtesy: 'COURTESY',
           refund: 'REFUND',
