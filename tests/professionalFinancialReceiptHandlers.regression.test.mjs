@@ -27,11 +27,11 @@ function mockDb(role='therapist', snapshot=null, appointmentOverrides={}, itemCo
     organization_id: CLINIC, amount:180, balance_amount:180, paid_amount:0,
     financial_status:'pending', source:'APPOINTMENT', private_price_source:'SPECIALTY_RULE' };
   const fixtures = {
-    clinic_memberships: role==='therapist' ? [{user_id:THERAPIST,role,status:'active'}] : [],
+    clinic_memberships: role==='therapist' ? [{user_id:THERAPIST,clinic_id:CLINIC,role,status:'active'}] : [],
     appointments: [appointments],
     payments: [payments],
     payment_appointment_items: Array.from({ length:itemCount },(_,i)=>({
-      appointment_id:i===0?APPT:'99999999-9999-4999-8999-999999999999',payment_id:PAYMENT,active:true
+      appointment_id:i===0?APPT:'99999999-9999-4999-8999-999999999999',payment_id:PAYMENT,organization_id:CLINIC,active:true
     })),
     appointment_private_financial_snapshots: snapshot?[snapshot]:[],
     patients:[{id:PATIENT,name:'Paciente de teste'}]
