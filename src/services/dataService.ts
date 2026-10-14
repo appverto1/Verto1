@@ -8416,6 +8416,40 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getOwnProfessionalReceivables() {
+    try {
+      const response = await fetchWithAuthRetry('/api/professional-finance/receivables', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading own professional receivables:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar seus recebimentos.' };
+    }
+  },
+
+  async recordOwnProfessionalReceipt(paymentId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/professional-finance/receivables/' + encodeURIComponent(paymentId) + '/record',
+        {
+          method: 'POST',
+          headers: {
+            ...(await getAuthHeaders()),
+            'X-Idempotency-Key': String(payload?.idempotencyKey || '')
+          },
+          credentials: 'include',
+          body: JSON.stringify(payload)
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error recording own professional receipt:', error);
+      return { success: false, error: 'Não foi possível confirmar o recebimento.' };
+    }
+  },
+
   async getPatientFinanceLedger(month?: string) {
     try {
       const endpoint = endpointWithQuery('/api/patient-finance/ledger', { month });
