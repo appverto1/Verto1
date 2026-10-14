@@ -223,6 +223,14 @@ export function PrivatePricingManagement({ patients, currentUser, capabilities, 
 
   const saveAgreement = async () => {
     if (!canManage || savingAgreement) return;
+    if (Number(agreement.discountAmount || 0) < 0 || Number(agreement.discountAmount || 0) > Number(agreement.baseAmount || 0)) {
+      onToast?.('O desconto recorrente deve estar entre zero e o valor-base do acordo.', 'error');
+      return;
+    }
+    if (agreement.validUntil && agreement.validUntil < agreement.validFrom) {
+      onToast?.('A vigência final deve ser posterior ou igual ao início.', 'error');
+      return;
+    }
     if (!agreement.patientId) {
       onToast?.('Selecione o paciente do acordo.', 'error');
       return;
@@ -512,7 +520,7 @@ export function PrivatePricingManagement({ patients, currentUser, capabilities, 
               <section className="rounded-2xl border border-emerald-100 p-4">
                 <div className="flex items-center gap-2">
                   <UserRoundCheck size={17} className="text-emerald-600" />
-                  <h3 className="text-sm font-semibold text-slate-900">Acordo particular do paciente</h3>
+                  <h3 className="text-sm font-semibold text-slate-900">Desconto recorrente / acordo por paciente</h3>
                 </div>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
                   <label className={`sm:col-span-2 ${labelClass}`}>Paciente
@@ -524,10 +532,10 @@ export function PrivatePricingManagement({ patients, currentUser, capabilities, 
                   <label className={labelClass}>Serviço opcional
                     <select value={agreement.serviceCatalogId} onChange={(event) => selectAgreementService(event.target.value)} className={inputClass}><option value="">Todos da especialidade</option>{services.map((service: any) => <option key={service.id} value={service.id}>{service.name}</option>)}</select>
                   </label>
-                  <label className={labelClass}>Valor
+                  <label className={labelClass}>Valor-base do acordo (R$)
                     <input type="number" min="0" step="0.01" value={agreement.baseAmount} onChange={(event) => setAgreement({ ...agreement, baseAmount: event.target.value })} className={inputClass} />
                   </label>
-                  <label className={labelClass}>Desconto
+                  <label className={labelClass}>Desconto recorrente por sessão (R$)
                     <input type="number" min="0" step="0.01" value={agreement.discountAmount} onChange={(event) => setAgreement({ ...agreement, discountAmount: Number(event.target.value) })} className={inputClass} />
                   </label>
                   <label className={labelClass}>Adicional domiciliar
@@ -542,10 +550,10 @@ export function PrivatePricingManagement({ patients, currentUser, capabilities, 
                   <label className={labelClass}>Classificação de valor zero
                     <select value={agreement.zeroClassification} onChange={(event) => setAgreement({ ...agreement, zeroClassification: event.target.value })} className={inputClass}><option value="">Não se aplica</option><option value="EXEMPT">Isenção</option><option value="CONTRACTUAL_FREE">Gratuidade contratual</option></select>
                   </label>
-                  <label className={labelClass}>Vigência inicial
+                  <label className={labelClass}>Início da recorrência
                     <input type="date" value={agreement.validFrom} onChange={(event) => setAgreement({ ...agreement, validFrom: event.target.value })} className={inputClass} />
                   </label>
-                  <label className={labelClass}>Vigência final
+                  <label className={labelClass}>Fim da recorrência (opcional)
                     <input type="date" value={agreement.validUntil} onChange={(event) => setAgreement({ ...agreement, validUntil: event.target.value })} className={inputClass} />
                   </label>
                   <label className={`sm:col-span-2 ${labelClass}`}>Motivo
@@ -559,6 +567,8 @@ export function PrivatePricingManagement({ patients, currentUser, capabilities, 
                     Acordo ativo nesta nova versão
                   </label>
                 </div>
+                <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600">Este acordo será aplicado automaticamente às futuras sessões elegíveis do paciente dentro da vigência. Para desconto em UMA sessão, use Financeiro de pacientes → Cobranças → Aplicar desconto na cobrança específica; ele não altera as sessões seguintes.</p>
+                <p className="text-sm font-semibold text-slate-800">Valor final recorrente estimado: {money(Math.max(0, Number(agreement.baseAmount || 0) - Number(agreement.discountAmount || 0)))}</p>
                 <button type="button" onClick={saveAgreement} disabled={savingAgreement} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-sm font-medium text-white disabled:opacity-60">
                   {savingAgreement ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Salvar acordo
                 </button>
@@ -598,7 +608,7 @@ export function PrivatePricingManagement({ patients, currentUser, capabilities, 
           {!canManage && (
             <div className="flex items-start gap-2 rounded-xl bg-slate-50 p-3 text-xs text-slate-600">
               <Clock3 size={15} className="mt-0.5 shrink-0" />
-              Seu perfil pode consultar preços e acordos, mas somente owner ou administrador pode criar novas versões.
+              Seu perfil pode consultar preços e acordos, mas a criação de regras exige permissão de gestão financeira da clínica.
             </div>
           )}
         </div>

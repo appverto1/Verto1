@@ -50,6 +50,7 @@ import {
   Reservation as RoomReservationType,
 } from "./RoomReservation";
 import { dataService } from "../services/dataService";
+import { ProfessionalReceipts } from "./ProfessionalReceipts";
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -343,32 +344,7 @@ export const TherapistDashboard = ({
   const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
   const [isFinancialOpen, setIsFinancialOpen] = useState(false);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
-  const [payments, setPayments] = useState<any[]>([
-    {
-      id: 1,
-      patientId: 101,
-      patientName: "Alexandre",
-      amount: 150,
-      date: new Date().toISOString(),
-      method: "pix",
-      status: "paid",
-    },
-    {
-      id: 2,
-      patientId: 102,
-      patientName: "Júlia S.",
-      amount: 200,
-      date: new Date().toISOString(),
-      method: "card",
-      status: "pending",
-    },
-  ]);
   const [professionalFilter, setProfessionalFilter] = useState("all");
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [selectedPaymentPatient, setSelectedPaymentPatient] =
-    useState<any>(null);
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState("pix");
   const [sessionPatientName, setSessionPatientName] = useState("");
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
   const [sessionTime, setSessionTime] = useState("");
@@ -729,24 +705,6 @@ export const TherapistDashboard = ({
       `Status do agendamento ${appointmentId} alterado para: ${newStatus}`,
       "management",
     );
-  };
-
-  const handleAddPayment = () => {
-    if (!selectedPaymentPatient || !paymentAmount)
-      return alert("Preencha todos os campos");
-    const newPayment = {
-      id: Date.now(),
-      patientId: selectedPaymentPatient.id,
-      patientName: selectedPaymentPatient.name,
-      amount: parseFloat(paymentAmount),
-      date: new Date().toISOString(),
-      method: paymentMethod,
-      status: "paid",
-    };
-    setPayments((prev) => [newPayment, ...prev]);
-    setIsPaymentModalOpen(false);
-    setPaymentAmount("");
-    setSelectedPaymentPatient(null);
   };
 
   const getFilteredAgenda = () => {
@@ -1276,141 +1234,7 @@ export const TherapistDashboard = ({
           </div>
         )}
 
-        {view === "financial" && (
-          <div className="p-6 bg-slate-50 min-h-screen">
-            <div className="flex items-center justify-between mb-8">
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={handleBackView}
-                  className="p-2 hover:bg-white rounded-xl transition-all"
-                >
-                  <ChevronRight className="rotate-180" />
-                </button>
-                <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
-                  Financeiro & Pagamentos{" "}
-                  <span className="text-[10px] bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full ml-2">
-                    EM BREVE
-                  </span>
-                </h2>
-              </div>
-              <button
-                onClick={() => setIsPaymentModalOpen(true)}
-                className="bg-[#7a32fc] text-white px-6 py-3 rounded-2xl font-bold text-sm shadow-lg shadow-purple-500/20 flex items-center gap-2 hover:scale-105 transition-all"
-              >
-                <Plus size={18} /> Registrar Pagamento
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 space-y-6">
-                <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
-                  <h3 className="text-lg font-bold text-slate-900 mb-6">
-                    Últimos Recebimentos
-                  </h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead>
-                        <tr className="text-left border-b border-slate-50">
-                          <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            Paciente
-                          </th>
-                          <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            Valor
-                          </th>
-                          <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            Data
-                          </th>
-                          <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            Método
-                          </th>
-                          <th className="pb-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            Status
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {payments.map((p) => (
-                          <tr
-                            key={p.id}
-                            className="group hover:bg-slate-50 transition-all"
-                          >
-                            <td className="py-4 font-semibold text-slate-700">
-                              {p.patientName}
-                            </td>
-                            <td className="py-4 font-bold text-[#7a32fc]">
-                              R$ {p.amount.toFixed(2)}
-                            </td>
-                            <td className="py-4 text-slate-500 text-sm">
-                              {new Date(p.date).toLocaleDateString()}
-                            </td>
-                            <td className="py-4">
-                              <span className="px-3 py-1 bg-slate-100 text-slate-600 rounded-full text-[10px] font-bold uppercase">
-                                {p.method}
-                              </span>
-                            </td>
-                            <td className="py-4">
-                              <span className="px-3 py-1 bg-green-100 text-green-600 rounded-full text-[10px] font-bold uppercase">
-                                Pago
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-6">
-                <div className="bg-white rounded-[32px] p-8 shadow-sm border border-slate-100">
-                  <div className="flex items-center gap-3 mb-6">
-                    <div className="p-2 bg-red-50 text-red-500 rounded-xl">
-                      <AlertCircle size={20} />
-                    </div>
-                    <h3 className="text-lg font-bold text-slate-900">
-                      Inadimplência
-                    </h3>
-                  </div>
-                  <div className="space-y-4">
-                    {allPatients.filter((p) => p.status === "delinquent")
-                      .length > 0 ? (
-                      allPatients
-                        .filter((p) => p.status === "delinquent")
-                        .map((p) => (
-                          <div
-                            key={p.id}
-                            className="p-4 bg-red-50/50 rounded-2xl border border-red-100 flex items-center justify-between"
-                          >
-                            <div>
-                              <p className="font-bold text-slate-900 text-sm">
-                                {p.name}
-                              </p>
-                              <p className="text-[10px] text-red-500 font-semibold">
-                                Débito em aberto
-                              </p>
-                            </div>
-                            <button className="p-2 bg-white text-red-500 rounded-xl shadow-sm hover:bg-red-500 hover:text-white transition-all">
-                              <MessageCircle size={16} />
-                            </button>
-                          </div>
-                        ))
-                    ) : (
-                      <div className="text-center py-8 opacity-50">
-                        <CheckCircle2
-                          size={32}
-                          className="mx-auto mb-2 text-green-500"
-                        />
-                        <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                          Tudo em dia!
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {view === "financial" && <ProfessionalReceipts />}
 
         {view === "patient" && selectedPatientId && (
           <div className="p-4 sm:p-8">
@@ -1518,86 +1342,6 @@ export const TherapistDashboard = ({
               onTemplateSave={handleTemplateSave}
               canEditTemplate={false}
             />
-
-            {isPaymentModalOpen && (
-              <div
-                className="fixed inset-0 z-[130] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
-                onClick={() => setIsPaymentModalOpen(false)}
-              >
-                <div
-                  className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-pop relative"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <button
-                    onClick={() => setIsPaymentModalOpen(false)}
-                    className="absolute top-6 right-6 text-gray-400 hover:text-gray-600"
-                  >
-                    <X size={24} />
-                  </button>
-                  <h2 className="text-2xl font-bold text-slate-900 mb-6 flex items-center gap-2">
-                    <ShoppingBag size={24} className="text-[#7a32fc]" />{" "}
-                    Registrar Pagamento
-                  </h2>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                        Paciente
-                      </label>
-                      <select
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
-                        onChange={(e) => {
-                          const p = allPatients.find(
-                            (p: any) => p.id === parseInt(e.target.value),
-                          );
-                          setSelectedPaymentPatient(p);
-                        }}
-                      >
-                        <option value="">Selecione o paciente...</option>
-                        {allPatients.map((p: any) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                        Valor (R$)
-                      </label>
-                      <input
-                        type="number"
-                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm outline-none font-semibold text-slate-700"
-                        placeholder="0,00"
-                        value={paymentAmount}
-                        onChange={(e) => setPaymentAmount(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                        Método
-                      </label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {["pix", "card", "cash"].map((m) => (
-                          <button
-                            key={m}
-                            onClick={() => setPaymentMethod(m)}
-                            className={`py-2 rounded-xl text-[10px] font-bold uppercase transition-all ${paymentMethod === m ? "bg-[#7a32fc] text-white" : "bg-slate-50 text-slate-400 hover:bg-slate-100"}`}
-                          >
-                            {m}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <button
-                      onClick={handleAddPayment}
-                      className="w-full bg-[#7a32fc] text-white font-bold py-4 rounded-xl shadow-lg shadow-purple-500/20 hover:opacity-90 transition-all mt-4 uppercase tracking-widest"
-                    >
-                      Confirmar Recebimento
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
 
             <DayDetailsModal
               isOpen={isDayDetailsModalOpen}

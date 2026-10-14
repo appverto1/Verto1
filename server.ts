@@ -1,6 +1,7 @@
 import { createAbaChartReadHandlers } from './services/abaChartReadHandlers';
 import { createOwnerStatsHandler, createOwnerClientsHandler, createOwnerFinancialOverviewHandler, createOwnerFinancialSurveysHandler, createAdminDemoSandboxesHandler, createAdminStatsHandler, createAdminClientsHandler, createAdminVertoProtocolsHandler, createOwnerRecoveryLeadsHandler } from './services/ownerAdminReadHandlers';
 import { createTissProviderProfileReadHandler, createTissPayerProfileReadHandler, createPatientTissAuthorizationsReadHandler, createPatientTissAuthorizationReadHandler, createTissOwnProfessionalProfileReadHandler, createTissProfessionalProfilesReadHandler, createTissProfessionalProfileReadHandler, createTissPreGuidesReadHandler, createTissOfficialDocumentsReadHandler, createTissDocumentTrackingListReadHandler, createTissXmlDraftsReadHandler, createTissXmlDraftReadHandler, createTissRevenueEventsReadHandler, createTissBillingBatchDraftsReadHandler, createTissBillingBatchDraftReadHandler, createTissPreGuidesCoverageReadHandler, createTissPreGuideReadHandler, createPayerOptionsReadHandler, createAdminPayersReadHandler, createAdminPayerRequirementsReadHandler } from './services/tissPayerReadHandlers';
+import { createProfessionalFinancialReceiptHandlers } from './services/professionalFinancialReceiptHandlers';
 import { createPrivatePricingCatalogReadHandler, createPrivatePricingSnapshotReadHandler, createPatientFinanceLedgerReadHandler, createPatientFinanceTransactionDocumentReadHandler, createPatientFinancePolicyReadHandler, createPaymentsReadHandler, createProfessionalPaymentsReadHandler, createFinancialExpensesReadHandler, createFinancialEntriesReadHandler, createFinancialFeatureSurveyReadHandler } from './services/clinicFinancialReadHandlers';
 import { createClinicAuthorizationMeHandler, createUserFeatureAccessReadHandler, createUserFeatureAccessWriteHandler, createClinicCapabilityMembersReadHandler, createClinicCapabilityMembersWriteHandler, createClinicMemberAuthorizationReadHandler, createClinicMemberAuthorizationWriteHandler, createClinicMembersReadHandler, createClinicSupervisionEligibilityWriteHandler } from './services/clinicAccessMembershipHandlers';
 import { createClinicWorkScheduleReadHandler, createClinicWorkScheduleWriteHandler, createClinicWorkScheduleApplyHandler } from './services/clinicWorkScheduleHandlers';
@@ -88408,6 +88409,11 @@ async function startServer() {
     }
   });
 
+  const professionalReceipts = createProfessionalFinancialReceiptHandlers({
+  supabase, currentClinicId, sanitizeString, isUuid, patientFinanceErrorResponse
+});
+app.get('/api/professional-finance/receivables', noStoreDynamicResponse, checkAuth, professionalReceipts.list);
+app.post('/api/professional-finance/receivables/:paymentId/record', portalActionLimiter, checkAuth, professionalReceipts.record);
   app.get('/api/patient-finance/ledger', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), createPatientFinanceLedgerReadHandler(() => ({ sanitizeString, currentClinicId, isUuid, supabase, PATIENT_FINANCE_CHARGE_SELECT, patientFinanceErrorResponse, PATIENT_FINANCE_APPOINTMENT_SELECT, PATIENT_FINANCE_POLICY_SELECT, PRIVATE_FINANCIAL_SNAPSHOT_SELECT, extractMissingColumnName, PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT, hasMissingFinancialSchema, isMissingRelationError, APPOINTMENT_BILLING_CONTEXT_SELECT })));
 
   app.get('/api/patient-finance/transactions/:transactionId/document', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), createPatientFinanceTransactionDocumentReadHandler(() => ({ sanitizeString, currentClinicId, isUuid, supabase, sanitizeReceiptUrl, patientFinanceErrorResponse })));
