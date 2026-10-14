@@ -536,7 +536,6 @@ export function PatientFinanceWorkspace({
             operation: lastAndSettled ? 'PAYMENT' : 'PARTIAL_PAYMENT',
             amount: part.cents / 100,
             method: part.method,
-            transactionAt: new Date().toISOString(),
             notes: 'Pagamento misto ' + (index + 1) + '/' + parts.length + '. ' + notes.trim(),
             idempotencyKey: idempotencyKey + ':split:' + (index + 1)
           });
@@ -1128,7 +1127,7 @@ export function PatientFinanceWorkspace({
                   <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
                     <label className="text-xs text-slate-600">Valor {index + 1} (R$)
                       <input value={part.amount} inputMode="decimal"
-                        onChange={(event) => setSplitParts((current) => current.map((p, i) => i === index ? { ...p, amount: event.target.value.replace(/[^\\d.,]/g, '') } : p))}
+                        onChange={(event) => setSplitParts((current) => current.map((p, i) => i === index ? { ...p, amount: event.target.value.replace(/[^\d.,]/g, '') } : p))}
                         className="mt-1 w-full rounded-lg border border-slate-200 p-2.5" />
                     </label>
                     <label className="text-xs text-slate-600">Forma
