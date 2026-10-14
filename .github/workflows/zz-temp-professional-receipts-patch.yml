@@ -1,0 +1,54 @@
+name: One-time professional finance backend route patch
+on:
+  push:
+    branches:
+      - feat/staging-private-pricing-split-receipts-20261014
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Patch one backend registration section
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server.ts')
+          source = p.read_text()
+          import_stmt = "import { createProfessionalFinancialReceiptHandlers } from './services/professionalFinancialReceiptHandlers';\n"
+          if import_stmt not in source:
+              needle = "import { createPrivatePricingCatalogReadHandler"
+              assert source.count(needle) == 1, "Unexpected import anchor"
+              source = source.replace(needle, import_stmt + needle)
+          route = """  const professionalReceipts = createProfessionalFinancialReceiptHandlers({
+            supabase, currentClinicId, sanitizeString, isUuid, patientFinanceErrorResponse
+          });
+          app.get('/api/professional-finance/receivables', noStoreDynamicResponse, checkAuth, professionalReceipts.list);
+          app.post('/api/professional-finance/receivables/:paymentId/record', portalActionLimiter, checkAuth, professionalReceipts.record);
+          """
+          anchor = "  app.get('/api/patient-finance/ledger',"
+          assert source.count(anchor) == 1, "Unexpected finance route anchor"
+          if "app.get('/api/professional-finance/receivables'" not in source:
+              source = source.replace(anchor, route + anchor)
+          p.write_text(source)
+          PY
+          git diff --check
+      - run: npm ci --no-audit --no-fund
+      - run: node --import tsx tests/professionalFinancialReceiptHandlers.regression.test.mjs
+      - run: npm run build
+      - name: Commit validated patch, removing temporary workflow
+        run: |
+          rm -f .github/workflows/zz-temp-professional-receipts-patch.yml
+          git add server.ts .github/workflows/zz-temp-professional-receipts-patch.yml
+          git config user.name "Verto finance patch"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(finance): register scoped professional receipt endpoints"
+          git push origin HEAD:feat/staging-private-pricing-split-receipts-20261014
