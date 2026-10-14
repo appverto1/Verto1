@@ -1,6 +1,51 @@
 import { formatDisplayDate, formatDisplayDateTime } from './dateFormatting';
 import { normalizeAppointmentFinancialContextType } from './appointmentFinancialContext';
 
+/**
+ * Rótulo de atendimento para a visualização financeira.
+ * Os valores persistidos/API continuam intactos: traduzimos apenas a apresentação.
+ * Nunca exibimos o código interno bruto ao usuário.
+ */
+export const patientFinanceClinicalStatusLabel = (value: unknown): string => {
+  const raw = String(value || '').trim().toLowerCase();
+  const key = raw.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[\s-]+/g, '_');
+  const labels: Record<string, string> = {
+    scheduled: 'Agendada',
+    agendada: 'Agendada',
+    confirmed: 'Confirmada',
+    confirmada: 'Confirmada',
+    pending: 'Pendente',
+    pendente: 'Pendente',
+    requested: 'Solicitada',
+    in_progress: 'Em andamento',
+    ongoing: 'Em andamento',
+    started: 'Em andamento',
+    em_andamento: 'Em andamento',
+    completed: 'Realizada',
+    complete: 'Realizada',
+    finished: 'Realizada',
+    concluded: 'Realizada',
+    concluida: 'Realizada',
+    realizada: 'Realizada',
+    reschedule: 'Remarcação solicitada',
+    reschedule_requested: 'Remarcação solicitada',
+    rescheduled: 'Remarcada',
+    remarcada: 'Remarcada',
+    canceled: 'Cancelada',
+    cancelled: 'Cancelada',
+    canceled_clinic: 'Cancelada pela clínica',
+    cancelled_clinic: 'Cancelada pela clínica',
+    canceled_patient: 'Cancelada pelo paciente',
+    cancelled_patient: 'Cancelada pelo paciente',
+    cancel_requested: 'Cancelamento solicitado',
+    no_show: 'Não compareceu',
+    no_show_patient: 'Paciente não compareceu',
+    absent: 'Não compareceu',
+    missed: 'Não compareceu'
+  };
+  return labels[key] || 'Status não identificado';
+};
+
 export type PatientFinancialStatus =
   | 'no_charge'
   | 'forecast'
