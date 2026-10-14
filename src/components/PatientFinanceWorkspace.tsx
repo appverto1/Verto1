@@ -509,6 +509,53 @@ export function PatientFinanceWorkspace({
       setOperationError('Selecione a cobrança que será alterada.');
       return;
     }
+    if (operation === 'split_payment') {
+      if (!selectedChargeId || !selectedCharge) {
+        setOperationError('Selecione uma cobrança existente para registrar formas de pagamento combinadas.');
+        return;
+      }
+      const parts = splitParts.map((part) => ({ cents: Math.round(parseMoney(part.amount) * 100), method: part.method }));
+      const balanceCents = Math.round(Number(selectedCharge.balance || 0) * 100);
+      const totalCents = parts.reduce((sum, part) => sum + part.cents, 0);
+      if (parts.length < 2 || parts.length > 6 ||
+          parts.some((part) => !Number.isSafeInteger(part.cents) || part.cents <= 0 || !['pix', 'card', 'cash', 'boleto', 'transfer'].includes(part.method)) ||
+          totalCents > balanceCents || totalCents <= 0) {
+        setOperationError('Informe entre 2 e 6 valores positivos com formas válidas, sem exceder o saldo.');
+        return;
+      }
+      if (totalCents < balanceCents && !notes.trim()) {
+        setOperationError('Informe a justificativa para o saldo que permanecerá em aberto.');
+        return;
+      }
+      setSaving(true);
+      try {
+        for (let index = 0; index < parts.length; index++) {
+          const part = parts[index];
+          const lastAndSettled = index === parts.length - 1 && totalCents === balanceCents;
+          const result = await dataService.applyPatientFinancialOperation(selectedChargeId, {
+            operation: lastAndSettled ? 'PAYMENT' : 'PARTIAL_PAYMENT',
+            amount: part.cents / 100,
+            method: part.method,
+            transactionAt: new Date().toISOString(),
+            notes: 'Pagamento misto ' + (index + 1) + '/' + parts.length + '. ' + notes.trim(),
+            idempotencyKey: idempotencyKey + ':split:' + (index + 1)
+          });
+          if (!result?.success) {
+            setOperationError('Falha na parte ' + (index + 1) + '/' + parts.length +
+              '. Verifique o histórico antes de repetir; partes anteriores podem ter sido registradas. ' + (result?.error || ''));
+            return;
+          }
+          mergePersistedPayload(result.data || {});
+        }
+        onToast?.('Pagamentos registrados por forma, com saldo atualizado.', 'success');
+        setOperation(null);
+      } catch {
+        setOperationError('Erro durante o pagamento misto. Confira os lançamentos antes de repetir.');
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     if (['charge', 'payment'].includes(operation) && !selectedChargeId && selectedAppointmentIds.length === 0 && !manualCompetence) {
       setOperationError('Selecione pelo menos uma sessão ou marque o lançamento por competência.');
       return;
@@ -1072,6 +1119,35 @@ export function PatientFinanceWorkspace({
               {['charge', 'due_date'].includes(operation) && <label className="text-sm text-slate-600">Vencimento<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" /></label>}
               {['charge', 'payment', 'partial_payment', 'refund'].includes(operation) && <label className="text-sm text-slate-600">Forma de pagamento<select value={method} onChange={(event) => setMethod(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="pix">Pix</option><option value="card">Cartão</option><option value="cash">Dinheiro</option><option value="boleto">Boleto</option><option value="transfer">Transferência</option></select></label>}
             </div>
+
+            {operation === 'split_payment' && selectedCharge && (
+              <section className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/40 p-4">
+                <p className="font-semibold text-slate-800">Recebimento por formas · saldo {currency(selectedCharge.balance)}</p>
+                <p className="text-xs text-slate-500">Cada forma gera uma transação auditável. Receber menos mantém o restante em aberto; não concede desconto automaticamente.</p>
+                {splitParts.map((part, index) => (
+                  <div key={index} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
+                    <label className="text-xs text-slate-600">Valor {index + 1} (R$)
+                      <input value={part.amount} inputMode="decimal"
+                        onChange={(event) => setSplitParts((current) => current.map((p, i) => i === index ? { ...p, amount: event.target.value.replace(/[^\\d.,]/g, '') } : p))}
+                        className="mt-1 w-full rounded-lg border border-slate-200 p-2.5" />
+                    </label>
+                    <label className="text-xs text-slate-600">Forma
+                      <select value={part.method} onChange={(event) => setSplitParts((current) => current.map((p, i) => i === index ? { ...p, method: event.target.value } : p))}
+                        className="mt-1 w-full rounded-lg border border-slate-200 p-2.5">
+                        <option value="pix">Pix</option><option value="card">Cartão</option><option value="cash">Dinheiro</option><option value="transfer">Transferência</option><option value="boleto">Boleto</option>
+                      </select>
+                    </label>
+                    <button type="button" disabled={splitParts.length <= 2} onClick={() => setSplitParts((current) => current.filter((_, i) => i !== index))}
+                      className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs disabled:opacity-40">Remover</button>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between gap-3">
+                  <button type="button" disabled={splitParts.length >= 6} onClick={() => setSplitParts((current) => [...current, { amount: '', method: 'pix' }])}
+                    className="rounded-lg border border-violet-200 px-3 py-2 text-xs font-medium text-violet-700 disabled:opacity-40">Adicionar forma</button>
+                  <span className="text-sm font-semibold">Total: {currency(splitParts.reduce((sum, part) => sum + parseMoney(part.amount), 0))}</span>
+                </div>
+              </section>
+            )}
 
             {operation === 'charge' && selectedAppointmentIds.length > 0 && <div className="rounded-xl border border-slate-100 p-4"><p className="text-sm font-medium text-slate-800">Composição</p><div className="mt-2 space-y-2 text-sm text-slate-600">{selectedAppointments.map((row: any) => <div key={row.appointmentId} className="flex justify-between gap-4"><span>{row.appointmentDateLabel} · {row.serviceType}</span><span>{currency(selectedTotal / Math.max(selectedAppointmentIds.length, 1))}</span></div>)}<div className="flex justify-between border-t border-slate-100 pt-2 font-medium text-slate-900"><span>Total</span><span>{currency(selectedTotal + selectedAdditional - selectedDiscount)}</span></div></div></div>}
 
