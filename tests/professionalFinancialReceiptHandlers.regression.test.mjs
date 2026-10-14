@@ -34,7 +34,7 @@ function mockDb(role='therapist', snapshot=null, appointmentOverrides={}, itemCo
       appointment_id:i===0?APPT:'99999999-9999-4999-8999-999999999999',payment_id:PAYMENT,organization_id:CLINIC,active:true
     })),
     appointment_private_financial_snapshots: snapshot?[{...snapshot,organization_id:CLINIC,payment_id:PAYMENT}]:[],
-    patients:[{id:PATIENT,name:'Paciente de teste'}]
+    patients:[{id:PATIENT,name:'Paciente de teste',clinic_id:CLINIC}]
   };
   const from = (table) => {
     const conds = [];let inFilter=null;
