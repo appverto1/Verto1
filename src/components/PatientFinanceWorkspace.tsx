@@ -39,6 +39,7 @@ type FinanceOperation =
   | 'charge'
   | 'payment'
   | 'partial_payment'
+  | 'split_payment'
   | 'discount'
   | 'courtesy'
   | 'refund'
@@ -85,6 +86,7 @@ const operationLabels: Record<FinanceOperation, string> = {
   charge: 'Criar cobrança',
   payment: 'Registrar pagamento',
   partial_payment: 'Registrar pagamento parcial',
+  split_payment: 'Recebimento combinado (Pix + cartão)',
   discount: 'Aplicar desconto',
   courtesy: 'Marcar como cortesia',
   refund: 'Estornar pagamento',
@@ -97,6 +99,7 @@ const operationDescriptions: Record<FinanceOperation, string> = {
   charge: 'Cria a obrigação financeira sem marcar valor como recebido.',
   payment: 'Baixa integralmente uma cobrança ou cria e recebe em uma única operação.',
   partial_payment: 'Registra o valor recebido e mantém o saldo restante em aberto.',
+  split_payment: 'Registra cada forma separadamente na mesma cobrança e contabiliza a soma.',
   discount: 'Reduz o saldo com registro auditável do motivo.',
   courtesy: 'Regulariza a cobrança como cortesia sem registrar recebimento.',
   refund: 'Estorna até o limite efetivamente recebido.',
@@ -249,6 +252,7 @@ export function PatientFinanceWorkspace({
   const [discountAmount, setDiscountAmount] = useState('');
   const [dueDate, setDueDate] = useState(new Date().toISOString().slice(0, 10));
   const [method, setMethod] = useState('pix');
+  const [splitParts, setSplitParts] = useState<Array<{ amount: string; method: string }>>([{ amount: '', method: 'pix' }, { amount: '', method: 'card' }]);
   const [notes, setNotes] = useState('');
   const [proof, setProof] = useState<{ url: string; name: string; type: string } | null>(null);
   const [manualCompetence, setManualCompetence] = useState(false);
@@ -416,6 +420,9 @@ export function PatientFinanceWorkspace({
     setDiscountAmount('');
     setDueDate(String(sourceRow?.dueDate || source?.dueDate || sourceCharge?.due_date || new Date().toISOString().slice(0, 10)).slice(0, 10));
     setMethod(String(sourceRow?.method || source?.method || sourceCharge?.method || 'pix'));
+    const balanceCents = Math.round(sourceBalance * 100);
+    const half = Math.floor(balanceCents / 2);
+    setSplitParts([{ amount: moneyInput(half / 100), method: 'pix' }, { amount: moneyInput((balanceCents - half) / 100), method: 'card' }]);
     setNotes('');
     setProof(null);
     setManualCompetence(false);
@@ -497,7 +504,7 @@ export function PatientFinanceWorkspace({
   const submitOperation = async () => {
     if (!operation || saving) return;
     setOperationError('');
-    const requiresExistingCharge = ['partial_payment', 'discount', 'courtesy', 'refund', 'receipt', 'due_date', 'cancel'].includes(operation);
+    const requiresExistingCharge = ['partial_payment', 'split_payment', 'discount', 'courtesy', 'refund', 'receipt', 'due_date', 'cancel'].includes(operation);
     if (requiresExistingCharge && !selectedChargeId) {
       setOperationError('Selecione a cobrança que será alterada.');
       return;
@@ -524,6 +531,10 @@ export function PatientFinanceWorkspace({
     }
     if (operation === 'payment' && selectedCharge && Math.abs(selectedTotal - Number(selectedCharge.balance || 0)) > 0.009) {
       setOperationError(`Para pagamento integral, informe exatamente o saldo de ${currency(selectedCharge.balance)}. Use pagamento parcial para outro valor.`);
+      return;
+    }
+    if (operation === 'partial_payment' && selectedCharge && !notes.trim()) {
+      setOperationError('Justifique o recebimento parcial e o saldo em aberto.');
       return;
     }
     if (operation === 'partial_payment' && selectedCharge && selectedTotal >= Number(selectedCharge.balance || 0)) {
@@ -886,6 +897,7 @@ export function PatientFinanceWorkspace({
                     {!row.chargeId ? <button onClick={() => openOperation('charge', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Criar cobrança</button> : null}
                     {row.chargeId && row.balance > 0 ? <button onClick={() => openOperation('payment', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Registrar pagamento</button> : null}
                     {row.chargeId && row.balance > 0 ? <button onClick={() => openOperation('partial_payment', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Pagamento parcial</button> : null}
+                    {row.chargeId && row.balance > 0 ? <button onClick={() => openOperation('split_payment', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Pix + cartão / recebimento misto</button> : null}
                     {row.chargeId ? <button onClick={() => openOperation('discount', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Aplicar desconto</button> : null}
                     {row.chargeId && row.balance > 0 ? <button onClick={() => openOperation('courtesy', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Marcar como cortesia</button> : null}
                     {row.chargeId && row.paid > 0 ? <button onClick={() => openOperation('receipt', row)} className="w-full rounded-lg px-3 py-2 text-left text-xs hover:bg-slate-50">Emitir recibo</button> : null}
@@ -1023,7 +1035,7 @@ export function PatientFinanceWorkspace({
           <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4"><div><h3 className="text-lg font-semibold text-slate-900">{operationLabels[operation]}</h3><p className="mt-1 text-sm text-slate-500">{operationDescriptions[operation]}</p></div><button onClick={closeOperation} className="rounded-lg p-2 text-slate-400 hover:bg-slate-50"><X size={19} /></button></div>
           <div className="flex-1 space-y-5 overflow-y-auto p-5">
             <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              {(['charge', 'payment', 'partial_payment', 'discount', 'courtesy', 'refund'] as FinanceOperation[]).map((item) => <button key={item} type="button" onClick={() => openOperation(item)} className={`rounded-xl border p-3 text-left transition ${operation === item ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-600 hover:border-violet-200'}`}><span className="text-sm font-medium">{operationLabels[item]}</span></button>)}
+              {(['charge', 'payment', 'partial_payment', 'split_payment', 'discount', 'courtesy', 'refund'] as FinanceOperation[]).map((item) => <button key={item} type="button" onClick={() => openOperation(item)} className={`rounded-xl border p-3 text-left transition ${operation === item ? 'border-violet-400 bg-violet-50 text-violet-800' : 'border-slate-200 text-slate-600 hover:border-violet-200'}`}><span className="text-sm font-medium">{operationLabels[item]}</span></button>)}
             </div>
 
             <label className="block text-sm text-slate-600">Paciente<select value={selectedPatientId} onChange={(event) => { setSelectedPatientId(event.target.value); setSelectedAppointmentIds([]); setSelectedChargeId(''); }} disabled={Boolean(selectedChargeId)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Selecione o paciente</option>{patients.map((patient: any) => <option key={patient.id} value={patient.id}>{patient.name}</option>)}</select></label>
@@ -1050,12 +1062,12 @@ export function PatientFinanceWorkspace({
               </> : <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4 text-sm text-violet-800">Competência: {formatDisplayDate(`${month}-01`)}. O lançamento ficará identificado como mensal e não será apresentado como pagamento de uma sessão específica.</div>}
             </div>}
 
-            {operation !== 'charge' && operationCharges.length > 0 && <label className="block text-sm text-slate-600">Cobrança existente<select value={selectedChargeId} onChange={(event) => { const next = chargesById.get(event.target.value); setSelectedChargeId(event.target.value); if (next) { setSelectedPatientId(next.patientId); setAmount(moneyInput(operation === 'refund' ? next.paidGross : next.balance)); setDueDate(String(next.dueDate || '').slice(0, 10)); } }} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Selecione a cobrança</option>{operationCharges.map((charge: any) => <option key={charge.id} value={charge.id}>{charge.patientName} · {charge.dueDateLabel} · saldo {currency(charge.balance)}</option>)}</select></label>}
+            {operation !== 'charge' && operationCharges.length > 0 && <label className="block text-sm text-slate-600">Cobrança existente<select value={selectedChargeId} onChange={(event) => { const next = chargesById.get(event.target.value); setSelectedChargeId(event.target.value); if (next) { setSelectedPatientId(next.patientId); setAmount(moneyInput(operation === 'refund' ? next.paidGross : next.balance)); setDueDate(String(next.dueDate || '').slice(0, 10)); const cents = Math.round(Number(next.balance || 0) * 100); const half = Math.floor(cents / 2); setSplitParts([{ amount: moneyInput(half / 100), method: 'pix' }, { amount: moneyInput((cents - half) / 100), method: 'card' }]); } }} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="">Selecione a cobrança</option>{operationCharges.map((charge: any) => <option key={charge.id} value={charge.id}>{charge.patientName} · {charge.dueDateLabel} · saldo {currency(charge.balance)}</option>)}</select></label>}
 
             {selectedCharge && <div className="grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-4 sm:grid-cols-4">{[['Total', selectedCharge.total], ['Pago', selectedCharge.paid], ['Estornado', selectedCharge.refunded], ['Saldo', selectedCharge.balance]].map(([label, value]) => <div key={String(label)}><p className="text-xs text-slate-500">{label}</p><p className="mt-1 font-semibold text-slate-900">{currency(value)}</p></div>)}</div>}
 
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {!['courtesy', 'receipt', 'due_date', 'cancel'].includes(operation) && <label className="text-sm text-slate-600">Valor (R$)<input value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^\d.,]/g, ''))} onBlur={() => setAmount(moneyInput(parseMoney(amount)))} inputMode="decimal" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" placeholder="0,00" /></label>}
+              {!['courtesy', 'receipt', 'due_date', 'cancel', 'split_payment'].includes(operation) && <label className="text-sm text-slate-600">Valor (R$)<input value={amount} onChange={(event) => setAmount(event.target.value.replace(/[^\d.,]/g, ''))} onBlur={() => setAmount(moneyInput(parseMoney(amount)))} inputMode="decimal" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" placeholder="0,00" /></label>}
               {operation === 'charge' && <><label className="text-sm text-slate-600">Adicional (R$)<input value={additionalAmount} onChange={(event) => setAdditionalAmount(event.target.value.replace(/[^\d.,]/g, ''))} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" placeholder="0,00" /></label><label className="text-sm text-slate-600">Desconto inicial (R$)<input value={discountAmount} onChange={(event) => setDiscountAmount(event.target.value.replace(/[^\d.,]/g, ''))} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" placeholder="0,00" /></label></>}
               {['charge', 'due_date'].includes(operation) && <label className="text-sm text-slate-600">Vencimento<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm" /></label>}
               {['charge', 'payment', 'partial_payment', 'refund'].includes(operation) && <label className="text-sm text-slate-600">Forma de pagamento<select value={method} onChange={(event) => setMethod(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"><option value="pix">Pix</option><option value="card">Cartão</option><option value="cash">Dinheiro</option><option value="boleto">Boleto</option><option value="transfer">Transferência</option></select></label>}
@@ -1064,7 +1076,7 @@ export function PatientFinanceWorkspace({
             {operation === 'charge' && selectedAppointmentIds.length > 0 && <div className="rounded-xl border border-slate-100 p-4"><p className="text-sm font-medium text-slate-800">Composição</p><div className="mt-2 space-y-2 text-sm text-slate-600">{selectedAppointments.map((row: any) => <div key={row.appointmentId} className="flex justify-between gap-4"><span>{row.appointmentDateLabel} · {row.serviceType}</span><span>{currency(selectedTotal / Math.max(selectedAppointmentIds.length, 1))}</span></div>)}<div className="flex justify-between border-t border-slate-100 pt-2 font-medium text-slate-900"><span>Total</span><span>{currency(selectedTotal + selectedAdditional - selectedDiscount)}</span></div></div></div>}
 
             {['payment', 'partial_payment'].includes(operation) && <label className="block text-sm text-slate-600">Comprovante<input type="file" accept="image/png,image/jpeg,image/webp,application/pdf" className="mt-1 block w-full rounded-xl border border-dashed border-slate-200 p-3 text-sm" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; setOperationError(''); try { setProof(await readFinanceDocument(file)); } catch (error: any) { setProof(null); setOperationError(error?.message || 'Comprovante inválido.'); event.target.value = ''; } }} />{proof && <span className="mt-1 inline-flex items-center gap-1 text-xs text-emerald-700"><Paperclip size={13} /> {proof.name}</span>}</label>}
-            <label className="block text-sm text-slate-600">Observação / motivo{['discount', 'courtesy', 'refund', 'cancel'].includes(operation) && <span className="text-rose-500"> *</span>}<textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} className="mt-1 w-full resize-none rounded-xl border border-slate-200 p-3 text-sm" placeholder="Registre o contexto desta operação" /></label>
+            <label className="block text-sm text-slate-600">Observação / motivo{['discount', 'courtesy', 'refund', 'cancel', 'partial_payment'].includes(operation) && <span className="text-rose-500"> *</span>}<textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} className="mt-1 w-full resize-none rounded-xl border border-slate-200 p-3 text-sm" placeholder="Registre o contexto desta operação" /></label>
             {operationError && <div className="flex items-start gap-2 rounded-xl border border-rose-100 bg-rose-50 p-3 text-sm text-rose-700"><AlertCircle size={17} className="mt-0.5" />{operationError}</div>}
           </div>
           <div className="flex items-center justify-end gap-3 border-t border-slate-100 bg-white p-4"><button type="button" disabled={saving} onClick={closeOperation} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm text-slate-600">Cancelar</button><button type="button" disabled={saving} onClick={submitOperation} className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-medium text-white disabled:opacity-60">{saving ? <><Loader2 size={16} className="animate-spin" /> Salvando...</> : operationLabels[operation]}</button></div>
