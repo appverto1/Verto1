@@ -33,7 +33,7 @@ function mockDb(role='therapist', snapshot=null, appointmentOverrides={}, itemCo
     payment_appointment_items: Array.from({ length:itemCount },(_,i)=>({
       appointment_id:i===0?APPT:'99999999-9999-4999-8999-999999999999',payment_id:PAYMENT,organization_id:CLINIC,active:true
     })),
-    appointment_private_financial_snapshots: snapshot?[snapshot]:[],
+    appointment_private_financial_snapshots: snapshot?[{...snapshot,organization_id:CLINIC,payment_id:PAYMENT}]:[],
     patients:[{id:PATIENT,name:'Paciente de teste'}]
   };
   const from = (table) => {
