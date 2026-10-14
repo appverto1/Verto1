@@ -110,8 +110,22 @@ export function createProfessionalFinancialReceiptHandlers(deps: {
             .eq('organization_id', context.organizationId).in('id', paymentIds).limit(200)
           : { data: [], error: null };
         if (linkedError) throw linkedError;
+        // Consultar TODOS os vínculos de cada cobrança para não expor um recebível
+        // consolidado que contenha sessões de outro profissional/paciente.
+        const candidatePaymentIds = Array.from(new Set([
+          ...(direct || []).map((item: any) => String(item.id)),
+          ...(linked || []).map((item: any) => String(item.id))
+        ]));
+        const { data: allLinks, error: allLinksError } = candidatePaymentIds.length
+          ? await supabase.from('payment_appointment_items')
+            .select('payment_id,appointment_id,active')
+            .eq('organization_id', context.organizationId)
+            .in('payment_id', candidatePaymentIds)
+            .limit(500)
+          : { data: [], error: null };
+        if (allLinksError) throw allLinksError;
         const activeByPayment = new Map<string, string[]>();
-        for (const item of links || []) {
+        for (const item of allLinks || []) {
           if (item.active === false) continue;
           const id = String(item.payment_id);
           activeByPayment.set(id, [...(activeByPayment.get(id) || []), String(item.appointment_id)]);
@@ -165,7 +179,7 @@ export function createProfessionalFinancialReceiptHandlers(deps: {
         const notes = sanitizeString(req.body?.notes, 1200);
         const amount = Number(req.body?.amount);
         if (!key || !Number.isFinite(amount) || amount <= 0 ||
-            Math.round(amount * 100) !== amount * 100 ||
+            Math.abs(Math.round(amount * 100) - amount * 100) > 0.000001 ||
             !['pix', 'card', 'cash', 'transfer'].includes(method)) {
           return failed(res, 400, 'Informe valor, método e chave da operação válidos.');
         }
