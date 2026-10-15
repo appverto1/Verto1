@@ -1,7 +1,8 @@
+import { readClinicalServerSource } from './helpers/clinicalReadSource.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const server = readFileSync('server.ts', 'utf8');
+const server = readClinicalServerSource();
 const sessionMode = readFileSync('src/components/SessionMode.tsx', 'utf8');
 const dataService = readFileSync('src/services/dataService.ts', 'utf8');
 const localDb = readFileSync('src/services/localDb.ts', 'utf8');
