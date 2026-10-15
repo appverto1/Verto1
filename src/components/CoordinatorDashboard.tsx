@@ -18424,13 +18424,28 @@ export function CoordinatorDashboard({
                               </div>
                             )}
                             {!isCourtesyPlan && (
-                              <FormField label={isMonthlySessionPlan ? "Valor por sessão" : isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
+                              <FormField label={plan.billingMode === "PRIVATE" ? "Sessão individual (por paciente)" : isMonthlySessionPlan ? "Valor por sessão" : isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
                                 <input
                                   className={patientFormInputClass}
                                   placeholder="R$ 0,00"
                                   inputMode="decimal"
                                   value={plan.amount}
                                   onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                                />
+                              </FormField>
+                            )}
+                            {plan.billingMode === "PRIVATE" && (
+                              <FormField
+                                label="Sessão em grupo (por paciente)"
+                                helperText="Valor para cada participante do grupo. Deixe em branco se não houver atendimento coletivo nesta especialidade."
+                              >
+                                <input
+                                  className={patientFormInputClass}
+                                  placeholder="R$ 0,00"
+                                  inputMode="decimal"
+                                  aria-label="Valor da sessão em grupo por paciente"
+                                  value={plan.groupAmount}
+                                  onChange={(event) => handleFinancialPlanChange(plan.id, "groupAmount", event.target.value)}
                                 />
                               </FormField>
                             )}
