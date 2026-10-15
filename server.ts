@@ -20248,6 +20248,17 @@ async function persistPatientFinancialPlans(params: {
 if (!specialtyGate.ok) {
   return { success: false, error: specialtyGate.error, code: specialtyGate.code };
 }
+
+const clinicFinancialSpecialties = await validateActiveClinicFinancialPlanSpecialties({
+  supabase,
+  clinicId: params.clinicId,
+  patientId: params.patientId,
+  rows
+});
+if (!clinicFinancialSpecialties.ok) {
+  return { success: false, error: clinicFinancialSpecialties.error, code: clinicFinancialSpecialties.code };
+}
+
   const payerIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.payer_id, 120)).filter((id: string) => isUuid(id))));
   if (payerIds.length > 0) {
     const { data: payers, error: payerError } = await supabase
