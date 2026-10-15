@@ -619,6 +619,13 @@ export function getAppointmentPatientId(appointment: any): string {
   return String(appointment?.patient_id || appointment?.patientId || '').trim();
 }
 
+// Patient names are display labels, not unique scheduling identities.
+export function isSameSchedulePatient(patientId: any, appointment: any): boolean {
+  const selectedPatientId = String(patientId || '').trim();
+  const existingPatientId = getAppointmentPatientId(appointment);
+  return Boolean(selectedPatientId && existingPatientId && selectedPatientId === existingPatientId);
+}
+
 export function getAppointmentPatientName(appointment: any): string {
   return String(appointment?.patient_name || appointment?.patientName || appointment?.name || 'Paciente').trim();
 }
