@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { clinicalSpecialtyScopeKey } from '../../src/utils/clinicalSpecialties';
 import { createServerGroupSessionId } from './groupSessionWriteValidation';
 import { resolveGroupPatientRates } from './groupSessionFinancialValidation';
 import { validateGroupBookingResources } from './groupSessionResourceValidation';
@@ -16,8 +18,28 @@ export type NewGroupBookingPlan = {
   roomId: string;
   professionalIds: string[];
   idempotencyKey: string;
+  /** Server-derived payload fingerprint for the future transactional idempotency ledger. */
+  idempotencyFingerprint: string;
   patients: Array<{ patientId: string; financialPlanId: string; priceCents: number }>;
 };
+/** Stable across client ordering and repeated previews, but sensitive to every
+ * field affecting occupancy or billing. Never include the random group UUID:
+ * the DB write will persist its own identity on first successful execution.
+ */
+export function fingerprintGroupBooking(plan: Omit<NewGroupBookingPlan, 'groupId' | 'idempotencyFingerprint'>): string {
+  const members = plan.patients.map(row => [
+    normalizeId(row.patientId), normalizeId(row.financialPlanId), row.priceCents,
+  ] as const).sort((a,b) => a[0].localeCompare(b[0]));
+  const canonical = JSON.stringify([
+    'GROUP_BOOKING_V1',
+    normalizeId(plan.clinicId), clinicalSpecialtyScopeKey(plan.specialty),
+    plan.date, plan.startTime, plan.durationMinutes,
+    normalizeId(plan.roomId), [...plan.professionalIds].map(normalizeId).sort(),
+    members,
+  ]);
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
 export type NewGroupBookingDecision =
   | { ok: true; plan: NewGroupBookingPlan }
   | { ok: false; code: string; patientId?: string };
@@ -98,25 +120,29 @@ export function prepareNewGroupBooking(params: {
   });
   if (!rates.ok) return { ok: false, code: rates.code, ...('patientId' in rates ? { patientId: rates.patientId } : {}) };
 
+  const bookingData = {
+    clinicId,
+    modality: 'GROUP' as const,
+    specialty,
+    date,
+    startTime,
+    durationMinutes,
+    roomId,
+    professionalIds,
+    idempotencyKey,
+    patients: rates.rates.map(rate => ({
+      patientId: rate.patientId,
+      financialPlanId: rate.financialPlanId,
+      priceCents: rate.amountCents
+    })),
+  };
   // The client is never permitted to choose the group ID on creation.
   return {
     ok: true,
     plan: {
-      clinicId,
+      ...bookingData,
       groupId: createServerGroupSessionId(),
-      modality: 'GROUP',
-      specialty,
-      date,
-      startTime,
-      durationMinutes,
-      roomId,
-      professionalIds,
-      idempotencyKey,
-      patients: rates.rates.map(rate => ({
-        patientId: rate.patientId,
-        financialPlanId: rate.financialPlanId,
-        priceCents: rate.amountCents
-      }))
-    }
+      idempotencyFingerprint: fingerprintGroupBooking(bookingData),
+    },
   };
 }
