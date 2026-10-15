@@ -19,6 +19,7 @@ assert.match(migration, /unit_amount_cents\s+integer\s+not null/i, 'group patien
 assert.match(migration, /create or replace function public\.verify_group_session_booking_v1/i);
 assert.match(migration, /GROUP_BOOKING_SLOT_IMMUTABLE/, 'group slot/tenant identity immutable');
 assert.match(migration, /GROUP_BOOKING_ROOM_SCOPE_INVALID/, 'room must be active in clinic');
+assert.match(migration, /GROUP_BOOKING_ACTOR_SCOPE_INVALID/, 'booking actor must have active clinic membership');
 assert.match(migration, /GROUP_BOOKING_PROFESSIONAL_SCOPE_INVALID/, 'professional must be active in the correct specialty and clinic');
 assert.match(migration, /lower\(membership\.role\)\s*=\s*'therapist'/i);
 assert.match(migration, /count\(distinct membership\.user_id\)/i);
