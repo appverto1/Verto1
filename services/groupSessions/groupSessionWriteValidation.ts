@@ -57,7 +57,7 @@ export function authorizeExistingGroupJoin(params: {
   const clinicPatientIds = new Set(params.clinicPatientRows
     .filter(row => id(row.clinic_id) === clinicId).map(row => id(row.id)));
   const clinicProfessionalIds = new Set(params.clinicProfessionalRows
-    .filter(row => id(row.clinic_id) === clinicId && row.is_active !== false)
+    .filter(row => id(row.clinic_id) === clinicId && row.is_active === true)
     .map(row => id(row.id)));
   if (patients.some(value => !clinicPatientIds.has(value)) ||
     professionals.some(value => !clinicProfessionalIds.has(value))) {
