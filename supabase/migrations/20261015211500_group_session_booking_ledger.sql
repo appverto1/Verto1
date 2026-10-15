@@ -161,6 +161,9 @@ begin
     where appointment.id = new.appointment_id
       and appointment.clinic_id = new.organization_id
       and appointment.patient_id = new.patient_id
+      and appointment.deleted_at is null
+      and coalesce(appointment.is_active,true)=true
+      and lower(coalesce(appointment.status,'')) in ('scheduled','pending','confirmed')
       and appointment.room_id = v_booking.room_id::text
       and appointment.location_type = 'clinica'
       and appointment.therapist_id = any(v_booking.professional_ids)
@@ -172,6 +175,9 @@ begin
       and appointment.scheduled_end_at = v_booking.scheduled_end_at
       and appointment.source_payload->>'sessionGroupId' = new.booking_id::text
       and appointment.source_payload->>'sessionModality' = 'GROUP'
+      and jsonb_typeof(appointment.source_payload->'professionalIds') = 'array'
+      and jsonb_array_length(appointment.source_payload->'professionalIds') = cardinality(v_booking.professional_ids)
+      and appointment.source_payload->'professionalIds' @> to_jsonb(v_booking.professional_ids)
   ) then raise exception 'GROUP_PARTICIPANT_APPOINTMENT_SCOPE_INVALID'; end if;
 
   return new;
