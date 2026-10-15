@@ -18,6 +18,12 @@ const check = (overrides: any = {}) => checkNewGroupSlotAgainstAppointments({ ..
 assert.deepEqual(check(),{ok:true,code:'GROUP_SLOT_AVAILABLE'});
 assert.equal(check({existingAppointments:[entry]}).code,'GROUP_PROFESSIONAL_BUSY',
   'the same clinician cannot be booked into another independently created group');
+assert.equal(check({existingAppointments:[{
+  ...entry, therapist_id:'therapist-c', source_payload:{teamProfessionalIds:['therapist-b']}
+}]}).code,'GROUP_PROFESSIONAL_BUSY',
+  'a secondary team member cannot be double-booked even if therapist_id differs');
+assert.equal(check({existingAppointments:[{...entry,source_payload:'bad-payload'}]}).code,
+  'GROUP_SLOT_UNVERIFIABLE','invalid persisted team payload must fail closed');
 assert.equal(check({existingAppointments:[{...entry,therapist_id:'therapist-c'}]}).code,'GROUP_ROOM_BUSY',
   'a room prohibiting overlaps is still protected');
 assert.equal(check({existingAppointments:[{...entry,therapist_id:'therapist-c'}],roomPreventsOverlap:false}).ok,true,
