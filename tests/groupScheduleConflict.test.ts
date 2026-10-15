@@ -12,11 +12,13 @@ const first = {
 const second = {
   appointments:[first], clinic_id:'clinic-a', patient_id:'patient-b',
   professional_ids:['professional-a','professional-b'], session_modality:'GROUP',
-  session_group_id:id, date:'2026-10-16', start_time:'21:45',
+  session_group_id:id, group_booking_authorized:true, date:'2026-10-16', start_time:'21:45',
   duration_minutes:50, location_type:'clinica', room_id:'room-a',
   service_type:'Fonoaudiologia',
   rooms:[{id:'room-a',name:'Sala A',prevent_overlapping_appointments:true}],
 };
+const unverified = checkLocalScheduleConflicts({ ...second, group_booking_authorized: false });
+assert.equal(unverified.blocking, true, 'ID de grupo sem validação server-side não libera agenda');
 const shared = checkLocalScheduleConflicts(second);
 assert.equal(shared.blocking,false,'mesma sessão coletiva pode compartilhar sala e equipe');
 const asIndividual = checkLocalScheduleConflicts({...second,session_modality:'INDIVIDUAL'});
