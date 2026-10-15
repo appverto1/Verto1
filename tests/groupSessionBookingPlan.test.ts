@@ -16,9 +16,9 @@ const input = {
     { id: patientA, clinic_id: clinic }, { id: patientB, clinic_id: clinic }
   ],
   clinicProfessionalRows: [
-    { id: professional, clinic_id: clinic, is_active: true }
+    { user_id: professional, clinic_id: clinic, role: 'therapist', status: 'active', specialty: 'Fonoaudiólogo' }
   ],
-  clinicRoomRows: [{ id:roomId, clinic_id:clinic, is_active:true }],
+  clinicRoomRows: [{ id:roomId, clinic_id:clinic, is_active:true, capacity:10 }],
   activeFinancialPlanRows: [
     { id:'98100c4d-23f4-4a5c-87ad-2778df202d9d', organization_id:clinic, patient_id:patientA,
       status:'ACTIVE', billing_mode:'PRIVATE', service_type:'SPEECH_THERAPY', group_amount_cents:8000 },
@@ -50,8 +50,12 @@ const invalid = [
   { idempotencyKey:'' },
   { idempotencyKey:'<script>alert(1)</script>' },
   { clinicPatientRows:[{ id:patientA,clinic_id:outside },input.clinicPatientRows[1]] },
-  { clinicProfessionalRows:[{id:professional,clinic_id:clinic,is_active:false}] },
-  { clinicRoomRows:[{id:roomId,clinic_id:outside,is_active:true}] },
+  { clinicProfessionalRows:[{user_id:professional,clinic_id:clinic,role:'therapist',status:'inactive',specialty:'Fonoaudiólogo'}] },
+  { clinicProfessionalRows:[{user_id:professional,clinic_id:clinic,role:'patient',status:'active',specialty:'Fonoaudiólogo'}] },
+  { clinicProfessionalRows:[{user_id:professional,clinic_id:clinic,role:'therapist',status:'active',specialty:'Psicólogo'}] },
+  { clinicRoomRows:[{id:roomId,clinic_id:outside,is_active:true,capacity:10}] },
+  { clinicRoomRows:[{id:roomId,clinic_id:clinic,is_active:true,capacity:1}] },
+  { clinicRoomRows:[{id:roomId,clinic_id:clinic,is_active:true,capacity:null}] },
   { activeFinancialPlanRows:input.activeFinancialPlanRows.slice(0,1) },
   { activeFinancialPlanRows:input.activeFinancialPlanRows.map(r=>({...r,group_amount_cents:0})) },
   { activeFinancialPlanRows:input.activeFinancialPlanRows.map(r=>({...r,billing_mode:'INSURANCE'})) },
