@@ -65,9 +65,22 @@ export function authorizeExistingGroupJoin(params: {
   }
 
   const candidate = params.candidateAppointment;
+  const candidatePatient = id(candidate?.patient_id || candidate?.patientId);
+  const candidateProfessionals = [
+    candidate?.therapist_id, candidate?.therapistId,
+    candidate?.professional_id, candidate?.professionalId,
+    ...(Array.isArray(candidate?.professional_ids) ? candidate.professional_ids : []),
+    ...(Array.isArray(candidate?.professionalIds) ? candidate.professionalIds : []),
+    ...(Array.isArray(candidate?.team_professional_ids) ? candidate.team_professional_ids : []),
+    ...(Array.isArray(candidate?.teamProfessionalIds) ? candidate.teamProfessionalIds : []),
+  ].map(id).filter(Boolean);
+  const uniqueCandidateProfessionals = [...new Set(candidateProfessionals)].sort();
   if (
     id(candidate?.clinic_id || candidate?.clinicId) !== clinicId ||
-    getAppointmentGroupId(candidate) !== groupId
+    getAppointmentGroupId(candidate) !== groupId ||
+    !patients.includes(candidatePatient) ||
+    uniqueCandidateProfessionals.length !== professionals.length ||
+    uniqueCandidateProfessionals.some((value, index) => value !== [...professionals].sort()[index])
   ) return { ok: false, code: 'GROUP_CANDIDATE_INVALID', authorizedForOverlap: false };
 
   // Every persisted row must belong to this exact group, clinic and slot.
