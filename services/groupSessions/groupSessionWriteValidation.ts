@@ -4,6 +4,7 @@ import {
   getAppointmentGroupId,
   groupBookingIncludesPatient,
 } from '../../src/utils/groupSessionRules';
+import { validateGroupBookingResources } from './groupSessionResourceValidation';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const id = (value: unknown) => String(value || '').trim().toLowerCase();
@@ -32,7 +33,8 @@ export function authorizeExistingGroupJoin(params: {
   candidateAppointment: any;
   existingGroupAppointments: any[];
   clinicPatientRows: Array<{ id: string; clinic_id: string }>;
-  clinicProfessionalRows: Array<{ id: string; clinic_id: string; is_active?: boolean }>;
+  clinicProfessionalRows: Array<{ user_id: string; clinic_id: string; role: string; status: string; specialty: string }>;
+  clinicRoomRows: Array<{ id: string; clinic_id?: string; organization_id?: string; is_active?: boolean; capacity?: number | null }>;
   patientIds: string[];
   professionalIds: string[];
 }): GroupJoinDecision {
@@ -56,11 +58,7 @@ export function authorizeExistingGroupJoin(params: {
 
   const clinicPatientIds = new Set(params.clinicPatientRows
     .filter(row => id(row.clinic_id) === clinicId).map(row => id(row.id)));
-  const clinicProfessionalIds = new Set(params.clinicProfessionalRows
-    .filter(row => id(row.clinic_id) === clinicId && row.is_active === true)
-    .map(row => id(row.id)));
-  if (patients.some(value => !clinicPatientIds.has(value)) ||
-    professionals.some(value => !clinicProfessionalIds.has(value))) {
+  if (patients.some(value => !clinicPatientIds.has(value))) {
     return { ok: false, code: 'GROUP_MEMBERSHIP_DENIED', authorizedForOverlap: false };
   }
 
@@ -102,6 +100,17 @@ export function authorizeExistingGroupJoin(params: {
       existingPatientIds.length + patients.length > 30) {
     return { ok: false, code: 'GROUP_CAPACITY_INVALID', authorizedForOverlap: false };
   }
+
+  const resources = validateGroupBookingResources({
+    clinicId,
+    specialty: String(candidate?.service_type || candidate?.serviceType || candidate?.approach || ''),
+    professionalIds: professionals,
+    patientCount: existingPatientIds.length + patients.length,
+    roomId: id(candidate?.room_id || candidate?.roomId),
+    membershipRows: params.clinicProfessionalRows,
+    roomRows: params.clinicRoomRows,
+  });
+  if (!resources.ok) return { ok: false, code: resources.code, authorizedForOverlap: false };
 
   if (params.existingGroupAppointments.some(row => patients.includes(id(row?.patient_id || row?.patientId))) ||
       patients.some(patientId => groupBookingIncludesPatient(params.existingGroupAppointments, {
