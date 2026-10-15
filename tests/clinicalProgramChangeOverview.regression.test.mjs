@@ -1,3 +1,4 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -5,7 +6,7 @@ const shell = fs.readFileSync('src/components/ClinicalPlanAnalyticsShell.tsx', '
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 const changeAnalytics = fs.readFileSync('src/utils/clinicalProgramChangeAnalytics.ts', 'utf8');
 const outcomeAnalytics = fs.readFileSync('src/utils/clinicalOutcomeAnalytics.ts', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 
 assert.match(shell, /Andamento geral dos programas/, 'mudanças por sessão deve resumir programas, não repetir um gráfico por alvo');
 assert.match(shell, /Evolução dos programas/, 'a visão deve explicitar evolução dos programas');
