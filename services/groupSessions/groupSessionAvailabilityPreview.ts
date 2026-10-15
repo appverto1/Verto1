@@ -46,7 +46,8 @@ export async function previewGroupBookingAvailability(params: Candidate): Promis
   if (!ABSOLUTE_ISO.test(raw)) return { ok: false, code: 'GROUP_PREVIEW_TIME_INVALID' };
   const start = new Date(raw);
   const startMs = start.getTime();
-  if (!Number.isFinite(startMs) || !Number.isInteger(params.durationMinutes) ||
+  if (!Number.isFinite(startMs) || startMs % 60_000 !== 0 ||
+      !Number.isInteger(params.durationMinutes) ||
       params.durationMinutes < 15 || params.durationMinutes > 360) {
     return { ok: false, code: 'GROUP_PREVIEW_TIME_INVALID' };
   }
