@@ -1,4 +1,5 @@
 import { prepareNewGroupBooking, type NewGroupBookingDecision } from './groupSessionBookingPlan';
+import { previewGroupBookingAvailability } from './groupSessionAvailabilityPreview';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const id = (value: unknown) => String(value ?? '').trim().toLowerCase();
@@ -13,6 +14,7 @@ type GroupBookingInput = {
   durationMinutes: unknown;
   roomId: unknown;
   idempotencyKey: unknown;
+  scheduledStartAt: unknown;
 };
 
 /**
@@ -65,7 +67,7 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
       .eq('clinic_id',clinicId).eq('status','active')
       .in('user_id',professionals).limit(professionals.length + 1),
     params.supabase.from('clinic_rooms')
-      .select('id,clinic_id,organization_id,is_active,capacity')
+      .select('id,clinic_id,organization_id,is_active,capacity,prevent_overlapping_appointments')
       .eq('clinic_id',clinicId).eq('id',roomId).limit(1),
     params.supabase.from('patient_financial_plans')
       .select('id,organization_id,patient_id,status,billing_mode,service_type,custom_service_name,service_name_snapshot,group_amount_cents')
@@ -82,7 +84,7 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
   if ((planRows.data || []).length >= 201 || (memberRows.data || []).length > professionals.length)
     return { ok:false, code:'GROUP_PREVIEW_ROWS_TRUNCATED' };
 
-  return prepareNewGroupBooking({
+  const prepared = prepareNewGroupBooking({
     authenticatedClinicId:clinicId,
     patientIds:patients,
     professionalIds:professionals,
@@ -97,4 +99,19 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
     clinicRoomRows:roomRows.data || [],
     activeFinancialPlanRows:planRows.data || [],
   });
+  if (!prepared.ok) return prepared;
+
+  // Only an actual canonical room can define whether overlap is permitted.
+  // The preview remains non-authoritative even after this collision check.
+  const room = (roomRows.data || []).find((row: any) => id(row.id) === roomId && id(row.clinic_id) === clinicId);
+  if (!room) return { ok:false, code:'GROUP_ROOM_UNAVAILABLE' };
+  const availability = await previewGroupBookingAvailability({
+    supabase: params.supabase,
+    clinicId, patientIds: patients, professionalIds: professionals,
+    roomId, roomPreventsOverlap: room.prevent_overlapping_appointments !== false,
+    date, startTime: time, durationMinutes: duration,
+    scheduledStartAt: params.scheduledStartAt,
+  });
+  if (!availability.ok) return { ok:false, code:availability.code };
+  return prepared;
 }
