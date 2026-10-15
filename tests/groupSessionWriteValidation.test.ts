@@ -39,4 +39,16 @@ assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{id:
 assert.equal(authorizeExistingGroupJoin({...input, existingGroupAppointments:[{...existing,status:'canceled'}]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, candidateAppointment:{...current,time:'22:00'}}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, requestedGroupId:'not-a-uuid'}).ok, false);
+const fullGroup = Array.from({ length: 30 }, (_, index) => ({
+  ...existing,
+  id: `existing-${index}`,
+  patient_id: `5502e3c5-f4c1-4a18-ae65-${String(index+1).padStart(12, '0')}`
+}));
+const capacityResult = authorizeExistingGroupJoin({
+  ...input,
+  existingGroupAppointments: fullGroup
+});
+assert.equal(capacityResult.ok, false, 'new patient must not exceed overall group capacity');
+if (!capacityResult.ok) assert.equal(capacityResult.code, 'GROUP_CAPACITY_INVALID');
+
 console.log('groupSessionWriteValidation.test.ts: ok');
