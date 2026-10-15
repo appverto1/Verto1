@@ -110,6 +110,8 @@ set search_path = public, pg_temp
 as $$
 declare
   v_booking public.group_session_bookings%rowtype;
+  v_room_capacity integer;
+  v_participant_count integer;
 begin
   select * into v_booking
   from public.group_session_bookings
@@ -120,15 +122,17 @@ begin
   end if;
 
   -- All joins of a booking serialize on the same header lock.
-  if (select count(*) from public.group_session_participants existing
-      where existing.booking_id=new.booking_id) >= 30 then
+  select room.capacity into v_room_capacity from public.clinic_rooms room
+  where room.id=v_booking.room_id and room.clinic_id=new.organization_id and room.is_active=true;
+  if v_room_capacity is null or v_room_capacity < 2 then
+    raise exception 'GROUP_PARTICIPANT_ROOM_UNAVAILABLE';
+  end if;
+  select count(*)::integer into v_participant_count
+  from public.group_session_participants existing where existing.booking_id=new.booking_id;
+  if v_participant_count >= 30 then
     raise exception 'GROUP_PARTICIPANT_CAPACITY_EXCEEDED';
   end if;
-  if (select count(*) from public.group_session_participants existing
-      where existing.booking_id=new.booking_id) >= (
-        select room.capacity from public.clinic_rooms room
-        where room.id=v_booking.room_id and room.clinic_id=new.organization_id and room.is_active=true
-      ) then
+  if v_participant_count >= v_room_capacity then
     raise exception 'GROUP_PARTICIPANT_ROOM_CAPACITY_EXCEEDED';
   end if;
 
