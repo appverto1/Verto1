@@ -33,7 +33,7 @@ create table if not exists public.group_session_bookings (
 create or replace function public.verify_group_session_booking_v1()
 returns trigger language plpgsql security invoker
 set search_path = public, pg_temp
-as $
+as $$
 declare
   v_capacity integer;
   v_team_count integer;
@@ -96,7 +96,7 @@ begin
   end if;
   return new;
 end;
-$;
+$$;
 
 drop trigger if exists group_booking_verify_scope on public.group_session_bookings;
 create trigger group_booking_verify_scope
