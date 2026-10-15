@@ -5,9 +5,9 @@ const migration = readFileSync('supabase/migrations/20261015211500_group_session
 
 assert.match(migration, /\bbegin\s*;/i, 'migration must use a transaction');
 assert.match(migration, /\bcommit\s*;/i);
-assert.equal((migration.match(/\\bas \\$\\$\\s*\\n/g) || []).length, 2, 'both trigger functions must use $$ PLpgSQL delimiters');
-assert.equal((migration.match(/\\n\\$\\$;/g) || []).length, 2, 'both trigger functions must close with $$');
-assert.doesNotMatch(migration, /\\bas \\$\\s*\\n/, 'single-dollar function delimiter is not valid SQL');
+assert.equal((migration.match(/\bas \$\$\s*\n/g) || []).length, 2, 'both trigger functions must use $$ PLpgSQL delimiters');
+assert.equal((migration.match(/\n\$\$;/g) || []).length, 2, 'both trigger functions must close with $$');
+assert.doesNotMatch(migration, /\bas \$\s*\n/, 'single-dollar function delimiter is not valid SQL');
 assert.match(migration, /create table if not exists public\.group_session_bookings/i);
 assert.match(migration, /create table if not exists public\.group_session_participants/i);
 assert.match(migration, /unique\s*\(organization_id,booking_key\)/i, 'tenant-scoped idempotency key must be unique');
