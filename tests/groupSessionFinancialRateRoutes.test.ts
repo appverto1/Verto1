@@ -19,9 +19,9 @@ const deps={
 };
 registerGroupSessionFinancialRateRoutes(app,deps);
 assert.deepEqual(moduleNames,['appointments_communication']);
-assert.deepEqual(capabilities,['patient.demographics.edit']);
+assert.deepEqual(capabilities,['patient.demographics.edit','finance.entries.manage']);
 assert.equal(calls[0][1],'/api/patients/:patientId/financial-plans/:planId/group-rate');
-assert.equal(calls[0][2],6,'rate route has limiter/cache/auth/module/capability + handler');
+assert.equal(calls[0][2],7,'rate route has limiter/cache/auth/module/capabilities + handler');
 const res=()=>({statusCode:200,body:null as any,status(code:number){this.statusCode=code;return this;},json(value:any){this.body=value;return this;}});
 const req=(changes:any={})=>({
   session:{user:{id:actor}},params:{patientId:patient,planId:plan},
