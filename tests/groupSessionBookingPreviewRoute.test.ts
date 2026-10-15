@@ -46,8 +46,8 @@ registerGroupSessionBookingPreviewRoute(app,{
   enforcePayloadLimit(){return true;},
 });
 assert.deepEqual(mods,['appointments_communication']);
-assert.deepEqual(caps,['calendar.appointment.create','patient.demographics.edit']);
-assert.equal(middlewares.length,7);
+assert.deepEqual(caps,['calendar.appointment.create','patient.demographics.edit','finance.entries.view']);
+assert.equal(middlewares.length,8);
 const req=(body:any)=>({session:{user:{id:'authenticated-user'}},body});
 const response=()=>({
   statusCode:200, body:null as any,
