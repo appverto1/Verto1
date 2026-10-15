@@ -50,6 +50,9 @@ begin
       old.professional_ids is distinct from new.professional_ids or
       old.created_by is distinct from new.created_by
   ) then raise exception 'GROUP_BOOKING_SLOT_IMMUTABLE'; end if;
+  -- Cancellation/completion must remain possible after a room or member is
+  -- deactivated. Only INSERT needs current availability/membership checks.
+  if tg_op = 'UPDATE' then return new; end if;
 
   select room.capacity into v_capacity
   from public.clinic_rooms room
