@@ -27,6 +27,65 @@ create table if not exists public.group_session_bookings (
   constraint group_session_booking_tenant_key unique (id,organization_id)
 );
 
+-- The booking header must never bind a room or professional from another
+-- clinic. Its identity/slot is immutable; rescheduling will require its own
+-- atomic operation, not arbitrary edits of the ledger row.
+create or replace function public.verify_group_session_booking_v1()
+returns trigger language plpgsql security invoker
+set search_path = public, pg_temp
+as $
+declare
+  v_capacity integer;
+  v_team_count integer;
+  v_authorized_count integer;
+begin
+  if tg_op = 'UPDATE' and (
+      old.organization_id is distinct from new.organization_id or
+      old.booking_key is distinct from new.booking_key or
+      old.payload_hash is distinct from new.payload_hash or
+      old.specialty is distinct from new.specialty or
+      old.room_id is distinct from new.room_id or
+      old.scheduled_start_at is distinct from new.scheduled_start_at or
+      old.scheduled_end_at is distinct from new.scheduled_end_at or
+      old.professional_ids is distinct from new.professional_ids or
+      old.created_by is distinct from new.created_by
+  ) then raise exception 'GROUP_BOOKING_SLOT_IMMUTABLE'; end if;
+
+  select room.capacity into v_capacity
+  from public.clinic_rooms room
+  where room.id = new.room_id
+    and room.clinic_id = new.organization_id
+    and room.is_active = true;
+  if v_capacity is null or v_capacity < 2 then
+    raise exception 'GROUP_BOOKING_ROOM_SCOPE_INVALID';
+  end if;
+
+  select count(distinct requested_id)::integer into v_team_count
+  from unnest(new.professional_ids) requested_id;
+  if v_team_count <> cardinality(new.professional_ids) then
+    raise exception 'GROUP_BOOKING_TEAM_DUPLICATED';
+  end if;
+
+  select count(distinct membership.user_id)::integer into v_authorized_count
+  from public.clinic_memberships membership
+  where membership.clinic_id = new.organization_id
+    and membership.user_id = any(new.professional_ids)
+    and lower(membership.status) = 'active'
+    and lower(membership.role) = 'therapist'
+    and public.appointment_financial_service_key_v1(membership.specialty)
+      = public.appointment_financial_service_key_v1(new.specialty);
+  if v_authorized_count <> cardinality(new.professional_ids) then
+    raise exception 'GROUP_BOOKING_PROFESSIONAL_SCOPE_INVALID';
+  end if;
+  return new;
+end;
+$;
+
+drop trigger if exists group_booking_verify_scope on public.group_session_bookings;
+create trigger group_booking_verify_scope
+before insert or update on public.group_session_bookings
+for each row execute function public.verify_group_session_booking_v1();
+
 -- A record per patient connects the collective booking to the existing
 -- independently auditable clinical appointment and its frozen patient rate.
 create table if not exists public.group_session_participants (
@@ -120,6 +179,7 @@ alter table public.group_session_bookings enable row level security;
 alter table public.group_session_participants enable row level security;
 revoke all on table public.group_session_bookings from public,anon,authenticated;
 revoke all on table public.group_session_participants from public,anon,authenticated;
+revoke all on function public.verify_group_session_booking_v1() from public,anon,authenticated;
 revoke all on function public.verify_group_session_participant_v1() from public,anon,authenticated;
 grant select,insert,update on table public.group_session_bookings to service_role;
 grant select,insert on table public.group_session_participants to service_role;
