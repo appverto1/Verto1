@@ -10,7 +10,7 @@ const routes = ["targets","behaviors","mastery","maintenance","session-changes",
 const deps = ["supabase","resolveAbaChartPatientScope","isUuid","parseAbaChartParams","fetchAbaSnapshotRows","fetchAbaGraphAnnotations","normalizeAbaSnapshotPoint","applyAbaChartTenantScope","hasMissingFinancialSchema","analyzeBehaviorContextPatterns","enrichMaintenanceRowsWithTargetDisplay","isAbaSignificantChange","buildAbaChartInsight","ABA_BEHAVIOR_DAILY_CHART_SELECT","ABA_MASTERY_LIST_SELECT","ABA_MAINTENANCE_SCHEDULE_SELECT","ABA_MAINTENANCE_PROBE_RESULT_SELECT","ABA_REGRESSION_ALERT_SELECT","ABA_PATIENT_SUMMARY_SELECT"];
 const factory = '  const abaChartReadHandlers = createAbaChartReadHandlers(() => ({ ' + deps.join(', ') + ' }));\n';
 const imp = "import { createAbaChartReadHandlers } from './services/abaChartReadHandlers';\n";
-assert.ok(current.startsWith(imp));
+assert.equal(current.split(imp).length - 1, 1, 'ABA factory import remains registered exactly once alongside independent domain imports');
 assert.ok(!current.includes('abaChartReadHandlers.session-changes'), 'route names with hyphens must use bracket access');
 // Compare the historical ABA extraction against its merge commit; subsequent
 // independent server.ts extractions must not invalidate this source fixture.
