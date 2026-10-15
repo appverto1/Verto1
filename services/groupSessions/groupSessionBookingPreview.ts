@@ -38,6 +38,21 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
     return { ok:false, code:'GROUP_PREVIEW_INPUT_INVALID' };
   }
 
+  // Refuse malformed calendar inputs *before* spending four batched DB reads.
+  // The booking plan performs this validation again after fetching canonical rows.
+  const specialty = String(params.specialty || '').trim().slice(0, 120);
+  const date = String(params.date || '').trim();
+  const time = String(params.startTime || '').trim();
+  const duration = Number(params.durationMinutes);
+  const key = String(params.idempotencyKey || '').trim();
+  const parsed = /^\\d{4}-\\d{2}-\\d{2}$/.test(date) ? new Date(date + 'T00:00:00Z') : null;
+  if (!specialty || !parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ||
+      !/^([01]\\d|2[0-3]):[0-5]\\d$/.test(time) ||
+      !Number.isInteger(duration) || duration < 15 || duration > 360 ||
+      !/^[a-zA-Z0-9:._-]{12,120}$/.test(key)) {
+    return { ok:false, code:'GROUP_PREVIEW_INPUT_INVALID' };
+  }
+
   // Each request is scoped by the authenticated clinic, never by a tenant ID
   // provided in the request body. The queries can run concurrently without
   // creating per-patient N+1 reads.
