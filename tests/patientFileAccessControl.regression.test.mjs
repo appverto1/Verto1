@@ -1,7 +1,8 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readPatientPlanServerSource();
 const dataService = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
 const patientDetail = fs.readFileSync(new URL('../src/components/PatientDetailView.tsx', import.meta.url), 'utf8');
 const accessUtil = fs.readFileSync(new URL('../src/utils/patientFileAccess.ts', import.meta.url), 'utf8');

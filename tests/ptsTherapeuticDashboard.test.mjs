@@ -1,3 +1,4 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -5,7 +6,7 @@ const dashboard = fs.readFileSync('src/components/PtsTherapeuticDashboard.tsx', 
 const panel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
 const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const editor = fs.readFileSync('src/components/PtsWorkspaceEditor.tsx', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 
 for (const label of [
   'Projeto Terapêutico Singular',
