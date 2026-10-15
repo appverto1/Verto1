@@ -267,6 +267,7 @@ const criticalTests = [
   'tests/moduleUpgradeV5S1Finalization.regression.test.mjs',
   'tests/moduleUpgradeV5S1Http.test.ts',
   'tests/abaChartReadHandlers.test.ts',
+  'tests/reminderValueNormalization.test.ts',
 ];
 
 for (const testFile of criticalTests) {
