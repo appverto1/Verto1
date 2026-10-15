@@ -97,6 +97,7 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
     specialty:params.specialty,
     date:params.date,
     startTime:params.startTime,
+    scheduledStartAt: params.scheduledStartAt,
     durationMinutes:params.durationMinutes,
     roomId,
     idempotencyKey:params.idempotencyKey,
