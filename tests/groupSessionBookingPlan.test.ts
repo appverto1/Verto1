@@ -35,6 +35,33 @@ if (valid.ok) {
   assert.equal(valid.plan.modality,'GROUP');
   assert.deepEqual(valid.plan.professionalIds,[professional]);
 }
+if (valid.ok) {
+  assert.match(valid.plan.idempotencyFingerprint, /^[0-9a-f]{64}$/);
+  const retry = prepareNewGroupBooking({...input,patientIds:[patientB,patientA]});
+  assert.equal(retry.ok,true);
+  if (retry.ok) {
+    assert.notEqual(retry.plan.groupId,valid.plan.groupId,
+      'preview group IDs are not binding reservation identities');
+    assert.equal(retry.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint,
+      'same clinic, slot, patients, professional and canonical prices hash identically');
+  }
+  const changedPrice = prepareNewGroupBooking({...input,
+    activeFinancialPlanRows: input.activeFinancialPlanRows.map((row,i) =>
+      i === 0 ? {...row, group_amount_cents:8001} : row),
+  });
+  assert.equal(changedPrice.ok,true);
+  if (changedPrice.ok) assert.notEqual(changedPrice.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint,
+    'same idempotency key with different canonical charge must conflict at write');
+  const changedRoom = prepareNewGroupBooking({...input,
+    roomId:'48385e86-4f18-4fa7-b977-00a182e768c3',
+    clinicRoomRows:[{id:'48385e86-4f18-4fa7-b977-00a182e768c3',clinic_id:clinic,is_active:true,capacity:10}],
+  });
+  assert.equal(changedRoom.ok,true);
+  if (changedRoom.ok) assert.notEqual(changedRoom.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
+  const changedTime = prepareNewGroupBooking({...input,startTime:'22:00'});
+  assert.equal(changedTime.ok,true);
+  if (changedTime.ok) assert.notEqual(changedTime.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
+}
 const invalid = [
   { patientIds:[patientA] },
   { patientIds:[patientA,patientA] },
