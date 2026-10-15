@@ -248,6 +248,10 @@ type NavigationNode = {
   newFeatureKey?: NewFeatureKey;
 };
 
+// Enable only after the backend financial-plan row mapper forwards
+// group_amount_cents to the transactional reconciler and the group pricing
+// triggers/snapshots are deployed. Never promise an unpersisted price.
+const GROUP_FINANCIAL_PLAN_EDITOR_ENABLED = false;
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
 const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
 
@@ -18434,7 +18438,7 @@ export function CoordinatorDashboard({
                                 />
                               </FormField>
                             )}
-                            {plan.billingMode === "PRIVATE" && (
+                            {GROUP_FINANCIAL_PLAN_EDITOR_ENABLED && plan.billingMode === "PRIVATE" && (
                               <FormField
                                 label="Sessão em grupo (por paciente)"
                                 helperText="Valor para cada participante do grupo. Deixe em branco se não houver atendimento coletivo nesta especialidade."
