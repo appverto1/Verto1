@@ -374,6 +374,7 @@ import {
   buildPatientPortabilitySnapshot,
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
+import { validateActiveClinicFinancialPlanSpecialties } from './services/patientFinancialSpecialtyGuard';
 import {
   getPatientFinancialServiceLabel,
   isPatientFinancialPlanComplete,
@@ -20241,6 +20242,12 @@ async function persistPatientFinancialPlans(params: {
     // independent PRIVATE/base plan mutations to continue.
     rows = rows.filter((row: any) => !patientFinancialPlanIsInsurance(row));
   }
+  const specialtyGate = await validateActiveClinicFinancialPlanSpecialties({
+  supabase, clinicId: params.clinicId, patientId: params.patientId, rows
+});
+if (!specialtyGate.ok) {
+  return { success: false, error: specialtyGate.error, code: specialtyGate.code };
+}
   const payerIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.payer_id, 120)).filter((id: string) => isUuid(id))));
   if (payerIds.length > 0) {
     const { data: payers, error: payerError } = await supabase

@@ -258,7 +258,9 @@ import {
   PATIENT_FINANCIAL_BILLING_MODE_OPTIONS,
   PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
   PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS,
-  PATIENT_FINANCIAL_SERVICE_OPTIONS,
+  availableClinicFinancialPlanServiceOptions,
+  patientFinancialPlanSelectionValue,
+  patientFinancialPlanClinicalScopeKey,
   createPatientFinancialPlan,
   financialPlanRequiresPaymentMethod,
   getFinancialPlanMonthlyProjectionValue,
@@ -1419,6 +1421,11 @@ export function CoordinatorDashboard({
     });
     return Array.from(available).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [therapistMembersById]);
+
+  const clinicFinancialPlanServiceOptions = useMemo(
+    () => availableClinicFinancialPlanServiceOptions(clinicSessionSpecialtyOptions),
+    [clinicSessionSpecialtyOptions],
+  );
 
   const patientCareProfessionals = useMemo(() => {
     const unique = new Map<string, any>();
@@ -6730,6 +6737,13 @@ export function CoordinatorDashboard({
   };
 
   const handleFinancialPlanChange = (planId: string, field: string, value: any) => {
+    const selectedSpecialty = field === "serviceType"
+      ? clinicFinancialPlanServiceOptions.find((option) => option.value === value)
+      : null;
+    if (field === "serviceType" && !selectedSpecialty) {
+      showToast("Selecione uma especialidade com profissional ativo nesta clínica.", "error");
+      return;
+    }
     setNewPatientForm((prev: any) => {
       const nextPlans = normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => {
         if (plan.id !== planId) {
@@ -6744,7 +6758,9 @@ export function CoordinatorDashboard({
         }
         return createPatientFinancialPlan({
           ...plan,
-          [field]: value,
+          ...(field === "serviceType" && selectedSpecialty
+            ? { serviceType: selectedSpecialty.serviceType, customServiceName: selectedSpecialty.customServiceName }
+            : { [field]: value }),
           ...(field === "billingMode" && value === "INSURANCE"
             ? {
                 payerId: plan.payerId || prev.convenioPayerId || "",
@@ -6782,7 +6798,6 @@ export function CoordinatorDashboard({
                 aggregationMethod: "",
               }
             : {}),
-          ...(field === "serviceType" && value !== "CUSTOM" ? { customServiceName: "" } : {}),
           ...(field === "payerNameSnapshot" ? { insuranceName: value } : {}),
         });
       });
@@ -6846,6 +6861,10 @@ export function CoordinatorDashboard({
   };
 
   const addFinancialPlanRow = () => {
+    if (therapistMembersLoading || clinicSpecialtiesError || !clinicFinancialPlanServiceOptions.length) {
+      showToast("Vincule um profissional ativo à especialidade antes de cadastrar um plano financeiro.", "error");
+      return;
+    }
     setNewPatientForm((prev: any) => ({
       ...prev,
       financialPlans: [
@@ -6978,6 +6997,30 @@ export function CoordinatorDashboard({
       showToast("Selecione um convênio ativo cadastrado pela clínica.", "error");
       setActivePatientRegistrationTab("insurance");
       return;
+    }
+    if (canManagePatientFinancialPlan) {
+      const existing = editingPatientId
+        ? allPatients.find((patient: any) => String(patient?.id) === String(editingPatientId))
+        : null;
+      const previous = normalizePatientFinancialPlans(existing?.financialPlans || existing?.financial_plans || [], existing || {});
+      const available = new Set(clinicFinancialPlanServiceOptions.map((option) => patientFinancialPlanClinicalScopeKey({
+        serviceType: option.serviceType,
+        customServiceName: option.customServiceName,
+      })));
+      const newInvalidPlan = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
+        .some((plan: any) => {
+          if (!plan?.serviceType) return false;
+          const scope = patientFinancialPlanClinicalScopeKey(plan);
+          if (scope && available.has(scope)) return false;
+          // A historical plan remains readable and saveable without silently deleting it.
+          const old = previous.find((item: any) => String(item.id) === String(plan.id));
+          return !old || patientFinancialPlanClinicalScopeKey(old) !== scope;
+        });
+      if (newInvalidPlan) {
+        showToast("Não é possível cadastrar plano de especialidade sem profissional ativo na clínica.", "error");
+        setActivePatientRegistrationTab("financial");
+        return;
+      }
     }
     showProcessing(
       editingPatientId
@@ -18209,11 +18252,17 @@ export function CoordinatorDashboard({
                     <button
                       type="button"
                       onClick={addFinancialPlanRow}
+                      disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError) || !clinicFinancialPlanServiceOptions.length}
+                      title={!clinicFinancialPlanServiceOptions.length ? "É necessário profissional ativo na clínica" : "Adicionar plano financeiro"}
                       className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-bold text-[#7a32fc] shadow-sm transition-all hover:bg-violet-50"
                     >
                       <Plus size={14} /> Plano
                     </button>
                   </div>
+                  {clinicSpecialtiesError && <p role="alert" className="mb-3 text-xs text-rose-700">{clinicSpecialtiesError}</p>}
+                  {!therapistMembersLoading && !clinicSpecialtiesError && !clinicFinancialPlanServiceOptions.length && (
+                    <p className="mb-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">Nenhuma especialidade disponível. Vincule um profissional ativo na equipe antes de cadastrar planos financeiros.</p>
+                  )}
                   <div className="space-y-3">
                     {(() => {
                       const plans = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm);
@@ -18249,11 +18298,15 @@ export function CoordinatorDashboard({
                                 <FormField label="Linha de cuidado / especialidade">
                                   <select
                                     className={patientFormInputClass}
-                                    value={plan.serviceType}
+                                    value={patientFinancialPlanSelectionValue(plan)}
+                                    disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError) || !clinicFinancialPlanServiceOptions.length}
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "serviceType", e.target.value)}
                                   >
-                                    <option value="">Especialidade/serviço</option>
-                                    {PATIENT_FINANCIAL_SERVICE_OPTIONS.map((option) => (
+                                    <option value="">Selecione a especialidade</option>
+                                    {plan.serviceType && !clinicFinancialPlanServiceOptions.some((option) => option.value === patientFinancialPlanSelectionValue(plan)) && (
+                                      <option value={patientFinancialPlanSelectionValue(plan)} disabled>Especialidade anterior (indisponível na equipe atual)</option>
+                                    )}
+                                    {clinicFinancialPlanServiceOptions.map((option) => (
                                       <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                   </select>
@@ -18261,12 +18314,12 @@ export function CoordinatorDashboard({
                               </div>
                             {plan.serviceType === "CUSTOM" && (
                               <div className="xl:col-span-2">
-                                <FormField label="Nome do serviço">
+                                <FormField label="Especialidade do profissional">
                                   <input
                                     className={patientFormInputClass}
-                                    placeholder="Nome do serviço"
                                     value={plan.customServiceName}
-                                    onChange={(e) => handleFinancialPlanChange(plan.id, "customServiceName", e.target.value)}
+                                    readOnly
+                                    title="Nome definido pelo cadastro do profissional ativo"
                                   />
                                 </FormField>
                               </div>

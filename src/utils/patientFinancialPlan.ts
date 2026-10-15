@@ -1,4 +1,4 @@
-import { clinicalSpecialtiesMatch } from './clinicalSpecialties';
+import { clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey, normalizeClinicalSpecialty } from './clinicalSpecialties';
 
 export const PATIENT_FINANCIAL_SERVICE_OPTIONS = [
   { value: 'PSYCHOLOGY', label: 'Psicologia' },
@@ -10,6 +10,54 @@ export const PATIENT_FINANCIAL_SERVICE_OPTIONS = [
   { value: 'THERAPY', label: 'Terapia' },
   { value: 'CUSTOM', label: 'Outro' },
 ] as const;
+
+/**
+ * Agenda and financial plans share the same clinic-active specialty boundary.
+ * ABA is a treatment approach, not a profession; generic CUSTOM/THERAPY options
+ * must never allow bypassing an unavailable clinic specialty.
+ */
+const FINANCIAL_SERVICE_BY_CLINICAL_SCOPE: Record<string, string> = {
+  psychotherapy: 'PSYCHOLOGY',
+  speech_therapy: 'SPEECH_THERAPY',
+  occupational_therapy: 'OCCUPATIONAL_THERAPY',
+  psychopedagogy: 'PSYCHOPEDAGOGY',
+  physiotherapy: 'PHYSIOTHERAPY'
+};
+
+const CLINICAL_SCOPE_BY_FINANCIAL_SERVICE: Record<string, string> =
+  Object.fromEntries(Object.entries(FINANCIAL_SERVICE_BY_CLINICAL_SCOPE).map(([scope, service]) => [service, scope]));
+
+export const patientFinancialPlanClinicalScopeKey = (plan: any): string | null => {
+  const type = String(plan?.serviceType || plan?.service_type || '').trim().toUpperCase();
+  if (type === 'CUSTOM') return clinicalSpecialtyScopeKey(
+    plan?.customServiceName || plan?.custom_service_name || plan?.specialty || ''
+  );
+  return CLINICAL_SCOPE_BY_FINANCIAL_SERVICE[type] || null;
+};
+
+export const availableClinicFinancialPlanServiceOptions = (activeSpecialties: string[]) => {
+  const seen = new Set<string>();
+  return (activeSpecialties || []).flatMap((raw) => {
+    const canonical = normalizeClinicalSpecialty(raw);
+    const scope = clinicalSpecialtyScopeKey(canonical);
+    if (!canonical || !scope || seen.has(scope)) return [];
+    seen.add(scope);
+    const serviceType = FINANCIAL_SERVICE_BY_CLINICAL_SCOPE[scope] || 'CUSTOM';
+    return [{
+      value: serviceType === 'CUSTOM' ? `CUSTOM:${canonical}` : serviceType,
+      label: canonical,
+      serviceType,
+      customServiceName: serviceType === 'CUSTOM' ? canonical : ''
+    }];
+  });
+};
+
+export const patientFinancialPlanSelectionValue = (plan: any) => {
+  const serviceType = String(plan?.serviceType || plan?.service_type || '');
+  if (serviceType !== 'CUSTOM') return serviceType;
+  const name = String(plan?.customServiceName || plan?.custom_service_name || plan?.specialty || '').trim();
+  return name ? `CUSTOM:${name}` : 'CUSTOM';
+};
 
 export const PATIENT_FINANCIAL_BILLING_MODE_OPTIONS = [
   { value: 'PRIVATE', label: 'Particular' },
