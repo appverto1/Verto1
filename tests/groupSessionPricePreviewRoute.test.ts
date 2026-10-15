@@ -22,9 +22,9 @@ registerGroupSessionPricePreviewRoute(app,{
   enforcePayloadLimit(){return true;}
 });
 assert.deepEqual(names,['/api/appointments/groups/price-preview']);
-assert.deepEqual(capabilities,['patient.demographics.edit']);
+assert.deepEqual(capabilities,['patient.demographics.edit','finance.entries.view']);
 assert.deepEqual(modules,['appointments_communication']);
-assert.equal(route.length,6,'auth/module/capability/limiter/no-cache + handler');
+assert.equal(route.length,7,'auth/module/capabilities/limiter/no-cache + handler');
 const result:any={statusCode:200,body:null};
 result.status=function(code:number){this.statusCode=code;return this;};
 result.json=function(body:any){this.body=body;return this;};
