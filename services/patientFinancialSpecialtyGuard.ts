@@ -1,4 +1,4 @@
-import { patientFinancialPlanClinicalScopeKey } from '../utils/patientFinancialPlan';
+import { patientFinancialPlanClinicalScopeKey } from '../src/utils/patientFinancialPlan';
 
 type ValidationResult = { ok: true } | { ok: false; error: string; code: string };
 
