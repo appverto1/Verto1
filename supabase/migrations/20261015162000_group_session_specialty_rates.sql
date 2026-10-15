@@ -147,6 +147,12 @@ begin
       limit 1;
     end if;
 
+    -- Legacy clients do not know the group column: do not erase saved group rates
+    -- when they update another field of the same plan.
+    if not (v_plan ? 'group_amount_cents') then
+      v_group_amount_cents := coalesce(v_existing.group_amount_cents, 0);
+    end if;
+
     v_logical_plan_id := coalesce(v_existing.logical_plan_id, v_existing.id);
 
     -- Retry-safe semantic match. This also prevents duplicate active rows when a
