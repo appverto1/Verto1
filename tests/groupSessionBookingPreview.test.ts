@@ -75,6 +75,8 @@ for (const changes of [
   {idempotencyKey:'short'},
   {scheduledStartAt:'2026-10-16T21:45:00'},
   {scheduledStartAt:'not-a-timestamp'},
+  {scheduledStartAt:'2026-10-17T00:45:30Z'},
+  {scheduledStartAt:'2026-10-17T00:45:00.001Z'},
 ]) {
   calls.length = 0;
   const rejected = await previewNewGroupBooking({...input,...changes,supabase:supabaseWith()});
