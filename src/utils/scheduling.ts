@@ -615,6 +615,8 @@ export function getAppointmentLocationType(appointment: any): ScheduleLocationTy
       );
 }
 
+import { canShareGroupBooking } from './groupSessionRules';
+
 export function getAppointmentPatientId(appointment: any): string {
   return String(appointment?.patient_id || appointment?.patientId || '').trim();
 }
@@ -738,6 +740,9 @@ export function checkLocalScheduleConflicts(input: {
   service_type?: any;
   serviceType?: any;
   specialty?: any;
+  session_modality?: 'INDIVIDUAL' | 'GROUP';
+  session_group_id?: string;
+  clinic_id?: string;
 }): ScheduleConflictResult {
   const appointments = Array.isArray(input.appointments) ? input.appointments : [];
   const recurrenceDates = Array.isArray(input.recurrence_dates) && input.recurrence_dates.length > 0
@@ -828,6 +833,22 @@ export function checkLocalScheduleConflicts(input: {
           relatedEventId: String(appointment?.id || '')
         });
       }
+
+      // Patient overlap is never waived. Only the exact same server-verified
+      // group slot can share its professional(s) and physical room.
+      const sharedGroupSlot = !samePatient && canShareGroupBooking({
+        clinic_id: input.clinic_id,
+        session_modality: input.session_modality,
+        session_group_id: input.session_group_id,
+        date: dateKey,
+        time: startTime,
+        duration_minutes: durationMinutes,
+        room_id: roomId,
+        location_type: locationType,
+        service_type: serviceType,
+        professional_ids: [...professionalIds],
+      }, appointment);
+      if (sharedGroupSlot) continue;
 
       if (locationType === 'clinica' && roomId && getAppointmentRoomId(appointment) === roomId) {
         const existingRoomPolicySource = {
