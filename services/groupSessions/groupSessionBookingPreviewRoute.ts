@@ -22,6 +22,7 @@ export function registerGroupSessionBookingPreviewRoute(app: Express, deps: any)
           durationMinutes: req.body?.durationMinutes,
           roomId: req.body?.roomId,
           idempotencyKey: req.body?.idempotencyKey,
+          scheduledStartAt: req.body?.scheduledStartAt,
         });
         if (!result.ok) {
           const status = result.code.includes('MIGRATION_REQUIRED') ? 503 :
