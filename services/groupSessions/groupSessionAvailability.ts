@@ -62,7 +62,22 @@ export function checkNewGroupSlotAgainstAppointments(params: {
 
     if (patients.has(id(appointment?.patient_id)))
       return { ok: false, code: 'GROUP_PATIENT_BUSY' };
-    if (getAppointmentProfessionalIds(appointment).some(value => professionals.has(id(value))))
+    // A canonical group appointment can keep additional professionals in its
+    // persisted source snapshot. Include them for *blocking* collisions, never
+    // for granting membership or bypassing a conflict.
+    const source = appointment?.source_payload;
+    if (source !== undefined && source !== null &&
+        (typeof source !== 'object' || Array.isArray(source))) {
+      return { ok: false, code: 'GROUP_SLOT_UNVERIFIABLE' };
+    }
+    const extraProfessionalIds = [
+      ...(Array.isArray(source?.professional_ids) ? source.professional_ids : []),
+      ...(Array.isArray(source?.professionalIds) ? source.professionalIds : []),
+      ...(Array.isArray(source?.team_professional_ids) ? source.team_professional_ids : []),
+      ...(Array.isArray(source?.teamProfessionalIds) ? source.teamProfessionalIds : []),
+    ];
+    if ([...getAppointmentProfessionalIds(appointment), ...extraProfessionalIds]
+      .some(value => professionals.has(id(value))))
       return { ok: false, code: 'GROUP_PROFESSIONAL_BUSY' };
     if (params.roomPreventsOverlap && id(appointment?.room_id) === roomId)
       return { ok: false, code: 'GROUP_ROOM_BUSY' };
