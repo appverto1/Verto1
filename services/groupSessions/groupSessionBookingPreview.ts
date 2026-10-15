@@ -47,8 +47,13 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
   const time = String(params.startTime || '').trim();
   const duration = Number(params.durationMinutes);
   const key = String(params.idempotencyKey || '').trim();
+  const scheduledStartAt = String(params.scheduledStartAt || '').trim();
+  // Reject malformed instants before even the four resource lookups. The
+  // canonical clinic timezone check still runs after the scoped reads.
+  const hasExplicitInstant = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/i.test(scheduledStartAt) &&
+    Number.isFinite(Date.parse(scheduledStartAt));
   const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(date + 'T00:00:00Z') : null;
-  if (!specialty || !parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ||
+  if (!hasExplicitInstant || !specialty || !parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ||
       !/^([01]\d|2[0-3]):[0-5]\d$/.test(time) ||
       !Number.isInteger(duration) || duration < 15 || duration > 360 ||
       !/^[a-zA-Z0-9:._-]{12,120}$/.test(key)) {
