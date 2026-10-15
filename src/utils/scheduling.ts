@@ -743,6 +743,8 @@ export function checkLocalScheduleConflicts(input: {
   session_modality?: 'INDIVIDUAL' | 'GROUP';
   session_group_id?: string;
   clinic_id?: string;
+  /** Only trusted server-side validation may authorize sharing this group slot. */
+  group_booking_authorized?: boolean;
 }): ScheduleConflictResult {
   const appointments = Array.isArray(input.appointments) ? input.appointments : [];
   const recurrenceDates = Array.isArray(input.recurrence_dates) && input.recurrence_dates.length > 0
@@ -836,7 +838,7 @@ export function checkLocalScheduleConflicts(input: {
 
       // Patient overlap is never waived. Only the exact same server-verified
       // group slot can share its professional(s) and physical room.
-      const sharedGroupSlot = !samePatient && canShareGroupBooking({
+      const sharedGroupSlot = !samePatient && input.group_booking_authorized === true && canShareGroupBooking({
         clinic_id: input.clinic_id,
         session_modality: input.session_modality,
         session_group_id: input.session_group_id,
