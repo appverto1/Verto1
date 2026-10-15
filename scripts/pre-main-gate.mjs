@@ -240,6 +240,7 @@ const criticalTests = [
   'tests/groupSessionResourceValidation.test.ts',
   'tests/groupSessionBookingPreview.test.ts',
   'tests/groupSessionAvailability.test.ts',
+  'tests/groupSessionBookingLedgerSql.test.mjs',
   'tests/groupSessionBookingPreviewRoute.test.ts',
   'tests/groupSessionFinancialRateRoutes.test.ts',
   'tests/groupSessionFinancialCapabilityGuard.test.ts',
