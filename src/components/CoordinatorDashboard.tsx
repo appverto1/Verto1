@@ -1935,6 +1935,9 @@ export function CoordinatorDashboard({
   );
   const [sessionTime, setSessionTime] = useState("08:00");
   const [sessionPatientName, setSessionPatientName] = useState("");
+  // Preserve the identity selected from the patient list. Names are display-only:
+  // the clinic may have two patients with the same legal name.
+  const [sessionPatientId, setSessionPatientId] = useState("");
   const [sessionApproach, setSessionApproach] = useState("");
   const [sessionDurationOption, setSessionDurationOption] = useState("50");
   const [sessionCustomDuration, setSessionCustomDuration] = useState("50");
@@ -4393,16 +4396,6 @@ export function CoordinatorDashboard({
     };
   }, [isAddSessionModalOpen, isTherapist]);
 
-  const findSessionPatientByName = useCallback((name: string) => {
-    const normalizedName = normalizeUtf8Text(name).trim().toLowerCase();
-    if (!normalizedName) return null;
-    return (
-      allPatients.find(
-        (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
-      ) || null
-    );
-  }, [allPatients]);
-
   const findProfessionalOptionById = useCallback((professionalId: any) => {
     const targetId = String(professionalId || "").trim();
     if (!targetId) return null;
@@ -4417,13 +4410,16 @@ export function CoordinatorDashboard({
     );
   }, [appointmentProfessionalOptions]);
 
-  const selectPatientForSession = (name: string) => {
-    const patient = findSessionPatientByName(name);
+  const selectPatientForSession = (patient: any) => {
+    const name = String(patient?.name || "").trim();
+    const patientId = String(patient?.id || "").trim();
+    if (!patientId || !name) return;
     const responsibleProfessionalId = resolvePatientResponsibleProfessionalId(patient);
     const responsibleProfessional = findProfessionalOptionById(responsibleProfessionalId);
     const patientPayer = resolvePatientInsurancePayer(patient, sessionApproach);
     const matchingPayer = resolveClinicPayerForPatientInsurance(patientPayer);
     lastAutoPayerPatientKeyRef.current = getPatientAutoPayerKey(patient, name);
+    setSessionPatientId(patientId);
     setSessionPatientName(name);
     setSessionProfessionalManuallySelected(false);
     setSessionProfessionalId(responsibleProfessional?.id ? String(responsibleProfessional.id) : "");
@@ -4451,10 +4447,11 @@ export function CoordinatorDashboard({
   };
 
   const handleSessionPatientNameChange = (value: string) => {
+    // Typing a different name invalidates the previously selected patient ID.
+    // Never send the prior patient ID with a new name to conflict detection.
+    setSessionPatientId("");
     setSessionPatientName(value);
     setSessionProfessionalManuallySelected(false);
-    const patient = findSessionPatientByName(value);
-    if (patient) return;
     setSessionProfessionalId("");
     setSessionProfessional("");
   };
@@ -4506,12 +4503,11 @@ export function CoordinatorDashboard({
   );
 
   const selectedSessionPatient = useMemo(() => {
-    const normalizedName = normalizeUtf8Text(sessionPatientName).trim().toLowerCase();
-    return (
-      allPatients.find((patient: any) => normalizeUtf8Text(patient?.name).trim().toLowerCase() === normalizedName) ||
-      null
-    );
-  }, [allPatients, sessionPatientName]);
+    const id = String(sessionPatientId || "").trim();
+    if (!id) return null;
+    // Exact clinic patient ID must be authoritative, never first matching name.
+    return allPatients.find((patient: any) => String(patient?.id || "").trim() === id) || null;
+  }, [allPatients, sessionPatientId]);
 
   useEffect(() => {
     if (!isAddSessionModalOpen || !selectedSessionPatient?.id || !["escola", "domicilio"].includes(sessionLocationType)) {
@@ -5734,6 +5730,7 @@ export function CoordinatorDashboard({
   const resetSessionForm = () => {
     lastAutoPayerPatientKeyRef.current = "";
     setSessionPatientName("");
+    setSessionPatientId("");
     setSessionTime("08:00");
     setSessionDurationOption("50");
     setSessionCustomDuration("50");
@@ -5830,6 +5827,7 @@ export function CoordinatorDashboard({
     }
     resetSessionForm();
     setSessionPatientName(String(patient.name));
+    setSessionPatientId(String(patient.id || ""));
     setSessionDate(getLocalDateKey(new Date()));
     setSessionLocationType("escola");
     setSessionSchoolId(String(enrollment?.school_id || ""));
@@ -7496,6 +7494,7 @@ export function CoordinatorDashboard({
     setSessionNumSessions(1);
     setSessionRecurrencePattern(appointment.recurrencePattern || appointment.recurrence_pattern || "weekly");
     setSessionPatientName(appointment.patientName || appointment.name || "");
+    setSessionPatientId(String(appointment.patient_id || appointment.patientId || ""));
     setSessionDate(appointment.date);
     setSessionTime(appointment.time);
     setSessionApproach(appointment.type || appointment.approach || "");
@@ -15934,12 +15933,15 @@ export function CoordinatorDashboard({
                   value={sessionPatientName}
                   onChange={(e) => handleSessionPatientNameChange(e.target.value)}
                 />
-                {filteredPatients.length > 0 && (
+                {sessionPatientName.trim() && !selectedSessionPatient?.id && (
+                  <p className="mt-1 text-xs text-amber-700">Selecione um paciente da lista para confirmar o cadastro correto.</p>
+                )}
+                {!selectedSessionPatient?.id && filteredPatients.length > 0 && (
                   <div className="absolute top-full left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">
                     {filteredPatients.map((p) => (
                       <div
                         key={p.id}
-                        onClick={() => selectPatientForSession(p.name)}
+                        onClick={() => selectPatientForSession(p)}
                         className="p-3 hover:bg-slate-50 cursor-pointer text-sm font-semibold text-slate-700 border-b border-slate-50 last:border-0 flex items-center gap-2"
                       >
                         <div className="w-6 h-6 rounded-full bg-blue-50 text-[#7a32fc] flex items-center justify-center text-xs">
