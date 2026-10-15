@@ -27,6 +27,7 @@ export function registerGroupSessionFinancialRateRoutes(app: Express,deps: Group
     deps.checkAuth,
     deps.requireClinicModule('appointments_communication'),
     deps.requireClinicCapability('patient.demographics.edit'),
+    deps.requireClinicCapability('finance.entries.manage'),
     async (req:any,res:any) => {
       try {
         if (!deps.enforcePayloadLimit(req,res,4096,'Preço da sessão em grupo')) return;
