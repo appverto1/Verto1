@@ -57,6 +57,19 @@ calls.length=0;
 const bad=await previewNewGroupBooking({...input,patientIds:[patient1,patient1],supabase:supabaseWith()});
 assert.equal(bad.ok,false);
 assert.equal(calls.length,0,'invalid input must not spend DB queries');
+for (const changes of [
+  {date:'2026-02-30'},
+  {startTime:'25:00'},
+  {durationMinutes:361},
+  {durationMinutes:0},
+  {specialty:'   '},
+  {idempotencyKey:'short'},
+]) {
+  calls.length = 0;
+  const rejected = await previewNewGroupBooking({...input,...changes,supabase:supabaseWith()});
+  assert.deepEqual(rejected,{ok:false,code:'GROUP_PREVIEW_INPUT_INVALID'},JSON.stringify(changes));
+  assert.equal(calls.length,0,'invalid calendar payload must not consume batch reads');
+}
 const foreign=await previewNewGroupBooking({...input,supabase:supabaseWith({
   clinic_memberships:[{...rows.clinic_memberships[0],clinic_id:other}]
 })});
