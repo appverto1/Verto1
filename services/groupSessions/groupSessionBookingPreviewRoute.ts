@@ -7,6 +7,7 @@ export function registerGroupSessionBookingPreviewRoute(app: Express, deps: any)
     deps.requireClinicModule('appointments_communication'),
     deps.requireClinicCapability('calendar.appointment.create'),
     deps.requireClinicCapability('patient.demographics.edit'),
+    deps.requireClinicCapability('finance.entries.view'),
     async (req: any, res: any) => {
       try {
         if (!deps.enforcePayloadLimit(req,res,8192,'Previa de agendamento em grupo')) return;
