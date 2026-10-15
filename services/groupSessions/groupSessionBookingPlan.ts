@@ -14,6 +14,8 @@ export type NewGroupBookingPlan = {
   specialty: string;
   date: string;
   startTime: string;
+  /** Absolute UTC instant; distinguishes repeated local wall-clock times. */
+  scheduledStartAt: string;
   durationMinutes: number;
   roomId: string;
   professionalIds: string[];
@@ -33,7 +35,7 @@ export function fingerprintGroupBooking(plan: Omit<NewGroupBookingPlan, 'groupId
   const canonical = JSON.stringify([
     'GROUP_BOOKING_V1',
     normalizeId(plan.clinicId), clinicalSpecialtyScopeKey(plan.specialty),
-    plan.date, plan.startTime, plan.durationMinutes,
+    plan.date, plan.startTime, plan.scheduledStartAt, plan.durationMinutes,
     normalizeId(plan.roomId), [...plan.professionalIds].map(normalizeId).sort(),
     members,
   ]);
@@ -56,6 +58,7 @@ export function prepareNewGroupBooking(params: {
   specialty: unknown;
   date: unknown;
   startTime: unknown;
+  scheduledStartAt: unknown;
   durationMinutes: unknown;
   roomId: unknown;
   patientIds: unknown;
@@ -81,11 +84,16 @@ export function prepareNewGroupBooking(params: {
   const specialty = String(params.specialty || '').trim().slice(0, 120);
   const date = String(params.date || '').trim();
   const startTime = String(params.startTime || '').trim();
+  const timestamp = String(params.scheduledStartAt || '').trim();
+  const parsedInstant = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(timestamp)
+    ? Date.parse(timestamp) : NaN;
+  const scheduledStartAt = Number.isFinite(parsedInstant) && parsedInstant % 60_000 === 0
+    ? new Date(parsedInstant).toISOString() : '';
   const durationMinutes = Number(params.durationMinutes);
   const roomId = normalizeId(params.roomId);
   const idempotencyKey = String(params.idempotencyKey || '').trim();
   if (!specialty || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-      !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) || !scheduledStartAt ||
       !Number.isInteger(durationMinutes) || durationMinutes < 15 || durationMinutes > 360 ||
       !UUID.test(roomId) || !/^[a-zA-Z0-9:._-]{12,120}$/.test(idempotencyKey)) {
     return { ok: false, code: 'GROUP_SLOT_INVALID' };
@@ -126,6 +134,7 @@ export function prepareNewGroupBooking(params: {
     specialty,
     date,
     startTime,
+    scheduledStartAt,
     durationMinutes,
     roomId,
     professionalIds,
