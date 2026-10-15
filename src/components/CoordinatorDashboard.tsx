@@ -8107,27 +8107,52 @@ export function CoordinatorDashboard({
 
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
-      if (!agendaAppointmentObservation.trim()) {
-        showToast("Informe o motivo do cancelamento na observação da sessão.", "error");
-        return;
-      }
-      const decision = resolveAgendaManualPolicyDecision("cancellation");
-      if (!decision.ok) return;
-      closeAgendaActionModal();
-      requestAppointmentCancellation(appointment, {
-        note: agendaAppointmentObservation,
+      if (!appointment?.id) return;
+      // The Calendar detail and the administrative action card do not share a
+      // textarea. Open an explicit confirmation before any cancellation write.
+      openAgendaActionModal(appointment);
+      setPendingAgendaCancellation(appointment);
+      setAgendaCancellationReason("");
+      setAgendaCancellationDetails("");
+    },
+    [openAgendaActionModal],
+  );
+
+  const submitAgendaCancellation = useCallback(async () => {
+    if (!pendingAgendaCancellation?.id || agendaCancellationSubmitting) return;
+    const note = buildAppointmentCancellationNote(agendaCancellationReason, agendaCancellationDetails);
+    if (!note) {
+      showToast("Selecione o motivo; para Outro motivo, informe os detalhes.", "error");
+      return;
+    }
+    const decision = resolveAgendaManualPolicyDecision("cancellation");
+    if (!decision.ok) return;
+    setAgendaCancellationSubmitting(true);
+    try {
+      const result = await requestAppointmentCancellation(pendingAgendaCancellation, {
+        note,
         source: "agenda_modal",
         privatePolicyDecisionAmount: decision.amount,
       });
-    },
-    [
-      agendaAppointmentObservation,
-      closeAgendaActionModal,
-      requestAppointmentCancellation,
-      resolveAgendaManualPolicyDecision,
-      showToast,
-    ],
-  );
+      if (result?.success) {
+        setPendingAgendaCancellation(null);
+        closeAgendaActionModal();
+      } else {
+        showToast(result?.error || "Não foi possível cancelar esta sessão.", "error");
+      }
+    } finally {
+      setAgendaCancellationSubmitting(false);
+    }
+  }, [
+    pendingAgendaCancellation,
+    agendaCancellationSubmitting,
+    agendaCancellationReason,
+    agendaCancellationDetails,
+    resolveAgendaManualPolicyDecision,
+    requestAppointmentCancellation,
+    closeAgendaActionModal,
+    showToast,
+  ]);
 
   const handleNoShowAppointmentFromAgenda = useCallback(
     (appointment: any) => {
