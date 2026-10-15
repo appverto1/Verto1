@@ -62,6 +62,29 @@ if (valid.ok) {
   assert.equal(changedTime.ok,true);
   if (changedTime.ok) assert.notEqual(changedTime.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
 }
+// Multiple clinicians are part of the SAME group identity. Their input
+// ordering cannot create duplicate bookings; changing the team changes it.
+const secondProfessional = '758cad98-40d5-4d8d-a796-4840289752d2';
+const multiProfessional = {
+  ...input,
+  professionalIds: [professional, secondProfessional],
+  clinicProfessionalRows: [
+    ...input.clinicProfessionalRows,
+    {user_id:secondProfessional,clinic_id:clinic,role:'therapist',status:'active',specialty:'Fonoaudiólogo'},
+  ],
+};
+const multiA = prepareNewGroupBooking(multiProfessional);
+const multiB = prepareNewGroupBooking({
+  ...multiProfessional,professionalIds:[secondProfessional,professional],
+  patientIds:[patientB,patientA],
+});
+assert.equal(multiA.ok,true,'two authorized clinicians may share a group');
+assert.equal(multiB.ok,true,'order of group roster is immaterial');
+if (multiA.ok && multiB.ok && valid.ok) {
+  assert.equal(multiA.plan.idempotencyFingerprint,multiB.plan.idempotencyFingerprint);
+  assert.notEqual(multiA.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint,
+    'adding a clinician is a material occupancy change');
+}
 const invalid = [
   { patientIds:[patientA] },
   { patientIds:[patientA,patientA] },
