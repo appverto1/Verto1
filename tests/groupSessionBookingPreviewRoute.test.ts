@@ -10,6 +10,8 @@ const dbRows: Record<string,any[]> = {
   patients: [{id:patientA,clinic_id:clinic},{id:patientB,clinic_id:clinic}],
   clinic_memberships: [{user_id:professional,clinic_id:clinic,role:'therapist',status:'active',specialty:'Fonoaudiologia'}],
   clinic_rooms: [{id:room,clinic_id:clinic,organization_id:clinic,is_active:true,capacity:4}],
+  clinics: [{id:clinic,timezone:'America/Sao_Paulo'}],
+  appointments: [],
   patient_financial_plans: [
     {id:'98100c4d-23f4-4a5c-87ad-2778df202d9d',organization_id:clinic,patient_id:patientA,status:'ACTIVE',billing_mode:'PRIVATE',service_type:'SPEECH_THERAPY',group_amount_cents:8000},
     {id:'ab64e1e1-9aba-4287-822a-038539d9fb95',organization_id:clinic,patient_id:patientB,status:'ACTIVE',billing_mode:'PRIVATE',service_type:'SPEECH_THERAPY',group_amount_cents:7000},
@@ -23,7 +25,10 @@ const supabase = {
       select(_columns:string){return query;},
       eq(_column:string,_value:unknown){return query;},
       in(_column:string,_values:unknown[]){return query;},
-      limit(_count:number){return Promise.resolve({data:dbRows[table] || [],error:null});},
+      is(_column:string,_value:unknown){return query;},
+      or(_condition:string){return query;},
+      limit(_count:number){return table === 'clinics' ? query : Promise.resolve({data:dbRows[table] || [],error:null});},
+      maybeSingle(){return Promise.resolve({data:dbRows[table]?.[0] || null,error:null});},
     };
     return query;
   }
@@ -57,7 +62,7 @@ const response=()=>({
 const payload={
   patientIds:[patientA,patientB],professionalIds:[professional],specialty:'Fonoaudiologia',
   roomId:room,date:'2026-10-16',startTime:'21:45',durationMinutes:50,
-  idempotencyKey:'group-preview:abcdefghijkl',
+  idempotencyKey:'group-preview:abcdefghijkl',scheduledStartAt:'2026-10-17T00:45:00Z',
 };
 const valid=response();
 await handler(req(payload),valid);
@@ -67,7 +72,7 @@ assert.equal(valid.body.reserved,false);
 assert.equal(valid.body.availabilityConfirmed,false);
 assert.deepEqual(valid.body.patientRates,[{patientId:patientA,amountCents:8000},{patientId:patientB,amountCents:7000}]);
 assert.ok(!JSON.stringify(valid.body).includes('groupId'),'preview must not return an authorization-bearing group ID');
-assert.deepEqual(reads,['patients','clinic_memberships','clinic_rooms','patient_financial_plans']);
+assert.deepEqual(reads,['patients','clinic_memberships','clinic_rooms','patient_financial_plans','clinics','appointments']);
 reads.length=0;
 const invalid=response();
 await handler(req({...payload,patientIds:[patientA,patientA]}),invalid);
