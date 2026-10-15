@@ -1,0 +1,115 @@
+-- Canonical identity and idempotency ledger for ONE collective appointment slot.
+-- Draft foundation only: the transactional booking/finance RPC must be completed
+-- before this migration is applied or routes are enabled.
+begin;
+
+create table if not exists public.group_session_bookings (
+  id uuid primary key default gen_random_uuid(),
+  organization_id uuid not null references public.clinics(id) on delete restrict,
+  booking_key text not null,
+  payload_hash text not null,
+  specialty text not null,
+  scheduled_start_at timestamptz not null,
+  scheduled_end_at timestamptz not null,
+  room_id uuid not null references public.clinic_rooms(id) on delete restrict,
+  professional_ids uuid[] not null,
+  status text not null default 'RESERVED',
+  created_by uuid not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint group_session_booking_key_valid check (length(booking_key) between 12 and 120 and booking_key ~ '^[A-Za-z0-9:._-]+$'),
+  constraint group_session_booking_hash_valid check (payload_hash ~ '^[a-f0-9]{64}$'),
+  constraint group_session_booking_specialty_valid check (length(btrim(specialty)) between 2 and 120),
+  constraint group_session_booking_time_valid check (scheduled_end_at > scheduled_start_at and scheduled_end_at <= scheduled_start_at + interval '360 minutes'),
+  constraint group_session_booking_team_size_valid check (cardinality(professional_ids) between 1 and 8),
+  constraint group_session_booking_status_valid check (status in ('RESERVED','COMPLETED','CANCELED')),
+  constraint group_session_booking_idempotent unique (organization_id,booking_key),
+  constraint group_session_booking_tenant_key unique (id,organization_id)
+);
+
+-- A record per patient connects the collective booking to the existing
+-- independently auditable clinical appointment and its frozen patient rate.
+create table if not exists public.group_session_participants (
+  booking_id uuid not null,
+  organization_id uuid not null,
+  patient_id uuid not null references public.patients(id) on delete restrict,
+  appointment_id uuid not null unique references public.appointments(id) on delete restrict,
+  financial_plan_id uuid not null references public.patient_financial_plans(id) on delete restrict,
+  unit_amount_cents integer not null,
+  created_at timestamptz not null default now(),
+  constraint group_session_participant_booking_scope foreign key (booking_id,organization_id)
+    references public.group_session_bookings(id,organization_id) on delete restrict,
+  constraint group_session_participant_amount_valid check (unit_amount_cents between 1 and 1000000000),
+  constraint group_session_participant_one_per_patient primary key (booking_id,patient_id)
+);
+
+-- Backend validation is mandatory, but cross-tenant and mismatched appointment
+-- references must also fail in the database, not just in TypeScript.
+create or replace function public.verify_group_session_participant_v1()
+returns trigger language plpgsql security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_booking public.group_session_bookings%rowtype;
+begin
+  select * into v_booking
+  from public.group_session_bookings
+  where id = new.booking_id and organization_id = new.organization_id;
+  if not found or v_booking.status <> 'RESERVED' then
+    raise exception 'GROUP_PARTICIPANT_BOOKING_SCOPE_INVALID';
+  end if;
+
+  if not exists (
+    select 1 from public.patients patient
+    where patient.id = new.patient_id and patient.clinic_id = new.organization_id
+  ) then raise exception 'GROUP_PARTICIPANT_PATIENT_SCOPE_INVALID'; end if;
+
+  if not exists (
+    select 1 from public.patient_financial_plans plan
+    where plan.id = new.financial_plan_id
+      and plan.organization_id = new.organization_id
+      and plan.patient_id = new.patient_id
+      and plan.billing_mode = 'PRIVATE'
+      and plan.status = 'ACTIVE'
+      and plan.group_amount_cents = new.unit_amount_cents
+      and plan.valid_from <= v_booking.scheduled_start_at
+      and (plan.valid_until is null or v_booking.scheduled_start_at < plan.valid_until)
+  ) then raise exception 'GROUP_PARTICIPANT_RATE_SCOPE_INVALID'; end if;
+
+  if not exists (
+    select 1 from public.appointments appointment
+    where appointment.id = new.appointment_id
+      and appointment.clinic_id = new.organization_id
+      and appointment.patient_id = new.patient_id
+      and appointment.room_id = v_booking.room_id::text
+      and coalesce(appointment.scheduled_start_at,appointment.scheduled_at) = v_booking.scheduled_start_at
+      and appointment.scheduled_end_at = v_booking.scheduled_end_at
+      and appointment.source_payload->>'sessionGroupId' = new.booking_id::text
+      and appointment.source_payload->>'sessionModality' = 'GROUP'
+  ) then raise exception 'GROUP_PARTICIPANT_APPOINTMENT_SCOPE_INVALID'; end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists group_participant_verify_scope on public.group_session_participants;
+create trigger group_participant_verify_scope
+before insert or update on public.group_session_participants
+for each row execute function public.verify_group_session_participant_v1();
+
+create index if not exists group_session_bookings_by_clinic_time
+  on public.group_session_bookings(organization_id,scheduled_start_at);
+create index if not exists group_session_participants_by_clinic_patient
+  on public.group_session_participants(organization_id,patient_id,booking_id);
+
+alter table public.group_session_bookings enable row level security;
+alter table public.group_session_participants enable row level security;
+revoke all on table public.group_session_bookings from public,anon,authenticated;
+revoke all on table public.group_session_participants from public,anon,authenticated;
+revoke all on function public.verify_group_session_participant_v1() from public,anon,authenticated;
+grant select,insert,update on table public.group_session_bookings to service_role;
+grant select,insert,update on table public.group_session_participants to service_role;
+
+comment on table public.group_session_bookings is 'Internal group-booking ledger; no booking exists until an atomic backend RPC commits all patient appointments and financial snapshots.';
+comment on table public.group_session_participants is 'Tenant-scoped per-patient links to the clinical appointment and agreed group price; service-role writes only.';
+commit;
