@@ -11,7 +11,13 @@ export type SpecialtySessionPrice = {
  * The database resolver must remain the authority for billed amounts.
  */
 export function resolveFinancialPlanSessionPrice(plan: any, requestedModality: unknown): SpecialtySessionPrice | null {
-  const modality = normalizeAppointmentModality(requestedModality);
+  // Missing modality is legacy individual care. An EXPLICIT unknown modality
+  // must never silently receive the individual rate for a group booking.
+  const requested = requestedModality == null
+    ? 'INDIVIDUAL'
+    : String(requestedModality).trim().toUpperCase();
+  if (requested !== 'INDIVIDUAL' && requested !== 'GROUP') return null;
+  const modality = normalizeAppointmentModality(requested);
   if (!plan || String(plan.status || 'ACTIVE').trim().toUpperCase() !== 'ACTIVE') return null;
   const raw = modality === 'GROUP'
     ? plan.group_amount_cents ?? plan.groupAmountCents
