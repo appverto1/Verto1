@@ -1,0 +1,72 @@
+name: One-time Financial Plan Specialty Backend Guard
+on:
+  push:
+    branches:
+      - fix/staging-financial-plan-specialty-active-team-20261014
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Safely patch backend gate
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('server.ts')
+          source=p.read_text()
+          import_stmt="import { validateActiveClinicFinancialPlanSpecialties } from './services/patientFinancialSpecialtyGuard';\n"
+          anchor="import {\n  getPatientFinancialServiceLabel,"
+          assert source.count(anchor)==1, "Financial utility import moved"
+          if import_stmt not in source:
+              source=source.replace(anchor,import_stmt+anchor)
+          guard="""  const specialtyGate = await validateActiveClinicFinancialPlanSpecialties({
+            supabase, clinicId: params.clinicId, patientId: params.patientId, rows
+          });
+          if (!specialtyGate.ok) {
+            return { success: false, error: specialtyGate.error, code: specialtyGate.code };
+          }
+          """
+          insert_at="  const payerIds = Array.from(new Set(rows.map((row: any)"
+          assert source.count(insert_at)==1, "Financial plans reconciliation moved"
+          if "const specialtyGate = await validateActiveClinicFinancialPlanSpecialties" not in source:
+              source=source.replace(insert_at,guard+insert_at)
+          p.write_text(source)
+          PY
+          git diff --check
+      - run: npm ci --no-audit --no-fund
+      - name: Financial specialty regression
+        run: npx tsx tests/patientFinancialSpecialtyClinicGate.test.ts
+      - name: Typecheck and frontend build
+        run: |
+          npm run typecheck
+          npm run build
+      - name: Backend parse check
+        run: |
+          node --input-type=module - <<'JS'
+          import fs from 'node:fs';
+          import ts from 'typescript';
+          const source=fs.readFileSync('server.ts','utf8');
+          const parsed=ts.createSourceFile('server.ts',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TS);
+          if(parsed.parseDiagnostics.length) {
+            console.error(parsed.parseDiagnostics);
+            process.exit(1);
+          }
+          console.log('Backend TypeScript syntax: OK');
+          JS
+      - name: Commit validated backend guard and delete one-time workflow
+        run: |
+          rm -f .github/workflows/zz-temp-financial-specialty-guard.yml
+          git add server.ts .github/workflows/zz-temp-financial-specialty-guard.yml
+          git config user.name "Verto finance patch"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix(finance): enforce active clinic specialty before saving patient plans"
+          git push origin HEAD:fix/staging-financial-plan-specialty-active-team-20261014
