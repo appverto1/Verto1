@@ -3,6 +3,7 @@ import type { Express } from 'express';
 import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
 import { registerHelpCenterRoutes } from './helpCenterRoutes';
 import { registerGroupSessionPricePreviewRoute } from './groupSessions/groupSessionPricePreviewRoute';
+import { registerGroupSessionFinancialRateRoutes } from './groupSessions/groupSessionFinancialRateRoutes';
 
 type ClinicAppointmentPolicyRouteDeps = {
   supabase: any;
@@ -228,6 +229,19 @@ export function registerClinicAppointmentPolicyRoutes(
   // The server's existing clinic-calendar route registrar delegates to this
   // isolated read-only module. No change to its 4.6 MB entrypoint is required.
   registerGroupSessionPricePreviewRoute(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    requireClinicModule,
+    portalActionLimiter,
+    enforcePayloadLimit,
+    currentClinicId
+  });
+
+  // Group-rate edits are separately authorized, and the DB's single RPC
+  // owns history-safe persistence; the large entrypoint remains untouched.
+  registerGroupSessionFinancialRateRoutes(app, {
     supabase,
     noStoreDynamicResponse,
     checkAuth,
