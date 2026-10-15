@@ -38,9 +38,9 @@ export function canShareGroupBooking(current: any, existing: any): boolean {
   if (!currentClinic || !existingClinic || currentClinic !== existingClinic) return false;
   if (comparable(current?.date) !== comparable(existing?.date)) return false;
   if (clock(current?.time || current?.start_time)
-    !== normalizeAppointmentTime(existing?.time || existing?.start_time)) return false;
+    !== clock(existing?.time || existing?.start_time)) return false;
   if (minutes(current?.duration_minutes || current?.durationMinutes)
-    !== normalizeDurationMinutes(existing?.duration_minutes || existing?.durationMinutes)) return false;
+    !== minutes(existing?.duration_minutes || existing?.durationMinutes)) return false;
   if (comparable(current?.room_id || current?.roomId || current?.room)
     !== comparable(existing?.room_id || existing?.roomId || existing?.room)) return false;
   if (comparable(current?.location_type || current?.locationType)
