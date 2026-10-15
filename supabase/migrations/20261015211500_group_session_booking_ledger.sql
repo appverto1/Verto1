@@ -148,6 +148,9 @@ begin
       and plan.patient_id = new.patient_id
       and plan.billing_mode = 'PRIVATE'
       and plan.status = 'ACTIVE'
+      and public.appointment_financial_service_key_v1(
+        coalesce(nullif(plan.service_name_snapshot,''),nullif(plan.custom_service_name,''),plan.service_type)
+      ) = public.appointment_financial_service_key_v1(v_booking.specialty)
       and plan.group_amount_cents = new.unit_amount_cents
       and plan.valid_from <= v_booking.scheduled_start_at
       and (plan.valid_until is null or v_booking.scheduled_start_at < plan.valid_until)
@@ -159,6 +162,12 @@ begin
       and appointment.clinic_id = new.organization_id
       and appointment.patient_id = new.patient_id
       and appointment.room_id = v_booking.room_id::text
+      and appointment.location_type = 'clinica'
+      and appointment.therapist_id = any(v_booking.professional_ids)
+      and public.appointment_financial_service_key_v1(appointment.service_type)
+        = public.appointment_financial_service_key_v1(v_booking.specialty)
+      and coalesce(appointment.scheduled_duration_minutes,appointment.duration_minutes)
+        = extract(epoch from (v_booking.scheduled_end_at-v_booking.scheduled_start_at))::integer / 60
       and coalesce(appointment.scheduled_start_at,appointment.scheduled_at) = v_booking.scheduled_start_at
       and appointment.scheduled_end_at = v_booking.scheduled_end_at
       and appointment.source_payload->>'sessionGroupId' = new.booking_id::text
