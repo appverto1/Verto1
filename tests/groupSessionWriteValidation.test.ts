@@ -35,6 +35,7 @@ assert.equal(authorizeExistingGroupJoin({...input, patientIds: [patient1]}).ok, 
 assert.equal(authorizeExistingGroupJoin({...input, patientIds: [patient2,patient2]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, clinicPatientRows: [{id:patient2,clinic_id:otherClinic}]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{id:professional,clinic_id:clinic,is_active:false}]}).ok, false);
+assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{id:professional,clinic_id:clinic}]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, existingGroupAppointments:[{...existing,status:'canceled'}]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, candidateAppointment:{...current,time:'22:00'}}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, requestedGroupId:'not-a-uuid'}).ok, false);
