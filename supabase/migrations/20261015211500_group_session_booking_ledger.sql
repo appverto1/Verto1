@@ -40,6 +40,8 @@ declare
   v_authorized_count integer;
 begin
   if tg_op = 'UPDATE' and (
+      old.id is distinct from new.id or
+      old.created_at is distinct from new.created_at or
       old.organization_id is distinct from new.organization_id or
       old.booking_key is distinct from new.booking_key or
       old.payload_hash is distinct from new.payload_hash or
@@ -52,7 +54,13 @@ begin
   ) then raise exception 'GROUP_BOOKING_SLOT_IMMUTABLE'; end if;
   -- Cancellation/completion must remain possible after a room or member is
   -- deactivated. Only INSERT needs current availability/membership checks.
-  if tg_op = 'UPDATE' then return new; end if;
+  if tg_op = 'UPDATE' then
+    if old.status is distinct from new.status and
+       not (old.status = 'RESERVED' and new.status in ('COMPLETED','CANCELED')) then
+      raise exception 'GROUP_BOOKING_STATUS_TRANSITION_INVALID';
+    end if;
+    return new;
+  end if;
 
   select room.capacity into v_capacity
   from public.clinic_rooms room
