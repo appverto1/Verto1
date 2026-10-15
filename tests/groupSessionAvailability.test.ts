@@ -24,6 +24,17 @@ assert.equal(check({existingAppointments:[{
   'a secondary team member cannot be double-booked even if therapist_id differs');
 assert.equal(check({existingAppointments:[{...entry,source_payload:'bad-payload'}]}).code,
   'GROUP_SLOT_UNVERIFIABLE','invalid persisted team payload must fail closed');
+for (const malformed of [
+  { teamProfessionalIds: 'therapist-b' },
+  { professional_ids: { 0:'therapist-b' } },
+  { team_professional_ids: null },
+  { professionalIds: false },
+]) {
+  assert.equal(check({existingAppointments:[{
+    ...entry,therapist_id:'therapist-c',source_payload:malformed,
+  }],roomPreventsOverlap:false}).code,'GROUP_SLOT_UNVERIFIABLE',
+  'malformed secondary professional membership cannot bypass occupancy');
+}
 assert.equal(check({existingAppointments:[{...entry,therapist_id:'therapist-c'}]}).code,'GROUP_ROOM_BUSY',
   'a room prohibiting overlaps is still protected');
 assert.equal(check({existingAppointments:[{...entry,therapist_id:'therapist-c'}],roomPreventsOverlap:false}).ok,true,
