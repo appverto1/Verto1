@@ -69,6 +69,7 @@ import { ProtocolManagementSystem } from "./Protocols";
 import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
+import { APPOINTMENT_CANCELLATION_REASONS, buildAppointmentCancellationNote } from "../utils/appointmentCancellationReasons";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
 import ClinicExpenseManager from "./ClinicExpenseManager";
 import { buildPatientFinancialChargeRows, resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
@@ -2061,6 +2062,10 @@ export function CoordinatorDashboard({
     useState("");
   const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
     useState("");
+  const [pendingAgendaCancellation, setPendingAgendaCancellation] = useState<any>(null);
+  const [agendaCancellationReason, setAgendaCancellationReason] = useState("");
+  const [agendaCancellationDetails, setAgendaCancellationDetails] = useState("");
+  const [agendaCancellationSubmitting, setAgendaCancellationSubmitting] = useState(false);
   const [pendingRecurringCancellation, setPendingRecurringCancellation] =
     useState<{
       appointment: any;
@@ -6329,13 +6334,14 @@ export function CoordinatorDashboard({
     const result = await onUpdateAgendaStatus(id, status, details);
     if (result?.success === false) {
       showToast(result.error || "Não foi possível confirmar a atualização da agenda.", "error");
-      return;
+      return result;
     }
     onAddActivityLog(
       "Status de agenda atualizado",
       `Agendamento ${id} atualizado para ${status}${details?.recurrenceScope === "future" ? " para esta e as próximas sessões da série" : ""}.${details?.note ? ` Observação: ${details.note}` : ""}`,
       "management",
     );
+    return result;
   };
 
   const readAppointmentSourcePayload = useCallback((appointment: any) => {
@@ -6493,26 +6499,19 @@ export function CoordinatorDashboard({
   }, [hasFuturePatientSeriesAppointment, readAppointmentSourcePayload]);
 
   const requestAppointmentCancellation = useCallback(
-    (appointment: any, details: any = {}) => {
-      if (!appointment?.id) return;
+    async (appointment: any, details: any = {}) => {
+      if (!appointment?.id) return { success: false, error: "Sessão não identificada." };
       const payload = {
-        note: String(
-          details?.note ?? details?.notes ?? details?.observation ?? "",
-        ).trim(),
+        note: String(details?.note ?? details?.notes ?? details?.observation ?? "").trim(),
         source: String(details?.source || "agenda_management"),
-        privatePolicyDecisionAmount:
-          details?.privatePolicyDecisionAmount === undefined
-            ? undefined
-            : Number(details.privatePolicyDecisionAmount),
+        privatePolicyDecisionAmount: details?.privatePolicyDecisionAmount === undefined
+          ? undefined : Number(details.privatePolicyDecisionAmount),
       };
       if (canCancelRecurringAppointments && isRecurringAppointment(appointment)) {
-        setPendingRecurringCancellation({
-          appointment,
-          ...payload,
-        });
-        return;
+        setPendingRecurringCancellation({ appointment, ...payload });
+        return { success: true, pendingRecurrence: true };
       }
-      handleStatusUpdate(appointment.id, "canceled", {
+      return await handleStatusUpdate(appointment.id, "canceled", {
         ...payload,
         recurrenceScope: "single",
       });
@@ -6521,9 +6520,9 @@ export function CoordinatorDashboard({
   );
 
   const submitRecurringCancellation = useCallback(
-    (scope: "single" | "future") => {
+    async (scope: "single" | "future") => {
       if (!pendingRecurringCancellation?.appointment?.id) return;
-      handleStatusUpdate(
+      const result = await handleStatusUpdate(
         pendingRecurringCancellation.appointment.id,
         "canceled",
         {
@@ -6533,7 +6532,7 @@ export function CoordinatorDashboard({
           privatePolicyDecisionAmount: pendingRecurringCancellation.privatePolicyDecisionAmount,
         },
       );
-      setPendingRecurringCancellation(null);
+      if (result?.success) setPendingRecurringCancellation(null);
     },
     [handleStatusUpdate, pendingRecurringCancellation],
   );
@@ -8108,27 +8107,52 @@ export function CoordinatorDashboard({
 
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
-      if (!agendaAppointmentObservation.trim()) {
-        showToast("Informe o motivo do cancelamento na observação da sessão.", "error");
-        return;
-      }
-      const decision = resolveAgendaManualPolicyDecision("cancellation");
-      if (!decision.ok) return;
-      closeAgendaActionModal();
-      requestAppointmentCancellation(appointment, {
-        note: agendaAppointmentObservation,
+      if (!appointment?.id) return;
+      // The Calendar detail and the administrative action card do not share a
+      // textarea. Open an explicit confirmation before any cancellation write.
+      openAgendaActionModal(appointment);
+      setPendingAgendaCancellation(appointment);
+      setAgendaCancellationReason("");
+      setAgendaCancellationDetails("");
+    },
+    [openAgendaActionModal],
+  );
+
+  const submitAgendaCancellation = useCallback(async () => {
+    if (!pendingAgendaCancellation?.id || agendaCancellationSubmitting) return;
+    const note = buildAppointmentCancellationNote(agendaCancellationReason, agendaCancellationDetails);
+    if (!note) {
+      showToast("Selecione o motivo; para Outro motivo, informe os detalhes.", "error");
+      return;
+    }
+    const decision = resolveAgendaManualPolicyDecision("cancellation");
+    if (!decision.ok) return;
+    setAgendaCancellationSubmitting(true);
+    try {
+      const result = await requestAppointmentCancellation(pendingAgendaCancellation, {
+        note,
         source: "agenda_modal",
         privatePolicyDecisionAmount: decision.amount,
       });
-    },
-    [
-      agendaAppointmentObservation,
-      closeAgendaActionModal,
-      requestAppointmentCancellation,
-      resolveAgendaManualPolicyDecision,
-      showToast,
-    ],
-  );
+      if (result?.success) {
+        setPendingAgendaCancellation(null);
+        closeAgendaActionModal();
+      } else {
+        showToast(result?.error || "Não foi possível cancelar esta sessão.", "error");
+      }
+    } finally {
+      setAgendaCancellationSubmitting(false);
+    }
+  }, [
+    pendingAgendaCancellation,
+    agendaCancellationSubmitting,
+    agendaCancellationReason,
+    agendaCancellationDetails,
+    resolveAgendaManualPolicyDecision,
+    requestAppointmentCancellation,
+    closeAgendaActionModal,
+    showToast,
+  ]);
 
   const handleNoShowAppointmentFromAgenda = useCallback(
     (appointment: any) => {
@@ -17374,6 +17398,51 @@ export function CoordinatorDashboard({
         </div>
       )}
 
+      {pendingAgendaCancellation && (
+        <div className="fixed inset-0 z-[185] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div role="dialog" aria-modal="true" aria-labelledby="agenda-cancellation-title" className="w-full max-w-lg max-h-[92vh] overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl sm:p-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-rose-600">Cancelamento de sessão</p>
+                <h3 id="agenda-cancellation-title" className="mt-1 text-lg font-bold text-slate-900">
+                  {pendingAgendaCancellation.patientName || pendingAgendaCancellation.patient_name || pendingAgendaCancellation.name || "Paciente"}
+                </h3>
+                <p className="text-sm text-slate-500">{pendingAgendaCancellation.date} às {pendingAgendaCancellation.time}</p>
+              </div>
+              <button type="button" aria-label="Fechar cancelamento" disabled={agendaCancellationSubmitting} onClick={() => { setPendingAgendaCancellation(null); closeAgendaActionModal(); }} className="rounded-xl p-2 text-slate-500 hover:bg-slate-100"><X size={18} /></button>
+            </div>
+            <fieldset className="mt-5 space-y-2">
+              <legend className="mb-2 text-sm font-bold text-slate-800">Qual é o motivo do cancelamento?</legend>
+              {APPOINTMENT_CANCELLATION_REASONS.map((reason) => (
+                <label key={reason} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-3 text-sm ${agendaCancellationReason === reason ? "border-rose-400 bg-rose-50 font-semibold text-rose-800" : "border-slate-200 text-slate-700 hover:bg-slate-50"}`}>
+                  <input type="radio" name="agenda-cancellation-reason" value={reason} checked={agendaCancellationReason === reason} onChange={() => setAgendaCancellationReason(reason)} disabled={agendaCancellationSubmitting} className="accent-rose-600" />
+                  <span>{reason}</span>
+                </label>
+              ))}
+            </fieldset>
+            <label htmlFor="agenda-cancellation-details" className="mt-4 block text-sm font-semibold text-slate-700">
+              {agendaCancellationReason === "Outro motivo" ? "Descreva o motivo (obrigatório)" : "Observação adicional (opcional)"}
+            </label>
+            <textarea id="agenda-cancellation-details" value={agendaCancellationDetails} onChange={(event) => setAgendaCancellationDetails(event.target.value)} maxLength={900} rows={3} disabled={agendaCancellationSubmitting} placeholder="Acrescente detalhes, se necessário" className="mt-2 w-full resize-none rounded-xl border border-slate-200 p-3 text-sm focus:border-rose-500 focus:outline-none" />
+            {agendaPrivateFinancialSnapshotState.loading && <p className="mt-2 text-sm text-slate-500">Verificando a política financeira desta sessão...</p>}
+            {agendaPrivateFinancialSnapshotState.error && <p role="alert" className="mt-2 text-sm text-rose-700">{agendaPrivateFinancialSnapshotState.error}</p>}
+            {agendaPrivatePolicyState.cancellationRequiresManualDecision && (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                <label htmlFor="agenda-cancellation-amount" className="block text-sm font-semibold text-amber-900">Valor a cobrar pelo cancelamento (R$)</label>
+                <input id="agenda-cancellation-amount" type="number" min="0" max={agendaPrivatePolicyState.finalAmount} step="0.01" value={agendaPrivatePolicyDecisionAmount} onChange={(event) => setAgendaPrivatePolicyDecisionAmount(event.target.value)} disabled={agendaCancellationSubmitting || !agendaPrivatePolicyState.canDecide} className="mt-2 w-full rounded-lg border border-amber-200 p-2" />
+                {!agendaPrivatePolicyState.canDecide && <p className="mt-1 text-xs text-rose-700">Seu perfil não pode decidir valores financeiros manuais.</p>}
+              </div>
+            )}
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+              <button type="button" disabled={agendaCancellationSubmitting} onClick={() => { setPendingAgendaCancellation(null); closeAgendaActionModal(); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700">Voltar</button>
+              <button type="button" disabled={agendaCancellationSubmitting || !buildAppointmentCancellationNote(agendaCancellationReason, agendaCancellationDetails) || agendaPrivateFinancialSnapshotState.loading || Boolean(agendaPrivateFinancialSnapshotState.error)} onClick={() => void submitAgendaCancellation()} className="flex-1 rounded-xl bg-rose-600 px-4 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                {agendaCancellationSubmitting ? "Salvando..." : "Confirmar cancelamento"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {pendingRecurringCancellation && (
         <div className="fixed inset-0 z-[180] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm">
           <div className="w-full max-w-md rounded-3xl border border-violet-100 bg-white p-6 shadow-2xl">
@@ -17433,7 +17502,7 @@ export function CoordinatorDashboard({
         </div>
       )}
 
-      {selectedAgendaAppointment && (
+      {selectedAgendaAppointment && !pendingAgendaCancellation && (
         <div
           className="fixed inset-0 z-[135] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
           onClick={closeAgendaActionModal}
