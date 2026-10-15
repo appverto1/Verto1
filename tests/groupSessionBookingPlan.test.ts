@@ -9,7 +9,8 @@ const professional = '9128fd0a-9e77-42f9-98c9-d86403d6f7b0';
 const roomId = 'a87b5cd6-4493-4f25-a5ea-48901fe0fe39';
 const input = {
   authenticatedClinicId: clinic, specialty: 'Fonoaudiólogo',
-  date: '2026-10-16', startTime: '21:45', durationMinutes: 50,
+  date: '2026-10-16', startTime: '21:45',
+  scheduledStartAt: '2026-10-17T00:45:00Z', durationMinutes: 50,
   roomId, patientIds: [patientA, patientB], professionalIds: [professional],
   idempotencyKey: 'group-create:abc12345',
   clinicPatientRows: [
@@ -45,6 +46,24 @@ if (valid.ok) {
     assert.equal(retry.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint,
       'same clinic, slot, patients, professional and canonical prices hash identically');
   }
+  // Same wall clock in a DST fold may correspond to two distinct instants.
+  // This must not replay or alias a previously booked session.
+  const repeatedClock = prepareNewGroupBooking({
+    ...input, scheduledStartAt:'2026-10-17T01:45:00Z'
+  });
+  assert.equal(repeatedClock.ok,true);
+  if (repeatedClock.ok) {
+    assert.notEqual(repeatedClock.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
+  }
+  // Equivalent ISO timezone representations of the same instant are identical.
+  const equivalentInstant = prepareNewGroupBooking({
+    ...input, scheduledStartAt:'2026-10-16T21:45:00-03:00'
+  });
+  assert.equal(equivalentInstant.ok,true);
+  if (equivalentInstant.ok) {
+    assert.equal(equivalentInstant.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
+    assert.equal(equivalentInstant.plan.scheduledStartAt,valid.plan.scheduledStartAt);
+  }
   const changedPrice = prepareNewGroupBooking({...input,
     activeFinancialPlanRows: input.activeFinancialPlanRows.map((row,i) =>
       i === 0 ? {...row, group_amount_cents:8001} : row),
@@ -58,7 +77,7 @@ if (valid.ok) {
   });
   assert.equal(changedRoom.ok,true);
   if (changedRoom.ok) assert.notEqual(changedRoom.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
-  const changedTime = prepareNewGroupBooking({...input,startTime:'22:00'});
+  const changedTime = prepareNewGroupBooking({...input,startTime:'22:00',scheduledStartAt:'2026-10-17T01:00:00Z'});
   assert.equal(changedTime.ok,true);
   if (changedTime.ok) assert.notEqual(changedTime.plan.idempotencyFingerprint,valid.plan.idempotencyFingerprint);
 }
@@ -94,6 +113,10 @@ const invalid = [
   { date:'2026-02-30' },
   { date:'2026-1-02' },
   { startTime:'25:00' },
+  { scheduledStartAt:'' },
+  { scheduledStartAt:'2026-10-17T00:45:00' },
+  { scheduledStartAt:'2026-10-17T00:45:01Z' },
+  { scheduledStartAt:'2026-10-17T00:45:00.001Z' },
   { durationMinutes:0 },
   { durationMinutes:361 },
   { roomId: outside },
