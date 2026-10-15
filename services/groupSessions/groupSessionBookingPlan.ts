@@ -1,5 +1,6 @@
 import { createServerGroupSessionId } from './groupSessionWriteValidation';
 import { resolveGroupPatientRates } from './groupSessionFinancialValidation';
+import { validateGroupBookingResources } from './groupSessionResourceValidation';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const normalizeId = (raw: unknown) => String(raw || '').trim().toLowerCase();
@@ -39,8 +40,8 @@ export function prepareNewGroupBooking(params: {
   professionalIds: unknown;
   idempotencyKey: unknown;
   clinicPatientRows: Array<{ id: string; clinic_id: string }>;
-  clinicProfessionalRows: Array<{ id: string; clinic_id: string; is_active?: boolean }>;
-  clinicRoomRows: Array<{ id: string; clinic_id?: string; organization_id?: string; is_active?: boolean }>;
+  clinicProfessionalRows: Array<{ user_id: string; clinic_id: string; role: string; status: string; specialty: string }>;
+  clinicRoomRows: Array<{ id: string; clinic_id?: string; organization_id?: string; is_active?: boolean; capacity?: number | null }>;
   activeFinancialPlanRows: any[];
 }): NewGroupBookingDecision {
   const clinicId = normalizeId(params.authenticatedClinicId);
@@ -75,16 +76,19 @@ export function prepareNewGroupBooking(params: {
 
   const validPatients = new Set(params.clinicPatientRows
     .filter(row => normalizeId(row.clinic_id) === clinicId).map(row => normalizeId(row.id)));
-  const validProfessionals = new Set(params.clinicProfessionalRows
-    .filter(row => normalizeId(row.clinic_id) === clinicId && row.is_active === true)
-    .map(row => normalizeId(row.id)));
-  if (patientIds.some(id => !validPatients.has(id)) ||
-      professionalIds.some(id => !validProfessionals.has(id))) {
+  if (patientIds.some(value => !validPatients.has(value))) {
     return { ok: false, code: 'GROUP_MEMBER_OUT_OF_SCOPE' };
   }
-  const room = params.clinicRoomRows.find(row => normalizeId(row.id) === roomId &&
-    normalizeId(row.clinic_id || row.organization_id) === clinicId && row.is_active !== false);
-  if (!room) return { ok: false, code: 'GROUP_ROOM_OUT_OF_SCOPE' };
+  const resources = validateGroupBookingResources({
+    clinicId,
+    specialty,
+    professionalIds,
+    patientCount: patientIds.length,
+    roomId,
+    membershipRows: params.clinicProfessionalRows,
+    roomRows: params.clinicRoomRows,
+  });
+  if (!resources.ok) return { ok: false, code: resources.code };
 
   const rates = resolveGroupPatientRates({
     authenticatedClinicId: clinicId,
