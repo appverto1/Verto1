@@ -272,6 +272,8 @@ const criticalTests = [
   'tests/clinicalReadHandlersEquivalence.test.mjs',
   'tests/protocolImportExtractionParity.test.mjs',
   'tests/protocolImportHandlersEquivalence.test.mjs',
+  'tests/patientPlanReadParity.test.mjs',
+  'tests/patientPlanReadEquivalence.test.mjs',
 ];
 
 for (const testFile of criticalTests) {

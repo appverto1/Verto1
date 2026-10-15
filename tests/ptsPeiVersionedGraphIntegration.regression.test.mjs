@@ -1,7 +1,8 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const server = readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 const routes = readFileSync('services/clinicalMeasurementV3Routes.ts', 'utf8');
 const dashboard = readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 const migration = readFileSync('supabase/migrations/20260916113530_aba_history_version_snapshot_v1.sql', 'utf8');

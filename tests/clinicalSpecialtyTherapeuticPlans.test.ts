@@ -1,3 +1,4 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -135,7 +136,7 @@ assert.equal(
   'a coordenação precisa gerir os planos da equipe inteira',
 );
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 const invitationModal = fs.readFileSync(
   'src/components/InvitationModal.tsx',
   'utf8',

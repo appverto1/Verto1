@@ -1,10 +1,11 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const app = fs.readFileSync('src/App.tsx', 'utf8');
 const clinical = fs.readFileSync('src/utils/clinicalPostResilience.ts', 'utf8');
 const fallback = fs.readFileSync('src/utils/routeSchemaFallbacks.ts', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 const migration = fs.readFileSync('supabase/migrations/20260817103000_patient_note_visibility_privacy_v1.sql', 'utf8');
 
 assert.match(app, /resolvePatientNoteAudience\(n\)/,
