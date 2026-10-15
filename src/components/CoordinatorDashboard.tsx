@@ -69,6 +69,7 @@ import { ProtocolManagementSystem } from "./Protocols";
 import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
+import { APPOINTMENT_CANCELLATION_REASONS, buildAppointmentCancellationNote } from "../utils/appointmentCancellationReasons";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
 import ClinicExpenseManager from "./ClinicExpenseManager";
 import { buildPatientFinancialChargeRows, resolvePatientFinancialStatus } from "../utils/patientFinancialLedger";
@@ -2061,6 +2062,10 @@ export function CoordinatorDashboard({
     useState("");
   const [agendaAppointmentObservation, setAgendaAppointmentObservation] =
     useState("");
+  const [pendingAgendaCancellation, setPendingAgendaCancellation] = useState<any>(null);
+  const [agendaCancellationReason, setAgendaCancellationReason] = useState("");
+  const [agendaCancellationDetails, setAgendaCancellationDetails] = useState("");
+  const [agendaCancellationSubmitting, setAgendaCancellationSubmitting] = useState(false);
   const [pendingRecurringCancellation, setPendingRecurringCancellation] =
     useState<{
       appointment: any;
@@ -6329,13 +6334,14 @@ export function CoordinatorDashboard({
     const result = await onUpdateAgendaStatus(id, status, details);
     if (result?.success === false) {
       showToast(result.error || "Não foi possível confirmar a atualização da agenda.", "error");
-      return;
+      return result;
     }
     onAddActivityLog(
       "Status de agenda atualizado",
       `Agendamento ${id} atualizado para ${status}${details?.recurrenceScope === "future" ? " para esta e as próximas sessões da série" : ""}.${details?.note ? ` Observação: ${details.note}` : ""}`,
       "management",
     );
+    return result;
   };
 
   const readAppointmentSourcePayload = useCallback((appointment: any) => {
@@ -6493,26 +6499,19 @@ export function CoordinatorDashboard({
   }, [hasFuturePatientSeriesAppointment, readAppointmentSourcePayload]);
 
   const requestAppointmentCancellation = useCallback(
-    (appointment: any, details: any = {}) => {
-      if (!appointment?.id) return;
+    async (appointment: any, details: any = {}) => {
+      if (!appointment?.id) return { success: false, error: "Sessão não identificada." };
       const payload = {
-        note: String(
-          details?.note ?? details?.notes ?? details?.observation ?? "",
-        ).trim(),
+        note: String(details?.note ?? details?.notes ?? details?.observation ?? "").trim(),
         source: String(details?.source || "agenda_management"),
-        privatePolicyDecisionAmount:
-          details?.privatePolicyDecisionAmount === undefined
-            ? undefined
-            : Number(details.privatePolicyDecisionAmount),
+        privatePolicyDecisionAmount: details?.privatePolicyDecisionAmount === undefined
+          ? undefined : Number(details.privatePolicyDecisionAmount),
       };
       if (canCancelRecurringAppointments && isRecurringAppointment(appointment)) {
-        setPendingRecurringCancellation({
-          appointment,
-          ...payload,
-        });
-        return;
+        setPendingRecurringCancellation({ appointment, ...payload });
+        return { success: true, pendingRecurrence: true };
       }
-      handleStatusUpdate(appointment.id, "canceled", {
+      return await handleStatusUpdate(appointment.id, "canceled", {
         ...payload,
         recurrenceScope: "single",
       });
@@ -6521,9 +6520,9 @@ export function CoordinatorDashboard({
   );
 
   const submitRecurringCancellation = useCallback(
-    (scope: "single" | "future") => {
+    async (scope: "single" | "future") => {
       if (!pendingRecurringCancellation?.appointment?.id) return;
-      handleStatusUpdate(
+      const result = await handleStatusUpdate(
         pendingRecurringCancellation.appointment.id,
         "canceled",
         {
@@ -6533,7 +6532,7 @@ export function CoordinatorDashboard({
           privatePolicyDecisionAmount: pendingRecurringCancellation.privatePolicyDecisionAmount,
         },
       );
-      setPendingRecurringCancellation(null);
+      if (result?.success) setPendingRecurringCancellation(null);
     },
     [handleStatusUpdate, pendingRecurringCancellation],
   );
