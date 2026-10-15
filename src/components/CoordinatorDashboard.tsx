@@ -4396,16 +4396,6 @@ export function CoordinatorDashboard({
     };
   }, [isAddSessionModalOpen, isTherapist]);
 
-  const findSessionPatientByName = useCallback((name: string) => {
-    const normalizedName = normalizeUtf8Text(name).trim().toLowerCase();
-    if (!normalizedName) return null;
-    return (
-      allPatients.find(
-        (item: any) => normalizeUtf8Text(item?.name).trim().toLowerCase() === normalizedName,
-      ) || null
-    );
-  }, [allPatients]);
-
   const findProfessionalOptionById = useCallback((professionalId: any) => {
     const targetId = String(professionalId || "").trim();
     if (!targetId) return null;
