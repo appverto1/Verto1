@@ -70,6 +70,12 @@ export function checkNewGroupSlotAgainstAppointments(params: {
         (typeof source !== 'object' || Array.isArray(source))) {
       return { ok: false, code: 'GROUP_SLOT_UNVERIFIABLE' };
     }
+    // A malformed saved team list is not proof of availability. Never ignore
+    // it and accidentally double-book a secondary professional.
+    for (const field of ['professional_ids','professionalIds','team_professional_ids','teamProfessionalIds']) {
+      if (source && Object.hasOwn(source, field) && !Array.isArray(source[field]))
+        return { ok: false, code: 'GROUP_SLOT_UNVERIFIABLE' };
+    }
     const extraProfessionalIds = [
       ...(Array.isArray(source?.professional_ids) ? source.professional_ids : []),
       ...(Array.isArray(source?.professionalIds) ? source.professionalIds : []),
