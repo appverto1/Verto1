@@ -236,6 +236,7 @@ const criticalTests = [
   'tests/groupSessionPricePreview.test.ts',
   'tests/groupSessionPricePreviewRoute.test.ts',
   'tests/groupFinancialPlanFormAndAuthority.test.ts',
+  'tests/groupSessionBookingPlan.test.ts',
   'tests/p0BackendAppointmentFinalization.test.ts',
   'tests/p0AppointmentReminderClaimIntegrity.test.ts',
   'tests/abaLegacyProtocolApplicationsP0.regression.test.mjs',
