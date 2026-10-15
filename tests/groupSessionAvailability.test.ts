@@ -29,6 +29,11 @@ for (const malformed of [
   { professional_ids: { 0:'therapist-b' } },
   { team_professional_ids: null },
   { professionalIds: false },
+  { teamProfessionalIds: [null] },
+  { teamProfessionalIds: [''] },
+  { teamProfessionalIds: ['   '] },
+  { teamProfessionalIds: [123] },
+  { professional_ids: [{ id: 'therapist-b' }] },
 ]) {
   assert.equal(check({existingAppointments:[{
     ...entry,therapist_id:'therapist-c',source_payload:malformed,
