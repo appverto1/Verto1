@@ -1,5 +1,12 @@
-import { getAppointmentProfessionalIds, normalizeAppointmentTime, normalizeDurationMinutes } from './scheduling';
-
+const getIds = (row: any): string[] => Array.from(new Set([
+  row?.therapist_id, row?.therapistId, row?.professional_id, row?.professionalId,
+  ...(Array.isArray(row?.professional_ids) ? row.professional_ids : []),
+  ...(Array.isArray(row?.professionalIds) ? row.professionalIds : []),
+  ...(Array.isArray(row?.team_professional_ids) ? row.team_professional_ids : []),
+  ...(Array.isArray(row?.teamProfessionalIds) ? row.teamProfessionalIds : [])
+].map((id) => String(id || '').trim()).filter(Boolean)));
+const clock = (value: any) => String(value || '').trim().slice(0, 5);
+const minutes = (value: any) => Number(value || 0);
 export type AppointmentModality = 'INDIVIDUAL' | 'GROUP';
 
 export function normalizeAppointmentModality(value: unknown): AppointmentModality {
@@ -12,7 +19,7 @@ export function getAppointmentGroupId(value: any): string {
 }
 
 const sortedProfessionals = (appointment: any): string[] =>
-  getAppointmentProfessionalIds(appointment).sort();
+  getIds(appointment).sort();
 
 const comparable = (value: any): string => String(value || '').trim().toLowerCase();
 
@@ -30,9 +37,9 @@ export function canShareGroupBooking(current: any, existing: any): boolean {
   const existingClinic = comparable(existing?.clinicId || existing?.clinic_id);
   if (!currentClinic || !existingClinic || currentClinic !== existingClinic) return false;
   if (comparable(current?.date) !== comparable(existing?.date)) return false;
-  if (normalizeAppointmentTime(current?.time || current?.start_time)
+  if (clock(current?.time || current?.start_time)
     !== normalizeAppointmentTime(existing?.time || existing?.start_time)) return false;
-  if (normalizeDurationMinutes(current?.duration_minutes || current?.durationMinutes)
+  if (minutes(current?.duration_minutes || current?.durationMinutes)
     !== normalizeDurationMinutes(existing?.duration_minutes || existing?.durationMinutes)) return false;
   if (comparable(current?.room_id || current?.roomId || current?.room)
     !== comparable(existing?.room_id || existing?.roomId || existing?.room)) return false;
