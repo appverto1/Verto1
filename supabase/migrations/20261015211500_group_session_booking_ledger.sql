@@ -59,6 +59,12 @@ begin
   if v_capacity is null or v_capacity < 2 then
     raise exception 'GROUP_BOOKING_ROOM_SCOPE_INVALID';
   end if;
+  if not exists (
+    select 1 from public.clinic_memberships actor_membership
+    where actor_membership.clinic_id = new.organization_id
+      and actor_membership.user_id = new.created_by
+      and lower(actor_membership.status) = 'active'
+  ) then raise exception 'GROUP_BOOKING_ACTOR_SCOPE_INVALID'; end if;
 
   select count(distinct requested_id)::integer into v_team_count
   from unnest(new.professional_ids) requested_id;
