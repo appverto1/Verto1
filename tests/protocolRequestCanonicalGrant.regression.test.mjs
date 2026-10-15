@@ -1,7 +1,8 @@
+import { readProtocolImportServerSource } from './helpers/protocolImportSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readProtocolImportServerSource();
 
 assert.match(server, /from\('clinic_protocol_grants'\)[\s\S]{0,180}select\('clinic_id, canonical_key'\)[\s\S]{0,120}is\('revoked_at', null\)/,
   'admin protocol access must read active canonical grants');
