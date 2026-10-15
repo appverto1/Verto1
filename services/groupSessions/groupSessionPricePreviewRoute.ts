@@ -21,6 +21,7 @@ export function registerGroupSessionPricePreviewRoute(app: Express, deps: GroupP
     deps.checkAuth,
     deps.requireClinicModule('appointments_communication'),
     deps.requireClinicCapability('patient.demographics.edit'),
+    deps.requireClinicCapability('finance.entries.view'),
     async (req: any, res: any) => {
       try {
         if (!deps.enforcePayloadLimit(req, res, 8 * 1024, 'Consulta de valores da sessão em grupo')) return;
