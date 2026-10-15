@@ -239,6 +239,7 @@ const criticalTests = [
   'tests/groupSessionBookingPlan.test.ts',
   'tests/groupSessionResourceValidation.test.ts',
   'tests/groupSessionBookingPreview.test.ts',
+  'tests/groupSessionAvailability.test.ts',
   'tests/groupSessionBookingPreviewRoute.test.ts',
   'tests/groupSessionFinancialRateRoutes.test.ts',
   'tests/groupSessionFinancialCapabilityGuard.test.ts',
