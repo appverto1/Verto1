@@ -263,6 +263,9 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
     overrides.amount !== undefined || overrides.monthlyFee !== undefined || overrides.monthly_fee !== undefined
       ? amountToCents(overrides.amount ?? overrides.monthlyFee ?? overrides.monthly_fee)
       : Math.max(0, Math.round(Number(overrides.amountCents ?? overrides.amount_cents) || 0));
+  const groupAmountCents = overrides.groupAmount !== undefined
+    ? amountToCents(overrides.groupAmount)
+    : Math.max(0, Math.round(Number(overrides.groupAmountCents ?? overrides.group_amount_cents) || 0));
   const copaymentAmountCents =
     overrides.copaymentAmount !== undefined || overrides.copayment_amount !== undefined
       ? amountToCents(overrides.copaymentAmount ?? overrides.copayment_amount)
@@ -361,6 +364,9 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
                 ? 'MONTH'
                 : 'SESSION',
     amountCents,
+    // Zero disables group billing; never fall back to the individual rate.
+    groupAmountCents,
+    groupAmount: overrides.groupAmount !== undefined ? String(overrides.groupAmount) : centsToAmountInput(groupAmountCents),
     amount:
       overrides.amount !== undefined
         ? String(overrides.amount)
@@ -533,6 +539,7 @@ const serializePatientFinancialPlanPayload = (
     sessionsQuantity: normalized.sessionsQuantity ? Number(normalized.sessionsQuantity) : null,
     quantityPeriod: normalized.quantityPeriod,
     amountCents: normalized.amountCents,
+    groupAmountCents: normalized.groupAmountCents,
     copaymentAmountCents: normalized.copaymentAmountCents,
     paymentMethod: financialPlanRequiresPaymentMethod(normalized)
       ? normalized.paymentMethod || null
