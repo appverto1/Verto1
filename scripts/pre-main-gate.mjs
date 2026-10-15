@@ -226,6 +226,7 @@ const criticalTests = [
   'tests/p0WellbeingProductionReconciliation.regression.test.mjs',
   'tests/agendaPortalActionsP0.regression.test.mjs',
   'tests/p0ContextAuthAgendaBatch05.test.ts',
+  'tests/schedulingOverlappingRoomsPatientIdentity.test.ts',
   'tests/p0BackendAppointmentFinalization.test.ts',
   'tests/p0AppointmentReminderClaimIntegrity.test.ts',
   'tests/abaLegacyProtocolApplicationsP0.regression.test.mjs',

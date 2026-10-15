@@ -22,6 +22,7 @@ import {
   findWeeklyScheduleDraftConflicts,
   findScheduleRoomConfig,
   getAppointmentDurationMinutes,
+  isSameSchedulePatient,
   normalizeAppointmentTime,
   normalizeDurationMinutes,
   normalizeScheduleLocationType,
@@ -6857,9 +6858,7 @@ export default function App() {
         const sameProfessional =
           (occurrenceProfessionalId && String(item.professionalId || item.therapistId || item.professional_id || item.therapist_id || '') === occurrenceProfessionalId) ||
           (occurrenceProfessionalName && String(item.professional || item.therapistName || '').trim() === occurrenceProfessionalName);
-        const samePatient =
-          String(item.patientId || item.patient_id || '') === String(pid || '') ||
-          String(item.name || item.patientName || '').trim() === String(sess.patientName || '').trim();
+        const samePatient = isSameSchedulePatient(pid, item);
 
         if (sameRoom && roomBlocksOverlap) {
           const message = `${roomName || roomId} já está ocupada das ${item.time} às ${existingEndTime} em ${dateStr}.`;
