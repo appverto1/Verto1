@@ -94,6 +94,15 @@ export function authorizeExistingGroupJoin(params: {
   ));
   if (!validRows) return { ok: false, code: 'GROUP_SLOT_CONFLICT', authorizedForOverlap: false };
 
+  // Limit the whole group, not merely the current join request. A batch of
+  // repeated small additions must never bypass the logical 30-patient ceiling.
+  const existingPatientIds = params.existingGroupAppointments.map(row => id(row?.patient_id || row?.patientId));
+  if (existingPatientIds.some(value => !UUID.test(value)) ||
+      new Set(existingPatientIds).size !== existingPatientIds.length ||
+      existingPatientIds.length + patients.length > 30) {
+    return { ok: false, code: 'GROUP_CAPACITY_INVALID', authorizedForOverlap: false };
+  }
+
   if (params.existingGroupAppointments.some(row => patients.includes(id(row?.patient_id || row?.patientId))) ||
       patients.some(patientId => groupBookingIncludesPatient(params.existingGroupAppointments, {
         ...candidate, patient_id: patientId, id: '',
