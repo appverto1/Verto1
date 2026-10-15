@@ -54,9 +54,23 @@ declare
 begin
   select * into v_booking
   from public.group_session_bookings
-  where id = new.booking_id and organization_id = new.organization_id;
+  where id = new.booking_id and organization_id = new.organization_id
+  for update;
   if not found or v_booking.status <> 'RESERVED' then
     raise exception 'GROUP_PARTICIPANT_BOOKING_SCOPE_INVALID';
+  end if;
+
+  -- All joins of a booking serialize on the same header lock.
+  if (select count(*) from public.group_session_participants existing
+      where existing.booking_id=new.booking_id) >= 30 then
+    raise exception 'GROUP_PARTICIPANT_CAPACITY_EXCEEDED';
+  end if;
+  if (select count(*) from public.group_session_participants existing
+      where existing.booking_id=new.booking_id) >= (
+        select room.capacity from public.clinic_rooms room
+        where room.id=v_booking.room_id and room.clinic_id=new.organization_id and room.is_active=true
+      ) then
+    raise exception 'GROUP_PARTICIPANT_ROOM_CAPACITY_EXCEEDED';
   end if;
 
   if not exists (
@@ -94,7 +108,7 @@ $$;
 
 drop trigger if exists group_participant_verify_scope on public.group_session_participants;
 create trigger group_participant_verify_scope
-before insert or update on public.group_session_participants
+before insert on public.group_session_participants
 for each row execute function public.verify_group_session_participant_v1();
 
 create index if not exists group_session_bookings_by_clinic_time
@@ -108,7 +122,7 @@ revoke all on table public.group_session_bookings from public,anon,authenticated
 revoke all on table public.group_session_participants from public,anon,authenticated;
 revoke all on function public.verify_group_session_participant_v1() from public,anon,authenticated;
 grant select,insert,update on table public.group_session_bookings to service_role;
-grant select,insert,update on table public.group_session_participants to service_role;
+grant select,insert on table public.group_session_participants to service_role;
 
 comment on table public.group_session_bookings is 'Internal group-booking ledger; no booking exists until an atomic backend RPC commits all patient appointments and financial snapshots.';
 comment on table public.group_session_participants is 'Tenant-scoped per-patient links to the clinical appointment and agreed group price; service-role writes only.';
