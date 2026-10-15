@@ -4462,8 +4462,6 @@ export function CoordinatorDashboard({
     setSessionPatientId("");
     setSessionPatientName(value);
     setSessionProfessionalManuallySelected(false);
-    const patient = findSessionPatientByName(value);
-    if (patient) return;
     setSessionProfessionalId("");
     setSessionProfessional("");
   };
@@ -15948,7 +15946,7 @@ export function CoordinatorDashboard({
                 {sessionPatientName.trim() && !selectedSessionPatient?.id && (
                   <p className="mt-1 text-xs text-amber-700">Selecione um paciente da lista para confirmar o cadastro correto.</p>
                 )}
-                {filteredPatients.length > 0 && (
+                {!selectedSessionPatient?.id && filteredPatients.length > 0 && (
                   <div className="absolute top-full left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl mt-1 z-20 max-h-40 overflow-y-auto no-scrollbar">
                     {filteredPatients.map((p) => (
                       <div
