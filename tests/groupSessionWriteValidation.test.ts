@@ -7,11 +7,12 @@ const patient1 = '5502e3c5-f4c1-4a18-ae65-714180e38b92';
 const patient2 = '46b81ab1-d910-4b87-90d3-30d0f0d5886f';
 const professional = '9128fd0a-9e77-42f9-98c9-d86403d6f7b0';
 const groupId = 'db7f211c-6d4f-4781-930e-9cf0146782a1';
+const roomId = 'a87b5cd6-4493-4f25-a5ea-48901fe0fe39';
 const current = {
   id: 'a-2', clinic_id: clinic, patient_id: patient2, session_modality: 'GROUP',
   session_group_id: groupId, professional_ids: [professional],
   date: '2026-10-16', time: '21:45', duration_minutes: 50,
-  location_type: 'clinica', room_id: 'room-a', service_type: 'Fonoaudiologia'
+  location_type: 'clinica', room_id: roomId, service_type: 'Fonoaudiologia'
 };
 const existing = {
   ...current, id: 'a-1', patient_id: patient1, status: 'scheduled',
@@ -23,7 +24,8 @@ const input = {
     { id: patient1, clinic_id: clinic },
     { id: patient2, clinic_id: clinic },
   ],
-  clinicProfessionalRows: [{ id: professional, clinic_id: clinic, is_active: true }],
+  clinicProfessionalRows: [{ user_id: professional, clinic_id: clinic, role: 'therapist', status: 'active', specialty: 'Fonoaudiólogo' }],
+  clinicRoomRows: [{ id: roomId, clinic_id: clinic, is_active: true, capacity: 30 }],
   patientIds: [patient2], professionalIds: [professional],
 };
 assert.equal(authorizeExistingGroupJoin(input).ok, true);
@@ -34,11 +36,13 @@ assert.equal(authorizeExistingGroupJoin({...input, existingGroupAppointments: [{
 assert.equal(authorizeExistingGroupJoin({...input, patientIds: [patient1]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, patientIds: [patient2,patient2]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, clinicPatientRows: [{id:patient2,clinic_id:otherClinic}]}).ok, false);
-assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{id:professional,clinic_id:clinic,is_active:false}]}).ok, false);
-assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{id:professional,clinic_id:clinic}]}).ok, false);
+assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{user_id:professional,clinic_id:clinic,role:'therapist',status:'inactive',specialty:'Fonoaudiólogo'}]}).ok, false);
+assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{user_id:professional,clinic_id:clinic,role:'therapist',status:'active',specialty:'Psicólogo'}]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, existingGroupAppointments:[{...existing,status:'canceled'}]}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, candidateAppointment:{...current,time:'22:00'}}).ok, false);
 assert.equal(authorizeExistingGroupJoin({...input, requestedGroupId:'not-a-uuid'}).ok, false);
+assert.equal(authorizeExistingGroupJoin({...input, clinicRoomRows: [{id:roomId,clinic_id:clinic,is_active:true,capacity:1}]}).ok, false, 'room cannot exceed capacity');
+assert.equal(authorizeExistingGroupJoin({...input, clinicProfessionalRows: [{user_id:professional,clinic_id:otherClinic,role:'therapist',status:'active',specialty:'Fonoaudiólogo'}]}).ok, false, 'other-clinic member denied');
 const fullGroup = Array.from({ length: 30 }, (_, index) => ({
   ...existing,
   id: `existing-${index}`,
