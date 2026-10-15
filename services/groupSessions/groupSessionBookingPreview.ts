@@ -50,7 +50,7 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
   const scheduledStartAt = String(params.scheduledStartAt || '').trim();
   // Reject malformed instants before even the four resource lookups. The
   // canonical clinic timezone check still runs after the scoped reads.
-  const hasExplicitInstant = /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/i.test(scheduledStartAt) &&
+  const hasExplicitInstant = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(scheduledStartAt) &&
     Number.isFinite(Date.parse(scheduledStartAt));
   const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(date + 'T00:00:00Z') : null;
   if (!hasExplicitInstant || !specialty || !parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date ||
