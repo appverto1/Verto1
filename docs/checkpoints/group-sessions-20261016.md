@@ -150,3 +150,78 @@ Supabase Staging; controlled integration of complete PR #413; exact-commit Railw
 health; authenticated HTTP/UI smoke with fictitious data; F5 and logout/login.
 No group migration has been applied remotely at this checkpoint, and no group
 release is live. Production remains untouched. Operational completion is not 100%.
+
+## Remote execution checkpoint — do not duplicate (2026-10-16)
+
+- Published lifecycle/API/UI commit: `cc5158320767e66d26c2af758e8027f321046c3e`.
+- Complete GitHub CI **SUCCESS**: run `38920244587`, job `117038024410`.
+  Includes all 30 dedicated regressions, actual concurrent PostgreSQL connections,
+  production build, modularization/readiness regressions and pre-main ratchet.
+- Added a further mounted React DOM regression with pinned `jsdom@26.1.0`:
+  patient/team selection, separate GROUP amounts, detail duration/ledger amount,
+  failure without optimistic success, same-key retry, and manual cancellation
+  decisions keyed by patient (the actual RPC contract). Runs in the mandatory
+  group suite; requires the next exact-head CI.
+
+### Applied to Supabase STAGING only
+
+History confirmed through `list_migrations`:
+
+| Local SQL source | Remote migration version | Status |
+| --- | --- | --- |
+| 20261015162000_group_session_specialty_rates.sql | 20261016150342 | applied |
+| 20261015171000_group_session_private_rate_authority.sql | 20261016150343 | applied |
+| 20261015183500_group_financial_rate_atomic_update.sql | 20261016150345 | applied |
+| 20261015211500_group_session_booking_ledger.sql and all later GROUP SQL | — | NOT applied |
+
+The fourth `apply_migration` call repeatedly returned a connector transport error:
+`McpServerError: Invalid or expired requestState` (`INVALID_ARGUMENT`, JSON-RPC
+-32602, `reason: invalid_request_state`). A fresh `list_migrations` and
+`to_regclass('public.group_session_bookings')` confirmed no partial fourth
+migration. Read/write `execute_sql` still works. Do not substitute DDL through
+`execute_sql`, weaken permissions, or merge/deploy UI against the incomplete schema.
+Restore the connector execution path before retrying the unapplied migration.
+
+### Isolated fictitious Staging data
+
+- Clinic/owner `db03af60-8804-49f3-ba45-b47b67712077`, display name
+  `HOMOLOGAÇÃO FICTÍCIA SESSÕES EM GRUPO`.
+- A second isolated fictitious clinic exists for tenant-denial checks.
+- Two fictitious therapist memberships (`Fonoaudiólogo`), two capacity-3 rooms,
+  four patients, four ACTIVE PRIVATE plans: individual amounts 150/160/170/180 BRL,
+  GROUP amounts 80/70/60/50 BRL; first two AT_SESSION, last two MONTHLY_SESSION.
+- Canonical reconcile RPC persisted the four plans in Staging; aggregate SQL
+  confirmed all four GROUP values. Authenticated HTTP login returned 200 and
+  selected exactly the fictitious owner clinic. This is preparation, NOT group
+  end-to-end acceptance. No actual group appointment/charge has been created remotely.
+- Clinic `is_demo=true`, `billing_model='demo'`, playground, complimentary owner,
+  no Stripe IDs, no real patient/contact data. Credentials/cookies remain outside
+  the repository and must never be committed or printed.
+
+### Railway and PR safety
+
+- PR #413 remains open, draft, unmerged. Staging branch remains `0b9f502`.
+- Candidate source was staged ONLY in Railway environment
+  `bb3dd988-b80d-423e-9b95-e49fbb1243e4`, never accepted/deployed.
+- Because migrations are blocked, its pending source was restored to
+  `appverto1/Verto1@staging` with no pinned commit. The connector retains four
+  cosmetic staged source assignments (staging→staging, same repo, null image/SHA),
+  patch `dfafd0fb-3ce4-48ce-afe3-e2efac0b35ef`. Review/replace this pending source
+  before the eventual deploy; no variables or other services were changed.
+- Live service remains the previous baseline release. No group feature deploy,
+  authenticated group HTTP/UI smoke, F5 or new-login acceptance is claimed.
+- Production was neither modified nor deployed.
+
+Next: recover Supabase migration execution; skip the three applied names; apply
+remaining nine sources in filename order; verify privileges/triggers; stage exact
+CI-green candidate in existing Railway Staging only; confirm terminal SUCCESS and
+health; authenticated fictitious-clinic smoke for Save/reload, create/join,
+individual↔GROUP conflict, tenant/permission denial, idempotency, cancellation,
+reschedule/recurrence, financial snapshots and receipt preservation; browser F5
+and logout/login; only then mark PR ready and merge into staging. Never production.
+
+Additional live verification of the first three migrations: edited a fictitious
+GROUP rate 8000→9500 cents, read it through the canonical resolver, confirmed
+individual price remained 15000 cents, confirmed foreign-clinic lookup was denied,
+and confirmed anon/authenticated cannot execute the editing RPC. Restored the
+fixture GROUP price to 8000 cents. Mounted UI plus complete local suite: 31/31 pass.
