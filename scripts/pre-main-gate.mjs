@@ -230,6 +230,7 @@ const criticalTests = [
   'tests/appointmentCancellationReasons.test.ts',
   'tests/groupSessionRules.test.ts',
   'tests/groupFinancialPlanPrice.test.ts',
+  'tests/groupFinancialPlanPersistence.test.ts',
   'tests/groupScheduleConflict.test.ts',
   'tests/groupSessionWriteValidation.test.ts',
   'tests/groupSessionFinancialValidation.test.ts',
@@ -285,6 +286,14 @@ const criticalTests = [
   'tests/moduleUpgradeV5S1Finalization.regression.test.mjs',
   'tests/moduleUpgradeV5S1Http.test.ts',
   'tests/abaChartReadHandlers.test.ts',
+  'tests/reminderValueNormalization.test.ts',
+  'tests/clinicalReadExtractionParity.test.mjs',
+  'tests/clinicalReadHandlersEquivalence.test.mjs',
+  'tests/protocolImportExtractionParity.test.mjs',
+  'tests/protocolImportHandlersEquivalence.test.mjs',
+  'tests/patientPlanReadParity.test.mjs',
+  'tests/patientPlanReadEquivalence.test.mjs',
+
 ];
 
 for (const testFile of criticalTests) {

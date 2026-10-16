@@ -227,6 +227,13 @@ begin
           using v_current.id;
       end if;
 
+      -- A reserved GROUP session already freezes this plan, including monthly
+      -- sessions that have not produced a payment item yet.
+      if not v_referenced and to_regclass('public.group_session_participants') is not null then
+        execute 'select exists(select 1 from public.group_session_participants where financial_plan_id = $1)'
+          into v_referenced using v_current.id;
+      end if;
+
       if not v_referenced then
         update public.patient_financial_plans
         set client_plan_key = coalesce(v_client_plan_key, client_plan_key),
@@ -322,6 +329,11 @@ begin
       execute 'select exists(select 1 from public.payment_appointment_items where patient_financial_plan_id = $1)'
         into v_referenced
         using v_current.id;
+    end if;
+
+    if not v_referenced and to_regclass('public.group_session_participants') is not null then
+      execute 'select exists(select 1 from public.group_session_participants where financial_plan_id = $1)'
+        into v_referenced using v_current.id;
     end if;
 
     if v_referenced then

@@ -1,3 +1,4 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -148,7 +149,7 @@ assert.doesNotMatch(dashboard, /Target:\s*/, 'a interface clínica não deve exp
 assert.doesNotMatch(dashboard, /series\.context} · \{series\.source}/, 'fonte técnica não deve aparecer crua no card clínico');
 assert.doesNotMatch(dashboard, /series\.slice\(0, 2\)/, 'PTS não pode esconder silenciosamente séries adicionais da especialidade');
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 assert.match(server, /clinical-outcomes-dashboard/);
 assert.match(server, /doesNotAverageSpecialties: true/);
 assert.match(server, /supabase\.rpc\('read_clinical_outcomes_converged_v3'/, 'dashboard deve usar uma única leitura bulk V3 convergente');

@@ -1,3 +1,4 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -39,7 +40,7 @@ assert.deepEqual(
   [],
 );
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 assert.match(server, /req\.patientActorSpecialty\s*=\s*normalizeClinicalSpecialty\(evidence\.activeProfessionalProfile\?\.specialty\)/);
 assert.match(server, /const graphVisiblePlanScopes = filterClinicalGraphPlanScopesForActor\(rebacVisiblePlans, graphActorScope\)/);
 assert.match(server, /filterTherapeuticPlanProgramsForActor\(programResult\.data \|\| \[\], graphVisiblePlanScopes, accessContext\)/);

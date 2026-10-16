@@ -1,7 +1,8 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readPatientPlanServerSource();
 
 const block = (start, end) => {
   const from = server.indexOf(start);

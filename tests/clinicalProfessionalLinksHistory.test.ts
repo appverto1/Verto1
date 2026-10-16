@@ -1,3 +1,4 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -23,7 +24,7 @@ import {
 } from '../src/utils/routeSchemaFallbacks.ts';
 import { formatDateInAppointmentTimezone } from '../src/utils/scheduling.ts';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 const panel = fs.readFileSync(
   'src/components/PatientProfessionalLinksPanel.tsx',
   'utf8'

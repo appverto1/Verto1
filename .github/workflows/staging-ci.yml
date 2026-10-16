@@ -107,6 +107,9 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: Group sessions and financial persistence regressions
+        run: node scripts/group-sessions-regressions.mjs
+
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
 
