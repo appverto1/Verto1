@@ -73,3 +73,35 @@
 
 No operational completion percentage is claimed: the end-to-end acceptance
 criteria are not yet satisfied and no GROUP feature deploy has occurred.
+
+## Atomic reservation block (candidate, not deployed)
+
+- Added canonical `reserve_group_sessions_v1` and `join_group_session_v1`.
+  RPCs accept clinic/actor only from backend context, generate group/series IDs,
+  resolve prices in PostgreSQL, and atomically write headers, participant links,
+  appointments, billing contexts, financial snapshots/charges and operation keys.
+- Shared clinic advisory lock now guards individual appointment writes against
+  GROUP reservations. Group participant guards recheck all patient conflicts.
+- Added explicit canonical work-schedule checks for periods, breaks, exceptions
+  and allowed rooms. Null schedules preserve manual-calendar behavior.
+- Both AT_SESSION and MONTHLY_SESSION engines use the reserved GROUP amount;
+  individual branches remain present. Monthly amounts survive plan versioning.
+- Booking fails closed when required financial persistence is unconfirmed.
+- Added five operational migration candidates (05000 through 40000 on 20261016),
+  including the discovered Staging dependency: unpaid forecasts require nullable
+  `payments.payment_date` and optional `method`. Defaults/stored values remain;
+  settled receipts still require those fields through a CHECK constraint.
+- Real finance triggers are loaded in isolated PostgreSQL tests. Successful cases:
+  per-patient charges, monthly amounts, canonical joining, capacity, work hours,
+  transaction rollback, recurrence rollback, missing-trigger rollback, replay,
+  tenant scope, forged IDs/prices, and an individual financial regression.
+- Added a mandatory multi-connection PostgreSQL 17 CI service/test for actual
+  advisory-lock contention, duplicate/distinct requests, GROUP↔individual races,
+  final room place, price edit races and denied RPC calls. Local PGlite tests do
+  not substitute for this check.
+- Still outstanding: resource buffers/location policies audit; lifecycle RPCs;
+  HTTP routes/permissions; calendar UI; migrations applied in Staging; deployment
+  and authenticated F5/logout/login smoke. Do not merge or expose booking yet.
+
+First checkpoint commit `42c3c1b8709e94f82fa2bff5802bb0e93a7cec77`:
+GitHub Actions `38827815749` / job `116739289656` completed successfully.

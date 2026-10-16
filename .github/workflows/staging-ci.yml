@@ -22,6 +22,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
+    services:
+      group-postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: verto_group_regression
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: group_session_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d verto_group_regression"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -109,6 +124,16 @@ jobs:
 
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
+
+      - name: Group session PostgreSQL concurrency
+        env:
+          VERTO_GROUP_POSTGRES_TEST: "1"
+          PGHOST: "127.0.0.1"
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: group_session_ci_only
+          PGDATABASE: verto_group_regression
+        run: node tests/postgresGroupSessionConcurrency.test.mjs
 
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
