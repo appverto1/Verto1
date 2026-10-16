@@ -1453,6 +1453,7 @@ export const ClinicalAgendaBoard = ({
   onNavigateTissPreGuides,
   onOpenPatientFinance,
   onAppointmentActionResolved,
+  onManageGroupSessions,
   schoolModuleEnabled = false,
   theme = 'light'
 }: any) => {
@@ -3193,7 +3194,7 @@ export const ClinicalAgendaBoard = ({
               {!compact && statusColor.label}
             </span>
           </div>
-          <p className={`mt-1 truncate text-sm font-semibold leading-tight ${eventTextClass} ${compact ? 'text-xs' : ''}`}>{event.patientName}</p>
+          <p className={`mt-1 truncate text-sm font-semibold leading-tight ${eventTextClass} ${compact ? 'text-xs' : ''}`}>{event.patientName}{event.sessionModality === 'GROUP' && <span className="ml-1 rounded bg-purple-100 px-1 text-[9px] text-purple-800">Grupo</span>}</p>
           <p className={`${compact ? 'mt-0.5' : 'mt-1'} truncate text-[11px] font-medium opacity-85`}>
             <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${style.badge}`}>{style.label}</span>
             <span className="ml-1">{getRoomDisplayLine(event)}</span>
@@ -3708,6 +3709,7 @@ export const ClinicalAgendaBoard = ({
                 );
               })}
             </div>
+            {onManageGroupSessions && <button type="button" onClick={onManageGroupSessions} className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold">Grupos</button>}
             {filteredEvents.length > 0 && (
               <button
                 type="button"

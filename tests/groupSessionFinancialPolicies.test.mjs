@@ -1,0 +1,43 @@
+import assert from 'node:assert/strict';
+import {createGroupSessionTestDatabase} from './helpers/groupSessionDatabase.mjs';
+
+const{db,clinic,actor,patients,query,scalar,book}=await createGroupSessionTestDatabase();
+const cancel=(booking,key,policy={})=>scalar("select cancel_group_session_v1($1,$2,$3,null,'Solicitação com política congelada',$4::jsonb,'single',$5)",[clinic,actor,booking,JSON.stringify(policy),key]);
+const amounts=async booking=>(await query('select payment.amount from group_session_participants participant join payment_appointment_items item on item.appointment_id=participant.appointment_id join payments payment on payment.id=item.payment_id where participant.booking_id=$1 order by participant.patient_id',[booking])).map(x=>Number(x.amount));
+let step='late cancellation';
+try{
+  await query("update patient_financial_plans set valid_from='2026-01-01'");
+  await query("insert into private_session_price_rules(organization_id,scope_type,base_amount,valid_from,cancellation_free_value,cancellation_free_unit,late_cancellation_type,late_cancellation_value,no_show_type,no_show_value) values($1,'CLINIC_DEFAULT',150,'2026-01-01',48,'HOURS','PERCENTAGE',50,'FULL',0)",[clinic]);
+  const before=n=>new Date(Date.now()-n*86400000).toISOString().slice(0,10);
+  const late=await book('policy-late-booking',before(2));await cancel(late.bookings[0].id,'policy-late-cancel');
+  assert.deepEqual(await amounts(late.bookings[0].id),[40,35],'late fee is based on each frozen GROUP price');
+  step='no-show snapshot';
+  const absent=await book('policy-absent-booking',before(3));
+  await query("update private_session_price_rules set no_show_type='NO_CHARGE',late_cancellation_type='NO_CHARGE'");
+  for(const appointment of absent.appointments)await query("update appointments set status='no_show' where id=$1",[appointment.id]);
+  assert.deepEqual(await amounts(absent.bookings[0].id),[80,70],'changed current rules do not rewrite the original no-show policy');
+  step='manual decision';
+  await query("update private_session_price_rules set late_cancellation_type='MANUAL'");
+  const manual=await book('policy-manual-booking',before(4));
+  await assert.rejects(()=>cancel(manual.bookings[0].id,'policy-manual-missing'),/PRIVATE_SESSION_MANUAL_CANCELLATION_DECISION_REQUIRED/);
+  await assert.rejects(()=>cancel(manual.bookings[0].id,'policy-manual-invalid',{[patients[0]]:-1,[patients[1]]:25}),/appointments_financial_policy_decision_amount_check/);
+  await assert.rejects(()=>cancel(manual.bookings[0].id,'policy-manual-above-price',{[patients[0]]:81,[patients[1]]:25}),/PRIVATE_SESSION_MANUAL_POLICY_AMOUNT_INVALID/);
+  assert.equal(await scalar("select count(*)::int from appointments where id=any($1::uuid[]) and status='scheduled'",[manual.appointments.map(a=>a.id)]),2);
+  await cancel(manual.bookings[0].id,'policy-manual-approved',{[patients[0]]:30,[patients[1]]:25});
+  assert.deepEqual(await amounts(manual.bookings[0].id),[30,25]);
+  step='clinic timezone and package date';
+  await query("update clinics set timezone='America/Los_Angeles' where id=$1",[clinic]);
+  await query("update patient_financial_plans set package_valid_until='2026-11-01' where patient_id=any($1::uuid[])",[patients.slice(0,2)]);
+  const local=await book('policy-local-package','2026-11-01',patients.slice(0,2),'23:15');
+  assert.equal(local.bookings[0].scheduled_start_at,'2026-11-02T07:15:00+00:00');
+  const snapshots=await query('select due_date,timezone from appointment_private_financial_snapshots where appointment_id=any($1::uuid[])',[local.appointments.map(a=>a.id)]);
+  assert.ok(snapshots.every(x=>new Date(x.due_date).toISOString().slice(0,10)==='2026-11-01'&&x.timezone==='America/Los_Angeles'));
+  step='monthly competence timezone';
+  await query("update clinics set timezone='Pacific/Auckland' where id=$1",[clinic]);
+  const monthly=await book('policy-local-monthly','2026-11-01',patients.slice(2),'00:15');
+  assert.equal(monthly.bookings[0].scheduled_start_at,'2026-10-31T11:15:00+00:00');
+  for(const appointment of monthly.appointments)await query("update appointments set status='completed',actual_end_at=scheduled_end_at where id=$1",[appointment.id]);
+  const items=await query("select competence_month,unit_amount from payment_appointment_items where billing_item_type='MONTHLY_SESSION' order by patient_id");
+  assert.deepEqual(items.map(x=>new Date(x.competence_month).toISOString().slice(0,10)),['2026-11-01','2026-11-01']);assert.deepEqual(items.map(x=>Number(x.unit_amount)),[60,50]);
+  console.log('groupSessionFinancialPolicies: frozen GROUP late/no-show rules, atomic manual decisions, clinic package dates and monthly competence timezone passed');
+}catch(error){console.error('groupSessionFinancialPolicies failed at',step,':',error.message,error.detail||'');process.exitCode=1;}finally{await db.close();}

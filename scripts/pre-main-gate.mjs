@@ -228,6 +228,25 @@ const criticalTests = [
   'tests/p0ContextAuthAgendaBatch05.test.ts',
   'tests/schedulingOverlappingRoomsPatientIdentity.test.ts',
   'tests/appointmentCancellationReasons.test.ts',
+  'tests/groupSessionRules.test.ts',
+  'tests/groupFinancialPlanPrice.test.ts',
+  'tests/groupFinancialPlanPersistence.test.ts',
+  'tests/groupScheduleConflict.test.ts',
+  'tests/groupSessionWriteValidation.test.ts',
+  'tests/groupSessionFinancialValidation.test.ts',
+  'tests/groupSessionPricePreview.test.ts',
+  'tests/groupSessionPricePreviewRoute.test.ts',
+  'tests/groupFinancialPlanFormAndAuthority.test.ts',
+  'tests/groupSessionBookingPlan.test.ts',
+  'tests/groupSessionResourceValidation.test.ts',
+  'tests/groupSessionBookingPreview.test.ts',
+  'tests/groupSessionAvailability.test.ts',
+  'tests/groupSessionBookingLedgerSql.test.mjs',
+  'tests/groupSessionTransactionalSlotGuards.test.mjs',
+  'tests/groupSessionBookingPreviewRoute.test.ts',
+  'tests/groupSessionFinancialRateRoutes.test.ts',
+  'tests/groupSessionFinancialCapabilityGuard.test.ts',
+  'tests/groupSessionFinanceAtomicSql.test.ts',
   'tests/p0BackendAppointmentFinalization.test.ts',
   'tests/p0AppointmentReminderClaimIntegrity.test.ts',
   'tests/abaLegacyProtocolApplicationsP0.regression.test.mjs',
@@ -274,6 +293,7 @@ const criticalTests = [
   'tests/protocolImportHandlersEquivalence.test.mjs',
   'tests/patientPlanReadParity.test.mjs',
   'tests/patientPlanReadEquivalence.test.mjs',
+
 ];
 
 for (const testFile of criticalTests) {

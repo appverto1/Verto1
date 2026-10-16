@@ -1,3 +1,5 @@
+import {GroupSessionDialog} from "./GroupSessionDialog";
+import {getAppointmentGroupId} from "../utils/groupSessionRules";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   LayoutDashboard,
@@ -248,6 +250,10 @@ type NavigationNode = {
   newFeatureKey?: NewFeatureKey;
 };
 
+// Enable only after the backend financial-plan row mapper forwards
+// group_amount_cents to the transactional reconciler and the group pricing
+// triggers/snapshots are deployed. Never promise an unpersisted price.
+const GROUP_FINANCIAL_PLAN_EDITOR_ENABLED = true;
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
 const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
 
@@ -623,6 +629,7 @@ interface CoordinatorDashboardProps {
   onScheduleSession: (session: any) => Promise<any> | any;
   onUpdateAppointment: (id: any, updates: any) => Promise<any> | any;
   onAppointmentActionResolved?: (appointment: any) => Promise<any> | any;
+  onGroupAppointmentsResolved?: (result: any) => void;
   onUpdateAgendaStatus: (id: any, status: string, details?: any) => Promise<any> | any;
   onDeleteAppointment?: (id: any, details?: any) => Promise<any> | any;
   onAddPatient: (patient: any) => Promise<any> | any;
@@ -759,6 +766,7 @@ export function CoordinatorDashboard({
   onScheduleSession,
   onUpdateAppointment,
   onAppointmentActionResolved,
+  onGroupAppointmentsResolved,
   onUpdateAgendaStatus,
   onDeleteAppointment,
   onAddPatient,
@@ -894,6 +902,10 @@ export function CoordinatorDashboard({
   const canViewPatientInsurance = hasCapability("patient.insurance.view");
   const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
   const canCreatePatients = hasCapability("patient.create");
+  const canViewGroups = hasCapability("calendar.clinic.view") && hasCapability("patient.demographics.edit") && hasCapability("finance.entries.view");
+  const canCreateGroups = canViewGroups && hasCapability("finance.entries.manage") && hasCapability("calendar.appointment.create");
+  const canEditGroups = canViewGroups && hasCapability("finance.entries.manage") && hasCapability("calendar.appointment.edit");
+  const canCancelGroups = canViewGroups && hasCapability("finance.entries.manage") && hasCapability("calendar.appointment.cancel");
   const canManageRooms = hasCapability("clinic.rooms.manage");
   const [roomMutationPending, setRoomMutationPending] = useState(false);
   const roomCanonicalRequestSeqRef = useRef(0);
@@ -1814,7 +1826,7 @@ export function CoordinatorDashboard({
 
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
-  const [newRoom, setNewRoom] = useState({ name: "", specialties: "", preventOverlappingAppointments: true });
+  const [newRoom, setNewRoom] = useState({ name: "", specialties: "", capacity: "", preventOverlappingAppointments: true });
   const [editingRoom, setEditingRoom] = useState<any>(null);
 
   const agendaViewPreferenceKey = useMemo(
@@ -1890,6 +1902,7 @@ export function CoordinatorDashboard({
   );
   const [professionalFilter, setProfessionalFilter] = useState("all");
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
+  const [groupSessionDialog,setGroupSessionDialog] = useState<any>(null);
   const [isQuickRegisterModalOpen, setIsQuickRegisterModalOpen] = useState(false);
   const [isPatientRegistrationModalOpen, setIsPatientRegistrationModalOpen] =
     useState(false);
@@ -7467,6 +7480,12 @@ export function CoordinatorDashboard({
   };
 
   const handleEditAppointment = (appointment: any) => {
+    const groupId=getAppointmentGroupId(appointment);
+    if(groupId){
+      if(canViewGroups)setGroupSessionDialog({bookingId:groupId});
+      else showToast("Solicite a remarcação da sessão em grupo à coordenação.","error");
+      return;
+    }
     const appointmentInsurancePlanSnapshot = String(
       appointment.insurancePlanName || appointment.insurance_plan_name || "",
     );
@@ -8108,6 +8127,8 @@ export function CoordinatorDashboard({
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
       if (!appointment?.id) return;
+      const groupId=getAppointmentGroupId(appointment);
+      if(groupId && canCancelGroups){setGroupSessionDialog({bookingId:groupId,initialAction:"cancel"});return;}
       // The Calendar detail and the administrative action card do not share a
       // textarea. Open an explicit confirmation before any cancellation write.
       openAgendaActionModal(appointment);
@@ -8115,7 +8136,7 @@ export function CoordinatorDashboard({
       setAgendaCancellationReason("");
       setAgendaCancellationDetails("");
     },
-    [openAgendaActionModal],
+    [openAgendaActionModal,canCancelGroups],
   );
 
   const submitAgendaCancellation = useCallback(async () => {
@@ -8977,24 +8998,24 @@ export function CoordinatorDashboard({
     const specialties = newRoom.specialties.split(',').map((value) => value.trim()).filter(Boolean);
     setRoomMutationPending(true);
     try {
-      const result = await dataService.createClinicRoom({ name, specialties, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false, is_active: true });
+      const result = await dataService.createClinicRoom({ name, specialties, capacity: newRoom.capacity.trim() ? Number(newRoom.capacity) : null, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false, is_active: true });
       if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível salvar a sala.', 'error'); return; }
       const saved = normalizeRoomFromApi(result.data); setRooms((prev) => [...prev.filter((room) => String(room?.id) !== String(saved.id)), saved]);
-      setNewRoom({ name: '', specialties: '', preventOverlappingAppointments: true }); showToast('Sala salva e disponível na agenda.', 'success');
+      setNewRoom({ name: '', specialties: '', capacity: '', preventOverlappingAppointments: true }); showToast('Sala salva e disponível na agenda.', 'success');
     } finally { setRoomMutationPending(false); }
   };
   const handleEditRoom = (room: any) => {
     if (!canManageRooms || roomMutationPending) return; const normalized = normalizeRoomFromApi(room); setEditingRoom(normalized);
-    setNewRoom({ name: normalized.name, specialties: normalized.specialties.join(', '), preventOverlappingAppointments: normalized.preventOverlappingAppointments !== false });
+    setNewRoom({ name: normalized.name, specialties: normalized.specialties.join(', '), capacity: normalized.capacity == null ? '' : String(normalized.capacity), preventOverlappingAppointments: normalized.preventOverlappingAppointments !== false });
   };
   const handleUpdateRoom = async (e: React.FormEvent) => {
     e.preventDefault(); if (!canManageRooms || !editingRoom || roomMutationPending) return; const name = newRoom.name.trim(); if (!name) return;
     const specialties = newRoom.specialties.split(',').map((value) => value.trim()).filter(Boolean); setRoomMutationPending(true);
     try {
-      const result = await dataService.updateClinicRoom(String(editingRoom.id), { name, specialties, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false });
+      const result = await dataService.updateClinicRoom(String(editingRoom.id), { name, specialties, capacity: newRoom.capacity.trim() ? Number(newRoom.capacity) : null, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false });
       if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível atualizar a sala.', 'error'); return; }
       const saved = normalizeRoomFromApi(result.data); setRooms((prev) => prev.map((room) => String(room?.id) === String(saved.id) ? saved : room));
-      setEditingRoom(null); setNewRoom({ name: '', specialties: '', preventOverlappingAppointments: true }); showToast('Sala atualizada.', 'success');
+      setEditingRoom(null); setNewRoom({ name: '', specialties: '', capacity: '', preventOverlappingAppointments: true }); showToast('Sala atualizada.', 'success');
     } finally { setRoomMutationPending(false); }
   };
   const handleDeleteRoom = async (id: string) => {
@@ -10352,6 +10373,7 @@ export function CoordinatorDashboard({
       onDateChange={setCalendarDate}
       onViewChange={handleAgendaViewChange}
       onCreateAppointment={openNewAppointmentAt}
+      onManageGroupSessions={canViewGroups ? () => setGroupSessionDialog({showList:true}) : undefined}
       onEditAppointment={handleEditAppointment}
       onConfirmAppointment={handleConfirmAppointmentFromAgenda}
       onCancelAppointment={handleCancelAppointmentFromAgenda}
@@ -10472,6 +10494,11 @@ export function CoordinatorDashboard({
                     Especialidades ajudam a filtrar salas, mas são opcionais. Separe por vírgula.
                   </p>
                 </div>
+                <label className="block text-sm font-semibold">Capacidade de pacientes
+                  <input type="number" min={1} max={1000} step={1} className="mt-2 w-full rounded-xl border p-3"
+                    value={newRoom.capacity} onChange={(e)=>setNewRoom({...newRoom,capacity:e.target.value})} />
+                  <span className="mt-1 block text-xs text-slate-500">Informe a capacidade para permitir sessões em grupo.</span>
+                </label>
                 <label className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4">
                   <input
                     type="checkbox"
@@ -10498,7 +10525,7 @@ export function CoordinatorDashboard({
                     type="button"
                     onClick={() => {
                       setEditingRoom(null);
-                      setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
+                      setNewRoom({ name: "", specialties: "", capacity: "", preventOverlappingAppointments: true });
                     }}
                     className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
                   >
@@ -15926,6 +15953,19 @@ export function CoordinatorDashboard({
         onTemplateDelete={handleDeleteClinicAnamnesisTemplate}
       />
 
+      {groupSessionDialog && canViewGroups && <GroupSessionDialog
+        {...groupSessionDialog} patients={allPatients} professionals={appointmentProfessionalOptions}
+        specialties={clinicSessionSpecialtyOptions} rooms={rooms} onRooms={setRooms} timeZone={clinicTimeZone}
+        initialDate={sessionDate} initialTime={sessionTime} canCreate={canCreateGroups} canEdit={canEditGroups} canCancel={canCancelGroups}
+        onClose={() => setGroupSessionDialog(null)}
+        onIndividual={(date,time) => {setGroupSessionDialog(null);openNewAppointmentAt(date,time);}}
+        onPersisted={(result) => onGroupAppointmentsResolved?.(result)}
+        onFinance={(appointment) => {
+          setGroupSessionDialog(null);
+          setPatientFinanceLaunchRequest({key:`${appointment.id}:history:${Date.now()}`,appointmentId:appointment.id,action:"history"});
+          navigateToTab("financial",financialIntent("Financeiro de pacientes"));
+        }}
+      />}
       {isAddSessionModalOpen && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
@@ -15945,6 +15985,11 @@ export function CoordinatorDashboard({
               <CalendarPlus size={22} className="text-[#7a32fc]" />{" "}
               {editingAppointmentId ? "Editar Agendamento" : "Agendar Sessão"}
             </h2>
+            {!editingAppointmentId && canCreateGroups && <label className="mb-4 block text-sm font-semibold">Modalidade
+              <select className={sessionModalInputClass} value="INDIVIDUAL" onChange={(e) => {
+                if(e.target.value==="GROUP"){setIsAddSessionModalOpen(false);setGroupSessionDialog({});}
+              }}><option value="INDIVIDUAL">Individual</option><option value="GROUP">Grupo</option></select>
+            </label>}
             <div className="space-y-4">
               <div className="relative">
                 <label className={sessionModalLabelClass}>
@@ -18424,13 +18469,28 @@ export function CoordinatorDashboard({
                               </div>
                             )}
                             {!isCourtesyPlan && (
-                              <FormField label={isMonthlySessionPlan ? "Valor por sessão" : isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
+                              <FormField label={plan.billingMode === "PRIVATE" ? "Sessão individual (por paciente)" : isMonthlySessionPlan ? "Valor por sessão" : isInsurancePlan ? "Valor planejado do convênio" : isPackagePlan ? "Valor do pacote" : isMonthlyPlan ? "Mensalidade" : "Valor"}>
                                 <input
                                   className={patientFormInputClass}
                                   placeholder="R$ 0,00"
                                   inputMode="decimal"
                                   value={plan.amount}
                                   onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                                />
+                              </FormField>
+                            )}
+                            {GROUP_FINANCIAL_PLAN_EDITOR_ENABLED && plan.billingMode === "PRIVATE" && (
+                              <FormField
+                                label="Sessão em grupo (por paciente)"
+                                helperText="Valor para cada participante do grupo. Deixe em branco se não houver atendimento coletivo nesta especialidade."
+                              >
+                                <input
+                                  className={patientFormInputClass}
+                                  placeholder="R$ 0,00"
+                                  inputMode="decimal"
+                                  aria-label="Valor da sessão em grupo por paciente"
+                                  value={plan.groupAmount}
+                                  onChange={(event) => handleFinancialPlanChange(plan.id, "groupAmount", event.target.value)}
                                 />
                               </FormField>
                             )}

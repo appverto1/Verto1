@@ -37,7 +37,13 @@ assert.match(dashboard,/const clinicSessionSpecialtyOptions = useMemo\([\s\S]*?a
 assert.match(dashboard,/const appointmentProfessionalOptions = useMemo\([\s\S]*?activeClinicAppointmentSpecialty\(member\)/);
 assert.match(dashboard,/appointmentProfessionalOptions[\s\S]*?filter\(\(member\) => !sessionApproach \|\| clinicalSpecialtiesMatch/);
 assert.match(dashboard,/sessionWeeklySlots\.some\(\(slot\) => !clinicalSpecialtiesMatch/);
-assert.match(ds,/\.rpc\('clinic_scheduling_specialties_v1', \{ p_clinic_id: clinicId \}\)/);
+assert.match(ds,/fetch\('\/api\/clinic\/scheduling-specialties'/);
+assert.match(ds,/result\.clinicId !== clinicId/);
+const route = fs.readFileSync('services/groupSessions/clinicSchedulingSpecialtyRoute.ts','utf8');
+assert.match(route,/deps\.checkAuth/);
+assert.match(route,/deps\.requireAnyClinicCapability/);
+assert.match(route,/deps\.currentClinicId\(req\.session\?\.user\)/);
+assert.match(route,/\.eq\('clinic_id',clinicId\)\.eq\('status','active'\)\.eq\('role','therapist'\)/);
 assert.match(migration,/SECURITY DEFINER SET search_path = ''/);
 assert.match(migration,/caller\.user_id = auth\.uid\(\)/);
 assert.match(migration,/member\.role = 'therapist'/);

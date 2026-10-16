@@ -1,3 +1,5 @@
+import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';
+import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './services/groupSessions/groupSessionScheduleConflicts';
 import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';
 import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
@@ -7388,6 +7390,7 @@ const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'sessions_quantity',
   'quantity_period',
   'amount_cents',
+  'group_amount_cents',
   'copayment_amount_cents',
   'payment_method',
   'due_day',
@@ -12833,12 +12836,14 @@ function getClinicStateAppointmentProfessionals(appointment: any) {
   return { ids, names };
 }
 
-function validateClinicStateAppointmentsForScheduleConflicts(params: {
+async function validateClinicStateAppointmentsForScheduleConflicts(params: {
   appointments: any[];
+  clinicId: string;
   rooms?: any[];
   specialtySettings?: Record<string, any>;
 }) {
   const appointments = Array.isArray(params.appointments) ? params.appointments : [];
+  const canonicalGroupSlots = await loadCanonicalGroupScheduleSlots(supabase, params.clinicId, appointments);
   const roomsById = new Map(
     (Array.isArray(params.rooms) ? params.rooms : [])
       .map((room: any) => [sanitizeString(room?.id, 180), room])
@@ -12877,7 +12882,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         180,
       );
       const professionals = getClinicStateAppointmentProfessionals(appointment);
-      return {
+      const normalized = {
         index,
         id: sanitizeString(appointment?.id, 180),
         date,
@@ -12895,6 +12900,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         professionalNames: professionals.names,
         blocks: getClinicStateAppointmentStatusBlocksConflict(appointment)
       };
+      return {...normalized, sharedGroupSlot: canonicalSharedGroupSlot(appointment, normalized, canonicalGroupSlots)};
     })
     .filter((appointment) => appointment.blocks && appointment.date && appointment.startTime);
 
@@ -12939,6 +12945,8 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
             : `${current.patientName || 'Paciente'} já possui outra sessão nesse horário.`
         };
       }
+
+      if (current.sharedGroupSlot && current.sharedGroupSlot === other.sharedGroupSlot) continue;
 
       const sameRoom =
         current.locationType === 'clinica' &&
@@ -19630,6 +19638,7 @@ function patientFinancialPlanSemanticFingerprint(row: any) {
     sessions_quantity: normalizeFinancialPlanSemanticInteger(source.sessions_quantity ?? source.sessionsQuantity),
     quantity_period: normalizeFinancialPlanSemanticEnum(source.quantity_period ?? source.quantityPeriod, 40),
     amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.amount_cents ?? source.amountCents) || 0),
+    group_amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.group_amount_cents ?? source.groupAmountCents) || 0),
     copayment_amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.copayment_amount_cents ?? source.copaymentAmountCents) || 0),
     payment_method: normalizeFinancialPlanSemanticEnum(source.payment_method ?? source.paymentMethod ?? source.billingMethod, 40),
     due_day: normalizeFinancialPlanSemanticInteger(source.due_day ?? source.dueDay),
@@ -20186,7 +20195,15 @@ function buildPatientFinancialPlanRows(params: {
   clinicId: string;
   actorId?: string | null;
 }) {
-  return normalizePatientFinancialPlans(params.financialPlans)
+  const normalizedPlans = normalizePatientFinancialPlans(params.financialPlans);
+  // Omitted fields from older clients must remain omitted for the canonical
+  // reconciler to preserve an already saved collective rate.
+  const explicitGroupRateIds = new Set(normalizedPlans.filter((_plan: any, index: number) =>
+    ['groupAmount', 'groupAmountCents', 'group_amount_cents'].some(key =>
+      Object.prototype.hasOwnProperty.call(params.financialPlans[index] || {}, key)
+    )
+  ).map((plan: any) => plan.id));
+  return normalizedPlans
     .filter(isPatientFinancialPlanComplete)
     .map(serializePatientFinancialPlanForPayload)
     .map((plan: any) => cleanObject({
@@ -20209,6 +20226,7 @@ function buildPatientFinancialPlanRows(params: {
       sessions_quantity: asSafeNumber(plan.sessionsQuantity, 1, 10000),
       quantity_period: sanitizeString(plan.quantityPeriod, 40) || null,
       amount_cents: Math.max(0, Math.round(Number(plan.amountCents || 0) || 0)),
+      group_amount_cents: explicitGroupRateIds.has(plan.id) ? plan.groupAmountCents : undefined,
       copayment_amount_cents: Math.max(0, Math.round(Number(plan.copaymentAmountCents || 0) || 0)),
       payment_method: sanitizeString(plan.paymentMethod || plan.billingMethod, 40) || null,
       due_day: asSafeNumber(plan.dueDay, 1, 31),
@@ -34027,7 +34045,8 @@ async function startServer() {
             : previous.data?.specialty_settings && typeof previous.data.specialty_settings === 'object'
               ? previous.data.specialty_settings
               : {};
-        const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+        const scheduleValidation = await validateClinicStateAppointmentsForScheduleConflicts({
+          clinicId,
           appointments: nextAppointments,
           rooms: nextRooms !== undefined ? nextRooms : Array.isArray(previous.data?.rooms) ? previous.data.rooms : [],
           specialtySettings: effectiveSpecialtySettings
@@ -35361,7 +35380,8 @@ async function startServer() {
     );
 
     const nextAppointmentsForValidation = mergeClinicStateAppointmentsById(state.appointments, preparedAppointments);
-    const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+    const scheduleValidation = await validateClinicStateAppointmentsForScheduleConflicts({
+      clinicId,
       appointments: nextAppointmentsForValidation,
       rooms: state.rooms,
       specialtySettings: state.specialtySettings
@@ -53467,6 +53487,7 @@ async function startServer() {
     const financialContextType = explicitFinancialContext || (payerId || payerName ? 'INSURANCE' : null);
 
     return {
+      ...groupCalendarMetadata(row),
       id: appointmentId,
       patient_id: patientId || null,
       patient_name: pickCalendarPatientName([
@@ -53611,7 +53632,7 @@ async function startServer() {
   const calendarEventMatchesFilters = (event: any, filters: any) => {
     const rawStatus = sanitizeString(event?.status, 80).toLowerCase();
     if (event?.is_active === false || event?.isActive === false || event?.deleted_at || event?.deletedAt || rawStatus === 'deleted') return false;
-    if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
+    if (filters.therapistIds.length > 0 && !groupCalendarMatchesProfessional(event, new Set<string>(filters.therapistIds))) return false;
     if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
     if (filters.roomIds?.length > 0 && !filters.roomIds.includes(String(event.room_id || ''))) return false;
     if (filters.schoolIds?.length > 0 && !filters.schoolIds.includes(String(event.school_id || event.schoolId || ''))) return false;
@@ -60337,7 +60358,7 @@ async function startServer() {
     if (scope.allClinic) return true;
     const patientId = sanitizeString(row?.patient_id || row?.patientId, 120);
     const professionalId = sanitizeString(row?.therapist_id || row?.therapistId || row?.professional_id, 120);
-    return (patientId && scope.patientIds.has(patientId)) || (professionalId && scope.professionalIds.has(professionalId));
+    return Boolean((patientId && scope.patientIds.has(patientId)) || groupCalendarMatchesProfessional(row, scope.professionalIds));
   };
 
   const CALENDAR_INSURANCE_FIELDS = new Set([
@@ -60425,10 +60446,13 @@ async function startServer() {
         if (patientIdsForQuery.length === 0) return res.json({ success: true, data: [], source: 'authorization_scope' });
         query = query.in('patient_id', patientIdsForQuery);
       }
+      const professionalFilters: string[] = [];
       if (!calendarScope.allClinic && calendarScope.professionalIds.size > 0) {
-        query = query.in('therapist_id', Array.from(calendarScope.professionalIds));
+        professionalFilters.push(groupCalendarProfessionalFilter(calendarScope.professionalIds));
       }
-      if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
+      if (filters.therapistIds.length > 0) professionalFilters.push(groupCalendarProfessionalFilter(filters.therapistIds));
+      if (professionalFilters.length === 1) query = query.or(professionalFilters[0]);
+      if (professionalFilters.length === 2) query = query.or(`and(or(${professionalFilters[0]}),or(${professionalFilters[1]}))`);
       if (filters.patientIds.length > 0 && (calendarScope.allClinic || calendarScope.patientIds.size === 0)) query = query.in('patient_id', filters.patientIds);
       if (filters.roomIds.length > 0) query = query.in('room_id', filters.roomIds);
       if (filters.schoolIds.length > 0) query = query.in('school_id', filters.schoolIds);
@@ -93150,7 +93174,12 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
     portalActionLimiter,
     enforcePayloadLimit,
     sanitizeString,
-    currentClinicId
+    currentClinicId,
+    serializeGroupAppointment: serializePersistedAppointmentForAgenda,
+    onGroupAppointmentsPersisted: async ({ appointments, action }: any) => {
+      if (action !== 'created') await acknowledgeStaleAppointmentReminderNotifications(appointments);
+      triggerAppointmentReminderScan(`group.${action}`);
+    }
   });
 
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback

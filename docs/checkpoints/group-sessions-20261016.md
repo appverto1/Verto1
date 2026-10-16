@@ -1,0 +1,376 @@
+# Group sessions — continuation checkpoint
+
+## Source of truth
+
+- Continue PR #413, branch `feat/staging-group-sessions-specialty-pricing-20261015`.
+- Previous head: `0c064d618c3604395d8c3b98f4b0612184855d30`.
+- Staging baseline: `0b9f502219beeb23a13d41c4e3d5d7c53ee85543` (PR #417).
+- PRs #414–417 and their backend extractions are preserved. The only overlapping
+  file requiring combination is `scripts/pre-main-gate.mjs`; retain all tests.
+- Production is outside the authorized scope. Do not merge this PR while incomplete.
+
+## Financial persistence block
+
+- The existing Save flow now maps `groupAmountCents` to `group_amount_cents`.
+- Canonical patient-plan reads include the column; generic payer authorization
+  equality also accounts for it. Existing individual amounts are unchanged.
+- Legacy requests that omit collective prices leave the SQL field absent, so
+  reconciliation preserves a previously stored group rate.
+- The unapplied reconciliation migration now treats GROUP participant references
+  as historical references, including monthly reservations without payment items.
+  Editing versions the plan; removal ends it rather than deleting its history.
+- The UI flag remains false until remote persistence and the complete feature pass.
+- Reused all 41 PR foundation files. No remote migrations have been applied.
+
+## Validation
+
+- `npm run typecheck`: passed on the local candidate.
+- `npm run build`: passed on the local candidate.
+- `node scripts/group-sessions-regressions.mjs`: dedicated suite, run in CI as a
+  mandatory step independently of the existing baseline regression ratchet.
+- `groupFinancialPlanPersistence.test.ts` executes the actual backend mapper:
+  Save, canonical reload, resave, independent rates, zero and legacy omission.
+- `groupSessionPostgres.test.mjs` runs all five PR migrations in PostgreSQL 17
+  (PGlite), plus actual RPCs for history, stale writes, retries, no fallback,
+  clinic isolation and anon/authenticated privilege denial.
+- SQL fixtures contain definitions only, no real records or credentials. The
+  schema fixture retains columns, defaults, primary/unique/check constraints;
+  it omits pre-existing FKs, indexes, RLS policies and triggers. Feature migrations
+  create their own actual constraints/triggers. This is not full financial,
+  concurrency, authenticated HTTP or deployed smoke coverage.
+- Local runtime: Node 24; required GitHub CI runtime: Node 20.
+
+## Remaining required implementation
+
+1. Atomic create/join RPC: backend UUID, idempotency, capacity, all patients/team,
+   canonical prices, all appointments, financial context/snapshots in one transaction.
+2. Individual and GROUP writers must share the same clinic slot lock; validate
+   collisions inside the transaction, including secondary professionals and patients.
+3. Respect professional availability, calendar rules, clinic timezone and resources.
+4. GROUP pricing must connect to both existing AT_SESSION and MONTHLY_SESSION
+   engines. Current individual resolver and monthly unit price still use individual
+   values. Never expose booking with this unresolved.
+5. Atomic lifecycle operations: cancellation, rescheduling, recurrence, no-show,
+   settled-payment preservation and individual participant actions.
+6. Calendar UI: modality, multiple patients/professionals, rates, create/join,
+   detail/edit/cancel and refresh after successful durable persistence.
+7. Review and apply the five migrations plus operational migrations to Staging
+   only after dependency/security validation; none is assumed applied.
+8. Actual concurrent-connection tests, HTTP permission/tenant tests, regressions,
+   exact-head CI, controlled merge, Railway deploy, authenticated smoke, F5 and
+   logout/login. Create fictitious test data rather than using real patients.
+
+## Verified environment
+
+- Supabase Staging: `irspungjhapqdbgqroyc`; PostgreSQL 17.6.
+- Railway project: `e9712be6-e075-47bb-a006-b5991fd38c88`.
+- Environment: `bb3dd988-b80d-423e-9b95-e49fbb1243e4` (`staging`).
+- Service: `55de13c3-3e54-4668-b32a-5d8ba96bc2b0` (`Staging`), source `staging`.
+- API health on `https://api.appverto.com.br/api/health`: HTTP 200 before changes.
+- Railway OAuth lists variable names with values redacted. Do not recreate sealed
+  variables or assume credentials are readable. GitHub connector supports large
+  UTF-8 blobs; the large server.ts is not a blocker.
+
+No operational completion percentage is claimed: the end-to-end acceptance
+criteria are not yet satisfied and no GROUP feature deploy has occurred.
+
+## Atomic reservation block (candidate, not deployed)
+
+- Added canonical `reserve_group_sessions_v1` and `join_group_session_v1`.
+  RPCs accept clinic/actor only from backend context, generate group/series IDs,
+  resolve prices in PostgreSQL, and atomically write headers, participant links,
+  appointments, billing contexts, financial snapshots/charges and operation keys.
+- Shared clinic advisory lock now guards individual appointment writes against
+  GROUP reservations. Group participant guards recheck all patient conflicts.
+- Added explicit canonical work-schedule checks for periods, breaks, exceptions
+  and allowed rooms. Null schedules preserve manual-calendar behavior.
+- Both AT_SESSION and MONTHLY_SESSION engines use the reserved GROUP amount;
+  individual branches remain present. Monthly amounts survive plan versioning.
+- Booking fails closed when required financial persistence is unconfirmed.
+- Added five operational migration candidates (05000 through 40000 on 20261016),
+  including the discovered Staging dependency: unpaid forecasts require nullable
+  `payments.payment_date` and optional `method`. Defaults/stored values remain;
+  settled receipts still require those fields through a CHECK constraint.
+- Real finance triggers are loaded in isolated PostgreSQL tests. Successful cases:
+  per-patient charges, monthly amounts, canonical joining, capacity, work hours,
+  transaction rollback, recurrence rollback, missing-trigger rollback, replay,
+  tenant scope, forged IDs/prices, and an individual financial regression.
+- Added a mandatory multi-connection PostgreSQL 17 CI service/test for actual
+  advisory-lock contention, duplicate/distinct requests, GROUP↔individual races,
+  final room place, price edit races and denied RPC calls. Local PGlite tests do
+  not substitute for this check.
+- Still outstanding: resource buffers/location policies audit; lifecycle RPCs;
+  HTTP routes/permissions; calendar UI; migrations applied in Staging; deployment
+  and authenticated F5/logout/login smoke. Do not merge or expose booking yet.
+
+First checkpoint commit `42c3c1b8709e94f82fa2bff5802bb0e93a7cec77`:
+GitHub Actions `38827815749` / job `116739289656` completed successfully.
+
+## Lifecycle, API and interface block (2026-10-16 continuation)
+
+This section supersedes the earlier remaining-work lists for the local candidate.
+Second published checkpoint: `cb55fc0f3f058da560842b0ba2652909cbcf7d46`;
+GitHub Actions `38829529255`, job `116744835440`, all steps successful,
+including real PostgreSQL 17 concurrent connections. PR #413 remains draft.
+Fresh remote check: staging still `0b9f502219beeb23a13d41c4e3d5d7c53ee85543`,
+PR head still `cb55fc0`, mergeable, no competing merge observed.
+
+- Added atomic single-occurrence rescheduling, individual/whole-group cancellation,
+  and backend-owned future-series cancellation. Existing IDs, frozen prices,
+  canceled participant history, clinical records and paid receipts are preserved.
+- Added no-show/authorized-reopen ledger synchronization and reserved room capacity
+  protection. Buffer, work-period, break, exception, room and location policies
+  are validated against canonical membership schedules inside the transaction.
+- Added atomic clinic_state calendar projection through the existing CAS function,
+  preserving individual events/protocols and section versions. Durable domain
+  events are inserted in the same transaction, once per changed appointment.
+- Added scoped HTTP list/detail/create/join/reschedule/cancel handlers with explicit
+  capabilities, server actor/clinic, payload whitelists and idempotency keys.
+- Calendar reads include canonical secondary GROUP professionals while retaining
+  clinic/patient capability scope. Financial quote payloads are omitted.
+- Added the group scheduling dialog: multiple patients/professionals, canonical
+  price preview, capacity, weekly recurrence, list/detail, adding patients,
+  rescheduling and cancellation with per-patient manual policy decisions.
+  Failed network operations retain their action key and never enter an offline queue.
+- Integrated successful batch results/events/section versions into existing agenda
+  state. Added room capacity input and enabled collective financial-plan editing
+  in the candidate release; deploy only after all 12 migrations are validated/applied.
+- Corrected GROUP package dates, monthly competence and snapshots to use canonical
+  clinic timezone. Individual branches retain their existing timezone behavior.
+
+Validation on the local candidate: 30/30 dedicated group/financial/scheduling
+regressions passed; typecheck and build passed; therapist scope and appointment
+financial read regressions passed. Additional old static agenda regression fails
+on a pre-existing navigation label assertion; local modularization parity requires
+Git objects omitted from this sparse checkout. Neither test was weakened.
+Remote full-tree CI remains required for the new candidate.
+
+Still outstanding: exact-candidate full CI/concurrency; migration deployment to
+Supabase Staging; controlled integration of complete PR #413; exact-commit Railway
+health; authenticated HTTP/UI smoke with fictitious data; F5 and logout/login.
+No group migration has been applied remotely at this checkpoint, and no group
+release is live. Production remains untouched. Operational completion is not 100%.
+
+## Remote execution checkpoint — do not duplicate (2026-10-16)
+
+- Published lifecycle/API/UI commit: `cc5158320767e66d26c2af758e8027f321046c3e`.
+- Complete GitHub CI **SUCCESS**: run `38920244587`, job `117038024410`.
+  Includes all 30 dedicated regressions, actual concurrent PostgreSQL connections,
+  production build, modularization/readiness regressions and pre-main ratchet.
+- Added a further mounted React DOM regression with pinned `jsdom@26.1.0`:
+  patient/team selection, separate GROUP amounts, detail duration/ledger amount,
+  failure without optimistic success, same-key retry, and manual cancellation
+  decisions keyed by patient (the actual RPC contract). Runs in the mandatory
+  group suite; requires the next exact-head CI.
+
+### Applied to Supabase STAGING only
+
+History confirmed through `list_migrations`:
+
+| Local SQL source | Remote migration version | Status |
+| --- | --- | --- |
+| 20261015162000_group_session_specialty_rates.sql | 20261016150342 | applied |
+| 20261015171000_group_session_private_rate_authority.sql | 20261016150343 | applied |
+| 20261015183500_group_financial_rate_atomic_update.sql | 20261016150345 | applied |
+| 20261015211500_group_session_booking_ledger.sql and all later GROUP SQL | — | NOT applied |
+
+The fourth `apply_migration` call repeatedly returned a connector transport error:
+`McpServerError: Invalid or expired requestState` (`INVALID_ARGUMENT`, JSON-RPC
+-32602, `reason: invalid_request_state`). A fresh `list_migrations` and
+`to_regclass('public.group_session_bookings')` confirmed no partial fourth
+migration. Read/write `execute_sql` still works. Do not substitute DDL through
+`execute_sql`, weaken permissions, or merge/deploy UI against the incomplete schema.
+Restore the connector execution path before retrying the unapplied migration.
+
+### Isolated fictitious Staging data
+
+- Clinic/owner `db03af60-8804-49f3-ba45-b47b67712077`, display name
+  `HOMOLOGAÇÃO FICTÍCIA SESSÕES EM GRUPO`.
+- A second isolated fictitious clinic exists for tenant-denial checks.
+- Two fictitious therapist memberships (`Fonoaudiólogo`), two capacity-3 rooms,
+  four patients, four ACTIVE PRIVATE plans: individual amounts 150/160/170/180 BRL,
+  GROUP amounts 80/70/60/50 BRL; first two AT_SESSION, last two MONTHLY_SESSION.
+- Canonical reconcile RPC persisted the four plans in Staging; aggregate SQL
+  confirmed all four GROUP values. Authenticated HTTP login returned 200 and
+  selected exactly the fictitious owner clinic. This is preparation, NOT group
+  end-to-end acceptance. No actual group appointment/charge has been created remotely.
+- Clinic `is_demo=true`, `billing_model='demo'`, playground, complimentary owner,
+  no Stripe IDs, no real patient/contact data. Credentials/cookies remain outside
+  the repository and must never be committed or printed.
+
+### Railway and PR safety
+
+- PR #413 remains open, draft, unmerged. Staging branch remains `0b9f502`.
+- Candidate source was staged ONLY in Railway environment
+  `bb3dd988-b80d-423e-9b95-e49fbb1243e4`, never accepted/deployed.
+- Because migrations are blocked, its pending source was restored to
+  `appverto1/Verto1@staging` with no pinned commit. The connector retains four
+  cosmetic staged source assignments (staging→staging, same repo, null image/SHA),
+  patch `dfafd0fb-3ce4-48ce-afe3-e2efac0b35ef`. Review/replace this pending source
+  before the eventual deploy; no variables or other services were changed.
+- Live service remains the previous baseline release. No group feature deploy,
+  authenticated group HTTP/UI smoke, F5 or new-login acceptance is claimed.
+- Production was neither modified nor deployed.
+
+Next: recover Supabase migration execution; skip the three applied names; apply
+remaining nine sources in filename order; verify privileges/triggers; stage exact
+CI-green candidate in existing Railway Staging only; confirm terminal SUCCESS and
+health; authenticated fictitious-clinic smoke for Save/reload, create/join,
+individual↔GROUP conflict, tenant/permission denial, idempotency, cancellation,
+reschedule/recurrence, financial snapshots and receipt preservation; browser F5
+and logout/login; only then mark PR ready and merge into staging. Never production.
+
+Additional live verification of the first three migrations: edited a fictitious
+GROUP rate 8000→9500 cents, read it through the canonical resolver, confirmed
+individual price remained 15000 cents, confirmed foreign-clinic lookup was denied,
+and confirmed anon/authenticated cannot execute the editing RPC. Restored the
+fixture GROUP price to 8000 cents. Mounted UI plus complete local suite: 31/31 pass.
+
+## Operator fallback after browser login failure — 2026-10-16
+
+The user authorized browser fallback. Secure browser authentication reached a
+CAPTCHA, followed by an unauthenticated sign-in page; a subsequent secure request
+timed out. No successful dashboard session or fourth migration is claimed.
+At the user's later report that browser login was not working, fresh connector
+reads confirmed PR head `327160a`, staging `0b9f502`, and only the same three
+GROUP migration names. A fresh apply attempt again returned `invalid_request_state`.
+No new GROUP DDL was applied; do not retry in a loop or change credentials/scopes.
+
+A concrete alternative is ready for the operator's existing trusted SQL access:
+`supabase/operations/group_sessions_staging_remaining.sql`.
+Generate it with `node scripts/build-group-staging-migration-bundle.mjs`.
+It contains the exact nine pending sources, with only outer transaction wrappers
+removed, inside one transaction. It checks the unique fictitious Staging clinic
+and all three confirmed remote prerequisite versions before any DDL; rejects
+partial/concurrent unreviewed history; records the nine source versions/names in
+migration history; reloads PostgREST schema; and treats an already complete replay
+as a no-op. Run the WHOLE file in Verto-Staging `irspungjhapqdbgqroyc`, never production.
+The result must show `STAGING_GROUP_MIGRATIONS_VERIFIED` and count 9.
+
+`groupSessionMigrationBundle.test.mjs` executes the actual delivered SQL in
+PostgreSQL 17/PGlite: source parity, wrong-target guard, partial-history rejection,
+rollback of all nine DDL/history changes after a final-step failure, service-only
+RPC grants, and no-op replay. Complete local suite: 32/32 passed.
+No application business logic or original migration source changed in this block.
+The prior application head `327160a` has full CI success (run `38931519500`, job
+`117076418079`). The operator fallback block requires its own exact-head CI.
+
+After operator execution, verify migration history/tables/RPC grants through the
+working read connector before deploying. The prepared fictitious clinic and
+financial plans remain available. Deployment, authenticated GROUP smoke,
+F5/logout-login and final merge are still outstanding. Production is untouched.
+
+## Live Staging acceptance and individual-write regression — 2026-10-16
+
+This section supersedes the earlier migration/deploy blocker above. The operator
+reported `STAGING_GROUP_MIGRATIONS_VERIFIED | 9`; read-back confirmed all 12 GROUP
+migration names. The first three retain remote versions 20261016150342/343/345;
+the nine remaining sources use their filename versions. Do NOT reapply any of them.
+Seven critical RPCs deny anon/authenticated execution and permit service_role;
+all three GROUP tables have RLS and deny direct anon/authenticated INSERT.
+Slot/participant/state/status/capacity triggers were verified in the live catalog.
+
+Railway candidate deployment `1a71303b-2975-4d35-a799-3ce9f1d55283` reached SUCCESS
+with exact CI-green head `69dbc4b6eb0d84b4b524f5fd646b9d1e886c96f6`; health returned
+release `69dbc4b6eb0d`. Scope was only Verto-Staging environment
+`bb3dd988-b80d-423e-9b95-e49fbb1243e4`, service
+`55de13c3-3e54-4668-b32a-5d8ba96bc2b0`; no variable changes. Source is temporarily
+pinned to the feature commit. PR #413 remains draft/unmerged; staging base 0b9f502.
+
+Authenticated HTTP and scoped SQL smoke on the fictitious clinic confirmed:
+- Financial Save/read/logout/login/read: GROUP 80→95→80 BRL, individual 150 intact.
+  `/api/auth/me` correctly returns HTTP 200 with `{user:null}` after logout.
+- Create group `0eaa3200-1b19-4c82-a037-3740c39e301e`: two patients/professionals,
+  canonical backend UUID, GROUP 80/70 snapshots and separate forecast payments.
+  Frontend clinic/group UUID/modality/prices did not override server authority.
+- Same-key replay returns the same booking without duplicate finance. Different-key
+  collision returns GROUP_BOOKING_SLOT_BUSY. Joining the third patient reused the
+  same booking at GROUP 60; fourth patient exceeded capacity and left no residue.
+- Partial cancellation retained the canceled participant's original slot; remaining
+  participants moved to 2026-11-04 10:00 America/Sao_Paulo / room 2, 60 minutes.
+  Other-clinic GET and participant mutation returned 404; original clinic can read.
+- Actual calendar filter for the secondary professional returned all three linked
+  patient appointments. Two-occurrence backend series created and canceled with
+  scope=future atomically (bookings 25cbf985… and 6fbe5a6c…).
+- Monthly group cc7161b8-1ccb-46d0-a0f1-7fde69eac72a: both patients started and
+  completed through existing conventional-session HTTP endpoints, all HTTP 200.
+  Header COMPLETED; payment_appointment_items/payments use GROUP 60/50 BRL and
+  competence 2026-11-01, not individual 170/180. No external payment was executed.
+
+The live individual-booking smoke found a real integration defect: the legacy
+whole-agenda pair validator compared the patient rows of an existing GROUP against
+each other, blocking an unrelated individual appointment on another day. No
+individual appointment persisted in that failing request. Fix this before merge.
+`groupSessionScheduleConflicts.ts` now batches clinic-scoped participant links
+joined to their persisted appointments. Only matching canonical membership,
+patient, exact local slot/duration/room/team allows sharing resources within that
+same group. Same-patient checks run first. Client group IDs alone, unknown IDs,
+altered slots/teams and cross-modality conflicts cannot waive validation.
+Individual-only agendas add zero reads. Both legacy validator call sites await the
+same check; database transactional guards remain authoritative and unchanged.
+
+New regression executes the real server validator: unrelated individual succeeds,
+secondary-professional/room/patient conflicts remain blocked, and forged/mutated
+GROUP data cannot authorize sharing. Full local suite 33/33, tsc --noEmit and
+production build passed; diff reviewed. No new migration is needed for this fix.
+
+Next: publish this fix/checkpoint, await its exact-head full CI, deploy that commit
+to the same Railway Staging environment, repeat individual + GROUP cross-conflict
+smoke and health. Browser F5/logout-login has NOT been accepted: current cloud tab
+is at the professional sign-in form, not an authenticated Verto app session.
+Do not claim browser acceptance, 100% completion or merge until verified. Preserve
+fictitious fixture credentials/cookies outside Git. After complete acceptance,
+merge PR413 into staging, restore Railway source to staging without a pinned SHA,
+and confirm exact merge deployment. Production remains untouched.
+
+## Fix deployment verified and browser transport defect — 2026-10-16 23:20 UTC
+
+Remote fix head `f908a7c824930740ea00c3796cc1e2884fe9286c` passed the COMPLETE CI:
+run38976258123/job117226314540, including 33 group regressions and real PG17
+concurrency. After an interrupted accept call, read-back showed no new deployment
+and exactly one pending source-SHA change. Reissued it once. Railway deployment
+`acf4b8bc-ee70-48b1-bba8-930ad8d3e0b5` reached terminal SUCCESS; health release
+`f908a7c82493`. Actual individual creation now returns200 in the fictitious clinic;
+GROUP over that individual returns409 GROUP_BOOKING_PROFESSIONAL_BUSY; individual
+over the secondary professional of a GROUP returns409. The regression is fixed.
+
+Additional live financial history smoke: change an already referenced plan GROUP
+80→85→80 via HTTP Save; original plan becomes INACTIVE/versioned and the prior
+GROUP ledger/snapshot remains80, individual remains150. Changed-payload replay
+with the old reservation key returns409 GROUP_IDEMPOTENCY_CONFLICT.
+
+The browser was found authenticated as the existing Staging director in Clínica
+Diretoria, clinic `ff28d30d-2d5b-4775-a411-810c6c1465a7`. No credentials were read or
+entered. It remained authenticated after a closed-tab interruption and re-opening.
+Created only explicitly named fictitious UI fixtures in that Staging clinic:
+patients `f88943b5-6879-4c3b-82cb-d748a322f2c4`,
+`18bfdd8e-539d-445b-a2aa-8c9581d62381`,
+`1db925dc-b3f7-4736-85c6-8711a039763e`; room
+`df58d141-6988-4c89-8405-002debe42c3e` (capacity3).
+Names start HOMOLOGAÇÃO FICTÍCIA GRUPO UI, metadata.testFixture=group-ui-20261016,
+patients is_demo=true, no email/portal accounts, no real patient data used.
+Individual amounts200/210/220, GROUP90/75/65 BRL. In the browser's EXISTING Editar
+Cadastro → Plano financeiro → Salvar alterações, changed patient1 GROUP90→95;
+completed only that fictitious patient's required placeholder phone11900000000
+(no email/contact notification action). Success modal confirmed saving. F5 and
+re-opening the modal showed GROUP95 and individual200. Scoped SQL confirmed it.
+
+A second genuine UI blocker was found: getClinicSchedulingSpecialties called a
+Supabase browser RPC that requires auth.uid(), while this valid Verto browser
+session is authenticated with the backend cookie. The RPC fails, leaving no
+selectable specialties and preventing new financial lines/group creation.
+The new clinicSchedulingSpecialtyRoute serves the same active therapist membership
+projection through checkAuth/capabilities and a clinic-scoped backend query; client
+clinic IDs cannot select scope. Client verifies returned clinicId against the
+requested workspace and uses credentials:include/no-store. No new migration,
+permission grants or RLS bypass is introduced; existing browser RPC stays secured.
+The transport regression executes the real dataService method without a Supabase
+session and checks authorization/filtering/workspace-switch denial. The old static
+membership test now verifies the new HTTP transport while retaining all database
+specialty/role/security assertions. Await full tests/CI and deploy before proceeding.
+
+UI creation/join/edit/cancel and browser logout/new-login remain unaccepted. Use the
+fictitious UI patients/room only, an authorized Fonoaudiólogo, future Nov2026 slots
+within work hours. Cancel these UI test bookings before finishing so they do not
+contribute to future scheduled-session billing. Never edit real prices/patients or
+Stripe data. Keep PR413 draft until the complete feature is accepted.
