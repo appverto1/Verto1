@@ -1,3 +1,4 @@
+import { groupSessionErrorMessage } from '../utils/groupSessionApiErrors';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   generateId,
@@ -1293,6 +1294,24 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
           ? undefined
           : 'Não foi possível persistir localmente nem confirmar no servidor.'
     };
+  }
+}
+
+async function requestGroupSession(endpoint: string, method = 'GET', payload?: any) {
+  try {
+    const response = await fetch(endpoint, {
+      method, credentials: 'include', cache: 'no-store', headers: await getAuthHeaders(),
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+    });
+    const result = await safeJson(response);
+    if (!response.ok || result?.success === false) return {
+      ...result, success: false, status: response.status,
+      error: result?.error || groupSessionErrorMessage(String(result?.code || 'GROUP_OPERATION_FAILED')),
+    };
+    return result;
+  } catch {
+    return { success: false, code: 'GROUP_NETWORK_UNCONFIRMED',
+      error: 'Não foi possível confirmar a operação. Tente novamente com os mesmos dados.' };
   }
 }
 
@@ -9866,6 +9885,31 @@ export const dataService = {
       console.error('Error saving clinic state:', error);
       return { success: false, error: String(error) };
     }
+  },
+
+  async getGroupSessions(from: string, to: string) {
+    return requestGroupSession(`/api/appointments/groups?${new URLSearchParams({from, to})}`);
+  },
+  async getGroupSession(bookingId: string) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}`);
+  },
+  async createGroupSessions(payload: any) {
+    return requestGroupSession('/api/appointments/groups', 'POST', payload);
+  },
+  async addGroupSessionParticipants(bookingId: string, payload: any) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}/participants`, 'POST', payload);
+  },
+  async rescheduleGroupSession(bookingId: string, payload: any) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}`, 'PATCH', payload);
+  },
+  async cancelGroupSession(bookingId: string, payload: any) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}/cancel`, 'POST', payload);
+  },
+  async previewGroupSession(payload: any) {
+    return requestGroupSession('/api/appointments/groups/booking-preview', 'POST', payload);
+  },
+  async previewGroupSessionRates(payload: any) {
+    return requestGroupSession('/api/appointments/groups/price-preview', 'POST', payload);
   },
 
   async createAppointments(appointments: any[], clientRequestId?: string) {

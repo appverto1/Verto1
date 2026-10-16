@@ -105,3 +105,48 @@ criteria are not yet satisfied and no GROUP feature deploy has occurred.
 
 First checkpoint commit `42c3c1b8709e94f82fa2bff5802bb0e93a7cec77`:
 GitHub Actions `38827815749` / job `116739289656` completed successfully.
+
+## Lifecycle, API and interface block (2026-10-16 continuation)
+
+This section supersedes the earlier remaining-work lists for the local candidate.
+Second published checkpoint: `cb55fc0f3f058da560842b0ba2652909cbcf7d46`;
+GitHub Actions `38829529255`, job `116744835440`, all steps successful,
+including real PostgreSQL 17 concurrent connections. PR #413 remains draft.
+Fresh remote check: staging still `0b9f502219beeb23a13d41c4e3d5d7c53ee85543`,
+PR head still `cb55fc0`, mergeable, no competing merge observed.
+
+- Added atomic single-occurrence rescheduling, individual/whole-group cancellation,
+  and backend-owned future-series cancellation. Existing IDs, frozen prices,
+  canceled participant history, clinical records and paid receipts are preserved.
+- Added no-show/authorized-reopen ledger synchronization and reserved room capacity
+  protection. Buffer, work-period, break, exception, room and location policies
+  are validated against canonical membership schedules inside the transaction.
+- Added atomic clinic_state calendar projection through the existing CAS function,
+  preserving individual events/protocols and section versions. Durable domain
+  events are inserted in the same transaction, once per changed appointment.
+- Added scoped HTTP list/detail/create/join/reschedule/cancel handlers with explicit
+  capabilities, server actor/clinic, payload whitelists and idempotency keys.
+- Calendar reads include canonical secondary GROUP professionals while retaining
+  clinic/patient capability scope. Financial quote payloads are omitted.
+- Added the group scheduling dialog: multiple patients/professionals, canonical
+  price preview, capacity, weekly recurrence, list/detail, adding patients,
+  rescheduling and cancellation with per-patient manual policy decisions.
+  Failed network operations retain their action key and never enter an offline queue.
+- Integrated successful batch results/events/section versions into existing agenda
+  state. Added room capacity input and enabled collective financial-plan editing
+  in the candidate release; deploy only after all 12 migrations are validated/applied.
+- Corrected GROUP package dates, monthly competence and snapshots to use canonical
+  clinic timezone. Individual branches retain their existing timezone behavior.
+
+Validation on the local candidate: 30/30 dedicated group/financial/scheduling
+regressions passed; typecheck and build passed; therapist scope and appointment
+financial read regressions passed. Additional old static agenda regression fails
+on a pre-existing navigation label assertion; local modularization parity requires
+Git objects omitted from this sparse checkout. Neither test was weakened.
+Remote full-tree CI remains required for the new candidate.
+
+Still outstanding: exact-candidate full CI/concurrency; migration deployment to
+Supabase Staging; controlled integration of complete PR #413; exact-commit Railway
+health; authenticated HTTP/UI smoke with fictitious data; F5 and logout/login.
+No group migration has been applied remotely at this checkpoint, and no group
+release is live. Production remains untouched. Operational completion is not 100%.

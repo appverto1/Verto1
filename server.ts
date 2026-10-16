@@ -1,3 +1,4 @@
+import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';
 import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';
 import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
@@ -53478,6 +53479,7 @@ async function startServer() {
     const financialContextType = explicitFinancialContext || (payerId || payerName ? 'INSURANCE' : null);
 
     return {
+      ...groupCalendarMetadata(row),
       id: appointmentId,
       patient_id: patientId || null,
       patient_name: pickCalendarPatientName([
@@ -53622,7 +53624,7 @@ async function startServer() {
   const calendarEventMatchesFilters = (event: any, filters: any) => {
     const rawStatus = sanitizeString(event?.status, 80).toLowerCase();
     if (event?.is_active === false || event?.isActive === false || event?.deleted_at || event?.deletedAt || rawStatus === 'deleted') return false;
-    if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
+    if (filters.therapistIds.length > 0 && !groupCalendarMatchesProfessional(event, new Set<string>(filters.therapistIds))) return false;
     if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
     if (filters.roomIds?.length > 0 && !filters.roomIds.includes(String(event.room_id || ''))) return false;
     if (filters.schoolIds?.length > 0 && !filters.schoolIds.includes(String(event.school_id || event.schoolId || ''))) return false;
@@ -60348,7 +60350,7 @@ async function startServer() {
     if (scope.allClinic) return true;
     const patientId = sanitizeString(row?.patient_id || row?.patientId, 120);
     const professionalId = sanitizeString(row?.therapist_id || row?.therapistId || row?.professional_id, 120);
-    return (patientId && scope.patientIds.has(patientId)) || (professionalId && scope.professionalIds.has(professionalId));
+    return Boolean((patientId && scope.patientIds.has(patientId)) || groupCalendarMatchesProfessional(row, scope.professionalIds));
   };
 
   const CALENDAR_INSURANCE_FIELDS = new Set([
@@ -60436,10 +60438,13 @@ async function startServer() {
         if (patientIdsForQuery.length === 0) return res.json({ success: true, data: [], source: 'authorization_scope' });
         query = query.in('patient_id', patientIdsForQuery);
       }
+      const professionalFilters: string[] = [];
       if (!calendarScope.allClinic && calendarScope.professionalIds.size > 0) {
-        query = query.in('therapist_id', Array.from(calendarScope.professionalIds));
+        professionalFilters.push(groupCalendarProfessionalFilter(calendarScope.professionalIds));
       }
-      if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
+      if (filters.therapistIds.length > 0) professionalFilters.push(groupCalendarProfessionalFilter(filters.therapistIds));
+      if (professionalFilters.length === 1) query = query.or(professionalFilters[0]);
+      if (professionalFilters.length === 2) query = query.or(`and(or(${professionalFilters[0]}),or(${professionalFilters[1]}))`);
       if (filters.patientIds.length > 0 && (calendarScope.allClinic || calendarScope.patientIds.size === 0)) query = query.in('patient_id', filters.patientIds);
       if (filters.roomIds.length > 0) query = query.in('room_id', filters.roomIds);
       if (filters.schoolIds.length > 0) query = query.in('school_id', filters.schoolIds);
@@ -93161,7 +93166,12 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
     portalActionLimiter,
     enforcePayloadLimit,
     sanitizeString,
-    currentClinicId
+    currentClinicId,
+    serializeGroupAppointment: serializePersistedAppointmentForAgenda,
+    onGroupAppointmentsPersisted: async ({ appointments, action }: any) => {
+      if (action !== 'created') await acknowledgeStaleAppointmentReminderNotifications(appointments);
+      triggerAppointmentReminderScan(`group.${action}`);
+    }
   });
 
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback

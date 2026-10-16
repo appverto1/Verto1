@@ -1,3 +1,4 @@
+import { registerGroupSessionRoutes } from './groupSessions/groupSessionRoutes';
 import { clinicPolicyPayloadHash } from './clinicPolicyPayloadHash';
 import type { Express } from 'express';
 import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
@@ -17,12 +18,16 @@ type ClinicAppointmentPolicyRouteDeps = {
   enforcePayloadLimit: (req: any, res: any, maxBytes: number, label?: string) => boolean;
   sanitizeString: (value: any, max?: number) => string;
   currentClinicId: (user: any) => string | null;
+  serializeGroupAppointment?: (row: any) => any;
+  onGroupAppointmentsPersisted?: (params: any) => Promise<void>;
 };
 
 export function registerClinicAppointmentPolicyRoutes(
   app: Express,
   deps: ClinicAppointmentPolicyRouteDeps
 ) {
+  if (deps.serializeGroupAppointment) registerGroupSessionRoutes(app, deps);
+
   const {
     supabase,
     noStoreDynamicResponse,

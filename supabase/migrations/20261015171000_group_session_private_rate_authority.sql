@@ -47,7 +47,7 @@ begin
     and plan.billing_mode='PRIVATE'
     and plan.valid_from<=p_scheduled_at
     and (plan.valid_until is null or p_scheduled_at<plan.valid_until)
-    and (plan.package_valid_until is null or plan.package_valid_until>=p_scheduled_at::date)
+    and (plan.package_valid_until is null or plan.package_valid_until>=(p_scheduled_at at time zone (select clinic.timezone from public.clinics clinic where clinic.id=p_organization_id))::date)
     and public.appointment_financial_service_key_v1(
       coalesce(nullif(plan.service_name_snapshot,''),nullif(plan.custom_service_name,''),plan.service_type)
     )=v_specialty_key;
@@ -67,7 +67,7 @@ begin
     and plan.billing_mode='PRIVATE'
     and plan.valid_from<=p_scheduled_at
     and (plan.valid_until is null or p_scheduled_at<plan.valid_until)
-    and (plan.package_valid_until is null or plan.package_valid_until>=p_scheduled_at::date)
+    and (plan.package_valid_until is null or plan.package_valid_until>=(p_scheduled_at at time zone (select clinic.timezone from public.clinics clinic where clinic.id=p_organization_id))::date)
     and public.appointment_financial_service_key_v1(
       coalesce(nullif(plan.service_name_snapshot,''),nullif(plan.custom_service_name,''),plan.service_type)
     )=v_specialty_key;

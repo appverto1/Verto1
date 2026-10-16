@@ -11,7 +11,7 @@ const scalar=async(sql,args=[]) => Object.values((await query(sql,args))[0])[0];
 let step='bootstrap';
 try{
   await db.exec("create role anon;create role authenticated;create role service_role;create schema auth;create function auth.role() returns text language sql stable as $$select 'service_role'::text$$;");
-  for(const file of ['staging-schema.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql']){
+  for(const file of ['staging-schema.sql','staging-clinic-state.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql']){
     step=file;await db.exec(fs.readFileSync('tests/fixtures/groupSessions/'+file,'utf8'));
   }
   for(const name of fs.readdirSync('supabase/migrations').filter(name=>/^2026101[56].*group_/.test(name)).sort()){

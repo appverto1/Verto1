@@ -15,6 +15,8 @@ declare
   v_key text;
   v_available boolean;
   v_member_count integer:=0;
+  v_buffer integer;
+  v_allowed jsonb;
 begin
   select timezone into strict v_timezone from public.clinics where id=p_booking.organization_id;
   for v_member in select * from public.clinic_memberships where clinic_id=p_booking.organization_id
@@ -24,16 +26,36 @@ begin
     if v_schedule is null then continue; end if;
     if jsonb_typeof(v_schedule)<>'object' or coalesce((v_schedule->>'active')::boolean,true)=false then
       raise exception 'GROUP_PROFESSIONAL_SCHEDULE_UNAVAILABLE'; end if;
+    v_buffer:=least(120,greatest(0,coalesce((coalesce(v_schedule->>'sessionBufferMinutes',v_schedule->>'session_buffer_minutes'))::numeric,0)::int));
+    v_allowed:=coalesce(v_schedule->'allowedLocationTypes',v_schedule->'allowed_location_types','[]'::jsonb);
+    if jsonb_array_length(v_allowed)>0 and not exists(select 1 from jsonb_array_elements_text(v_allowed) location
+      where lower(location) in ('clinica','clinic','clínica')) then raise exception 'GROUP_PROFESSIONAL_LOCATION_UNAVAILABLE'; end if;
+    if v_buffer>0 and exists(select 1 from public.appointments a
+      where a.clinic_id=p_booking.organization_id and a.deleted_at is null and coalesce(a.is_active,true)
+        and lower(a.status) in ('scheduled','pending','confirmed','in_progress','completed','cancel_requested','reschedule_requested')
+        and a.source_payload->>'sessionGroupId' is distinct from p_booking.id::text
+        and (a.therapist_id=v_member.user_id or coalesce(a.source_payload->'professionalIds','[]'::jsonb) ? v_member.user_id::text
+          or coalesce(a.source_payload->'professional_ids','[]'::jsonb) ? v_member.user_id::text
+          or coalesce(a.source_payload->'teamProfessionalIds','[]'::jsonb) ? v_member.user_id::text
+          or coalesce(a.source_payload->'team_professional_ids','[]'::jsonb) ? v_member.user_id::text)
+        and coalesce(a.scheduled_start_at,a.scheduled_at)<p_booking.scheduled_end_at+v_buffer*interval '1 minute'
+        and coalesce(a.scheduled_end_at,coalesce(a.scheduled_start_at,a.scheduled_at)+coalesce(a.scheduled_duration_minutes,a.duration_minutes,50)*interval '1 minute')
+          +v_buffer*interval '1 minute'>p_booking.scheduled_start_at) then raise exception 'GROUP_PROFESSIONAL_BUFFER_UNAVAILABLE'; end if;
     v_start:=p_booking.scheduled_start_at at time zone coalesce(nullif(v_member.availability_timezone,''),v_timezone);
-    v_end:=p_booking.scheduled_end_at at time zone coalesce(nullif(v_member.availability_timezone,''),v_timezone);
+    v_end:=(p_booking.scheduled_end_at+v_buffer*interval '1 minute') at time zone coalesce(nullif(v_member.availability_timezone,''),v_timezone);
     if v_start::date<>v_end::date then raise exception 'GROUP_PROFESSIONAL_SCHEDULE_UNAVAILABLE'; end if;
     v_key:=(array['sunday','monday','tuesday','wednesday','thursday','friday','saturday'])[extract(dow from v_start)::int+1];
     v_day:=coalesce(v_schedule->'days',v_schedule->'weekly',v_schedule->'weeklySchedule',v_schedule->'weekly_schedule')->v_key;
+    if jsonb_typeof(v_day)='array' then v_day:=jsonb_build_object('enabled',true,'periods',v_day); end if;
     if v_day is null or coalesce((v_day->>'enabled')::boolean,true)=false then
       raise exception 'GROUP_PROFESSIONAL_SCHEDULE_UNAVAILABLE'; end if;
     v_available:=false;
     for v_period in select value from jsonb_array_elements(coalesce(v_day->'periods',v_day->'ranges',v_day->'shifts','[]'::jsonb)) loop
-      if v_start::time>=(v_period->>'start')::time and v_end::time<=(v_period->>'end')::time then v_available:=true; end if;
+      if v_start::time>=(v_period->>'start')::time and v_end::time<=(v_period->>'end')::time
+        and (jsonb_array_length(coalesce(v_period->'locationTypes','[]'::jsonb))=0
+          or exists(select 1 from jsonb_array_elements_text(v_period->'locationTypes') location where lower(location) in ('clinica','clinic','clínica')))
+        and (jsonb_array_length(coalesce(v_period->'roomIds','[]'::jsonb))=0 or v_period->'roomIds' ? p_booking.room_id::text)
+        then v_available:=true; end if;
     end loop;
     if not v_available then raise exception 'GROUP_PROFESSIONAL_SCHEDULE_UNAVAILABLE'; end if;
     for v_period in select value from jsonb_array_elements(coalesce(v_day->'intervals',v_day->'breaks','[]'::jsonb)) loop
@@ -47,8 +69,8 @@ begin
            or (v_start::time<(v_period->>'end')::time and v_end::time>(v_period->>'start')::time)) then
         raise exception 'GROUP_PROFESSIONAL_EXCEPTION_UNAVAILABLE'; end if;
     end loop;
-    if jsonb_array_length(coalesce(v_schedule->'allowedRoomIds','[]'::jsonb))>0
-      and not(v_schedule->'allowedRoomIds' ? p_booking.room_id::text) then raise exception 'GROUP_PROFESSIONAL_ROOM_UNAVAILABLE'; end if;
+    if jsonb_array_length(coalesce(v_schedule->'allowedRoomIds',v_schedule->'allowed_room_ids','[]'::jsonb))>0
+      and not(coalesce(v_schedule->'allowedRoomIds',v_schedule->'allowed_room_ids','[]'::jsonb) ? p_booking.room_id::text) then raise exception 'GROUP_PROFESSIONAL_ROOM_UNAVAILABLE'; end if;
   end loop;
   if v_member_count<>cardinality(p_booking.professional_ids) then raise exception 'GROUP_PROFESSIONAL_OUT_OF_SCOPE'; end if;
   return;
@@ -73,6 +95,8 @@ declare
   v_patients uuid[];
   v_patient uuid;
   v_hash text;
+  v_team_names text[];
+  v_changed_appointments uuid[]:=array[]::uuid[];
   v_resolution jsonb;
   v_plan uuid;
   v_appointment uuid;
@@ -109,7 +133,9 @@ begin
     and public.appointment_financial_service_key_v1(specialty)=public.appointment_financial_service_key_v1(v_booking.specialty))
     <>cardinality(v_booking.professional_ids) then raise exception 'GROUP_PROFESSIONAL_OUT_OF_SCOPE'; end if;
   select * into v_room from public.clinic_rooms where id=v_booking.room_id and clinic_id=p_organization_id and is_active for share;
-  if not found or (select count(*) from public.group_session_participants where booking_id=p_booking_id)+cardinality(v_patients)
+  if not found or (select count(*) from public.group_session_participants p join public.appointments a on a.id=p.appointment_id
+      where p.booking_id=p_booking_id and a.deleted_at is null and coalesce(a.is_active,true)
+      and lower(a.status) in ('scheduled','pending','confirmed','in_progress','completed','cancel_requested','reschedule_requested'))+cardinality(v_patients)
     >least(30,v_room.capacity) then raise exception 'GROUP_ROOM_CAPACITY_EXCEEDED'; end if;
   perform public.assert_group_work_schedule_v1(v_booking);
   select timezone into strict v_timezone from public.clinics where id=p_organization_id;
@@ -119,21 +145,25 @@ begin
   end loop;
   perform 1 from public.patient_financial_plans where organization_id=p_organization_id
     and patient_id=any(v_patients) order by patient_id,id for share;
+  select array_agg(coalesce(nullif(btrim(u.name),''),'Profissional') order by requested.professional_id) into v_team_names
+  from unnest(v_booking.professional_ids) requested(professional_id) left join public.users u on u.id=requested.professional_id;
+  perform set_config('verto.group_bulk_operation','1',true);
   perform set_config('verto.group_booking_id',p_booking_id::text,true);
   foreach v_patient in array v_patients loop
     v_resolution:=public.resolve_group_private_session_price_v1(p_organization_id,v_patient,v_booking.specialty,null,
       v_booking.scheduled_start_at,'CLINIC',null,null,null,null,p_actor_id);
     v_plan:=(v_resolution->>'legacy_patient_financial_plan_id')::uuid;
     v_source:=jsonb_build_object('sessionModality','GROUP','sessionGroupId',p_booking_id,
-      'professionalIds',to_jsonb(v_booking.professional_ids),'groupFinancialPlanId',v_plan,
+      'professionalIds',to_jsonb(v_booking.professional_ids),'recurrenceGroupId',v_booking.series_id,'recurrenceIndex',v_booking.series_index,'groupFinancialPlanId',v_plan,
       'financialContextType','PRIVATE','privatePricingResolution',v_resolution,'privatePricingActorId',p_actor_id,
       'date',to_char(v_booking.scheduled_start_at at time zone v_timezone,'YYYY-MM-DD'),
       'time',to_char(v_booking.scheduled_start_at at time zone v_timezone,'HH24:MI'),
-      'patientId',v_patient,'serviceType',v_booking.specialty,'durationMinutes',v_duration);
-    insert into public.appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,
+      'patientId',v_patient,'patientName',v_resolution->>'patient_name','professionalNames',to_jsonb(v_team_names),
+        'professional',v_team_names[1],'serviceType',v_booking.specialty,'durationMinutes',v_duration);
+    insert into public.appointments(clinic_id,organization_id,patient_id,therapist_id,therapist_name,scheduled_at,
       scheduled_start_at,scheduled_end_at,duration_minutes,scheduled_duration_minutes,room_id,room_name,
       location_type,care_setting,location_timezone,service_type,approach,financial_event_actor_id,source_payload,status)
-    values(p_organization_id,p_organization_id,v_patient,v_booking.professional_ids[1],v_booking.scheduled_start_at,
+    values(p_organization_id,p_organization_id,v_patient,v_booking.professional_ids[1],v_team_names[1],v_booking.scheduled_start_at,
       v_booking.scheduled_start_at,v_booking.scheduled_end_at,v_duration,v_duration,v_booking.room_id::text,v_room.name,
       'clinica','CLINIC',v_timezone,v_booking.specialty,v_booking.specialty,p_actor_id,v_source,'scheduled') returning id into v_appointment;
     insert into public.group_session_participants(booking_id,organization_id,patient_id,appointment_id,financial_plan_id,unit_amount_cents)
@@ -142,7 +172,11 @@ begin
     values(p_organization_id,v_appointment,v_patient,'PRIVATE',v_booking.specialty,
       jsonb_build_object('session_modality','GROUP','group_booking_id',p_booking_id,'financial_plan_id',v_plan),p_actor_id,p_actor_id);
       perform public.assert_group_patient_finance_v1(p_organization_id,v_appointment);
+      v_changed_appointments:=array_append(v_changed_appointments,v_appointment);
   end loop;
+  perform public.project_group_sessions_to_clinic_state_v1(p_organization_id,p_actor_id,array[p_booking_id],'group:'||p_idempotency_key);
+  perform public.emit_group_appointment_events_v1(p_organization_id,p_actor_id,v_changed_appointments,'appointment.created',p_idempotency_key);
+  perform set_config('verto.group_bulk_operation','',true);
   insert into public.group_session_operations(organization_id,operation_key,payload_hash,booking_ids,created_by)
   values(p_organization_id,p_idempotency_key,v_hash,array[p_booking_id],p_actor_id);
   perform set_config('verto.group_booking_id','',true);

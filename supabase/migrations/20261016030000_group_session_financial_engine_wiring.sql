@@ -246,7 +246,11 @@ begin
   -- Competence is the canonical scheduled/performed session month, never payment_date.
   -- scheduled_start_at wins so a September session completed retroactively in October remains September.
   v_effective_at:=coalesce(v_appointment.scheduled_start_at,v_appointment.scheduled_at,v_appointment.actual_end_at,now());
+  if upper(coalesce(v_source->>'sessionModality',''))='GROUP' then
+    v_competence:=date_trunc('month',v_effective_at at time zone v_appointment.location_timezone)::date;
+  else
   v_competence:=date_trunc('month',v_effective_at at time zone 'America/Sao_Paulo')::date;
+  end if;
 
   v_engine:=public.resolve_appointment_financial_engine_v1(
     p_organization_id,
@@ -958,7 +962,8 @@ begin
       coalesce((v_resolution->>'allow_manual_override')::boolean, false),
       coalesce((v_resolution->>'discount_approval_required')::boolean, true),
       coalesce(v_resolution->>'financial_classification', 'STANDARD'),
-      v_actor_id, v_resolution->>'override_reason', 'BRL', 'America/Sao_Paulo', v_resolution
+      v_actor_id, v_resolution->>'override_reason', 'BRL',
+      case when v_source->>'sessionModality'='GROUP' then v_resolution->>'timezone' else 'America/Sao_Paulo' end, v_resolution
     )
     returning * into v_snapshot;
 

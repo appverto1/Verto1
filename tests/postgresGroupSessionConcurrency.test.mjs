@@ -28,7 +28,7 @@ async function waitForLock(){
 }
 try{
   await pool.query("create role anon;create role authenticated;create role service_role;create schema auth;create function auth.role() returns text language sql stable as $$select 'service_role'::text$$;");
-  for(const file of ['staging-schema.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql'])await pool.query(fs.readFileSync('tests/fixtures/groupSessions/'+file,'utf8'));
+  for(const file of ['staging-schema.sql','staging-clinic-state.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql'])await pool.query(fs.readFileSync('tests/fixtures/groupSessions/'+file,'utf8'));
   for(const file of fs.readdirSync('supabase/migrations').filter(name=>/^2026101[56].*group_/.test(name)).sort())await pool.query(fs.readFileSync('supabase/migrations/'+file,'utf8'));
   await pool.query("insert into clinics(id,name,school_organization_id) values ($1,'Concurrency fictitious clinic',$1)",[clinic]);
   for(const [who,role]of [[actor,'director'],[primary,'therapist'],[secondary,'therapist']]){

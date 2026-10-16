@@ -2,6 +2,13 @@
 -- Depends on all five 20261015 migrations and the GROUP snapshot resolver.
 begin;
 
+alter table public.group_session_bookings add column series_id uuid;
+alter table public.group_session_bookings add column series_index integer;
+alter table public.group_session_bookings add constraint group_session_series_valid
+check ((series_id is null and series_index is null) or (series_id is not null and series_index between 1 and 12));
+create unique index group_session_series_position on public.group_session_bookings(organization_id,series_id,series_index)
+where series_id is not null;
+
 create table public.group_session_operations (
   organization_id uuid not null references public.clinics(id),
   operation_key text not null check (operation_key ~ '^[A-Za-z0-9:._-]{12,120}$'),
@@ -18,10 +25,20 @@ grant select,insert on public.group_session_operations to service_role;
 create or replace function public.group_session_result_v1(p_organization_id uuid,p_booking_ids uuid[])
 returns jsonb language sql stable security invoker set search_path=public,pg_temp as $$
   select jsonb_build_object('success',true,'modality','GROUP','reserved',true,
+    'sectionVersions',(select state.section_versions from public.clinic_state state where state.clinic_id=p_organization_id),
     'bookings',coalesce((select jsonb_agg(to_jsonb(b) order by b.scheduled_start_at,b.id)
       from public.group_session_bookings b where b.organization_id=p_organization_id and b.id=any(p_booking_ids)),'[]'::jsonb),
     'participants',coalesce((select jsonb_agg(to_jsonb(p) order by p.booking_id,p.patient_id)
       from public.group_session_participants p where p.organization_id=p_organization_id and p.booking_id=any(p_booking_ids)),'[]'::jsonb),
+    'financialSnapshots',coalesce((select jsonb_agg(to_jsonb(latest)) from (
+      select distinct on(snapshot.appointment_id) snapshot.appointment_id,snapshot.snapshot_version,
+        snapshot.final_amount,snapshot.due_date,snapshot.cancellation_free_until,snapshot.late_cancellation_rule,
+        snapshot.no_show_rule,snapshot.financial_classification,snapshot.timezone
+      from public.appointment_private_financial_snapshots snapshot join public.group_session_participants participant
+        on participant.appointment_id=snapshot.appointment_id and participant.organization_id=snapshot.organization_id
+      where participant.organization_id=p_organization_id and participant.booking_id=any(p_booking_ids)
+      order by snapshot.appointment_id,snapshot.snapshot_version desc
+    ) latest),'[]'::jsonb),
     'appointments',coalesce((select jsonb_agg(to_jsonb(a) order by a.scheduled_at,a.id)
       from public.appointments a join public.group_session_participants p on p.appointment_id=a.id
       where p.organization_id=p_organization_id and a.clinic_id=p_organization_id and p.booking_id=any(p_booking_ids)),'[]'::jsonb)
@@ -137,6 +154,8 @@ declare
   v_start timestamptz;
   v_timezone text;
   v_hash text;
+  v_team_names text[];
+  v_changed_appointments uuid[]:=array[]::uuid[];
   v_previous public.group_session_operations%rowtype;
   v_booking public.group_session_bookings%rowtype;
   v_patient uuid;
@@ -191,6 +210,9 @@ begin
   end loop;
   perform 1 from public.patient_financial_plans where organization_id=p_organization_id
     and patient_id=any(v_patients) order by patient_id,id for share;
+  select array_agg(coalesce(nullif(btrim(u.name),''),'Profissional') order by requested.professional_id) into v_team_names
+  from unnest(v_team) requested(professional_id) left join public.users u on u.id=requested.professional_id;
+  perform set_config('verto.group_bulk_operation','1',true);
   for v_slot in select value from jsonb_array_elements(p_local_slots) loop
     if coalesce(v_slot->>'date','') !~ '^\d{4}-\d{2}-\d{2}$'
       or coalesce(v_slot->>'time','') !~ '^([01]\d|2[0-3]):[0-5]\d$' then raise exception 'GROUP_SLOT_INVALID'; end if;
@@ -199,9 +221,10 @@ begin
       raise exception 'GROUP_SLOT_TIMEZONE_INVALID'; end if;
     v_index:=v_index+1;
     insert into public.group_session_bookings(organization_id,booking_key,payload_hash,specialty,
-      scheduled_start_at,scheduled_end_at,room_id,professional_ids,created_by)
+      scheduled_start_at,scheduled_end_at,room_id,professional_ids,created_by,series_id,series_index)
     values(p_organization_id,case when jsonb_array_length(p_local_slots)=1 then p_idempotency_key else left(p_idempotency_key,110)||':slot:'||v_index end,
-      v_hash,btrim(p_specialty),v_start,v_start+p_duration_minutes*interval '1 minute',p_room_id,v_team,p_actor_id)
+      v_hash,btrim(p_specialty),v_start,v_start+p_duration_minutes*interval '1 minute',p_room_id,v_team,p_actor_id,case when jsonb_array_length(p_local_slots)>1 then v_series end,
+      case when jsonb_array_length(p_local_slots)>1 then v_index end)
     returning * into v_booking;
     v_booking_ids:=array_append(v_booking_ids,v_booking.id);
     perform set_config('verto.group_booking_id',v_booking.id::text,true);
@@ -213,15 +236,16 @@ begin
       v_source:=jsonb_build_object('sessionModality','GROUP','sessionGroupId',v_booking.id,
         'professionalIds',to_jsonb(v_team),'groupFinancialPlanId',v_plan,'financialContextType','PRIVATE',
         'privatePricingResolution',v_resolution,'privatePricingActorId',p_actor_id,
-        'date',v_slot->>'date','time',v_slot->>'time','patientId',v_patient,
+        'date',v_slot->>'date','time',v_slot->>'time','patientId',v_patient,'patientName',v_resolution->>'patient_name','professionalNames',to_jsonb(v_team_names),
+        'professional',v_team_names[1],
         'serviceType',p_specialty,'durationMinutes',p_duration_minutes,
         'recurrenceGroupId',case when jsonb_array_length(p_local_slots)>1 then v_series end,
         'recurrenceIndex',v_index,'recurrenceTotal',jsonb_array_length(p_local_slots));
-      insert into public.appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,
+      insert into public.appointments(clinic_id,organization_id,patient_id,therapist_id,therapist_name,scheduled_at,
         scheduled_start_at,scheduled_end_at,duration_minutes,scheduled_duration_minutes,
         room_id,room_name,location_type,care_setting,location_timezone,service_type,approach,
         financial_event_actor_id,source_payload,status)
-      values(p_organization_id,p_organization_id,v_patient,v_team[1],v_start,v_start,v_booking.scheduled_end_at,
+      values(p_organization_id,p_organization_id,v_patient,v_team[1],v_team_names[1],v_start,v_start,v_booking.scheduled_end_at,
         p_duration_minutes,p_duration_minutes,p_room_id::text,v_room_name,'clinica','CLINIC',v_timezone,
         p_specialty,p_specialty,p_actor_id,v_source,'scheduled') returning id into v_appointment;
       insert into public.group_session_participants(booking_id,organization_id,patient_id,appointment_id,financial_plan_id,unit_amount_cents)
@@ -231,8 +255,12 @@ begin
       values(p_organization_id,v_appointment,v_patient,'PRIVATE',p_specialty,
         jsonb_build_object('session_modality','GROUP','group_booking_id',v_booking.id,'financial_plan_id',v_plan),p_actor_id,p_actor_id);
       perform public.assert_group_patient_finance_v1(p_organization_id,v_appointment);
+      v_changed_appointments:=array_append(v_changed_appointments,v_appointment);
     end loop;
   end loop;
+  perform public.project_group_sessions_to_clinic_state_v1(p_organization_id,p_actor_id,v_booking_ids,'group:'||p_idempotency_key);
+  perform public.emit_group_appointment_events_v1(p_organization_id,p_actor_id,v_changed_appointments,'appointment.created',p_idempotency_key);
+  perform set_config('verto.group_bulk_operation','',true);
   insert into public.group_session_operations(organization_id,operation_key,payload_hash,booking_ids,created_by)
   values(p_organization_id,p_idempotency_key,v_hash,v_booking_ids,p_actor_id);
   perform set_config('verto.group_booking_id','',true);

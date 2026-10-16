@@ -8822,6 +8822,12 @@ export default function App() {
             onAddActivityLog={onAddActivityLog}
             onScheduleSession={handleScheduleSession}
             onUpdateAppointment={handleUpdateAppointment}
+            onGroupAppointmentsResolved={(result: any) => {
+              if(result?.sectionVersions && typeof result.sectionVersions === 'object') {
+                clinicStateSectionVersionsRef.current={...clinicStateSectionVersionsRef.current,...result.sectionVersions};
+              }
+              return applyAppointmentResultToAgenda(result,{action:result.action,items:result.items},nextAppointmentActionSequence());
+            }}
             onAppointmentActionResolved={(appointment: any) => {
               const actionSequence = nextAppointmentActionSequence();
               return applyAppointmentResultToAgenda(

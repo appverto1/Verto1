@@ -9,6 +9,7 @@ CREATE OR REPLACE FUNCTION public.resolve_group_private_session_price_v1(p_organ
 AS $function$
 declare
   v_group_rate jsonb;
+  v_group_timezone text;
   v_patient public.patients%rowtype;
   v_service public.tuss_service_catalog%rowtype;
   v_rule public.private_session_price_rules%rowtype;
@@ -82,7 +83,8 @@ begin
     v_specialty_key := lower(v_specialty);
   end if;
 
-  v_session_date := (p_scheduled_at at time zone 'America/Sao_Paulo')::date;
+  select timezone into strict v_group_timezone from public.clinics where id=p_organization_id;
+  v_session_date := (p_scheduled_at at time zone v_group_timezone)::date;
 
   select rule.* into v_rule
   from public.private_session_price_rules rule
@@ -285,6 +287,7 @@ begin
   return jsonb_build_object(
     'valid', true,
     'session_modality', 'GROUP',
+    'patient_name', v_patient.name,
     'organization_id', p_organization_id,
     'patient_id', p_patient_id,
     'specialty_key', v_specialty_key,
@@ -326,7 +329,7 @@ begin
     'created_by', p_actor_id,
     'override_reason', v_override_reason,
     'currency', 'BRL',
-    'timezone', 'America/Sao_Paulo'
+    'timezone', v_group_timezone
   );
 end;
 $function$;
