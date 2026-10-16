@@ -225,3 +225,37 @@ GROUP rate 8000→9500 cents, read it through the canonical resolver, confirmed
 individual price remained 15000 cents, confirmed foreign-clinic lookup was denied,
 and confirmed anon/authenticated cannot execute the editing RPC. Restored the
 fixture GROUP price to 8000 cents. Mounted UI plus complete local suite: 31/31 pass.
+
+## Operator fallback after browser login failure — 2026-10-16
+
+The user authorized browser fallback. Secure browser authentication reached a
+CAPTCHA, followed by an unauthenticated sign-in page; a subsequent secure request
+timed out. No successful dashboard session or fourth migration is claimed.
+At the user's later report that browser login was not working, fresh connector
+reads confirmed PR head `327160a`, staging `0b9f502`, and only the same three
+GROUP migration names. A fresh apply attempt again returned `invalid_request_state`.
+No new GROUP DDL was applied; do not retry in a loop or change credentials/scopes.
+
+A concrete alternative is ready for the operator's existing trusted SQL access:
+`supabase/operations/group_sessions_staging_remaining.sql`.
+Generate it with `node scripts/build-group-staging-migration-bundle.mjs`.
+It contains the exact nine pending sources, with only outer transaction wrappers
+removed, inside one transaction. It checks the unique fictitious Staging clinic
+and all three confirmed remote prerequisite versions before any DDL; rejects
+partial/concurrent unreviewed history; records the nine source versions/names in
+migration history; reloads PostgREST schema; and treats an already complete replay
+as a no-op. Run the WHOLE file in Verto-Staging `irspungjhapqdbgqroyc`, never production.
+The result must show `STAGING_GROUP_MIGRATIONS_VERIFIED` and count 9.
+
+`groupSessionMigrationBundle.test.mjs` executes the actual delivered SQL in
+PostgreSQL 17/PGlite: source parity, wrong-target guard, partial-history rejection,
+rollback of all nine DDL/history changes after a final-step failure, service-only
+RPC grants, and no-op replay. Complete local suite: 32/32 passed.
+No application business logic or original migration source changed in this block.
+The prior application head `327160a` has full CI success (run `38931519500`, job
+`117076418079`). The operator fallback block requires its own exact-head CI.
+
+After operator execution, verify migration history/tables/RPC grants through the
+working read connector before deploying. The prepared fictitious clinic and
+financial plans remain available. Deployment, authenticated GROUP smoke,
+F5/logout-login and final merge are still outstanding. Production is untouched.
