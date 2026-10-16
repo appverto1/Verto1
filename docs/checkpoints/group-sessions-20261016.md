@@ -259,3 +259,66 @@ After operator execution, verify migration history/tables/RPC grants through the
 working read connector before deploying. The prepared fictitious clinic and
 financial plans remain available. Deployment, authenticated GROUP smoke,
 F5/logout-login and final merge are still outstanding. Production is untouched.
+
+## Live Staging acceptance and individual-write regression — 2026-10-16
+
+This section supersedes the earlier migration/deploy blocker above. The operator
+reported `STAGING_GROUP_MIGRATIONS_VERIFIED | 9`; read-back confirmed all 12 GROUP
+migration names. The first three retain remote versions 20261016150342/343/345;
+the nine remaining sources use their filename versions. Do NOT reapply any of them.
+Seven critical RPCs deny anon/authenticated execution and permit service_role;
+all three GROUP tables have RLS and deny direct anon/authenticated INSERT.
+Slot/participant/state/status/capacity triggers were verified in the live catalog.
+
+Railway candidate deployment `1a71303b-2975-4d35-a799-3ce9f1d55283` reached SUCCESS
+with exact CI-green head `69dbc4b6eb0d84b4b524f5fd646b9d1e886c96f6`; health returned
+release `69dbc4b6eb0d`. Scope was only Verto-Staging environment
+`bb3dd988-b80d-423e-9b95-e49fbb1243e4`, service
+`55de13c3-3e54-4668-b32a-5d8ba96bc2b0`; no variable changes. Source is temporarily
+pinned to the feature commit. PR #413 remains draft/unmerged; staging base 0b9f502.
+
+Authenticated HTTP and scoped SQL smoke on the fictitious clinic confirmed:
+- Financial Save/read/logout/login/read: GROUP 80→95→80 BRL, individual 150 intact.
+  `/api/auth/me` correctly returns HTTP 200 with `{user:null}` after logout.
+- Create group `0eaa3200-1b19-4c82-a037-3740c39e301e`: two patients/professionals,
+  canonical backend UUID, GROUP 80/70 snapshots and separate forecast payments.
+  Frontend clinic/group UUID/modality/prices did not override server authority.
+- Same-key replay returns the same booking without duplicate finance. Different-key
+  collision returns GROUP_BOOKING_SLOT_BUSY. Joining the third patient reused the
+  same booking at GROUP 60; fourth patient exceeded capacity and left no residue.
+- Partial cancellation retained the canceled participant's original slot; remaining
+  participants moved to 2026-11-04 10:00 America/Sao_Paulo / room 2, 60 minutes.
+  Other-clinic GET and participant mutation returned 404; original clinic can read.
+- Actual calendar filter for the secondary professional returned all three linked
+  patient appointments. Two-occurrence backend series created and canceled with
+  scope=future atomically (bookings 25cbf985… and 6fbe5a6c…).
+- Monthly group cc7161b8-1ccb-46d0-a0f1-7fde69eac72a: both patients started and
+  completed through existing conventional-session HTTP endpoints, all HTTP 200.
+  Header COMPLETED; payment_appointment_items/payments use GROUP 60/50 BRL and
+  competence 2026-11-01, not individual 170/180. No external payment was executed.
+
+The live individual-booking smoke found a real integration defect: the legacy
+whole-agenda pair validator compared the patient rows of an existing GROUP against
+each other, blocking an unrelated individual appointment on another day. No
+individual appointment persisted in that failing request. Fix this before merge.
+`groupSessionScheduleConflicts.ts` now batches clinic-scoped participant links
+joined to their persisted appointments. Only matching canonical membership,
+patient, exact local slot/duration/room/team allows sharing resources within that
+same group. Same-patient checks run first. Client group IDs alone, unknown IDs,
+altered slots/teams and cross-modality conflicts cannot waive validation.
+Individual-only agendas add zero reads. Both legacy validator call sites await the
+same check; database transactional guards remain authoritative and unchanged.
+
+New regression executes the real server validator: unrelated individual succeeds,
+secondary-professional/room/patient conflicts remain blocked, and forged/mutated
+GROUP data cannot authorize sharing. Full local suite 33/33, tsc --noEmit and
+production build passed; diff reviewed. No new migration is needed for this fix.
+
+Next: publish this fix/checkpoint, await its exact-head full CI, deploy that commit
+to the same Railway Staging environment, repeat individual + GROUP cross-conflict
+smoke and health. Browser F5/logout-login has NOT been accepted: current cloud tab
+is at the professional sign-in form, not an authenticated Verto app session.
+Do not claim browser acceptance, 100% completion or merge until verified. Preserve
+fictitious fixture credentials/cookies outside Git. After complete acceptance,
+merge PR413 into staging, restore Railway source to staging without a pinned SHA,
+and confirm exact merge deployment. Production remains untouched.

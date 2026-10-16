@@ -1,4 +1,5 @@
 import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';
+import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './services/groupSessions/groupSessionScheduleConflicts';
 import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';
 import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
@@ -12835,12 +12836,14 @@ function getClinicStateAppointmentProfessionals(appointment: any) {
   return { ids, names };
 }
 
-function validateClinicStateAppointmentsForScheduleConflicts(params: {
+async function validateClinicStateAppointmentsForScheduleConflicts(params: {
   appointments: any[];
+  clinicId: string;
   rooms?: any[];
   specialtySettings?: Record<string, any>;
 }) {
   const appointments = Array.isArray(params.appointments) ? params.appointments : [];
+  const canonicalGroupSlots = await loadCanonicalGroupScheduleSlots(supabase, params.clinicId, appointments);
   const roomsById = new Map(
     (Array.isArray(params.rooms) ? params.rooms : [])
       .map((room: any) => [sanitizeString(room?.id, 180), room])
@@ -12879,7 +12882,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         180,
       );
       const professionals = getClinicStateAppointmentProfessionals(appointment);
-      return {
+      const normalized = {
         index,
         id: sanitizeString(appointment?.id, 180),
         date,
@@ -12897,6 +12900,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         professionalNames: professionals.names,
         blocks: getClinicStateAppointmentStatusBlocksConflict(appointment)
       };
+      return {...normalized, sharedGroupSlot: canonicalSharedGroupSlot(appointment, normalized, canonicalGroupSlots)};
     })
     .filter((appointment) => appointment.blocks && appointment.date && appointment.startTime);
 
@@ -12941,6 +12945,8 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
             : `${current.patientName || 'Paciente'} já possui outra sessão nesse horário.`
         };
       }
+
+      if (current.sharedGroupSlot && current.sharedGroupSlot === other.sharedGroupSlot) continue;
 
       const sameRoom =
         current.locationType === 'clinica' &&
@@ -34039,7 +34045,8 @@ async function startServer() {
             : previous.data?.specialty_settings && typeof previous.data.specialty_settings === 'object'
               ? previous.data.specialty_settings
               : {};
-        const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+        const scheduleValidation = await validateClinicStateAppointmentsForScheduleConflicts({
+          clinicId,
           appointments: nextAppointments,
           rooms: nextRooms !== undefined ? nextRooms : Array.isArray(previous.data?.rooms) ? previous.data.rooms : [],
           specialtySettings: effectiveSpecialtySettings
@@ -35373,7 +35380,8 @@ async function startServer() {
     );
 
     const nextAppointmentsForValidation = mergeClinicStateAppointmentsById(state.appointments, preparedAppointments);
-    const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+    const scheduleValidation = await validateClinicStateAppointmentsForScheduleConflicts({
+      clinicId,
       appointments: nextAppointmentsForValidation,
       rooms: state.rooms,
       specialtySettings: state.specialtySettings
