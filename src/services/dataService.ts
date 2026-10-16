@@ -9180,13 +9180,14 @@ export const dataService = {
       return { success: false, error: 'Clínica inválida.' };
     }
     try {
-      const client = await getSupabase();
-      if (!client) return { success: false, error: 'Sessão de autenticação indisponível.' };
-      const { data, error } = await client.rpc('clinic_scheduling_specialties_v1', { p_clinic_id: clinicId });
-      if (error || !Array.isArray(data)) {
+      const response = await fetch('/api/clinic/scheduling-specialties', {
+        credentials: 'include', cache: 'no-store', headers: await getAuthHeaders(),
+      });
+      const result = await safeJson(response);
+      if (!response.ok || !result?.success || result.clinicId !== clinicId || !Array.isArray(result.data)) {
         return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
       }
-      return { success: true, data };
+      return { success: true, data: result.data };
     } catch {
       return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
     }

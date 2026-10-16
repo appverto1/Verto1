@@ -322,3 +322,55 @@ Do not claim browser acceptance, 100% completion or merge until verified. Preser
 fictitious fixture credentials/cookies outside Git. After complete acceptance,
 merge PR413 into staging, restore Railway source to staging without a pinned SHA,
 and confirm exact merge deployment. Production remains untouched.
+
+## Fix deployment verified and browser transport defect — 2026-10-16 23:20 UTC
+
+Remote fix head `f908a7c824930740ea00c3796cc1e2884fe9286c` passed the COMPLETE CI:
+run38976258123/job117226314540, including 33 group regressions and real PG17
+concurrency. After an interrupted accept call, read-back showed no new deployment
+and exactly one pending source-SHA change. Reissued it once. Railway deployment
+`acf4b8bc-ee70-48b1-bba8-930ad8d3e0b5` reached terminal SUCCESS; health release
+`f908a7c82493`. Actual individual creation now returns200 in the fictitious clinic;
+GROUP over that individual returns409 GROUP_BOOKING_PROFESSIONAL_BUSY; individual
+over the secondary professional of a GROUP returns409. The regression is fixed.
+
+Additional live financial history smoke: change an already referenced plan GROUP
+80→85→80 via HTTP Save; original plan becomes INACTIVE/versioned and the prior
+GROUP ledger/snapshot remains80, individual remains150. Changed-payload replay
+with the old reservation key returns409 GROUP_IDEMPOTENCY_CONFLICT.
+
+The browser was found authenticated as the existing Staging director in Clínica
+Diretoria, clinic `ff28d30d-2d5b-4775-a411-810c6c1465a7`. No credentials were read or
+entered. It remained authenticated after a closed-tab interruption and re-opening.
+Created only explicitly named fictitious UI fixtures in that Staging clinic:
+patients `f88943b5-6879-4c3b-82cb-d748a322f2c4`,
+`18bfdd8e-539d-445b-a2aa-8c9581d62381`,
+`1db925dc-b3f7-4736-85c6-8711a039763e`; room
+`df58d141-6988-4c89-8405-002debe42c3e` (capacity3).
+Names start HOMOLOGAÇÃO FICTÍCIA GRUPO UI, metadata.testFixture=group-ui-20261016,
+patients is_demo=true, no email/portal accounts, no real patient data used.
+Individual amounts200/210/220, GROUP90/75/65 BRL. In the browser's EXISTING Editar
+Cadastro → Plano financeiro → Salvar alterações, changed patient1 GROUP90→95;
+completed only that fictitious patient's required placeholder phone11900000000
+(no email/contact notification action). Success modal confirmed saving. F5 and
+re-opening the modal showed GROUP95 and individual200. Scoped SQL confirmed it.
+
+A second genuine UI blocker was found: getClinicSchedulingSpecialties called a
+Supabase browser RPC that requires auth.uid(), while this valid Verto browser
+session is authenticated with the backend cookie. The RPC fails, leaving no
+selectable specialties and preventing new financial lines/group creation.
+The new clinicSchedulingSpecialtyRoute serves the same active therapist membership
+projection through checkAuth/capabilities and a clinic-scoped backend query; client
+clinic IDs cannot select scope. Client verifies returned clinicId against the
+requested workspace and uses credentials:include/no-store. No new migration,
+permission grants or RLS bypass is introduced; existing browser RPC stays secured.
+The transport regression executes the real dataService method without a Supabase
+session and checks authorization/filtering/workspace-switch denial. The old static
+membership test now verifies the new HTTP transport while retaining all database
+specialty/role/security assertions. Await full tests/CI and deploy before proceeding.
+
+UI creation/join/edit/cancel and browser logout/new-login remain unaccepted. Use the
+fictitious UI patients/room only, an authorized Fonoaudiólogo, future Nov2026 slots
+within work hours. Cancel these UI test bookings before finishing so they do not
+contribute to future scheduled-session billing. Never edit real prices/patients or
+Stripe data. Keep PR413 draft until the complete feature is accepted.

@@ -1,4 +1,5 @@
 import { registerGroupSessionRoutes } from './groupSessions/groupSessionRoutes';
+import {registerClinicSchedulingSpecialtyRoute} from './groupSessions/clinicSchedulingSpecialtyRoute';
 import { clinicPolicyPayloadHash } from './clinicPolicyPayloadHash';
 import type { Express } from 'express';
 import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
@@ -26,6 +27,7 @@ export function registerClinicAppointmentPolicyRoutes(
   app: Express,
   deps: ClinicAppointmentPolicyRouteDeps
 ) {
+  registerClinicSchedulingSpecialtyRoute(app, deps);
   if (deps.serializeGroupAppointment) registerGroupSessionRoutes(app, deps);
 
   const {
