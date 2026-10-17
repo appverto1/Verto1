@@ -91,8 +91,9 @@ assert.match(serviceWorker, /const isClinicAnnouncement = notificationType === "
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""/);
 assert.doesNotMatch(serviceWorker, /const imageUrl|payload\.image/, 'Push sem cartão de imagem grande');
 assert.match(serviceWorker, /brandLogo \|\| payload\.icon/);
-assert.match(serviceWorker, /fallbackWithoutAssets/);
-assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
+assert.match(serviceWorker, /body: notificationOptions\.body/);
+assert.match(serviceWorker, /tag: notificationOptions\.tag/);
+assert.match(serviceWorker, /Falha ao exibir notificação no dispositivo/);
 assert.match(push, /O logo da clínica é enviado somente como ícone compacto/);
 
 assert.match(serviceWorker, /pushsubscriptionchange/);
