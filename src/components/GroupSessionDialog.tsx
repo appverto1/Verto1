@@ -2,6 +2,7 @@ import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {dataService} from '../services/dataService';
 import {clinicalSpecialtiesMatch} from '../utils/clinicalSpecialties';
 import {buildAppointmentDateTime} from '../utils/scheduling';
+import {groupSessionErrorMessage} from '../utils/groupSessionApiErrors';
 import {APPOINTMENT_CANCELLATION_REASONS, buildAppointmentCancellationNote} from '../utils/appointmentCancellationReasons';
 
 type Props = {
@@ -93,7 +94,16 @@ export function GroupSessionDialog(props: Props) {
       void (mode==='create'?dataService.previewGroupSession(payload):dataService.previewGroupSessionRates(payload)).then(result=>{
         if(!live)return;
         if(result?.success)setRates(result.patientRates||result.rates||[]);
-        else setPreviewError(result?.error || 'Não foi possível confirmar os valores coletivos. Confira os planos financeiros.');
+        else {
+          const code = String(result?.code || '');
+          const raw = String(result?.error || '').trim();
+          const description = raw && !/^HTTP\\s+\\d+$/i.test(raw)
+            ? raw : groupSessionErrorMessage(code || 'GROUP_OPERATION_FAILED');
+          const patientId = String(result?.patientId || '');
+          const patientLabel = patientId && patientIds.includes(patientId) &&
+            /GROUP_PRICING_(PLAN|RATE)_MISSING/.test(code) ? patientName(patientId) : '';
+          setPreviewError(patientLabel ? `Paciente: ${patientLabel}. ${description}` : description);
+        }
       }).finally(()=>{if(live)setPreviewLoading(false);});
     },300);
     return()=>{live=false;clearTimeout(timer);setPreviewLoading(false);};
@@ -166,7 +176,7 @@ export function GroupSessionDialog(props: Props) {
         {['create','add','edit','cancel'].includes(mode)&&<form onSubmit={e=>{e.preventDefault();void submit();}}><fieldset disabled={busy} className="space-y-4">
           {mode==='create'&&<label className="block">Modalidade<select className={inputClass} value="GROUP" onChange={e=>{if(e.target.value==='INDIVIDUAL')props.onIndividual(date,time);}}><option value="INDIVIDUAL">Individual</option><option value="GROUP">Grupo</option></select></label>}
           {['create','edit'].includes(mode)&&schedulingFields}
-          {['create','add'].includes(mode)&&<><label className="block">Pacientes ({patientIds.length})<input className={inputClass} placeholder="Buscar paciente" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className="max-h-48 overflow-y-auto rounded-xl border p-3">{patientOptions.map(p=><label className="flex items-center justify-between gap-2 py-2" key={p.id}><span><input type="checkbox" checked={patientIds.includes(String(p.id))} onChange={()=>toggle(String(p.id),patientIds,setPatientIds,30)}/> {p.name}</span><span>{rates.find(r=>r.patientId===String(p.id))?money(rates.find(r=>r.patientId===String(p.id)).amountCents):''}</span></label>)}</div><p className="text-slate-500">{mode==='create'?'Selecione de 2 a 30 pacientes. ':''}Os valores coletivos são confirmados por paciente e especialidade no plano financeiro.</p>{previewLoading&&<p role="status">Consultando valores…</p>}{previewError&&<p role="alert" className="text-red-700">{previewError}</p>}{rates.length>0&&<ul>{rates.map(r=><li key={r.patientId}>{patientName(r.patientId)}: {money(r.amountCents)} por sessão em grupo</li>)}</ul>}</>}
+          {['create','add'].includes(mode)&&<><label className="block">Pacientes ({patientIds.length})<input className={inputClass} placeholder="Buscar paciente" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className="max-h-48 overflow-y-auto rounded-xl border p-3">{patientOptions.map(p=><label className="flex items-center justify-between gap-2 py-2" key={p.id}><span><input type="checkbox" checked={patientIds.includes(String(p.id))} onChange={()=>toggle(String(p.id),patientIds,setPatientIds,30)}/> {p.name}</span><span>{rates.find(r=>r.patientId===String(p.id))?money(rates.find(r=>r.patientId===String(p.id)).amountCents):''}</span></label>)}</div><p className="text-slate-500">{mode==='create'?'Selecione de 2 a 30 pacientes. ':''}Os valores coletivos são confirmados por paciente e especialidade no plano financeiro.</p>{previewLoading&&<p role="status">Consultando valores…</p>}{previewError&&<div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-950"><strong className="block">Atenção: revise os dados antes de agendar</strong><p className="mt-1">{previewError}</p></div>}{rates.length>0&&<ul>{rates.map(r=><li key={r.patientId}>{patientName(r.patientId)}: {money(r.amountCents)} por sessão em grupo</li>)}</ul>}</>}
           {mode==='edit'&&<label className="block">Motivo da remarcação<textarea className={inputClass} required maxLength={1200} value={reason} onChange={e=>setReason(e.target.value)}/></label>}
           {mode==='cancel'&&<><label className="block">Cancelar<select className={inputClass} value={cancelPatient} onChange={e=>{setCancelPatient(e.target.value);setFuture(false);}}><option value="">Todos os participantes ativos</option>{appointments.filter(active).map(a=><option key={a.id} value={a.patientId||a.patient_id}>{patientName(a.patientId||a.patient_id)}</option>)}</select></label><label className="block">Motivo<select className={inputClass} required value={reason} onChange={e=>setReason(e.target.value)}><option value="">Selecione</option>{APPOINTMENT_CANCELLATION_REASONS.map(r=><option key={r}>{r}</option>)}</select></label><label className="block">Detalhes<textarea className={inputClass} required={reason==='Outro motivo'} maxLength={900} value={reasonDetails} onChange={e=>setReasonDetails(e.target.value)}/></label>{header?.series_id&&!cancelPatient&&<label className="flex items-center gap-2"><input type="checkbox" checked={future} onChange={e=>setFuture(e.target.checked)}/>Incluir as próximas sessões desta série</label>}{manualSnapshots.map((s:any)=>{const a=appointments.find(a=>a.id===s.appointment_id);return <label className="block" key={s.appointment_id}>Cobrança manual de {patientName(a.patientId||a.patient_id)} (máximo {money(Math.round(Number(s.final_amount)*100))})<input className={inputClass} inputMode="decimal" required value={policyAmounts[s.appointment_id]||''} onChange={e=>setPolicyAmounts({...policyAmounts,[s.appointment_id]:e.target.value})}/></label>;})}<p className="text-slate-500">As regras financeiras e os recebimentos existentes serão verificados antes da confirmação.</p></>}
           <button className="w-full rounded-xl bg-[#7a32fc] px-4 py-3 font-semibold text-white disabled:opacity-40" type="submit" disabled={busy||previewLoading||(['create','add'].includes(mode)&&rates.length!==patientIds.length)}>{busy?'Salvando…':mode==='create'?'Criar sessão em grupo':mode==='add'?'Adicionar participantes':mode==='edit'?'Salvar remarcação':'Confirmar cancelamento'}</button>

@@ -1,5 +1,6 @@
 import type { Express } from 'express';
 import { previewNewGroupBooking } from './groupSessionBookingPreview';
+import { groupSessionErrorMessage } from '../../src/utils/groupSessionApiErrors';
 
 export function registerGroupSessionBookingPreviewRoute(app: Express, deps: any) {
   app.post('/api/appointments/groups/booking-preview',
@@ -28,7 +29,16 @@ export function registerGroupSessionBookingPreviewRoute(app: Express, deps: any)
           const status = result.code.includes('MIGRATION_REQUIRED') ? 503 :
             result.code.includes('OUT_OF_SCOPE') ? 404 :
             result.code.includes('INVALID') ? 422 : 409;
-          return res.status(status).json({success:false,code:result.code});
+          // This is an expected, actionable conflict, not an opaque transport error.
+          // The patient ID is sourced from validated clinic-scoped rows and may only
+          // identify one of the explicitly requested patients.
+          const patientId = 'patientId' in result && typeof result.patientId === 'string' &&
+            Array.isArray(req.body?.patientIds) && req.body.patientIds.includes(result.patientId)
+            ? result.patientId : undefined;
+          return res.status(status).json({
+            success:false, code:result.code, error:groupSessionErrorMessage(result.code),
+            ...(patientId ? {patientId} : {}),
+          });
         }
         return res.json({
           success:true, modality:'GROUP', reserved:false, availabilityConfirmed:false,
