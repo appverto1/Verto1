@@ -16,7 +16,8 @@ const detail={success:true,bookings:[booking],appointments,items:appointments,pa
 const creates:any[]=[];const cancels:any[]=[];const persisted:any[]=[];
 dataService.getClinicRooms=async()=>({success:true,data:[room]});
 dataService.getGroupSession=async()=>detail;
-dataService.previewGroupSession=async()=>({success:true,patientRates:patients.map((p,i)=>({patientId:p.id,amountCents:8000-i*1000}))});
+let previewFailure: any = null;
+dataService.previewGroupSession=async()=>previewFailure || ({success:true,patientRates:patients.map((p,i)=>({patientId:p.id,amountCents:8000-i*1000}))});
 dataService.createGroupSessions=async(payload:any)=>{creates.push(payload);return creates.length===1?{success:false,error:'Falha transitória de teste'}:{...detail,action:'created'};};
 dataService.cancelGroupSession=async(bookingId:string,payload:any)=>{cancels.push({bookingId,payload});return {...detail,action:'canceled'};};
 const root=createRoot(document.getElementById('test')!);
@@ -35,8 +36,26 @@ try{
   await fill('Sala',room.id);await check(team[0].label);await check(team[1].label);await check(patients[0].name);await check(patients[1].name);
   await act(async()=>{await new Promise(resolve=>setTimeout(resolve,350));});
   assert.match(document.body.textContent!,/80,00 por sessão em grupo/);assert.match(document.body.textContent!,/70,00 por sessão em grupo/);
+  previewFailure={success:false,status:409,code:'GROUP_PRICING_PLAN_MISSING',patientId:patients[0].id,error:'HTTP 409'};
+  await fill('Horário','10:05');await act(async()=>{await new Promise(resolve=>setTimeout(resolve,350));});
+  assert.match(document.body.textContent!,/Paciente: Paciente fictício um/);
+  assert.match(document.body.textContent!,/plano financeiro particular ativo/i);
+  assert.doesNotMatch(document.body.textContent!,/HTTP 409/);
+  previewFailure={success:false,status:409,code:'GROUP_ROOM_CAPACITY_EXCEEDED',error:'HTTP 409'};
+  await fill('Horário','10:10');await act(async()=>{await new Promise(resolve=>setTimeout(resolve,350));});
+  assert.match(document.body.textContent!,/sala selecionada não comporta/i);
+  previewFailure=null;
+  await fill('Horário','10:15');await act(async()=>{await new Promise(resolve=>setTimeout(resolve,350));});
+  await fill('Repetição','WEEKLY');
+  await fill('Quantidade total de sessões','3');
+  assert.match(document.body.textContent!,/3 sessões previstas/);
   await submit();assert.equal(creates.length,1);assert.match(document.body.textContent!,/Falha transitória/);assert.equal(persisted.length,0,'no optimistic success after failure');
   await submit();assert.equal(creates.length,2);assert.equal(creates[0].idempotencyKey,creates[1].idempotencyKey,'network retry retains action key');
+  assert.deepEqual(creates[0].slots,[
+    {date:'2026-11-02',time:'10:15'},
+    {date:'2026-11-09',time:'10:15'},
+    {date:'2026-11-16',time:'10:15'},
+  ],'weekly recurrence must be included atomically in the create request');
   assert.deepEqual(creates[1].patientIds,patients.map(p=>p.id));assert.deepEqual(creates[1].professionalIds,team.map(p=>p.id));
   assert.equal(creates[1].amountCents,undefined);assert.equal(creates[1].sessionGroupId,undefined);assert.equal(persisted.length,1);
   assert.match(document.body.textContent!,/50 minutos/);assert.match(document.body.textContent!,/80,00/,'detail reads unit_amount_cents');
