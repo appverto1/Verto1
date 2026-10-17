@@ -1627,7 +1627,7 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
     runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
     requireDistributedLease: false,
   };
-  cron.schedule('* * * * *', () => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_cron_1_minute'); }, { timezone: 'UTC' });
+  cron.schedule('* * * * *', () => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_cron_1_minute'); }, { timezone: 'UTC', name: 'verto-notification-jobs' });
   setTimeout(() => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_startup'); }, 5 * 1000);
   logger.log('[Notification Jobs] Fila de lembretes de sessão e tarefas iniciada.', { timezone: 'UTC', businessTimezone: BRAZIL_TIMEZONE, deploymentEnv, pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey) });
 }

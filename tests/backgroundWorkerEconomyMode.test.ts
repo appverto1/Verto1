@@ -9,6 +9,7 @@ import {
   normalizeVertoBackgroundWorkerMode,
   resolveVertoBackgroundWorkerMode,
   shouldSuppressVertoEconomyWarmup,
+  isEssentialEconomyNotificationSchedule,
 } from '../services/backgroundWorkerMode.ts';
 import {
   shouldSuppressDistributedJobLeaseForEconomy,
@@ -72,7 +73,18 @@ assert.deepEqual(guardResult, { installed: true, mode: 'economy' });
 const stoppedTask = fakeEconomyScheduler.schedule('* * * * *', () => undefined, { timezone: 'UTC' });
 assert.equal(stoppedTask.started, false);
 assert.equal(stoppedTaskCreations, 1);
-assert.equal(directScheduleCalls, 0, 'economy must never call the original auto-starting schedule function');
+assert.equal(directScheduleCalls, 0, 'economy suppresses generic automatic schedules');
+assert.equal(isEssentialEconomyNotificationSchedule('* * * * *', { name:'verto-notification-jobs' }),true);
+assert.equal(isEssentialEconomyNotificationSchedule('* * * * *', { name:'verto-clinic-announcements' }),true);
+assert.equal(isEssentialEconomyNotificationSchedule('*/5 * * * *',{ name:'verto-notification-jobs' }),false,'do not allow arbitrary cadence');
+assert.equal(isEssentialEconomyNotificationSchedule('* * * * *',{ name:'unrelated-worker' }),false);
+const notificationTask=fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'verto-notification-jobs'});
+const announcementTask=fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'verto-clinic-announcements'});
+assert.equal(notificationTask.started,true,'essential patient reminders must run in economy');
+assert.equal(announcementTask.started,true,'essential patient announcements must run in economy');
+assert.equal(directScheduleCalls,2,'only two essential queues are allowed to run');
+assert.equal(fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'unsafe-job'}).started,false);
+assert.equal(stoppedTaskCreations,2,'other work remains stopped');
 
 let activeScheduleCalls = 0;
 const fakeActiveScheduler: any = {
@@ -227,6 +239,9 @@ assert.match(noShowService, /from 'node-cron'/);
 assert.match(backgroundWorkerMode, /from 'node-cron'/);
 assert.match(backgroundWorkerMode, /scheduler\.createTask/);
 assert.match(backgroundWorkerMode, /notification_jobs_startup/);
+assert.match(cronService, /name:\s*'verto-notification-jobs'/);
+assert.match(clinicAnnouncementCronService, /name:\s*'verto-clinic-announcements'/);
+assert.match(backgroundWorkerMode, /isEssentialEconomyNotificationSchedule/);
 assert.match(backgroundWorkerMode, /startup_warmup/);
 assert.match(backgroundWorkerModeConfig, /VERTO_BACKGROUND_WORKER_MODE=economy é proibido em production/);
 assert.match(backgroundWorkerMode, /from '\.\/backgroundWorkerModeConfig'/);
