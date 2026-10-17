@@ -58,6 +58,7 @@ import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { SettingsMenu } from "./SettingsMenu";
 import { TutorialOverlay } from "./Tutorial";
+import { HelpButtonHint } from "./HelpButtonHint";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
 import { BillingCommunicationNotifications } from "./BillingCommunicationNotifications";
@@ -1043,6 +1044,7 @@ export function CoordinatorDashboard({
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
+  const [showHelpHint, setShowHelpHint] = useState(false);
   const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
   const guidedTutorialLoadedKeyRef = useRef("");
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
@@ -11239,6 +11241,7 @@ export function CoordinatorDashboard({
 
   const startGuidedTutorial = useCallback(() => {
     if (!authorizationHydrated || guidedTutorialSteps.length === 0) return;
+    setShowHelpHint(false);
     setGuidedTutorialStep(0);
     persistGuidedTutorial("active", 0);
     setRunGuidedTutorial(true);
@@ -11257,10 +11260,17 @@ export function CoordinatorDashboard({
     setIsMobileMenuOpen(false);
   }, [guidedTutorialStep, persistGuidedTutorial]);
 
+  const dismissHelpHint = useCallback(() => {
+    setShowHelpHint(false);
+    persistGuidedTutorial("skipped", 0);
+  }, [persistGuidedTutorial]);
+
   useEffect(() => {
     if (!authorizationHydrated || !String(user?.id || "").trim() || guidedTutorialSteps.length === 0) return;
     if (guidedTutorialLoadedKeyRef.current === guidedTutorialContextKey) return;
     guidedTutorialLoadedKeyRef.current = guidedTutorialContextKey;
+    setRunGuidedTutorial(false);
+    setShowHelpHint(false);
 
     let stored: any = null;
     try {
@@ -11271,17 +11281,15 @@ export function CoordinatorDashboard({
     }
 
     if (stored?.revision === GUIDED_TUTORIAL_REVISION) {
-      if (stored.status === "active") {
-        const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0)));
-        setGuidedTutorialStep(safeStep);
-        setRunGuidedTutorial(true);
-      }
+      // Previous active tours resume as a small Help hint, never as a blocking overlay.
+      if (stored.status === "active") setShowHelpHint(true);
       return;
     }
 
+    // On first login only point to the existing Help button; no automatic tour.
     setGuidedTutorialStep(0);
     persistGuidedTutorial("active", 0);
-    setRunGuidedTutorial(true);
+    setShowHelpHint(true);
   }, [
     authorizationHydrated,
     guidedTutorialContextKey,
@@ -11710,6 +11718,7 @@ export function CoordinatorDashboard({
                 onOpenOnboarding={onOpenOnboarding}
                 onOpenGuidedTutorial={startGuidedTutorial}
               />
+              {showHelpHint && <HelpButtonHint onClose={dismissHelpHint} />}
               {runGuidedTutorial && (
                 <TutorialOverlay
                   steps={guidedTutorialSteps}
@@ -12042,6 +12051,7 @@ export function CoordinatorDashboard({
               onOpenOnboarding={onOpenOnboarding}
               onOpenGuidedTutorial={startGuidedTutorial}
             />
+            {showHelpHint && <HelpButtonHint onClose={dismissHelpHint} />}
             {runGuidedTutorial && (
               <TutorialOverlay
                 steps={guidedTutorialSteps}

@@ -5,6 +5,7 @@ const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx', '
 const tutorial = fs.readFileSync('src/components/Tutorial.tsx', 'utf8');
 const settings = fs.readFileSync('src/components/SettingsMenu.tsx', 'utf8');
 const help = fs.readFileSync('src/components/HelpButton.tsx', 'utf8');
+const hint = fs.readFileSync('src/components/HelpButtonHint.tsx', 'utf8');
 
 assert.match(coordinator, /GUIDED_TUTORIAL_REVISION = "p0-contextual-v1"/);
 assert.match(coordinator, /guidedTutorialContextKey = \[[\s\S]*user\?\.id[\s\S]*workspaceScopeKey[\s\S]*normalizedRole[\s\S]*moduleAccessMode[\s\S]*guidedTutorialModuleSignature/);
@@ -45,6 +46,15 @@ assert.match(settings, /onOpenGuidedTutorial/);
 
 assert.match(coordinator, /persistGuidedTutorial\("active", safeStep\)/);
 assert.match(coordinator, /stored\.status === "active"/);
+assert.match(coordinator, /if \(stored\.status === "active"\) setShowHelpHint\(true\)/);
+assert.match(coordinator, /setShowHelpHint\(true\)/);
+assert.match(coordinator, /setRunGuidedTutorial\(false\)/);
+assert.match(coordinator, /<HelpButtonHint onClose=\{dismissHelpHint\} \/>/);
+assert.doesNotMatch(coordinator, /stored\.status === "active"[\s\S]{0,240}setRunGuidedTutorial\(true\)/);
+assert.match(hint, /data-tutorial-anchor="help-center"/);
+assert.match(hint, /createPortal/);
+assert.match(hint, /role="region"/);
+assert.doesNotMatch(hint, /aria-modal|boxShadow:.*9999px/);
 assert.match(coordinator, /reason === "skip" \? "skipped" : reason === "complete" \? "completed" : "active"/);
 assert.match(coordinator, /onOpenGuidedTutorial=\{startGuidedTutorial\}/);
 assert.match(coordinator, /window\.matchMedia\("\(max-width: 1023px\)"\)/);
