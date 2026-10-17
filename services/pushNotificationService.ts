@@ -547,7 +547,7 @@ export async function deleteInvalidPushSubscription(params: {
   const invalidatedAt = new Date().toISOString();
   const mark = await params.supabase
     .from('push_subscriptions')
-    .update({ invalidated_at: invalidatedAt, p256dh: null, auth: null, subscription: null, updated_at: invalidatedAt })
+    .update({ invalidated_at: invalidatedAt, updated_at: invalidatedAt })
     .eq('endpoint', endpoint)
     .eq('deployment_env', deploymentEnv);
   if (!mark.error) return;
@@ -672,6 +672,7 @@ export async function findPushSubscriptionsForPatient(params: {
       .from('push_subscriptions')
       .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env')
       .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
       .in(column, values)
       .limit(500);
     if (error) {
@@ -695,6 +696,7 @@ export async function findPushSubscriptionsForPatient(params: {
       .from('push_subscriptions')
       .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env')
       .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
       .ilike('user_email', patientEmail)
       .limit(100);
     if (error) {
@@ -788,6 +790,7 @@ export async function findPushSubscriptionsForRecipients(params: {
           .from('push_subscriptions')
           .select(selectColumns)
           .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
           .in(column, chunk)
           .order('endpoint', { ascending: true })
           .range(from, from + 499);
@@ -822,6 +825,7 @@ export async function findPushSubscriptionsForRecipients(params: {
           .from('push_subscriptions')
           .select(selectColumns)
           .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
           .or(filters)
           .order('endpoint', { ascending: true })
           .range(from, from + 499);
