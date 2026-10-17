@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v20";
+const SW_VERSION = "verto-branding-v21";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -153,8 +153,8 @@ self.addEventListener("push", (event) => {
     : (payload.title || brandName);
   const notificationType = String(payload.data?.notificationType || "").trim();
   const isClinicAnnouncement = notificationType === "clinic_announcement";
-  // Avisos da clínica usam somente a identidade visual da própria clínica em formato compacto.
-  // Não enviamos `image` para evitar o cartão expandido com uma imagem grande abaixo da mensagem.
+  // Lembretes e avisos usam SOMENTE o ícone compacto. A propriedade `image`
+  // cria um cartão grande no Android e não é permitida, inclusive para payloads legados.
   const iconUrl = isClinicAnnouncement
     ? asNotificationAssetUrl(brandLogo || payload.icon || "")
     : asNotificationAssetUrl(brandLogo || payload.icon || VERTO_NOTIFICATION_ICON);
@@ -164,14 +164,10 @@ self.addEventListener("push", (event) => {
   const badgeUrl = isClinicAnnouncement
     ? ""
     : asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
-  const imageUrl = isClinicAnnouncement
-    ? ""
-    : asNotificationAssetUrl(payload.image || brandLogo || VERTO_NOTIFICATION_ICON);
   const notificationOptions = {
     body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
     ...(iconUrl ? { icon: iconUrl } : {}),
     ...(badgeUrl ? { badge: badgeUrl } : {}),
-    ...(imageUrl ? { image: imageUrl } : {}),
     tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
     renotify: Boolean(appointmentId),
     requireInteraction: true,
@@ -194,24 +190,23 @@ self.addEventListener("push", (event) => {
       try {
         await self.registration.showNotification(title, notificationOptions);
       } catch (primaryError) {
-        // Primeiro preserva icon/badge e remove apenas a imagem expandida, quando existir.
-        let optionsWithoutImage = notificationOptions;
-        if (Object.prototype.hasOwnProperty.call(notificationOptions, 'image')) {
-          const { image: _failedImage, ...fallbackWithoutImage } = notificationOptions;
-          optionsWithoutImage = fallbackWithoutImage;
-          try {
-            await self.registration.showNotification(title, optionsWithoutImage);
-            optionsWithoutImage = null;
-          } catch {
-            // Se o navegador também rejeitar algum asset compacto, cai no fallback sem mídia.
-          }
-        }
-
-        if (optionsWithoutImage) {
-          const { icon: _failedIcon, badge: _failedBadge, ...fallbackWithoutAssets } = optionsWithoutImage;
-          await self.registration.showNotification(title, fallbackWithoutAssets);
+        // A falha de um logo remoto não pode impedir a exibição do aviso.
+        // Repetimos sem mídia nem opções opcionais: apenas texto, tag e destino.
+        try {
+          await self.registration.showNotification(title, {
+            body: notificationOptions.body,
+            tag: notificationOptions.tag,
+            data: notificationOptions.data,
+          });
+        } catch (fallbackError) {
+          console.warn("[push] Falha ao exibir notificação no dispositivo.", {
+            notificationType,
+            reason: String(fallbackError?.name || "NOTIFICATION_DISPLAY_FAILED"),
+          });
+          throw fallbackError;
         }
       }
+
       const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       await Promise.all(windows.map((client) => client.postMessage({
         type: 'VERTO_PORTAL_NOTIFICATION',

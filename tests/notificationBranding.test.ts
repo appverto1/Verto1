@@ -42,7 +42,7 @@ const payload = buildPatientReminderNotificationPayload({
 // Lembretes usam o logo da clínica no ícone compacto; o badge do app permanece Verto.
 assert.equal(payload.icon, branding.logoUrl);
 assert.equal(payload.badge, VERTO_NOTIFICATION_BADGE_URL);
-assert.equal(payload.image, branding.logoUrl);
+assert.equal('image' in payload, false, 'lembrete não deve renderizar cartão expandido no Android');
 assert.equal(payload.data.brandLogoUrl, branding.logoUrl);
 assert.equal(payload.allowedActions.canRequestReschedule, false);
 assert.match(payload.body, /confirmar ou cancelar a sessão/);
@@ -54,7 +54,7 @@ const fallbackPayload = buildPatientReminderNotificationPayload({
   canRequestReschedule: true,
 });
 assert.equal(fallbackPayload.icon, VERTO_NOTIFICATION_ICON_URL);
-assert.equal(fallbackPayload.image, VERTO_NOTIFICATION_ICON_URL);
+assert.equal('image' in fallbackPayload, false, 'fallback também usa somente ícone');
 assert.equal(fallbackPayload.allowedActions.canRequestReschedule, true);
 
 // O popup interno mantém o mesmo contrato de texto e ações.
@@ -70,14 +70,14 @@ assert.equal(modal.allowedActions.canRequestReschedule, false);
 
 // Service worker respeita o logo da clínica no ícone compacto dos lembretes e avisos;
 // o badge continua reservado à identificação do app/SO.
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v20"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v21"/);
 assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?brandLogo \|\| payload\.icon \|\| VERTO_NOTIFICATION_ICON/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""[\s\S]*?VERTO_NOTIFICATION_BADGE/);
-assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""[\s\S]*?payload\.image \|\| brandLogo \|\| VERTO_NOTIFICATION_ICON/);
+assert.doesNotMatch(serviceWorker, /\bimageUrl\b|payload\.image|\{\s*image:/, 'Service Worker não deve abrir imagem expandida');
 assert.match(serviceWorker, /showNotification\(title, notificationOptions\)/);
-assert.match(serviceWorker, /fallbackWithoutImage/);
-assert.match(serviceWorker, /fallbackWithoutAssets/);
-assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
+assert.match(serviceWorker, /Falha ao exibir notificação no dispositivo/);
+assert.match(serviceWorker, /body: notificationOptions\.body/);
+assert.match(serviceWorker, /tag: notificationOptions\.tag/);
 assert.doesNotMatch(serviceWorker, /brandLogo \|\| payloadIcon/);
 
 // Logo privado recebe URL HTTPS estável assinada, sem signed URL temporária do Supabase.
