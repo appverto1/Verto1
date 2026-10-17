@@ -120,6 +120,12 @@ class PushQueryMock {
     return this;
   }
 
+  is(column: string, value: unknown) {
+    assert.equal(column, 'invalidated_at');
+    assert.equal(value, null);
+    return this;
+  }
+
   order() {
     return this;
   }
