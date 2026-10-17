@@ -975,7 +975,12 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
   });
   let sent = 0; let failed = 0; const invalidEndpoints = new Set<string>();
   for (const entry of rows) {
-    try { await webpush.sendNotification(entry.subscription, payload); sent += 1; }
+    try {
+      // Avisos são comunicação direta da clínica: prioridade alta e TTL limitado.
+      // A confirmação HTTP do provedor NÃO prova exibição no aparelho.
+      await webpush.sendNotification(entry.subscription, payload, { TTL: 24 * 60 * 60, urgency: 'high' });
+      sent += 1;
+    }
     catch (error: any) { failed += 1; logger.warn('[Push] Falha ao enviar aviso da clínica.', { patientId: isUuid(patientId) ? patientId : null, clinicId: isUuid(clinicId) ? clinicId : null, endpoint: entry.subscription.endpoint.slice(0,80), statusCode: error?.statusCode ?? error?.status ?? null, message: error?.message || String(error) }); if (isGonePushError(error)) invalidEndpoints.add(entry.subscription.endpoint); }
   }
   if (invalidEndpoints.size > 0) {

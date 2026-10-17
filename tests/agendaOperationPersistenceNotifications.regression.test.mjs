@@ -86,13 +86,14 @@ assert.match(patientDashboard, /setInterval\(\(\) => refreshNotifications\(false
 assert.match(patientDashboard, /Ativar notificações da clínica/);
 assert.match(serviceWorker, /VERTO_PORTAL_NOTIFICATION/);
 assert.match(serviceWorker, /clients\.matchAll/);
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v20"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v21"/);
 assert.match(serviceWorker, /const isClinicAnnouncement = notificationType === "clinic_announcement"/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""/);
-assert.match(serviceWorker, /const imageUrl = isClinicAnnouncement\s*\? ""/);
+assert.doesNotMatch(serviceWorker, /const imageUrl|payload\.image/, 'Push sem cartão de imagem grande');
 assert.match(serviceWorker, /brandLogo \|\| payload\.icon/);
-assert.match(serviceWorker, /fallbackWithoutAssets/);
-assert.match(serviceWorker, /icon: _failedIcon, badge: _failedBadge/);
+assert.match(serviceWorker, /body: notificationOptions\.body/);
+assert.match(serviceWorker, /tag: notificationOptions\.tag/);
+assert.match(serviceWorker, /Falha ao exibir notificação no dispositivo/);
 assert.match(push, /O logo da clínica é enviado somente como ícone compacto/);
 
 assert.match(serviceWorker, /pushsubscriptionchange/);
