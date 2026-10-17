@@ -184,7 +184,7 @@ function startClinicAnnouncementCron(options: CronServiceOptions) {
     () => {
       void runClinicAnnouncementDispatchScan('node_cron_1_minute');
     },
-    { timezone: 'UTC' },
+    { timezone: 'UTC', name: 'verto-clinic-announcements' },
   );
 
   setTimeout(() => {

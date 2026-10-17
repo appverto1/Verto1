@@ -12,6 +12,21 @@ export { normalizeVertoBackgroundWorkerMode, resolveVertoBackgroundWorkerMode, b
 const guardedSchedulers = new WeakSet<object>();
 const guardedTimerApis = new WeakSet<object>();
 
+// Patient-facing delivery is mandatory even in economy: disabling these two
+// bounded database queues silently prevents appointment reminders and notices.
+// Other expensive background scans remain disabled. Internal names are explicit
+// and cannot be taken from a request payload.
+const ESSENTIAL_NOTIFICATION_SCHEDULES = new Set([
+  'verto-notification-jobs',
+  'verto-clinic-announcements',
+]);
+
+export function isEssentialEconomyNotificationSchedule(expression: unknown, options: unknown): boolean {
+  return expression === '* * * * *' &&
+    typeof options === 'object' && options !== null &&
+    ESSENTIAL_NOTIFICATION_SCHEDULES.has(String((options as { name?: unknown }).name || ''));
+}
+
 export function installVertoBackgroundWorkerCronGuard(params: {
   env?: NodeJS.ProcessEnv;
   deploymentEnv?: VertoDeploymentEnvironment | null;
@@ -33,7 +48,14 @@ export function installVertoBackgroundWorkerCronGuard(params: {
     throw new Error('BACKGROUND_WORKER_CRON_GUARD_UNSUPPORTED');
   }
 
+  const originalSchedule = scheduler.schedule.bind(scheduler);
   scheduler.schedule = ((expression: string, task: (...args: any[]) => any, options?: any) => {
+    if (isEssentialEconomyNotificationSchedule(expression, options)) {
+      params.logger?.log?.('[Background Workers] Entrega essencial de notificacoes habilitada no modo economy.', {
+        deploymentEnv, workerMode: mode, taskName: options.name,
+      });
+      return originalSchedule(expression, task, options);
+    }
     const stoppedTask = scheduler.createTask(expression, task, options);
     params.logger?.log?.('[Background Workers] Polling node-cron suprimido pelo modo economy.', {
       deploymentEnv,
@@ -43,7 +65,7 @@ export function installVertoBackgroundWorkerCronGuard(params: {
     return stoppedTask;
   }) as typeof scheduler.schedule;
   guardedSchedulers.add(scheduler);
-  params.logger?.log?.('[Background Workers] Modo economy ativo; schedulers node-cron permanecem parados.', {
+  params.logger?.log?.('[Background Workers] Modo economy ativo; polling generico pausado, entregas essenciais preservadas.', {
     deploymentEnv,
     workerMode: mode,
   });
