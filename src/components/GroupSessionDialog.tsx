@@ -107,7 +107,7 @@ export function GroupSessionDialog(props: Props) {
         else {
           const code = String(result?.code || '');
           const raw = String(result?.error || '').trim();
-          const description = raw && !/^HTTP\\s+\\d+$/i.test(raw)
+          const description = raw && !/^HTTP\s+\d+$/i.test(raw)
             ? raw : groupSessionErrorMessage(code || 'GROUP_OPERATION_FAILED');
           const patientId = String(result?.patientId || '');
           const patientLabel = patientId && patientIds.includes(patientId) &&
