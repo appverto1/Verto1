@@ -11588,7 +11588,17 @@ export function CoordinatorDashboard({
       if (fromPatientRecord) setView("home");
     };
     return (
-      <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-4" aria-label="Ferramentas e conta">
+      <div className="mb-4 border-b border-slate-100 pb-4" aria-label="Ferramentas e conta">
+        {fromPatientRecord && (
+          <button
+            type="button"
+            onClick={() => { setIsMobileMenuOpen(false); goBackFromPatientRecord(); }}
+            className="mb-2 w-full rounded-xl bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-violet-50"
+          >
+            Voltar ao painel
+          </button>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
@@ -11619,6 +11629,7 @@ export function CoordinatorDashboard({
           onOpenOnboarding={() => { setIsMobileMenuOpen(false); onOpenOnboarding?.(); }}
           onOpenGuidedTutorial={() => { setIsMobileMenuOpen(false); startGuidedTutorial(); }}
         />
+        </div>
       </div>
     );
   };
@@ -11703,7 +11714,7 @@ export function CoordinatorDashboard({
             <div className="flex min-w-0 items-center gap-2 sm:gap-4">
               <button
                 onClick={goBackFromPatientRecord}
-                className={`shrink-0 rounded-full p-2 transition-all ${
+                className={`hidden lg:inline-flex shrink-0 rounded-full p-2 transition-all ${
                   theme === "dark"
                     ? "bg-slate-800 text-slate-300 hover:text-violet-300"
                     : "bg-slate-100 text-slate-500 hover:bg-violet-50 hover:text-[#7a32fc]"
