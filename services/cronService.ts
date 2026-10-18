@@ -1556,6 +1556,24 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
         return { entry, push: { sent: 0, failed: 1 }, ok: false, error: error?.message || String(error) };
       }
     }));
+    // "SENT" below means the reminder was saved to the patient portal;
+    // it is NOT an Android delivery receipt. Log aggregate provider outcomes
+    // to diagnose missing pushes without exposing patient identifiers.
+    const providerStats = chunkResults.reduce((totals, result) => {
+      if (!result.entry.appointment) return totals;
+      totals.reminders += 1;
+      totals.subscriptions += Number(result.push?.subscriptions || 0);
+      totals.accepted += Number(result.push?.sent || 0);
+      totals.failed += Number(result.push?.failed || 0);
+      if (!result.push?.subscriptions) totals.withoutSubscription += 1;
+      return totals;
+    }, { reminders: 0, subscriptions: 0, accepted: 0, failed: 0, withoutSubscription: 0 });
+    if (providerStats.reminders) {
+      options.logger.log('[Notification Jobs] Push: respostas do provedor, não recibos do Android.', {
+        deploymentEnv: options.deploymentEnv,
+        ...providerStats,
+      });
+    }
     for (const result of chunkResults) {
       if (result.ok) {
         finalResults.push({ id: result.entry.job.id, outcome: 'SENT' });
