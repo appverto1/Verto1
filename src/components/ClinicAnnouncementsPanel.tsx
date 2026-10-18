@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, CalendarClock, CalendarDays, Check, Clock3, Loader2, Megaphone, Search, Send, Users } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { formatBrazilScheduleInput, parseBrazilScheduleInput, isBrazilQuietHour, formatBrazilHistoryTimestamp } from '../utils/clinicAnnouncementBrazilTime';
 
 type Category = 'NOTICE' | 'HOLIDAY' | 'EVENT';
 type Audience = 'ALL' | 'SELECTED';
@@ -17,14 +18,11 @@ const statusLabels: Record<string,string> = {
 };
 const newKey = () => typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `notice-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const active = (p:any) => p?.is_active !== false && p?.isActive !== false && !p?.deleted_at && String(p?.status || '').toLowerCase() !== 'archived';
-const pad = (value:number) => String(value).padStart(2,'0');
-const toLocalDateTimeInput = (date:Date) => `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 const defaultScheduledAt = () => {
   const date = new Date(Date.now() + 30 * 60 * 1000);
   date.setSeconds(0,0);
-  return toLocalDateTimeInput(date);
+  return formatBrazilScheduleInput(date);
 };
-const isQuietHour = (date:Date) => date.getHours() >= 22 || date.getHours() < 6;
 
 export function ClinicAnnouncementsPanel({ patients, onToast }: { patients:any[]; onToast?:(message:string,type?:'success'|'error')=>void }) {
   const [category,setCategory]=useState<Category>('NOTICE');
@@ -42,7 +40,7 @@ export function ClinicAnnouncementsPanel({ patients, onToast }: { patients:any[]
   const keyRef=useRef(newKey());
   const activePatients=useMemo(()=>(patients||[]).filter(active).filter((p)=>String(p?.id||'').trim()),[patients]);
   const visible=useMemo(()=>{ const q=search.trim().toLowerCase(); return activePatients.filter((p)=>!q || `${p?.name||''} ${p?.email||''}`.toLowerCase().includes(q)).slice(0,80); },[activePatients,search]);
-  const minSchedule=useMemo(()=>toLocalDateTimeInput(new Date(Date.now()+60_000)),[]);
+  const minSchedule=useMemo(()=>formatBrazilScheduleInput(new Date(Date.now()+60_000)),[]);
   const load=async()=>{ setLoading(true); try { const r=await dataService.getClinicAnnouncements(30); if(r?.success&&Array.isArray(r.data)) setHistory(r.data); } finally { setLoading(false); } };
   useEffect(()=>{ void load(); },[]);
   const toggle=(id:string)=>setSelected((cur)=>cur.includes(id)?cur.filter((x)=>x!==id):[...cur,id]);
@@ -54,11 +52,11 @@ export function ClinicAnnouncementsPanel({ patients, onToast }: { patients:any[]
     if(audience==='SELECTED'&&!selected.length){onToast?.('Selecione ao menos um paciente.','error');return;}
     let scheduledFor:string|null=null;
     if(deliveryMode==='SCHEDULED'){
-      const parsed=new Date(scheduledAt);
-      if(!scheduledAt || Number.isNaN(parsed.getTime()) || parsed.getTime()<=Date.now()+15_000){onToast?.('Escolha um horário futuro para o envio.','error');return;}
-      if(isQuietHour(parsed)){onToast?.('O horário de não perturbe é das 22h às 06h. Escolha um horário entre 06h e 21h59.','error');return;}
+      const parsed=parseBrazilScheduleInput(scheduledAt);
+      if(!parsed || parsed.getTime()<=Date.now()+15_000){onToast?.('Escolha um horário futuro para o envio.','error');return;}
+      if(isBrazilQuietHour(parsed)){onToast?.('O horário de não perturbe é das 22h às 06h. Escolha um horário entre 06h e 21h59.','error');return;}
       scheduledFor=parsed.toISOString();
-    } else if(isQuietHour(new Date())){
+    } else if(isBrazilQuietHour(new Date())){
       onToast?.('O horário de não perturbe é das 22h às 06h. Agende o aviso para depois das 06h.','error');
       return;
     }
@@ -81,7 +79,7 @@ export function ClinicAnnouncementsPanel({ patients, onToast }: { patients:any[]
     } finally {setSending(false);}
   };
 
-  const formatDateTime=(value:any)=>{const date=new Date(value||'');return Number.isNaN(date.getTime())?'':date.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'});};
+  const formatDateTime=(value:any)=>{const date=new Date(value||'');return Number.isNaN(date.getTime())?'':formatBrazilHistoryTimestamp(date);};
   const statusClass=(status:any)=>{
     const normalized=String(status||'').toUpperCase();
     if(normalized==='SCHEDULED')return 'bg-amber-50 text-amber-700';
@@ -103,7 +101,7 @@ export function ClinicAnnouncementsPanel({ patients, onToast }: { patients:any[]
           <button type="button" onClick={()=>setDeliveryMode('NOW')} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-xs font-bold ${deliveryMode==='NOW'?'border-violet-200 bg-violet-50 text-[#7a32fc]':'border-slate-100 bg-slate-50 text-slate-500'}`}><Send size={14}/>Enviar agora</button>
           <button type="button" onClick={()=>{setDeliveryMode('SCHEDULED'); if(!scheduledAt)setScheduledAt(defaultScheduledAt());}} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-xs font-bold ${deliveryMode==='SCHEDULED'?'border-violet-200 bg-violet-50 text-[#7a32fc]':'border-slate-100 bg-slate-50 text-slate-500'}`}><CalendarClock size={14}/>Agendar envio</button>
         </div>
-        {deliveryMode==='SCHEDULED'&&<div className="mt-3"><input type="datetime-local" step={60} min={minSchedule} value={scheduledAt} onChange={(e)=>setScheduledAt(e.target.value)} className="w-full rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none"/><p className="mt-2 text-[10px] font-semibold text-slate-400">Envios são processados no minuto agendado. Horário de não perturbe: 22h às 06h.</p></div>}
+        {deliveryMode==='SCHEDULED'&&<div className="mt-3"><input type="datetime-local" step={60} min={minSchedule} value={scheduledAt} onChange={(e)=>setScheduledAt(e.target.value)} className="w-full rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm font-semibold outline-none"/><p className="mt-2 text-[10px] font-semibold text-slate-400">Horário de Brasília. Envios processados por minuto; não perturbe: 22h às 06h.</p></div>}
       </div>
 
       <div className="mt-5 rounded-3xl border border-slate-100 p-4"><div className="flex flex-wrap gap-2"><button type="button" onClick={()=>setAudience('ALL')} className={`rounded-full px-4 py-2 text-xs font-bold ${audience==='ALL'?'bg-[#7a32fc] text-white':'bg-slate-100 text-slate-500'}`}><Users size={13} className="mr-1 inline"/>Todos os pacientes ativos</button><button type="button" onClick={()=>setAudience('SELECTED')} className={`rounded-full px-4 py-2 text-xs font-bold ${audience==='SELECTED'?'bg-[#7a32fc] text-white':'bg-slate-100 text-slate-500'}`}>Selecionar pacientes</button></div>
