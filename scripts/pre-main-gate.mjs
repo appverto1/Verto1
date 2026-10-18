@@ -187,6 +187,7 @@ const criticalTests = [
   'tests/backgroundWorkerEconomyMode.test.ts',
   'tests/pushSubscriptionInvalidation.test.ts',
   'tests/patientNotificationPushPresentation.test.mjs',
+  'tests/patientPushPriorityAndTiming.test.ts',
   'tests/clinicPolicyPayloadHash.test.ts',
   'tests/supabaseSchemaSelectGuard.test.ts',
   'tests/therapeuticPlanHierarchyRebac.regression.test.mjs',

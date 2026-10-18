@@ -7,6 +7,7 @@ import {
 } from './pushSubscriptionNormalization';
 export { normalizePushSubscription };
 import webpush from 'web-push';
+import { reminderPushOptions, clinicAnnouncementPushOptions } from './patientPushDeliveryPolicy';
 import {
   buildPatientReminderNotificationPayload,
   resolveBrandingContext,
@@ -85,6 +86,7 @@ type SendAppointmentNotificationParams = {
   title?: string;
   body?: string;
   reminderKind?: string;
+  scheduledFor?: string | null;
   preloadedSubscriptions?: AppointmentPushSubscriptionEntry[];
   logger?: Logger;
 };
@@ -978,7 +980,11 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
     try {
       // Avisos são comunicação direta da clínica: prioridade alta e TTL limitado.
       // A confirmação HTTP do provedor NÃO prova exibição no aparelho.
-      await webpush.sendNotification(entry.subscription, payload, { TTL: 24 * 60 * 60, urgency: 'high' });
+      await webpush.sendNotification(entry.subscription, payload, {
+        ...(params.data?.notificationType === 'clinic_announcement'
+          ? clinicAnnouncementPushOptions
+          : { TTL: 24 * 60 * 60, urgency: 'high' as const }),
+      });
       sent += 1;
     }
     catch (error: any) { failed += 1; logger.warn('[Push] Falha ao enviar aviso da clínica.', { patientId: isUuid(patientId) ? patientId : null, clinicId: isUuid(clinicId) ? clinicId : null, endpoint: entry.subscription.endpoint.slice(0,80), statusCode: error?.statusCode ?? error?.status ?? null, message: error?.message || String(error) }); if (isGonePushError(error)) invalidEndpoints.add(entry.subscription.endpoint); }
@@ -1086,6 +1092,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     data: {
       ...(notificationPayload.data || {}),
       deploymentEnv,
+      notificationType: 'appointment_reminder',
+      ...(params.scheduledFor ? { scheduledFor: params.scheduledFor } : {}),
     },
   });
 
@@ -1095,7 +1103,9 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
 
   for (const entry of rows) {
     try {
-      await webpush.sendNotification(entry.subscription, payload);
+      // Short TTL + high urgency: delayed mobile devices should not display
+      // a time-sensitive appointment reminder hours after its due time.
+      await webpush.sendNotification(entry.subscription, payload, reminderPushOptions);
       sent += 1;
     } catch (error: any) {
       failed += 1;

@@ -1534,6 +1534,7 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
             appointment: { id: entry.appointment.id, scheduledAt: entry.appointment.scheduled_at, reminderKind: entry.kind, clinicId: entry.clinicId, clinicName: entry.clinicName, clinicLogoUrl: entry.clinicLogoUrl, patientName: resolvePortalPatientDisplayName(entry.patient), canRequestReschedule: true },
             clinicId: entry.clinicId,
             reminderKind: entry.kind,
+            scheduledFor: entry.job.scheduled_for,
             preloadedSubscriptions: preloaded,
             logger: options.logger,
           }) : { sent: 0, failed: 0, subscriptions: 0 };
