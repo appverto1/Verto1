@@ -11,6 +11,8 @@ assert.equal(headers.length, 2, 'workspace and patient-record headers must be co
 for (const [index, match] of headers.entries()) {
   const header = match[1];
   const label = index === 0 ? 'patient record' : 'workspace';
+  assert.ok(header.indexOf('<ClinicalMentionNotifications') < header.indexOf('<Menu size={20}'),
+    label + ': clinical bell comes before hamburger on mobile');
   assert.equal((header.match(/<Menu size=\{20\}/g) || []).length, 1, label + ': one hamburger');
   assert.equal((header.match(/<ClinicalMentionNotifications/g) || []).length, 1, label + ': one bell');
   assert.match(header, /aria-label="Abrir menu"/, label + ': hamburger accessible label');
