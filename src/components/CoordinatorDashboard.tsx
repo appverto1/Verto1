@@ -11736,14 +11736,6 @@ export function CoordinatorDashboard({
               className="flex shrink-0 items-center gap-1 sm:gap-2"
             >
               <button
-                type="button"
-                onClick={() => setIsMobileMenuOpen(true)}
-                aria-label="Abrir menu"
-                className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
-              >
-                <Menu size={20} />
-              </button>
-              <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
                 className={`hidden rounded-xl p-2 transition-all sm:p-2.5 lg:inline-flex ${
                   theme === "dark"
@@ -11755,6 +11747,14 @@ export function CoordinatorDashboard({
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
               <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+              <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen(true)}
+                aria-label="Abrir menu"
+                className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
+              >
+                <Menu size={20} />
+              </button>
               {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
                 <BillingCommunicationNotifications
                   clinicId={workspaceScopeKey}
@@ -12082,14 +12082,6 @@ export function CoordinatorDashboard({
             </div>
 
             <button
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
-              aria-label="Abrir menu"
-            >
-              <Menu size={20} />
-            </button>
-
-            <button
               onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
               className="hidden lg:inline-flex p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
               title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
@@ -12098,6 +12090,13 @@ export function CoordinatorDashboard({
             </button>
 
             <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              aria-label="Abrir menu"
+            >
+              <Menu size={20} />
+            </button>
             {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
               <BillingCommunicationNotifications
                 clinicId={workspaceScopeKey}
