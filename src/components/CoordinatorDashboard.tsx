@@ -1041,6 +1041,19 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  // Keep billing notifications mounted in one place to avoid redundant reads.
+  const [isMobileHeader, setIsMobileHeader] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 1023px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const sync = () => setIsMobileHeader(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
   const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
@@ -11566,6 +11579,50 @@ export function CoordinatorDashboard({
     </div>
   );
 
+  // Mobile top bars show only the hamburger and clinical notification bell.
+  // Theme, billing inbox, and account tools remain accessible inside the drawer.
+  const renderMobileDrawerUtilities = (fromPatientRecord: boolean) => {
+    const navigateFromDrawer = (tab: string) => {
+      setIsMobileMenuOpen(false);
+      navigateToTab(tab);
+      if (fromPatientRecord) setView("home");
+    };
+    return (
+      <div className="mb-4 flex flex-wrap items-center gap-2 border-b border-slate-100 pb-4" aria-label="Ferramentas e conta">
+        <button
+          type="button"
+          onClick={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
+          className="rounded-xl p-2.5 text-slate-500 hover:bg-slate-100"
+          aria-label={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
+        >
+          {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
+        </button>
+        {isMobileHeader && hasCapability("communication.billing_updates.view") && (
+          <BillingCommunicationNotifications
+            clinicId={workspaceScopeKey}
+            themeMode={theme}
+            onOpenThread={(threadId) => {
+              setIsMobileMenuOpen(false);
+              openBillingCommunicationThread(threadId);
+            }}
+          />
+        )}
+        <SettingsMenu
+          user={user}
+          onLogout={onLogout}
+          onViewTeam={() => navigateFromDrawer("team")}
+          onOpenInvitations={() => { setIsMobileMenuOpen(false); setShowInvitationModal(true); }}
+          onViewProfile={() => navigateFromDrawer("professionalProfile")}
+          canManageClinicSettings={canManageClinicSettings}
+          onViewClinicSettings={() => navigateFromDrawer("settings")}
+          onViewBilling={() => navigateFromDrawer("billing")}
+          onOpenOnboarding={() => { setIsMobileMenuOpen(false); onOpenOnboarding?.(); }}
+          onOpenGuidedTutorial={() => { setIsMobileMenuOpen(false); startGuidedTutorial(); }}
+        />
+      </div>
+    );
+  };
+
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
       (p) => String(p.id) === String(selectedPatientId),
@@ -11668,8 +11725,16 @@ export function CoordinatorDashboard({
               className="flex shrink-0 items-center gap-1 sm:gap-2"
             >
               <button
+                type="button"
+                onClick={() => setIsMobileMenuOpen(true)}
+                aria-label="Abrir menu"
+                className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
+              >
+                <Menu size={20} />
+              </button>
+              <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-                className={`rounded-xl p-2 transition-all sm:p-2.5 ${
+                className={`hidden rounded-xl p-2 transition-all sm:p-2.5 lg:inline-flex ${
                   theme === "dark"
                     ? "text-slate-300 hover:text-slate-100 hover:bg-[#122544]"
                     : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
@@ -11679,13 +11744,14 @@ export function CoordinatorDashboard({
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
               <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
-              {hasCapability("communication.billing_updates.view") && (
+              {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
                 <BillingCommunicationNotifications
                   clinicId={workspaceScopeKey}
                   themeMode={theme}
                   onOpenThread={openBillingCommunicationThread}
                 />
               )}
+              <div className="hidden lg:flex">
               <SettingsMenu
                 user={user}
                 onLogout={onLogout}
@@ -11710,6 +11776,7 @@ export function CoordinatorDashboard({
                 onOpenOnboarding={onOpenOnboarding}
                 onOpenGuidedTutorial={startGuidedTutorial}
               />
+              </div>
               {runGuidedTutorial && (
                 <TutorialOverlay
                   steps={guidedTutorialSteps}
@@ -11719,12 +11786,7 @@ export function CoordinatorDashboard({
                 />
               )}
 
-              <button
-                onClick={() => setIsMobileMenuOpen(true)}
-                className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
-              >
-                <Menu size={20} />
-              </button>
+
             </div>
           </header>
 
@@ -11758,6 +11820,7 @@ export function CoordinatorDashboard({
                     </button>
                   </div>
 
+                  {renderMobileDrawerUtilities(true)}
                   <nav className="flex-1 overflow-y-auto no-scrollbar">
                     {renderNavigationGroups({
                       expanded: true,
@@ -11949,7 +12012,7 @@ export function CoordinatorDashboard({
             {activeTab !== "dashboard" && (
               <button
                 onClick={goBackTab}
-                className="p-2 bg-white rounded-xl text-slate-400 hover:text-[#7a32fc] shadow-sm border border-slate-100 transition-all"
+                className="hidden lg:inline-flex p-2 bg-white rounded-xl text-slate-400 hover:text-[#7a32fc] shadow-sm border border-slate-100 transition-all"
                 aria-label="Voltar à página anterior"
                 title="Voltar"
               >
@@ -11991,7 +12054,7 @@ export function CoordinatorDashboard({
                 : "bg-white border-slate-100"
             }`}
           >
-            <div className="relative hidden md:block">
+            <div className="relative hidden lg:block">
               <Search
                 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
                 size={18}
@@ -12010,26 +12073,28 @@ export function CoordinatorDashboard({
             <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              aria-label="Abrir menu"
             >
               <Menu size={20} />
             </button>
 
             <button
               onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-              className="p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
+              className="hidden lg:inline-flex p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
               title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
             >
               {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
             <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
-            {hasCapability("communication.billing_updates.view") && (
+            {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
               <BillingCommunicationNotifications
                 clinicId={workspaceScopeKey}
                 themeMode={theme}
                 onOpenThread={openBillingCommunicationThread}
               />
             )}
+            <div className="hidden lg:flex">
             <SettingsMenu
               user={user}
               onLogout={onLogout}
@@ -12042,6 +12107,7 @@ export function CoordinatorDashboard({
               onOpenOnboarding={onOpenOnboarding}
               onOpenGuidedTutorial={startGuidedTutorial}
             />
+            </div>
             {runGuidedTutorial && (
               <TutorialOverlay
                 steps={guidedTutorialSteps}
@@ -12083,6 +12149,7 @@ export function CoordinatorDashboard({
                   </button>
                 </div>
 
+                {renderMobileDrawerUtilities(false)}
                 <nav className="flex-1 overflow-y-auto no-scrollbar">
                   {renderNavigationGroups({
                     expanded: true,
