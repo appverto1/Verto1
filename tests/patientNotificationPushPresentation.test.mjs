@@ -141,3 +141,61 @@ assert.match(recoveryCalls[1].options.icon,/\/clinic-wide\.png$/);
 assert.equal('image' in recoveryCalls[1].options,false);
 
 console.log('patientNotificationPushPresentation: aviso e lembrete compactos; fallback textual em falha de ícone');
+
+// Uploaded clinic logos can have large transparent margins around a tiny
+// artwork. The compact icon must crop that padding before scaling, preserving
+// original dimensions used in clinic settings and omitting the large image.
+const paddedCalls = [], paddedDraw = [], paddedHandlers = new Map();
+const paddedPixelData = new Uint8ClampedArray(96 * 96 * 4);
+for (let y = 44; y < 52; y++) {
+  for (let x = 44; x < 52; x++) {
+    const i = (y * 96 + x) * 4;
+    paddedPixelData[i] = 60;
+    paddedPixelData[i + 1] = 90;
+    paddedPixelData[i + 2] = 150;
+    paddedPixelData[i + 3] = 255;
+  }
+}
+class PaddedCanvas {
+  constructor(width, height) { assert.equal(width, 192); assert.equal(height, 192); }
+  getContext() {
+    return {
+      clearRect() {},
+      drawImage(...args) { paddedDraw.push(args); },
+      getImageData() { return { data: paddedPixelData }; },
+    };
+  }
+  async convertToBlob() {
+    return { type: 'image/png', size: 3, async arrayBuffer() { return Uint8Array.from([137,80,78]).buffer; } };
+  }
+}
+vm.runInNewContext(source, {
+  self: {
+    location: { origin: 'https://api.appverto.com.br' },
+    addEventListener(name, handler) { paddedHandlers.set(name, handler); },
+    registration: { async showNotification(title, options) { paddedCalls.push({ title, options }); } },
+    clients: { async matchAll() { return []; } },
+  },
+  console, URL, URLSearchParams, Set, Date, Uint8Array, Uint8ClampedArray, JSON, Promise, String,
+  OffscreenCanvas: PaddedCanvas,
+  createImageBitmap: async () => ({ width: 96, height: 96, close() {} }),
+  fetch: async () => ({ ok: true, headers: { get: () => null }, async blob() { return { type: 'image/png', size: 200 }; } }),
+  btoa: (data) => Buffer.from(data, 'binary').toString('base64'),
+}, { filename: 'sw-small-padded-logo.js' });
+let paddedDelivery;
+paddedHandlers.get('push')({
+  data: { json: () => ({
+    title: 'Clínica Teste', body: 'Lembrete',
+    branding: { displayName: 'Clínica Teste', logoUrl: '/small-logo.png' },
+    data: { notificationType: 'appointment_reminder' },
+  }) },
+  waitUntil(task) { paddedDelivery = task; },
+});
+await paddedDelivery;
+assert.equal(paddedCalls.length, 1);
+assert.match(paddedCalls[0].options.icon, /^data:image\/png;base64,/);
+assert.equal('image' in paddedCalls[0].options, false);
+assert.equal(paddedDraw.length, 2, 'scan followed by final proportional crop');
+assert.equal(paddedDraw[1].length, 9, 'visible logo is cropped by source rectangle');
+assert.ok(paddedDraw[1][3] < 20 && paddedDraw[1][4] < 20, 'transparent margins excluded');
+assert.equal(Math.max(paddedDraw[1][7], paddedDraw[1][8]), 168, 'small mark is enlarged to the compact icon frame');
