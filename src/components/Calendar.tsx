@@ -967,9 +967,14 @@ const resolveRoomInfo = (event: any, roomLookup?: Map<string, any>) => {
 };
 
 const getRoomDisplayLine = (event: any) => {
-  const specialties = normalizeRoomSpecialties(event?.roomSpecialties || event?.room_specialties);
-  if (event?.roomName) return specialties.length ? `${specialties[0]} · ${event.roomName}` : event.roomName;
-  return event?.locationNameSnapshot || event?.location_name_snapshot || event?.locationLabel || event?.location || 'Não informado';
+  const specialty = normalizeRoomSpecialties(event?.roomSpecialties || event?.room_specialties)
+    .find((value) => !looksLikeTechnicalId(value));
+  const room = sanitizeHumanRoomName(event?.roomName);
+  if (room) return specialty ? `${specialty} · ${room}` : room;
+  return [
+    event?.locationNameSnapshot, event?.location_name_snapshot,
+    event?.locationLabel, event?.location
+  ].map(sanitizeHumanRoomName).find(Boolean) || 'Não informado';
 };
 
 const getProfessionalDisplayLine = (event: any) => {
