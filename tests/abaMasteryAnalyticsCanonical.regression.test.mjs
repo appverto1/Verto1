@@ -32,7 +32,11 @@ assert(chart.includes('canonicalMasteryError'), 'erro da fonte canônica não de
 const cumulativeCalls = [...detail.matchAll(/<CumulativeGrowthChart[\s\S]*?\/>/g)].map((match) => match[0]);
 assert(cumulativeCalls.length >= 2, 'prontuário deve manter os gráficos cumulativos existentes');
 assert(cumulativeCalls.every((call) => call.includes('useCanonicalMastery={useCanonicalMasteryGrowth}')), 'gráfico cumulativo clínico ABA/KIDS deve ativar a fonte canônica');
-assert(dashboard.includes('<CumulativeGrowthChart') && dashboard.includes('useCanonicalMastery') && dashboard.includes('portalMode'), 'portal KIDS deve consumir a mesma fonte canônica do clínico');
+const portalShared = read('src/components/PortalSharedClinicalGraph.tsx');
+assert(dashboard.includes('<PortalSharedClinicalGraph'), 'portal KIDS só deve exibir gráfico publicado');
+assert(!dashboard.includes('<CumulativeGrowthChart'), 'crescimento cumulativo não pode voltar sem compartilhamento');
+assert(portalShared.includes('useCanonicalMastery') && portalShared.includes('portalMode'), 'gráfico de maestria autorizado preserva fonte canônica');
+assert(server.includes("error: 'GRAPH_NOT_SHARED'"), 'endpoint legado de maestria não pode ignorar autorização de publicação');
 
 assert(dashboard.includes("subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|')"), 'payload técnico de milestone deve continuar disponível só para reconciliação interna');
 assert(dashboard.includes('isSystemPortalMilestoneEvent(note)'), 'payload técnico de milestone não pode ser renderizado como anotação da família');
