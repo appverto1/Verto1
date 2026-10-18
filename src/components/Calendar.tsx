@@ -829,7 +829,7 @@ const addDays = (date: Date, amount: number) => {
   return next;
 };
 
-const formatTime = (date: Date) => `${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+const formatTime = (date: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date);
 
 const parseEventStart = (event: any) => {
   const value = event?.scheduled_start_at || event?.scheduledStartAt || event?.scheduled_at || event?.scheduledAt || event?.start_time || event?.startTime || event?.start;
@@ -1490,6 +1490,7 @@ export const ClinicalAgendaBoard = ({
   const [worseningOnly, setWorseningOnly] = useState(false);
   const [alertsOnly, setAlertsOnly] = useState(false);
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const [mobileAgendaMoreOpen, setMobileAgendaMoreOpen] = useState(false);
   const [timeReportsOpen, setTimeReportsOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
     const defaults = {
@@ -3709,12 +3710,12 @@ export const ClinicalAgendaBoard = ({
                 );
               })}
             </div>
-            {onManageGroupSessions && <button type="button" onClick={onManageGroupSessions} className="rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold">Grupos</button>}
+            {onManageGroupSessions && <button type="button" onClick={onManageGroupSessions} className="hidden rounded-xl border border-slate-300 px-3 py-1.5 text-xs font-semibold xl:inline-flex">Grupos</button>}
             {filteredEvents.length > 0 && (
               <button
                 type="button"
                 onClick={() => setTimeReportsOpen(true)}
-                className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}
+                className={`hidden rounded-xl border p-1.5 xl:inline-flex ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}
                 aria-label="Relatórios de tempo"
                 title={`Tempo: ${formatMinutesHuman(timeReports.scheduledMinutes)} previsto`}
               >
@@ -3727,12 +3728,27 @@ export const ClinicalAgendaBoard = ({
                 cacheRef.current.clear();
                 setRemoteRefreshNonce((value) => value + 1);
               }}
-              className={`rounded-xl border p-1.5 ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}
+              className={`hidden rounded-xl border p-1.5 xl:inline-flex ${isDark ? 'border-slate-700 text-slate-300 hover:bg-slate-800' : 'border-slate-200 text-slate-500 hover:bg-white'}`}
               aria-label="Atualizar agenda"
               title="Atualizar agenda"
             >
               <RefreshCcw size={15} className={remoteState.refreshing ? 'animate-spin' : ''} />
             </button>
+            <div className="relative xl:hidden">
+              <button type="button" onClick={() => setMobileAgendaMoreOpen((open) => !open)}
+                aria-expanded={mobileAgendaMoreOpen} aria-controls="agenda-mobile-more"
+                className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-xs font-semibold ${isDark ? 'border-slate-700 text-slate-100' : 'border-slate-200 text-slate-700'}`}>
+                Mais <ChevronDown size={14} aria-hidden="true" />
+              </button>
+              {mobileAgendaMoreOpen && (
+                <div id="agenda-mobile-more" className={`absolute right-0 top-full z-50 mt-1 min-w-[190px] rounded-xl border p-1 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-800'}`}
+                  onKeyDown={(event) => { if (event.key === 'Escape') setMobileAgendaMoreOpen(false); }}>
+                  {onManageGroupSessions && <button type="button" onClick={() => { setMobileAgendaMoreOpen(false); onManageGroupSessions(); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-violet-50 hover:text-violet-700">Sessões em grupo</button>}
+                  {filteredEvents.length > 0 && <button type="button" onClick={() => { setMobileAgendaMoreOpen(false); setTimeReportsOpen(true); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-violet-50 hover:text-violet-700">Relatórios de tempo</button>}
+                  <button type="button" onClick={() => { setMobileAgendaMoreOpen(false); cacheRef.current.clear(); setRemoteRefreshNonce((value) => value + 1); }} className="block w-full rounded-lg px-3 py-2 text-left text-xs font-semibold hover:bg-violet-50 hover:text-violet-700">Atualizar agenda</button>
+                </div>
+              )}
+            </div>
             <button type="button" onClick={() => setFilterSheetOpen(true)} className="inline-flex rounded-xl bg-slate-900 p-1.5 text-white xl:hidden" aria-label="Abrir filtros">
               <Filter size={17} />
             </button>
