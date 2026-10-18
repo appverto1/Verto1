@@ -128,6 +128,7 @@ jobs:
           node tests/patientNotificationPushPresentation.test.mjs
           node --import tsx tests/notificationBranding.test.ts
           node tests/notificationAgendaPresentation.regression.test.mjs
+          node --import tsx tests/patientSharedGraphGovernance.regression.test.mjs
           node --import tsx tests/clinicAnnouncementBrazilTime.test.ts
           node --import tsx tests/p0AppointmentReminderClaimIntegrity.test.ts
 
