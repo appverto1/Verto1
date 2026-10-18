@@ -4,6 +4,7 @@ import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandle
 import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
 import { createClinicalOutcomesDashboardHandler } from './services/clinicalOutcomesDashboardHandler';
+import { createPatientSharedGraphApi } from './services/patientSharedGraphApi';
 import { createProtocolImportRequestHandler, createClinicProtocolImportsReadHandler, createClinicProtocolGrantRevokeHandler, createClinicProtocolRequestDeleteHandler } from './services/protocolImportClinicHandlers';
 import { createAdminProtocolImportsReadHandler, createAdminProtocolAccessWriteHandler, createAdminProtocolImportApproveHandler, createAdminProtocolImportRejectHandler, createAdminProtocolImportScanHandler } from './services/protocolImportAdminHandlers';
 import { createSessionMaintenanceProbesReadHandler, createMaintenanceOverviewReadHandler, createPeiMaintenanceDiagnosticsHandler, createLinkableMaintenanceTargetsHandler, createMaintenanceSchedulesReadHandler, createFutureMaintenanceAppointmentsHandler, createNextMaintenanceProbeHandler, createMaintenanceRecommendationsHandler, createMaintenancePlanItemsHandler } from './services/abaMaintenanceReadHandlers';
@@ -28624,6 +28625,12 @@ async function startServer() {
     }
   };
 
+  // Patient-level shared graph API: per-case authority, verified global identity.
+  const patientGraphSharing = createPatientSharedGraphApi({
+    supabase, currentClinicId, resolveClinicCapabilityContext,
+  });
+  patientGraphSharing.registerClinicRoutes(app, { checkAuth, checkPatientAccess, requireClinicCapability });
+
   app.get('/api/config', (req, res) => {
     let url = process.env.SUPABASE_URL || "";
     if (url && !url.startsWith('http')) {
@@ -54352,6 +54359,9 @@ async function startServer() {
     });
   };
 
+  const portalSharedGraphApi = patientGraphSharing.registerPortalRoutes(app, {
+    checkAuth, requireRoles, requirePatientPortalModule, resolvePatientPortalContext,
+  });
   app.get('/api/portal/patients/:patientId/mastery-growth', noStoreDynamicResponse, checkAuth, requireRoles('patient'), requirePatientPortalModule('clinical_core'), async (req: any, res) => {
     try {
       const context = req.portalContext || await resolvePatientPortalContext(req.session.user);
@@ -54363,7 +54373,15 @@ async function startServer() {
       if (!isUuid(resolvedPatientId) || !allowedPatientIds.has(resolvedPatientId)) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
-      const data = await readPatientMasteryGrowthEvents({ patientId: resolvedPatientId, clinicId: context?.clinicId });
+      const sharing = await portalSharedGraphApi.loadPortal(req, res);
+      if (!sharing) return;
+      if (!sharing.publication || sharing.publication.graph_type !== 'mastery_growth') {
+        return res.status(403).json({ success: false, error: 'GRAPH_NOT_SHARED' });
+      }
+      const data = await readPatientMasteryGrowthEvents({
+        patientId: sharing.publication.patient_id,
+        clinicId: sharing.publication.clinic_id,
+      });
       return res.json({ success: true, data });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/portal/patients/:patientId/mastery-growth [GET]', error, {
