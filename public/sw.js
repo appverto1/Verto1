@@ -77,7 +77,11 @@ const fitClinicLogoForNotification = async (source) => {
       typeof fetch !== "function" || typeof btoa !== "function") return source;
   if (compactClinicIconCache.has(source)) return compactClinicIconCache.get(source);
   try {
-    const response = await fetch(source, { mode: "cors", credentials: "omit", cache: "force-cache" });
+    // Never hold a scheduled reminder for a slow or broken clinic logo.
+    const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(1500)
+      : undefined;
+    const response = await fetch(source, { mode: "cors", credentials: "omit", cache: "force-cache", signal });
     if (!response.ok || Number(response.headers?.get?.("content-length") || 0) > 1_000_000) return source;
     const original = await response.blob();
     if (!/^image\/(png|jpeg|webp|gif)$/i.test(original.type) || original.size > 1_000_000) return source;
