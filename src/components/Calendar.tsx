@@ -3172,6 +3172,7 @@ export const ClinicalAgendaBoard = ({
     const eventFinanceLabel = eventFinance && isPrivateFinance
       ? `Particular • ${formatPatientFinanceCurrency(eventFinanceAmounts.total)} • ${PATIENT_FINANCIAL_STATUS_LABELS[eventFinanceStatus]}`
       : '';
+    const intervalLabel = `${String(event.time || '').replace(':', 'h')}–${String(event.endTime || '').replace(':', 'h')}`;
     const accessibleLabel = `${event.time} a ${event.endTime}, ${event.patientName}. ${statusColor.label}.${eventFinanceLabel ? ` ${eventFinanceLabel}.` : ''}`;
     return (
       <button
@@ -3188,7 +3189,7 @@ export const ClinicalAgendaBoard = ({
         <div className="pl-1">
           <div className="flex items-start justify-between gap-2">
             <span className={`text-[10px] font-semibold leading-tight ${eventTextClass}`}>
-              {event.time} - {event.endTime}
+              {intervalLabel}
             </span>
             <span className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${statusColor.badge}`}>
               <StatusIcon size={10} />
