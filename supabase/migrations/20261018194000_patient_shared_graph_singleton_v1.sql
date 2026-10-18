@@ -139,9 +139,56 @@ $$;
 revoke execute on function public.set_patient_shared_graph_v1(uuid,uuid,uuid,uuid,text,text,text,bigint) from public, anon, authenticated;
 grant execute on function public.set_patient_shared_graph_v1(uuid,uuid,uuid,uuid,text,text,text,bigint) to service_role;
 
+-- Delegations and their audit records commit together, not as two HTTP writes.
+create or replace function public.set_patient_shared_graph_delegation_v1(
+  p_patient_id uuid,p_clinic_id uuid,p_professional_id uuid,p_actor_id uuid,p_allow boolean
+)
+returns void language plpgsql security invoker
+set search_path = pg_catalog, public
+as $
+declare v_identity uuid;
+begin
+  if p_patient_id is null or p_clinic_id is null or p_professional_id is null
+     or p_actor_id is null or p_allow is null then
+    raise exception 'SHARED_GRAPH_INVALID_DELEGATION' using errcode='22023';
+  end if;
+  select p.global_patient_identity_id into v_identity from public.patients p
+  where p.id=p_patient_id and p.clinic_id=p_clinic_id and p.is_active=true
+    and p.deleted_at is null and p.archived_at is null;
+  if v_identity is null then
+    raise exception 'SHARED_GRAPH_PATIENT_NOT_LINKED' using errcode='42501';
+  end if;
+  if not exists (
+    select 1 from public.patient_professional_links l
+    join public.clinic_memberships m on m.clinic_id=p_clinic_id and m.user_id=p_professional_id
+    where l.patient_id=p_patient_id and l.organization_id=p_clinic_id::text
+      and l.professional_id=p_professional_id::text and l.status='active'
+      and m.status='active' and m.role in ('therapist','supervisor')
+  ) then
+    raise exception 'SHARED_GRAPH_PROFESSIONAL_NOT_ON_CASE' using errcode='42501';
+  end if;
+  insert into public.patient_shared_graph_delegations(
+    patient_id,clinic_id,professional_user_id,granted_by,granted_at,revoked_at,revoked_by
+  ) values (
+    p_patient_id,p_clinic_id,p_professional_id,p_actor_id,now(),
+    case when p_allow then null else now() end,
+    case when p_allow then null else p_actor_id end
+  ) on conflict (patient_id,clinic_id,professional_user_id)
+    do update set granted_by=excluded.granted_by,granted_at=excluded.granted_at,
+      revoked_at=excluded.revoked_at,revoked_by=excluded.revoked_by;
+  insert into public.patient_shared_graph_audit(
+    global_patient_identity_id,clinic_id,patient_id,actor_id,action
+  ) values(v_identity,p_clinic_id,p_patient_id,p_actor_id,case when p_allow then 'DELEGATE' else 'REVOKE' end);
+end
+$;
+revoke execute on function public.set_patient_shared_graph_delegation_v1(uuid,uuid,uuid,uuid,boolean) from public, anon, authenticated;
+grant execute on function public.set_patient_shared_graph_delegation_v1(uuid,uuid,uuid,uuid,boolean) to service_role;
+
 -- Loss of clinic relationship immediately invalidates its publication.
-create or replace function public.invalidate_patient_shared_graph_on_unlink_v1()
-returns trigger language plpgsql security invoker
+create schema if not exists verto_internal_graph;
+revoke all on schema verto_internal_graph from public, anon, authenticated;
+create or replace function verto_internal_graph.invalidate_patient_shared_graph_on_unlink_v1()
+returns trigger language plpgsql security definer
 set search_path = pg_catalog, public
 as $$
 declare old_record public.patient_shared_graph_publications%rowtype;
@@ -170,6 +217,7 @@ drop trigger if exists trg_invalidate_patient_shared_graph_on_unlink_v1 on publi
 create trigger trg_invalidate_patient_shared_graph_on_unlink_v1
 after update of is_active,deleted_at,archived_at,clinic_id,global_patient_identity_id,relationship_status
 on public.patients for each row
-execute function public.invalidate_patient_shared_graph_on_unlink_v1();
+execute function verto_internal_graph.invalidate_patient_shared_graph_on_unlink_v1();
+revoke execute on function verto_internal_graph.invalidate_patient_shared_graph_on_unlink_v1() from public, anon, authenticated;
 
 commit;
