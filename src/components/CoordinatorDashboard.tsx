@@ -11582,7 +11582,7 @@ export function CoordinatorDashboard({
   // Mobile top bars show only the hamburger and clinical notification bell.
   // Theme, billing inbox, and account tools remain accessible inside the drawer.
   const renderMobileDrawerUtilities = (fromPatientRecord: boolean) => {
-    const navigateFromDrawer = (tab: string) => {
+    const navigateFromDrawer = (tab: DashboardTab) => {
       setIsMobileMenuOpen(false);
       navigateToTab(tab);
       if (fromPatientRecord) setView("home");
