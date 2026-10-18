@@ -61,7 +61,7 @@ const asNotificationAssetUrl = (value) => {
   if (!source) return "";
   try {
     const url = new URL(source, self.location.origin);
-    return ["https:", "http:", "data:"].includes(url.protocol) ? url.href : "";
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
   } catch {
     return "";
   }
