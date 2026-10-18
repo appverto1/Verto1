@@ -69,13 +69,17 @@ await push({title:'Clínica Diretoria',body:'Aviso vencido',
   data:{notificationType:'clinic_announcement',scheduledFor:new Date(Date.now()-16*60*1000).toISOString()}});
 assert.equal(calls.length,0,'aviso entregue ao dispositivo 16 minutos atrasado deve ser descartado');
 await push({title:'Clínica Diretoria',body:'Lembrete vencido',
-  data:{notificationType:'appointment_reminder',scheduledFor:new Date(Date.now()-6*60*1000).toISOString()}});
-assert.equal(calls.length,0,'lembrete 6 minutos atrasado não deve notificar');
+  data:{notificationType:'appointment_reminder',scheduledFor:new Date(Date.now()-31*60*1000).toISOString()}});
+assert.equal(calls.length,0,'lembrete 31 minutos atrasado não deve notificar');
 await push({title:'Clínica Diretoria',body:'Aviso pontual',
   data:{notificationType:'clinic_announcement',scheduledFor:new Date(Date.now()-30*1000).toISOString()}});
 assert.equal(calls.length,1,'aviso pontual deve aparecer');
 await push({title:'Clínica Diretoria',body:'Lembrete pontual',
   data:{notificationType:'appointment_reminder',scheduledFor:new Date(Date.now()-30*1000).toISOString()}});
 assert.equal(calls.length,2,'lembrete pontual deve aparecer');
+await push({title:'Clínica Diretoria',body:'Lembrete adiado',
+  data:{notificationType:'appointment_reminder',scheduledFor:new Date(Date.now()-10*60*1000).toISOString()}});
+assert.equal(calls.length,3,'lembrete 10 minutos atrasado deve permanecer visível');
+assert.match(calls[2].options.body,/Entregue com atraso/, 'atraso não deve ser apresentado como pontual');
 
 console.log('patientNotificationPushPresentation: aviso e lembrete compactos; fallback textual em falha de ícone');

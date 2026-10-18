@@ -70,7 +70,7 @@ assert.equal(modal.allowedActions.canRequestReschedule, false);
 
 // Service worker respeita o logo da clínica no ícone compacto dos lembretes e avisos;
 // o badge continua reservado à identificação do app/SO.
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v21"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v22"/);
 assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?brandLogo \|\| payload\.icon \|\| VERTO_NOTIFICATION_ICON/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""[\s\S]*?VERTO_NOTIFICATION_BADGE/);
 assert.doesNotMatch(serviceWorker, /\bimageUrl\b|payload\.image|\{\s*image:/, 'Service Worker não deve abrir imagem expandida');

@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v21";
+const SW_VERSION = "verto-branding-v22";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -159,7 +159,7 @@ self.addEventListener("push", (event) => {
   const scheduledForMs = Date.parse(String(payload.data?.scheduledFor || ""));
   const maxArrivalDelayMs = isClinicAnnouncement
     ? 15 * 60 * 1000
-    : (notificationType === "appointment_reminder" ? 5 * 60 * 1000 : 0);
+    : (notificationType === "appointment_reminder" ? 30 * 60 * 1000 : 0);
   if (maxArrivalDelayMs > 0 && Number.isFinite(scheduledForMs) &&
     Date.now() - scheduledForMs > maxArrivalDelayMs) {
     console.warn("[push] Notificação descartada por chegada tardia ao dispositivo.", {
@@ -178,8 +178,12 @@ self.addEventListener("push", (event) => {
   const badgeUrl = isClinicAnnouncement
     ? ""
     : asNotificationAssetUrl(VERTO_NOTIFICATION_BADGE);
+  const originalBody = payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`;
+  const reminderDelayed = notificationType === "appointment_reminder" &&
+    Number.isFinite(scheduledForMs) &&
+    Date.now() - scheduledForMs > 5 * 60 * 1000;
   const notificationOptions = {
-    body: payload.body || `Você tem uma sessão agendada. ${APPOINTMENT_NOTIFICATION_CTA}`,
+    body: reminderDelayed ? `${originalBody} (Entregue com atraso.)` : originalBody,
     ...(iconUrl ? { icon: iconUrl } : {}),
     ...(badgeUrl ? { badge: badgeUrl } : {}),
     tag: payload.tag || (appointmentId ? `appointment-reminder-${appointmentId}-${reminderKind}` : undefined),
