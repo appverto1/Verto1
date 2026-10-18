@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v23";
+const SW_VERSION = "verto-branding-v24";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -91,12 +91,53 @@ const fitClinicLogoForNotification = async (source) => {
       const canvas = new OffscreenCanvas(192, 192);
       const context = canvas.getContext("2d");
       if (!context) return source;
+      // Some uploaded logos are tiny artwork surrounded by large transparent or
+      // white margins. Trim only that padding for the compact OS icon, keeping
+      // the original clinic image unchanged everywhere else.
+      let cropX = 0, cropY = 0, cropWidth = bitmap.width, cropHeight = bitmap.height;
+      if (typeof context.getImageData === "function") {
+        try {
+          const scanSize = 96;
+          context.clearRect(0, 0, 192, 192);
+          context.drawImage(bitmap, 0, 0, scanSize, scanSize);
+          const pixels = context.getImageData(0, 0, scanSize, scanSize).data;
+          const corner = (x, y) => {
+            const i = (y * scanSize + x) * 4;
+            return pixels[i + 3] > 245 && pixels[i] > 245 && pixels[i + 1] > 245 && pixels[i + 2] > 245;
+          };
+          const whiteBackground = corner(0, 0) && corner(scanSize - 1, 0) &&
+            corner(0, scanSize - 1) && corner(scanSize - 1, scanSize - 1);
+          let left = scanSize, top = scanSize, right = -1, bottom = -1;
+          for (let y = 0; y < scanSize; y++) {
+            for (let x = 0; x < scanSize; x++) {
+              const i = (y * scanSize + x) * 4;
+              if (pixels[i + 3] < 32 ||
+                  (whiteBackground && pixels[i] > 242 && pixels[i + 1] > 242 && pixels[i + 2] > 242)) continue;
+              left = Math.min(left, x); top = Math.min(top, y);
+              right = Math.max(right, x); bottom = Math.max(bottom, y);
+            }
+          }
+          if (right >= left && bottom >= top && (right - left + 1) * (bottom - top + 1) >= 4) {
+            cropX = Math.floor(Math.max(0, left - 1) * bitmap.width / scanSize);
+            cropY = Math.floor(Math.max(0, top - 1) * bitmap.height / scanSize);
+            cropWidth = Math.max(1, Math.min(bitmap.width - cropX, Math.ceil((right + 2) * bitmap.width / scanSize) - cropX));
+            cropHeight = Math.max(1, Math.min(bitmap.height - cropY, Math.ceil((bottom + 2) * bitmap.height / scanSize) - cropY));
+          }
+        } catch {
+          // When pixel inspection is blocked, preserve the existing fit behavior.
+          cropX = 0; cropY = 0; cropWidth = bitmap.width; cropHeight = bitmap.height;
+        }
+      }
       const maxSide = 168;
-      const ratio = Math.min(maxSide / bitmap.width, maxSide / bitmap.height);
-      const width = Math.max(1, Math.round(bitmap.width * ratio));
-      const height = Math.max(1, Math.round(bitmap.height * ratio));
+      const ratio = Math.min(maxSide / cropWidth, maxSide / cropHeight);
+      const width = Math.max(1, Math.round(cropWidth * ratio));
+      const height = Math.max(1, Math.round(cropHeight * ratio));
       context.clearRect(0, 0, 192, 192);
-      context.drawImage(bitmap, (192 - width) / 2, (192 - height) / 2, width, height);
+      if (cropX || cropY || cropWidth !== bitmap.width || cropHeight !== bitmap.height) {
+        context.drawImage(bitmap, cropX, cropY, cropWidth, cropHeight, (192 - width) / 2, (192 - height) / 2, width, height);
+      } else {
+        context.drawImage(bitmap, (192 - width) / 2, (192 - height) / 2, width, height);
+      }
       const png = await canvas.convertToBlob({ type: "image/png" });
       if (png.type !== "image/png" || png.size > 120_000) return source;
       const bytes = new Uint8Array(await png.arrayBuffer());
