@@ -145,7 +145,7 @@ create or replace function public.set_patient_shared_graph_delegation_v1(
 )
 returns void language plpgsql security invoker
 set search_path = pg_catalog, public
-as $
+as $$
 declare v_identity uuid;
 begin
   if p_patient_id is null or p_clinic_id is null or p_professional_id is null
@@ -180,7 +180,7 @@ begin
     global_patient_identity_id,clinic_id,patient_id,actor_id,action
   ) values(v_identity,p_clinic_id,p_patient_id,p_actor_id,case when p_allow then 'DELEGATE' else 'REVOKE' end);
 end
-$;
+$$;
 revoke execute on function public.set_patient_shared_graph_delegation_v1(uuid,uuid,uuid,uuid,boolean) from public, anon, authenticated;
 grant execute on function public.set_patient_shared_graph_delegation_v1(uuid,uuid,uuid,uuid,boolean) to service_role;
 
