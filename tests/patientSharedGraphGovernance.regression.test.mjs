@@ -1,0 +1,62 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {encodeSharedClinicalMetric,decodeSharedClinicalMetric,sharedGraphOwnerIsLive} from '../services/patientSharedGraphApi.ts';
+
+const read=(path)=>readFileSync(path,'utf8');
+const schema=read('supabase/migrations/20261018194000_patient_shared_graph_singleton_v1.sql');
+const api=read('services/patientSharedGraphApi.ts');
+const portal=read('src/components/PatientDashboard.tsx');
+const graph=read('src/components/PortalSharedClinicalGraph.tsx');
+const clinic=read('src/components/PatientSharedGraphManagement.tsx');
+const clinical=read('src/components/PatientDetailView.tsx');
+const server=read('server.ts');
+
+assert.match(schema,/global_patient_identity_id uuid primary key/,'exactly one global record');
+assert.match(schema,/for update;/i,'serialise concurrent graph swaps');
+assert.match(schema,/SHARED_GRAPH_VERSION_CONFLICT/,'prevent last-writer-wins');
+assert.match(schema,/SHARED_GRAPH_OTHER_CLINIC_OWNS_PUBLICATION/,'other clinic cannot overwrite');
+assert.match(schema,/patient_shared_graph_audit/,'auditable actions');
+assert.match(schema,/trg_invalidate_patient_shared_graph_on_unlink_v1/);
+assert.match(schema,/status='INACTIVE',version=version\+1/);
+assert.match(schema,/revoke all on public.patient_shared_graph_publications from public, anon, authenticated/);
+assert.match(schema,/revoke execute on function public.set_patient_shared_graph_v1/);
+assert.match(schema,/security definer/,'trigger must not break patient update under invoker RLS');
+assert.match(schema,/verto_internal_graph/);
+assert.match(schema,/set_patient_shared_graph_delegation_v1/);
+
+assert.equal(decodeSharedClinicalMetric(encodeSharedClinicalMetric('Fonoaudiologia','ACC 2026'))?.metric,'ACC 2026');
+assert.equal(decodeSharedClinicalMetric('%ZZ::broken'),null);
+const publication={patient_id:'p',clinic_id:'c',global_patient_identity_id:'g'};
+const owner={id:'p',clinic_id:'c',global_patient_identity_id:'g',is_active:true,deleted_at:null,archived_at:null,relationship_status:'active'};
+assert.equal(sharedGraphOwnerIsLive(owner,publication),true);
+assert.equal(sharedGraphOwnerIsLive({...owner,archived_at:'2026-10-18'},publication),false);
+assert.equal(sharedGraphOwnerIsLive({...owner,clinic_id:'other'},publication),false);
+assert.equal(sharedGraphOwnerIsLive({...owner,relationship_status:'ended'},publication),false);
+
+assert.match(api,/requireClinicCapability\('aba.analytics.view'\)/,'clinic capability required');
+assert.match(api,/checkPatientAccess/,'reuses canonical per-case ReBAC');
+assert.match(api,/req.patientSupervisionLink/,'supervisors restricted to supervised cases');
+assert.match(api,/context.canPublish/,'delegation enforced server-side');
+assert.match(api,/GRAPH_PROFESSIONAL_NOT_ON_CASE/);
+assert.match(api,/identityReady:uuid\(context.scope.globalId\)/,'not safe to share without verified identity');
+assert.match(api,/ownedByOtherClinic/);
+assert.match(api,/.eq\('organization_id',item.clinic_id\)\.eq\('patient_id',item.patient_id\)/,'portal query stays in graph owner tenant');
+assert.match(api,/requireRoles\('patient'\)/);
+assert.match(api,/no-store/);
+assert.match(server,/patientGraphSharing.registerClinicRoutes/);
+assert.match(server,/patientGraphSharing.registerPortalRoutes/);
+assert.match(server,/GRAPH_NOT_SHARED/);
+
+assert.match(portal,/<PortalSharedClinicalGraph/,'portal child uses shared-only slot');
+assert.doesNotMatch(portal,/<EvolutionBarChart/,'legacy protocol graph not directly rendered');
+assert.doesNotMatch(portal,/<CumulativeGrowthChart/,'legacy mastery graph not directly rendered');
+assert.match(graph,/if \(!graph\) return null;/);
+assert.match(graph,/graph\.graphType === 'mastery_growth'/);
+assert.match(graph,/graph\.graphType === 'protocol_comparison'/);
+assert.match(graph,/graph\.graphType !== 'clinical_metric'/);
+assert.match(portal,/<AdultWellbeingTrendChart/,'adult mood untouched');
+assert.match(clinical,/<PatientSharedGraphManagement patientId=/);
+assert.match(clinic,/Confirmar e salvar/);
+assert.match(clinic,/Revogar/);
+assert.match(clinic,/expectedVersion:state.version/);
+console.log('patientSharedGraphGovernance: PASS');
