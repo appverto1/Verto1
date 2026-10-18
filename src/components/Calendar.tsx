@@ -3177,7 +3177,9 @@ export const ClinicalAgendaBoard = ({
     const eventFinanceLabel = eventFinance && isPrivateFinance
       ? `Particular • ${formatPatientFinanceCurrency(eventFinanceAmounts.total)} • ${PATIENT_FINANCIAL_STATUS_LABELS[eventFinanceStatus]}`
       : '';
-    const intervalLabel = `${String(event.time || '').replace(':', 'h')}–${String(event.endTime || '').replace(':', 'h')}`;
+    const eventStart = event.start instanceof Date ? event.start : parseEventStart(event);
+    const eventEnd = event.end instanceof Date ? event.end : parseEventEnd(event, eventStart);
+    const intervalLabel = `${formatTime(eventStart).replace(':', 'h')}–${formatTime(eventEnd).replace(':', 'h')}`;
     const accessibleLabel = `${event.time} a ${event.endTime}, ${event.patientName}. ${statusColor.label}.${eventFinanceLabel ? ` ${eventFinanceLabel}.` : ''}`;
     return (
       <button
@@ -3328,7 +3330,7 @@ export const ClinicalAgendaBoard = ({
     const dayCells = Array.from({ length: daysInMonth }, (_, index) => index + 1);
     const trailingBlanks = Array.from({ length: Math.max(0, 42 - blanks.length - dayCells.length) }, (_, index) => index);
     return (
-      <div className={`flex h-full min-h-0 flex-col overflow-hidden rounded-[18px] border p-1 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
+      <div className={`flex min-h-[520px] flex-col overflow-hidden rounded-[18px] border p-1 xl:h-full xl:min-h-0 ${isDark ? 'border-slate-700 bg-slate-950' : 'border-slate-200 bg-white'}`}>
         <div className="grid shrink-0 grid-cols-7 gap-1 pb-1 text-center text-[10px] font-bold uppercase tracking-[0.14em] text-slate-400">
           {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map((day) => <span key={day}>{day}</span>)}
         </div>
@@ -3786,7 +3788,7 @@ export const ClinicalAgendaBoard = ({
               {remoteState.error}
             </div>
           )}
-          <div className="xl:hidden">{renderMobileList()}</div>
+          <div className="xl:hidden">{view === 'month' ? renderMonthView() : renderMobileList()}</div>
           <div className="hidden min-h-0 flex-1 xl:block">
             {view === 'month' ? renderMonthView() : renderTimeline(view === 'day' ? [activeDate] : weekDays)}
           </div>
