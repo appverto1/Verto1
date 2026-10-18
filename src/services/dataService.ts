@@ -8081,6 +8081,52 @@ export const dataService = {
     };
   },
 
+  async getPatientSharedGraphManagement(patientId: string) {
+    const endpoint = `/api/patients/${encodeURIComponent(String(patientId))}/shared-graph/manage`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        credentials: 'include', cache: 'no-store',
+        headers: await getNoStoreAuthHeaders(),
+      }, {helperName:'getPatientSharedGraphManagement',operation:'list',table:'patient_shared_graph_publications,patient_shared_graph_delegations',hasExplicitColumns:true});
+      return await safeJson(response);
+    } catch(error) {
+      const message=getApiErrorMessage(error,'Não foi possível carregar o compartilhamento.');
+      return {success:false,error:message,message};
+    }
+  },
+
+  async savePatientSharedGraphPublication(patientId: string, payload: {
+    action:'PUBLISH'|'DISABLE';graphType?:string|null;graphKey?:string;expectedVersion:number;
+  }) {
+    const endpoint=`/api/patients/${encodeURIComponent(String(patientId))}/shared-graph/publication`;
+    try {
+      const response=await fetchClinical(endpoint, {
+        method:'POST',credentials:'include',
+        headers:{...(await getAuthHeaders()),'Content-Type':'application/json'},
+        body:JSON.stringify(payload),
+      }, {helperName:'savePatientSharedGraphPublication',operation:'write',table:'patient_shared_graph_publications',hasExplicitColumns:true});
+      return await safeJson(response);
+    } catch(error) {
+      const message=getApiErrorMessage(error,'Não foi possível salvar o gráfico.');
+      return {success:false,error:message,message};
+    }
+  },
+
+  async setPatientSharedGraphDelegation(patientId:string,professionalId:string,allowed:boolean) {
+    const endpoint=`/api/patients/${encodeURIComponent(String(patientId))}/shared-graph/delegations`;
+    try {
+      const response=await fetchClinical(endpoint, {
+        method:'POST',credentials:'include',
+        headers:{...(await getAuthHeaders()),'Content-Type':'application/json'},
+        body:JSON.stringify({professionalId,allowed}),
+      }, {helperName:'setPatientSharedGraphDelegation',operation:'write',table:'patient_shared_graph_delegations',hasExplicitColumns:true});
+      return await safeJson(response);
+    } catch(error) {
+      const message=getApiErrorMessage(error,'Não foi possível alterar a autorização.');
+      return {success:false,error:message,message};
+    }
+  },
+
   async getPatientMasteryGrowth(patientId: string, options: { portal?: boolean } = {}) {
     const safePatientId = String(patientId || '').trim();
     if (!safePatientId) return { success: true, data: [] };
