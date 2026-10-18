@@ -61,4 +61,21 @@ assert.equal('image' in calls[1].options,false);
 assert.equal('icon' in calls[1].options,false);
 assert.equal(calls[1].options.body,'Aviso legível');
 assert.equal(calls[1].options.tag,'clinic-announcement-456');
+
+// Android/FCM can accept a Web Push at 06:00 but awaken much later. Do not
+// display a stale notice/reminder long after its scheduled time.
+calls.length=0;forceFirstFailure=false;
+await push({title:'Clínica Diretoria',body:'Aviso vencido',
+  data:{notificationType:'clinic_announcement',scheduledFor:new Date(Date.now()-16*60*1000).toISOString()}});
+assert.equal(calls.length,0,'aviso entregue ao dispositivo 16 minutos atrasado deve ser descartado');
+await push({title:'Clínica Diretoria',body:'Lembrete vencido',
+  data:{notificationType:'appointment_reminder',scheduledFor:new Date(Date.now()-6*60*1000).toISOString()}});
+assert.equal(calls.length,0,'lembrete 6 minutos atrasado não deve notificar');
+await push({title:'Clínica Diretoria',body:'Aviso pontual',
+  data:{notificationType:'clinic_announcement',scheduledFor:new Date(Date.now()-30*1000).toISOString()}});
+assert.equal(calls.length,1,'aviso pontual deve aparecer');
+await push({title:'Clínica Diretoria',body:'Lembrete pontual',
+  data:{notificationType:'appointment_reminder',scheduledFor:new Date(Date.now()-30*1000).toISOString()}});
+assert.equal(calls.length,2,'lembrete pontual deve aparecer');
+
 console.log('patientNotificationPushPresentation: aviso e lembrete compactos; fallback textual em falha de ícone');

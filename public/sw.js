@@ -153,6 +153,20 @@ self.addEventListener("push", (event) => {
     : (payload.title || brandName);
   const notificationType = String(payload.data?.notificationType || "").trim();
   const isClinicAnnouncement = notificationType === "clinic_announcement";
+  // Preserve the portal inbox regardless of device timing. A late Android/FCM
+  // delivery must not present a scheduled reminder as if it had arrived on time.
+  // A missing/invalid legacy timestamp is NOT a reason to suppress a message.
+  const scheduledForMs = Date.parse(String(payload.data?.scheduledFor || ""));
+  const maxArrivalDelayMs = isClinicAnnouncement
+    ? 15 * 60 * 1000
+    : (notificationType === "appointment_reminder" ? 5 * 60 * 1000 : 0);
+  if (maxArrivalDelayMs > 0 && Number.isFinite(scheduledForMs) &&
+    Date.now() - scheduledForMs > maxArrivalDelayMs) {
+    console.warn("[push] Notificação descartada por chegada tardia ao dispositivo.", {
+      notificationType, overdueMinutes: Math.ceil((Date.now() - scheduledForMs) / 60000),
+    });
+    return;
+  }
   // Lembretes e avisos usam SOMENTE o ícone compacto. A propriedade `image`
   // cria um cartão grande no Android e não é permitida, inclusive para payloads legados.
   const iconUrl = isClinicAnnouncement
