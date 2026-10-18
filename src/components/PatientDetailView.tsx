@@ -10,6 +10,7 @@ import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
+import { PatientSharedGraphManagement } from './PatientSharedGraphManagement';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
 import { AbaReinforcerCatalogPanel } from './AbaReinforcerCatalogPanel';
@@ -12958,6 +12959,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </div>
               </section>
             )}
+            {isKidsProfile && <PatientSharedGraphManagement patientId={String(patient.id)} />}
             {isKidsProfile ? (
               <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
             ) : hasAbaClinicalProfile ? (
