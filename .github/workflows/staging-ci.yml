@@ -122,6 +122,14 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: Notification and scheduling regression tests
+        run: |
+          node tests/patientNotificationPushPresentation.test.mjs
+          node --import tsx tests/notificationBranding.test.ts
+          node tests/notificationAgendaPresentation.regression.test.mjs
+          node --import tsx tests/clinicAnnouncementBrazilTime.test.ts
+          node --import tsx tests/p0AppointmentReminderClaimIntegrity.test.ts
+
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
 

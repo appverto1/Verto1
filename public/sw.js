@@ -1,4 +1,4 @@
-const SW_VERSION = "verto-branding-v22";
+const SW_VERSION = "verto-branding-v23";
 const VERTO_NOTIFICATION_ICON = "/branding/verto/verto-icon-192.png?v=20260818-1";
 const VERTO_NOTIFICATION_BADGE = "/branding/verto/verto-notification-badge.png?v=20260818-1";
 const LEGACY_VERTO_CACHE_NAMES = new Set(["appointments-clinic-branding-v11", "verto-branding-v12", "verto-branding-v13", "verto-branding-v14", "verto-branding-v15"]);
@@ -60,9 +60,61 @@ const asNotificationAssetUrl = (value) => {
   const source = String(value || "").trim();
   if (!source) return "";
   try {
-    return new URL(source, self.location.origin).href;
+    const url = new URL(source, self.location.origin);
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
   } catch {
     return "";
+  }
+};
+
+// Native Android notification icons are square. Rendering a wide clinic logo
+// directly into the OS icon slot stretches it. Letterbox the original inside
+// a 192px square on the device; do not create the large "image" notification.
+// The result is bounded/in-memory only: no extra Supabase reads or uploads.
+const compactClinicIconCache = new Map();
+const fitClinicLogoForNotification = async (source) => {
+  if (!source || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap !== "function" ||
+      typeof fetch !== "function" || typeof btoa !== "function") return source;
+  if (compactClinicIconCache.has(source)) return compactClinicIconCache.get(source);
+  try {
+    // Never hold a scheduled reminder for a slow or broken clinic logo.
+    const signal = typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function"
+      ? AbortSignal.timeout(1500)
+      : undefined;
+    const response = await fetch(source, { mode: "cors", credentials: "omit", cache: "force-cache", signal });
+    if (!response.ok || Number(response.headers?.get?.("content-length") || 0) > 1_000_000) return source;
+    const original = await response.blob();
+    if (!/^image\/(png|jpeg|webp|gif)$/i.test(original.type) || original.size > 1_000_000) return source;
+    const bitmap = await createImageBitmap(original);
+    try {
+      if (!bitmap.width || !bitmap.height) return source;
+      const canvas = new OffscreenCanvas(192, 192);
+      const context = canvas.getContext("2d");
+      if (!context) return source;
+      const maxSide = 168;
+      const ratio = Math.min(maxSide / bitmap.width, maxSide / bitmap.height);
+      const width = Math.max(1, Math.round(bitmap.width * ratio));
+      const height = Math.max(1, Math.round(bitmap.height * ratio));
+      context.clearRect(0, 0, 192, 192);
+      context.drawImage(bitmap, (192 - width) / 2, (192 - height) / 2, width, height);
+      const png = await canvas.convertToBlob({ type: "image/png" });
+      if (png.type !== "image/png" || png.size > 120_000) return source;
+      const bytes = new Uint8Array(await png.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 8192) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+      }
+      const squareIcon = `data:image/png;base64,${btoa(binary)}`;
+      if (compactClinicIconCache.size >= 8) compactClinicIconCache.clear();
+      compactClinicIconCache.set(source, squareIcon);
+      return squareIcon;
+    } finally {
+      bitmap.close?.();
+    }
+  } catch {
+    // Older SWs/browsers or cross-origin images may block rasterization.
+    // Keep the original icon and, ultimately, the existing text-only fallback.
+    return source;
   }
 };
 
@@ -205,23 +257,40 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
+      // The clinic icon is normalized only for notifications, never for the
+      // original clinic branding used elsewhere in the application.
+      const compactIcon = brandLogo && iconUrl
+        ? await fitClinicLogoForNotification(iconUrl)
+        : iconUrl;
+      if (compactIcon) notificationOptions.icon = compactIcon;
       try {
         await self.registration.showNotification(title, notificationOptions);
       } catch (primaryError) {
-        // A falha de um logo remoto não pode impedir a exibição do aviso.
-        // Repetimos sem mídia nem opções opcionais: apenas texto, tag e destino.
-        try {
-          await self.registration.showNotification(title, {
-            body: notificationOptions.body,
-            tag: notificationOptions.tag,
-            data: notificationOptions.data,
-          });
-        } catch (fallbackError) {
-          console.warn("[push] Falha ao exibir notificação no dispositivo.", {
-            notificationType,
-            reason: String(fallbackError?.name || "NOTIFICATION_DISPLAY_FAILED"),
-          });
-          throw fallbackError;
+        // If a browser rejects an inline PNG, retry its original clinic URL.
+        // Otherwise preserve the existing text-only fallback.
+        let recovered = false;
+        if (compactIcon && compactIcon !== iconUrl && iconUrl) {
+          try {
+            await self.registration.showNotification(title, { ...notificationOptions, icon: iconUrl });
+            recovered = true;
+          } catch {
+            // Both image formats failed. Present the message without an icon.
+          }
+        }
+        if (!recovered) {
+          try {
+            await self.registration.showNotification(title, {
+              body: notificationOptions.body,
+              tag: notificationOptions.tag,
+              data: notificationOptions.data,
+            });
+          } catch (fallbackError) {
+            console.warn("[push] Falha ao exibir notificação no dispositivo.", {
+              notificationType,
+              reason: String(fallbackError?.name || "NOTIFICATION_DISPLAY_FAILED"),
+            });
+            throw fallbackError;
+          }
         }
       }
 

@@ -82,4 +82,62 @@ await push({title:'Clínica Diretoria',body:'Lembrete adiado',
 assert.equal(calls.length,3,'lembrete 10 minutos atrasado deve permanecer visível');
 assert.match(calls[2].options.body,/Entregue com atraso/, 'atraso não deve ser apresentado como pontual');
 
+
+    
+// Render a wide clinic mark into a centered square, preserving proportions,
+// with no external resizing service and no expanded Android notification.
+const normalizedCalls = [];
+const drawArgs = [];
+const rasterHandlers = new Map();
+class FakeOffscreenCanvas {
+  constructor(width,height) { assert.equal(width,192); assert.equal(height,192); }
+  getContext() { return { clearRect(){}, drawImage(...args){ drawArgs.push(args); } }; }
+  async convertToBlob() { return { type:'image/png', size:3, async arrayBuffer(){ return Uint8Array.from([137,80,78]).buffer; } }; }
+}
+const rasterSelf = {
+  location:{origin:'https://api.appverto.com.br'},
+  addEventListener(name,handler){ rasterHandlers.set(name,handler); },
+  registration:{async showNotification(title,options){ normalizedCalls.push({title,options}); }},
+  clients:{async matchAll(){return [];}},
+};
+vm.runInNewContext(source,{
+  self:rasterSelf, console,URL,URLSearchParams,Set,Date,Uint8Array,JSON,Promise,String,
+  OffscreenCanvas:FakeOffscreenCanvas,
+  createImageBitmap:async()=>({width:400,height:100,close(){}}),
+  fetch:async()=>({ok:true,headers:{get:()=>null},async blob(){return {type:'image/png',size:200};}}),
+  btoa:(data)=>Buffer.from(data,'binary').toString('base64'),
+},{filename:'sw-compact-logo.js'});
+let normalizedDelivery;
+rasterHandlers.get('push')({
+  data:{json:()=>({ title:'Espaço Guiar',body:'Aviso',branding:{displayName:'Espaço Guiar',logoUrl:'/clinic-wide.png'},
+    data:{notificationType:'clinic_announcement'} })},
+  waitUntil(task){normalizedDelivery=task;},
+});
+await normalizedDelivery;
+assert.equal(normalizedCalls.length,1);
+assert.match(normalizedCalls[0].options.icon,/^data:image\/png;base64,/);
+assert.equal('image' in normalizedCalls[0].options,false);
+assert.equal(drawArgs.length,1);
+assert.equal(drawArgs[0][1],12);
+assert.equal(drawArgs[0][2],75);
+assert.equal(drawArgs[0][3],168);
+assert.equal(drawArgs[0][4],42);
+
+// Rejection of an inline image does not drop the push: retry the original URL.
+const recoveryCalls=[];
+rasterSelf.registration.showNotification=async(title,options)=>{
+  recoveryCalls.push({title,options});
+  if(recoveryCalls.length===1) throw new Error('DATA_URL_UNSUPPORTED');
+};
+rasterHandlers.get('push')({
+  data:{json:()=>({title:'Espaço Guiar',body:'Lembrete',branding:{displayName:'Espaço Guiar',logoUrl:'/clinic-wide.png'},
+    data:{notificationType:'appointment_reminder'} })},
+  waitUntil(task){normalizedDelivery=task;},
+});
+await normalizedDelivery;
+assert.equal(recoveryCalls.length,2);
+assert.match(recoveryCalls[0].options.icon,/^data:image\/png;base64,/);
+assert.match(recoveryCalls[1].options.icon,/\/clinic-wide\.png$/);
+assert.equal('image' in recoveryCalls[1].options,false);
+
 console.log('patientNotificationPushPresentation: aviso e lembrete compactos; fallback textual em falha de ícone');
