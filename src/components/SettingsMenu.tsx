@@ -8,9 +8,11 @@ import {
   ChevronRight,
   ShoppingBag,
   ArrowLeftRight,
-  BookOpenCheck
+  BookOpenCheck,
+  CircleHelp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { createPortal } from 'react-dom';
 import { SecureImage } from './SecureMedia';
 import { ModuleDiscoveryInterstitial } from './ModuleDiscoveryInterstitial';
 import { HelpButton } from './HelpButton';
@@ -27,7 +29,11 @@ interface SettingsMenuProps {
   onOpenOnboarding?: () => void;
   onOpenMarketplace?: () => void;
   onOpenGuidedTutorial?: () => void;
-}
+  /** Render account actions as rows within the containing navigation drawer. */
+  inline?: boolean;
+  /** Close the containing drawer after an account action navigates elsewhere. */
+  onAction?: () => void;
+
 
 export function SettingsMenu({ 
   user, 
@@ -40,7 +46,9 @@ export function SettingsMenu({
   onViewBilling,
   onOpenOnboarding,
   onOpenMarketplace,
-  onOpenGuidedTutorial
+  onOpenGuidedTutorial,
+  inline = false,
+  onAction
 }: SettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -164,34 +172,8 @@ export function SettingsMenu({
     }
   };
 
-  return (
+  const accountActions = (
     <>
-    <HelpButton />
-    <div className="relative" ref={menuRef} style={{ zIndex: 100 }} data-tutorial-anchor="account-menu">
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => {
-          setIsOpen(!isOpen);
-        }}
-        className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
-        aria-label="Abrir menu da conta e configurações"
-        aria-haspopup="menu"
-        aria-expanded={isOpen}
-      >
-        <Settings size={20} />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-[100]"
-            role="menu"
-            aria-label="Conta e configurações"
-          >
             <div className="p-4 border-b border-slate-50">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-purple-50 text-sm font-medium text-[#7a32fc]">
@@ -220,6 +202,7 @@ export function SettingsMenu({
                 role="menuitem"
                 onClick={() => {
                   setIsOpen(false);
+                  onAction?.();
                   onViewProfile?.();
                 }}
                 className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
@@ -228,7 +211,7 @@ export function SettingsMenu({
                   <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
                   <span className="text-sm font-medium">Meu perfil profissional</span>
                 </div>
-                <ChevronRight size={14} className="text-slate-300" />
+                <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
               </button>
 
               {onOpenGuidedTutorial && (
@@ -237,6 +220,7 @@ export function SettingsMenu({
                   role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
+                    onAction?.();
                     onOpenGuidedTutorial();
                   }}
                   className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
@@ -245,7 +229,7 @@ export function SettingsMenu({
                     <BookOpenCheck size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
                     <span className="text-sm font-medium">Reiniciar tutorial guiado</span>
                   </div>
-                  <ChevronRight size={14} className="text-slate-300" />
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
               )}
 
@@ -255,6 +239,7 @@ export function SettingsMenu({
                   role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
+                    onAction?.();
                     onViewClinicSettings();
                   }}
                   className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
@@ -263,7 +248,7 @@ export function SettingsMenu({
                     <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
                     <span className="text-sm font-medium">Configurações da clínica</span>
                   </div>
-                  <ChevronRight size={14} className="text-slate-300" />
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
               )}
 
@@ -273,6 +258,7 @@ export function SettingsMenu({
                   role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
+                    onAction?.();
                     window.dispatchEvent(new CustomEvent('verto:open-access-contexts'));
                   }}
                   className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
@@ -281,7 +267,7 @@ export function SettingsMenu({
                     <ArrowLeftRight size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
                     <span className="text-sm font-medium">Trocar clínica ou acesso</span>
                   </div>
-                  <ChevronRight size={14} className="text-slate-300" />
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
               )}
 
@@ -291,6 +277,7 @@ export function SettingsMenu({
                   role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
+                    onAction?.();
                     onViewTeam?.();
                   }}
                   className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
@@ -299,7 +286,7 @@ export function SettingsMenu({
                     <Users size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
                     <span className="text-sm font-medium">Gestão da Equipe</span>
                   </div>
-                  <ChevronRight size={14} className="text-slate-300" />
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
               )}
 
@@ -309,6 +296,7 @@ export function SettingsMenu({
                   role="menuitem"
                   onClick={() => {
                     setIsOpen(false);
+                    onAction?.();
                     onViewBilling?.();
                   }}
                   className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
@@ -317,7 +305,7 @@ export function SettingsMenu({
                     <CreditCard size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
                     <span className="text-sm font-medium">Assinatura e Faturamento</span>
                   </div>
-                  <ChevronRight size={14} className="text-slate-300" />
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
               )}
 
@@ -337,9 +325,23 @@ export function SettingsMenu({
                     CONHEÇA
                   </span>
                 </div>
-                <ChevronRight size={14} className="text-slate-300" />
+                <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
               </button>
             </div>
+
+            {inline && (
+              <div className="px-2 pb-2">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => window.open('/ajuda', '_blank', 'noopener,noreferrer')}
+                  className="flex w-full items-center gap-3 rounded-xl p-3 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                >
+                  <CircleHelp size={18} className="text-slate-400" />
+                  Central de ajuda e tutoriais
+                </button>
+              </div>
+            )}
 
             <div className="p-2 border-t border-slate-50 bg-slate-50/50">
               {logoutError && (
@@ -358,11 +360,54 @@ export function SettingsMenu({
                 <span className="text-sm font-medium">{isLoggingOut ? 'Saindo...' : 'Sair do sistema'}</span>
               </button>
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-    <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />
+    </>
+  );
+
+  return (
+    <>
+      {inline ? (
+        <div className="w-full min-w-0 overflow-hidden rounded-xl bg-white" role="menu" aria-label="Conta e configurações">
+          {accountActions}
+        </div>
+      ) : (
+        <>
+          <HelpButton />
+          <div className="relative" ref={menuRef} style={{ zIndex: 100 }} data-tutorial-anchor="account-menu">
+            <button
+              ref={triggerRef}
+              type="button"
+              onClick={() => setIsOpen(!isOpen)}
+              className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              aria-label="Abrir menu da conta e configurações"
+              aria-haspopup="menu"
+              aria-expanded={isOpen}
+            >
+              <Settings size={20} />
+            </button>
+            <AnimatePresence>
+              {isOpen && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                  className="absolute right-0 mt-2 w-64 bg-white rounded-2xl shadow-xl border border-slate-100 overflow-hidden z-[100]"
+                  role="menu"
+                  aria-label="Conta e configurações"
+                >
+                  {accountActions}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </>
+      )}
+    {inline && typeof document !== 'undefined'
+      ? createPortal(
+          <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />,
+          document.body,
+        )
+      : <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />}
+
     </>
   );
 }
