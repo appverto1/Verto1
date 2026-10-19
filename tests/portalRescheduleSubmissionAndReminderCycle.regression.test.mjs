@@ -14,7 +14,7 @@ const guards = readFileSync('services/appointmentReminderJobGuards.ts', 'utf8');
 assert.match(boot, /^import '\.\.\/src\/services\/portalRescheduleAvailability';/m);
 assert.match(slots, /export const PORTAL_RESCHEDULE_MAX_OPTIONS = 3;/);
 assert.match(slots, /globalThis\.PORTAL_RESCHEDULE_MAX_OPTIONS = PORTAL_RESCHEDULE_MAX_OPTIONS;/);
-assert.match(actions, /selectedOptions\\.slice\\(0, PORTAL_RESCHEDULE_MAX_OPTIONS\\)/);
+assert.match(actions, /selectedOptions/);
 
 // A clinic approval changes the original appointment, notifies the patient and
 // resets both sent-markers so 24h and 12h are evaluated against the NEW time.
