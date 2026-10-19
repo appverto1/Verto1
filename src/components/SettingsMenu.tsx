@@ -33,7 +33,7 @@ interface SettingsMenuProps {
   inline?: boolean;
   /** Close the containing drawer after an account action navigates elsewhere. */
   onAction?: () => void;
-
+}
 
 export function SettingsMenu({ 
   user, 
