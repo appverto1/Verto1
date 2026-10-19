@@ -9,7 +9,9 @@ import {
   ShoppingBag,
   ArrowLeftRight,
   BookOpenCheck,
-  CircleHelp
+  CircleHelp,
+  Moon,
+  Sun
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { createPortal } from 'react-dom';
@@ -33,6 +35,9 @@ interface SettingsMenuProps {
   inline?: boolean;
   /** Close the containing drawer after an account action navigates elsewhere. */
   onAction?: () => void;
+  /** Mobile drawer-only theme control, directly after professional identity. */
+  themeMode?: 'light' | 'dark';
+  onToggleTheme?: () => void;
 }
 
 export function SettingsMenu({ 
@@ -48,7 +53,9 @@ export function SettingsMenu({
   onOpenMarketplace,
   onOpenGuidedTutorial,
   inline = false,
-  onAction
+  onAction,
+  themeMode = 'light',
+  onToggleTheme
 }: SettingsMenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -174,7 +181,7 @@ export function SettingsMenu({
 
   const accountActions = (
     <>
-            <div className="p-4 border-b border-slate-50">
+            <div className={inline ? "px-3 py-3" : "p-4 border-b border-slate-50"}>
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-purple-50 text-sm font-medium text-[#7a32fc]">
                   {profileImageUrl && !profileImageFailed ? (
@@ -194,6 +201,19 @@ export function SettingsMenu({
                 </div>
               </div>
             </div>
+            {inline && onToggleTheme && (
+              <div className="px-2 pb-3">
+                <button
+                  type="button"
+                  onClick={onToggleTheme}
+                  className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                  aria-label={themeMode === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'}
+                >
+                  {themeMode === 'light' ? <Moon size={18} className="text-slate-400" /> : <Sun size={18} className="text-slate-400" />}
+                  {themeMode === 'light' ? 'Tema escuro' : 'Tema claro'}
+                </button>
+              </div>
+            )}
 
             <div className="p-2">
               <button

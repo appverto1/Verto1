@@ -11592,29 +11592,10 @@ export function CoordinatorDashboard({
         <h3 className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
           Conta e configurações
         </h3>
-        <div className="mb-2 flex items-center gap-2 px-2">
-          <button
-            type="button"
-            onClick={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
-            className="flex min-h-11 flex-1 items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 hover:bg-slate-50"
-            aria-label={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
-          >
-            {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
-            {theme === "light" ? "Tema escuro" : "Tema claro"}
-          </button>
-          {isMobileHeader && hasCapability("communication.billing_updates.view") && (
-            <BillingCommunicationNotifications
-              clinicId={workspaceScopeKey}
-              themeMode={theme}
-              onOpenThread={(threadId) => {
-                setIsMobileMenuOpen(false);
-                openBillingCommunicationThread(threadId);
-              }}
-            />
-          )}
-        </div>
         <SettingsMenu
           inline
+          themeMode={theme}
+          onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
           onAction={() => setIsMobileMenuOpen(false)}
           user={user}
           onLogout={onLogout}
@@ -11816,7 +11797,7 @@ export function CoordinatorDashboard({
                   transition={{ type: "spring", damping: 25, stiffness: 200 }}
                   className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
                 >
-                  <div className="flex items-center justify-between mb-8">
+                  <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-3">
                       <LogoVerto size={32} showText={true} />
                     </div>
@@ -12151,7 +12132,7 @@ export function CoordinatorDashboard({
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
                 className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
               >
-                <div className="flex items-center justify-between mb-8">
+                <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-3">
                     <LogoVerto size={32} showText={true} />
                   </div>

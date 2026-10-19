@@ -38,8 +38,15 @@ assert.match(source, /onClick=\{\(\) => \{ setIsMobileMenuOpen\(false\); goBackF
 assert.match(source, /onViewClinicSettings=\{\(\) => navigateFromDrawer\("settings"\)\}/);
 assert.match(source, /onViewBilling=\{\(\) => navigateFromDrawer\("billing"\)\}/);
 assert.match(source, /onLogout=\{onLogout\}/);
-assert.match(source, /openBillingCommunicationThread\(threadId\)/);
-assert.match(source, /isMobileHeader && hasCapability\("communication\.billing_updates\.view"\)/);
+// Mobile drawer should not show the billing message bubble for now.
+const utilities = source.slice(
+  source.indexOf('const renderMobileDrawerUtilities ='),
+  source.indexOf('if (view === "patient" && selectedPatientId)'),
+);
+assert.doesNotMatch(utilities, /BillingCommunicationNotifications|openBillingCommunicationThread/,
+  'no billing message bubble inside the mobile drawer');
+assert.match(source, /!isMobileHeader && hasCapability\("communication\.billing_updates\.view"\)/,
+  'desktop billing notifications stay available');
 assert.match(source, /setIsMobileMenuOpen\(false\);/);
 // The hamburger contains a single navigation list: account and settings
 // actions must be its final section, rather than a gear opening a second menu.
@@ -51,7 +58,8 @@ for (const [index, match] of drawers.entries()) {
     'drawer ' + index + ': settings after navigation at end');
 }
 assert.match(source, /<section className="mt-6 border-t border-slate-200 pt-4"[^>]*data-mobile-drawer-settings>/);
-assert.match(source, /<SettingsMenu\s+inline\s+onAction=\{\(\) => setIsMobileMenuOpen\(false\)\}/);
+assert.match(source, /<SettingsMenu\s+inline\s+themeMode=\{theme\}\s+onToggleTheme=/,
+  'single SettingsMenu owns profile and theme toggle in the mobile drawer');
 assert.match(source, /onClick=\{\(\) => \{ setIsMobileMenuOpen\(false\); goBackFromPatientRecord\(\); \}\}/);
 
 const settings = readFileSync('src/components/SettingsMenu.tsx', 'utf8');
@@ -66,4 +74,23 @@ assert.match(settings, /canSeeBilling &&/, 'subscription remains conditional');
 assert.match(settings, /handleLogout\(\)/, 'logout remains supported');
 assert.match(settings, /Central de ajuda e tutoriais/, 'help is directly accessible');
 assert.match(settings, /\{inline \? \(/, 'no nested trigger on mobile');
+// The first block in account settings must be the professional identity,
+// immediately followed by the theme switch, then unchanged menu actions.
+const identityPosition = settings.indexOf('className={inline ? "px-3 py-3" : "p-4 border-b border-slate-50"}');
+const themePosition = settings.indexOf('{inline && onToggleTheme && (');
+const profilePosition = settings.indexOf('<span className="text-sm font-medium">Meu perfil profissional</span>');
+assert.ok(identityPosition !== -1 && themePosition > identityPosition &&
+  profilePosition > themePosition, 'professional info precedes theme toggle and navigation');
+assert.match(settings, /themeMode\?: 'light' \| 'dark'/);
+assert.match(settings, /onToggleTheme\?: \(\) => void/);
+assert.match(settings, /themeMode === 'light' \? 'Tema escuro' : 'Tema claro'/);
+assert.match(settings, /profileImageUrl && !profileImageFailed/, 'professional image retained');
+assert.match(settings, /\{roleLabel\}/);
+assert.match(settings, /\{organizationName\}/);
+
+// No oversized 32px blank strip under the logo in either mobile drawer.
+const mobileLogoHeaders = [...source.matchAll(
+  /className="flex items-center justify-between mb-2">\s*<div className="flex items-center gap-3">\s*<LogoVerto size=\{32\} showText=\{true\}/g,
+)];
+assert.equal(mobileLogoHeaders.length, 2, 'both mobile drawers use compact logo spacing');
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');
