@@ -43,7 +43,7 @@ assert.match(source, /isMobileHeader && hasCapability\("communication\.billing_u
 assert.match(source, /setIsMobileMenuOpen\(false\);/);
 // The hamburger contains a single navigation list: account and settings
 // actions must be its final section, rather than a gear opening a second menu.
-const drawers = [...source.matchAll(/<nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar">([\\s\\S]*?)<\\/nav>/g)];
+const drawers = [...source.matchAll(/<nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar">([\s\S]*?)<\/nav>/g)];
 assert.equal(drawers.length, 2, 'both mobile drawers must share unified navigation and settings');
 for (const [index, match] of drawers.entries()) {
   const drawer = match[1];
@@ -51,19 +51,19 @@ for (const [index, match] of drawers.entries()) {
     'drawer ' + index + ': settings after navigation at end');
 }
 assert.match(source, /<section className="mt-6 border-t border-slate-200 pt-4"[^>]*data-mobile-drawer-settings>/);
-assert.match(source, /<SettingsMenu\\s+inline\\s+onAction=\\{\\(\\) => setIsMobileMenuOpen\\(false\\)\\}/);
-assert.match(source, /onClick=\\{\\(\\) => \\{ setIsMobileMenuOpen\\(false\\); goBackFromPatientRecord\\(\\); \\}\\}/);
+assert.match(source, /<SettingsMenu\s+inline\s+onAction=\{\(\) => setIsMobileMenuOpen\(false\)\}/);
+assert.match(source, /onClick=\{\(\) => \{ setIsMobileMenuOpen\(false\); goBackFromPatientRecord\(\); \}\}/);
 
 const settings = readFileSync('src/components/SettingsMenu.tsx', 'utf8');
-assert.match(settings, /inline\\?: boolean/, 'inline mode exists');
-assert.match(settings, /const accountActions = \\(/, 'menu actions are shared');
-assert.match(settings, /\\{inline \\? \\(/, 'inline actions rendered directly');
-assert.match(settings, /onAction\\?\\.\\(\\)/, 'navigating away closes hamburger');
+assert.match(settings, /inline\?: boolean/, 'inline mode exists');
+assert.match(settings, /const accountActions = \(/, 'menu actions are shared');
+assert.match(settings, /\{inline \? \(/, 'inline actions rendered directly');
+assert.match(settings, /onAction\?\.\(\)/, 'navigating away closes hamburger');
 assert.match(settings, /canManageClinicSettings && onViewClinicSettings/, 'clinic settings preserve authorization');
 assert.match(settings, /canSwitchAccessContext &&/, 'context switching remains conditional');
 assert.match(settings, /canManageTeam &&/, 'team actions remain conditional');
 assert.match(settings, /canSeeBilling &&/, 'subscription remains conditional');
-assert.match(settings, /handleLogout\\(\\)/, 'logout remains supported');
+assert.match(settings, /handleLogout\(\)/, 'logout remains supported');
 assert.match(settings, /Central de ajuda e tutoriais/, 'help is directly accessible');
-assert.match(settings, /\\{inline \\? \\(/, 'no nested trigger on mobile');
+assert.match(settings, /\{inline \? \(/, 'no nested trigger on mobile');
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');
