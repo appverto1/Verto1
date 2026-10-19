@@ -12,6 +12,7 @@ import {
   CircleHelp
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { createPortal } from 'react-dom';
 import { SecureImage } from './SecureMedia';
 import { ModuleDiscoveryInterstitial } from './ModuleDiscoveryInterstitial';
 import { HelpButton } from './HelpButton';
@@ -400,7 +401,13 @@ export function SettingsMenu({
           </div>
         </>
       )}
-    <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />
+    {inline && typeof document !== 'undefined'
+      ? createPortal(
+          <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />,
+          document.body,
+        )
+      : <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />}
+
     </>
   );
 }
