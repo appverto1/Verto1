@@ -133,6 +133,18 @@ export type PortalProfessionalWorkingSchedule = {
 };
 
 export const PORTAL_RESCHEDULE_MAX_OPTIONS = 3;
+
+// Compatibility for the existing server.ts reschedule validator, which refers
+// to PORTAL_RESCHEDULE_MAX_OPTIONS as an unqualified identifier. server.ts is
+// currently too large to safely update via the GitHub contents interface;
+// provide the same canonical constant to that legacy entrypoint at runtime.
+// This avoids a ReferenceError on POST /api/portal/appointments/:id/request-reschedule.
+// Remove this adapter when server.ts is modularized to use an explicit import.
+declare global {
+  var PORTAL_RESCHEDULE_MAX_OPTIONS: number;
+}
+globalThis.PORTAL_RESCHEDULE_MAX_OPTIONS = PORTAL_RESCHEDULE_MAX_OPTIONS;
+
 export const PORTAL_RESCHEDULE_DEFAULT_WINDOW_DAYS = 14;
 export const PORTAL_RESCHEDULE_NOTE_START = '[verto-reschedule-options]';
 export const PORTAL_RESCHEDULE_NOTE_END = '[/verto-reschedule-options]';
