@@ -1,3 +1,11 @@
+// Import the canonical portal reschedule contract before the legacy server.ts
+// appointment mutation handlers run. The request-reschedule route reads the
+// unqualified PORTAL_RESCHEDULE_MAX_OPTIONS (3); without this initializer it
+// throws ReferenceError and returns 500 for valid family requests.
+// TODO: replace the legacy identifier with an explicit import when the
+// mutation route is extracted from server.ts.
+import '../src/services/portalRescheduleAvailability';
+
 // Extracted verbatim from server.ts; route middleware stays in the entrypoint.
 
 export function createPortalAppointmentsListHandler(getDeps: () => any) {
