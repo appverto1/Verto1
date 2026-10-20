@@ -132,6 +132,7 @@ jobs:
           node --import tsx tests/p0AppointmentReminderClaimIntegrity.test.ts
           node --import tsx tests/portalRescheduleRequestLifecycle.regression.test.ts
           node tests/rescheduleApprovalClinicAuthorizedRoles.regression.test.mjs
+          node tests/rescheduleApprovalDelegatedAgendaCapability.regression.test.mjs
           node tests/portalRescheduleSubmissionAndReminderCycle.regression.test.mjs
 
       - name: Group sessions and financial persistence regressions
