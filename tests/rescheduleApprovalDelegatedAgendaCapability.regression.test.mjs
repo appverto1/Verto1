@@ -25,7 +25,7 @@ assert.match(schema, /lower\(coalesce\(cm\.status, 'active'\)\) = 'active'/);
 assert.match(schema, /o\.permission_key = 'calendar\.requests\.manage'/);
 assert.match(schema, /o\.effect = 'allow'/);
 assert.match(schema, /o\.effect is distinct from 'deny'/);
-assert.match(schema, /from public\.clinic_membership_permission_overrides/);
+assert.match(schema, /left join public\.clinic_membership_permission_overrides/);
 assert.match(schema, /not exists \([\s\S]*?from public\.clinic_memberships cm[\s\S]*?cm\.clinic_id = p_clinic_id/);
 assert.match(schema, /v_updated <> 2/);
 assert.match(schema, /RESCHEDULE_CAPABILITY_GUARD_CHANGED/);
