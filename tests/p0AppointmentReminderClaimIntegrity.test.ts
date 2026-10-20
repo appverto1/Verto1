@@ -29,6 +29,7 @@ const job = {
   clinic_id: clinicId,
   patient_id: patientId,
   notification_kind: 'APPOINTMENT_REMINDER_24H',
+  created_at: '2026-10-08T10:00:00Z',
   scheduled_for: '2026-10-08T11:59:00Z',
   payload: { scheduledAt },
 };
@@ -62,6 +63,36 @@ check('deleted appointment cannot generate reminder', job, { ...appointment, del
 check('old 24h marker cannot suppress newly scheduled reminder', job, { ...appointment, notification_24h_sent_at: nowIso }, patient, nowIso, true);
 check('old 12h marker cannot suppress next schedule cycle', job, { ...appointment, notification_12h_sent_at: nowIso }, patient, nowIso, true);
 check('late 24h cannot collide with 12h after outage', job, appointment, patient, '2026-10-09T07:00:00Z');
+
+check('missing job creation time fails closed', { ...job, created_at: null }, appointment, patient);
+
+// Approval 15h before the new session: the DB creates both slots, but the
+// already-due 24h slot must be canceled; the 12h follow-up remains valid.
+const fifteenHoursAhead = '2026-10-09T03:00:00Z';
+const nearTermAppointment = { ...appointment, scheduled_at: fifteenHoursAhead };
+check('15h reschedule does not retroactively send a 24h reminder', {
+  ...job,
+  created_at: nowIso,
+  scheduled_for: '2026-10-08T03:00:00Z',
+  payload: { scheduledAt: fifteenHoursAhead },
+}, nearTermAppointment, patient);
+check('15h reschedule sends only its due 12h reminder', {
+  ...job,
+  notification_kind: 'APPOINTMENT_REMINDER_12H',
+  created_at: nowIso,
+  scheduled_for: '2026-10-08T15:00:00Z',
+  payload: { scheduledAt: fifteenHoursAhead },
+}, nearTermAppointment, patient, '2026-10-08T15:00:00Z', true);
+
+const tenHoursAhead = '2026-10-08T22:00:00Z';
+check('10h reschedule does not send an expired 12h reminder', {
+  ...job,
+  notification_kind: 'APPOINTMENT_REMINDER_12H',
+  created_at: nowIso,
+  scheduled_for: '2026-10-08T10:00:00Z',
+  payload: { scheduledAt: tenHoursAhead },
+}, { ...appointment, scheduled_at: tenHoursAhead }, patient);
+
 
 const followup = {
   ...job,

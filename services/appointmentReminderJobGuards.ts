@@ -8,7 +8,7 @@ import { normalizeId, UUID, validInstant, responded } from './appointmentReminde
 
 type QueuedAppointmentJob = {
   source_id?: unknown; clinic_id?: unknown; patient_id?: unknown;
-  scheduled_for?: unknown; notification_kind?: unknown;
+  created_at?: unknown; scheduled_for?: unknown; notification_kind?: unknown;
   payload?: unknown;
 };
 type PersistedAppointment = {
@@ -48,10 +48,20 @@ export function validateClaimedAppointmentReminder(
   const persistedStart = validInstant(appointment?.scheduled_at);
   const queuedStart = validInstant(payload.scheduledAt);
   const queuedDue = validInstant(job?.scheduled_for);
+  const queuedCreated = validInstant(job?.created_at);
   const now = validInstant(nowIso);
-  if (persistedStart === null || queuedStart === null || queuedDue === null || now === null
+  if (persistedStart === null || queuedStart === null || queuedDue === null || queuedCreated === null || now === null
     || persistedStart !== queuedStart || queuedDue > now || persistedStart <= now) {
     return deny('APPOINTMENT_REMINDER_SCHEDULE_CHANGED');
+  }
+
+  // A reschedule can occur after a reminder window has already passed.
+  // The appointment trigger still writes both kinds of jobs; never deliver
+  // one immediately if the job was first created at or after its due time.
+  // This preserves the 12h reminder when approving a slot 15h in advance,
+  // without sending a retroactive 24h reminder.
+  if (queuedCreated >= queuedDue) {
+    return deny('APPOINTMENT_REMINDER_CREATED_AFTER_DUE');
   }
 
   if (job?.notification_kind === 'APPOINTMENT_REMINDER_24H') {

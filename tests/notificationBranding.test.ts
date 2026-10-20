@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import {
   buildPatientReminderModalViewModel,
   buildPatientReminderNotificationPayload,
@@ -70,7 +71,7 @@ assert.equal(modal.allowedActions.canRequestReschedule, false);
 
 // Service worker respeita o logo da clínica no ícone compacto dos lembretes e avisos;
 // o badge continua reservado à identificação do app/SO.
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v24"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v25"/);
 assert.match(serviceWorker, /const iconUrl = isClinicAnnouncement[\s\S]*?brandLogo \|\| payload\.icon \|\| VERTO_NOTIFICATION_ICON/);
 assert.match(serviceWorker, /const badgeUrl = isClinicAnnouncement\s*\? ""[\s\S]*?VERTO_NOTIFICATION_BADGE/);
 assert.doesNotMatch(serviceWorker, /\bimageUrl\b|payload\.image|\{\s*image:/, 'Service Worker não deve abrir imagem expandida');
@@ -118,5 +119,71 @@ assert.match(manualPushRoute, /\.eq\('id', appointmentId\)[\s\S]*?\.eq\('clinic_
 assert.match(manualPushRoute, /reminderAppointmentContext\.patient_id[\s\S]*?!== patientId/);
 assert.match(manualPushRoute, /resolvePushSafeClinicLogoUrl\([\s\S]*?reminderClinicId/);
 assert.doesNotMatch(manualPushRoute, /req\.body\?\.clinicId|req\.body\?\.clinic_id|req\.body\?\.clinicLogoUrl|req\.body\?\.clinic_logo_url/);
+
+
+// Compact push icons must retain the ORIGINAL uploaded canvas, including blank
+// borders. No trimming of white/transparent pixels or proportional distortion.
+const iconFitting = section(
+  serviceWorker,
+  'const compactClinicIconCache = new Map();',
+  '\nself.addEventListener("install"',
+);
+assert.doesNotMatch(iconFitting, /getImageData|cropX|cropY|cropWidth|cropHeight/);
+assert.match(iconFitting, /Math\.min\(maxSide \/ bitmap\.width, maxSide \/ bitmap\.height\)/);
+const drawCalls: unknown[][] = [];
+let bitmapDimensions = { width: 192, height: 192 };
+const fakeWorkerGlobals = {
+  OffscreenCanvas: class {
+    constructor(public width: number, public height: number) {}
+    getContext() {
+      return {
+        clearRect: () => undefined,
+        drawImage: (...args: unknown[]) => drawCalls.push(args),
+      };
+    }
+    async convertToBlob() {
+      return {
+        type: 'image/png',
+        size: 3,
+        arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+      };
+    }
+  },
+  createImageBitmap: async () => ({ ...bitmapDimensions, close: () => undefined }),
+  fetch: async () => ({
+    ok: true,
+    headers: { get: () => null },
+    blob: async () => ({ type: 'image/png', size: 100 }),
+  }),
+  btoa: () => 'AQID',
+  Uint8Array,
+};
+const renderCompactIcon = vm.runInNewContext(
+  iconFitting + '\nfitClinicLogoForNotification;',
+  fakeWorkerGlobals,
+) as (source: string) => Promise<string>;
+const assertFitsWholeLogo = async (
+  source: string,
+  imageWidth: number,
+  imageHeight: number,
+  renderedWidth: number,
+  renderedHeight: number,
+) => {
+  bitmapDimensions = { width: imageWidth, height: imageHeight };
+  drawCalls.length = 0;
+  assert.match(await renderCompactIcon(source), /^data:image\/png;base64,/);
+  assert.equal(drawCalls.length, 1, 'o logo completo deve ser desenhado uma única vez');
+  const [bitmap, dx, dy, dw, dh] = drawCalls[0];
+  assert.equal(drawCalls[0].length, 5, 'nunca usar versão de drawImage com recorte da origem');
+  assert.equal((bitmap as { width: number }).width, imageWidth);
+  assert.equal((bitmap as { height: number }).height, imageHeight);
+  assert.equal(dw, renderedWidth);
+  assert.equal(dh, renderedHeight);
+  assert.equal(dx, (192 - renderedWidth) / 2);
+  assert.equal(dy, (192 - renderedHeight) / 2);
+};
+await assertFitsWholeLogo('https://clinic.test/padded-square.png', 192, 192, 168, 168);
+await assertFitsWholeLogo('https://clinic.test/wide-logo.png', 400, 100, 168, 42);
+await assertFitsWholeLogo('https://clinic.test/tall-logo.png', 100, 400, 42, 168);
 
 console.log('notificationBranding.test.ts: ok');

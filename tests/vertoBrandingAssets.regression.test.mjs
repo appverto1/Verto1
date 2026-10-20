@@ -67,7 +67,7 @@ assert.ok(manifest.icons.some((icon) => icon.src.includes('verto-icon-512.png'))
 assert.ok(manifest.icons.some((icon) => icon.src.includes('verto-maskable-icon.png') && icon.purpose === 'maskable'));
 
 const serviceWorker = read('public/sw.js');
-assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v24"/);
+assert.match(serviceWorker, /const SW_VERSION = "verto-branding-v25"/);
 assert.match(serviceWorker, new RegExp(`verto-icon-192\\.png\\?v=${BRAND_VERSION}`));
 assert.match(serviceWorker, new RegExp(`verto-notification-badge\\.png\\?v=${BRAND_VERSION}`));
 assert.match(serviceWorker, /"verto-branding-v15"/);

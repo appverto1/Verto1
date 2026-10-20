@@ -29,6 +29,6 @@ assert.match(calendar, /Relatórios de tempo/);
 assert.match(calendar, /Atualizar agenda/);
 assert.match(calendar, /cacheRef\.current\.clear\(\);[\s\S]*?setRemoteRefreshNonce/);
 assert.match(calendar, /setFilterSheetOpen\(true\)/);
-assert.match(worker, /const SW_VERSION = "verto-branding-v24"/);
+assert.match(worker, /const SW_VERSION = "verto-branding-v25"/);
 assert.doesNotMatch(worker, /notificationOptions\.image\s*=|\.showNotification\([^\n]*\{[^\n]*image:/);
 console.log('notificationAgendaPresentation.regression: PASS');

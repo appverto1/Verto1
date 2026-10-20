@@ -142,27 +142,17 @@ assert.equal('image' in recoveryCalls[1].options,false);
 
 console.log('patientNotificationPushPresentation: aviso e lembrete compactos; fallback textual em falha de ícone');
 
-// Uploaded clinic logos can have large transparent margins around a tiny
-// artwork. The compact icon must crop that padding before scaling, preserving
-// original dimensions used in clinic settings and omitting the large image.
+// Uploaded clinic logos can have large transparent/white margins around tiny
+// artwork. Keep the complete uploaded bitmap in the notification: no automatic
+// crop or enlargement of the artwork relative to its own canvas.
 const paddedCalls = [], paddedDraw = [], paddedHandlers = new Map();
-const paddedPixelData = new Uint8ClampedArray(96 * 96 * 4);
-for (let y = 44; y < 52; y++) {
-  for (let x = 44; x < 52; x++) {
-    const i = (y * 96 + x) * 4;
-    paddedPixelData[i] = 60;
-    paddedPixelData[i + 1] = 90;
-    paddedPixelData[i + 2] = 150;
-    paddedPixelData[i + 3] = 255;
-  }
-}
 class PaddedCanvas {
   constructor(width, height) { assert.equal(width, 192); assert.equal(height, 192); }
   getContext() {
     return {
       clearRect() {},
       drawImage(...args) { paddedDraw.push(args); },
-      getImageData() { return { data: paddedPixelData }; },
+      getImageData() { throw new Error('Unexpected logo pixel scan'); },
     };
   }
   async convertToBlob() {
@@ -176,7 +166,7 @@ vm.runInNewContext(source, {
     registration: { async showNotification(title, options) { paddedCalls.push({ title, options }); } },
     clients: { async matchAll() { return []; } },
   },
-  console, URL, URLSearchParams, Set, Date, Uint8Array, Uint8ClampedArray, JSON, Promise, String,
+  console, URL, URLSearchParams, Set, Date, Uint8Array, JSON, Promise, String,
   OffscreenCanvas: PaddedCanvas,
   createImageBitmap: async () => ({ width: 96, height: 96, close() {} }),
   fetch: async () => ({ ok: true, headers: { get: () => null }, async blob() { return { type: 'image/png', size: 200 }; } }),
@@ -195,7 +185,9 @@ await paddedDelivery;
 assert.equal(paddedCalls.length, 1);
 assert.match(paddedCalls[0].options.icon, /^data:image\/png;base64,/);
 assert.equal('image' in paddedCalls[0].options, false);
-assert.equal(paddedDraw.length, 2, 'scan followed by final proportional crop');
-assert.equal(paddedDraw[1].length, 9, 'visible logo is cropped by source rectangle');
-assert.ok(paddedDraw[1][3] < 20 && paddedDraw[1][4] < 20, 'transparent margins excluded');
-assert.equal(Math.max(paddedDraw[1][7], paddedDraw[1][8]), 168, 'small mark is enlarged to the compact icon frame');
+assert.equal(paddedDraw.length, 1, 'a imagem inteira deve ser desenhada uma única vez');
+assert.equal(paddedDraw[0].length, 5, 'não deve haver retângulo de recorte na origem');
+assert.equal(paddedDraw[0][1], 12, 'margens internas continuam preservadas');
+assert.equal(paddedDraw[0][2], 12);
+assert.equal(paddedDraw[0][3], 168);
+assert.equal(paddedDraw[0][4], 168);
