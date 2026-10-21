@@ -1782,17 +1782,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         .map((value) => String(value || '').trim())
         .filter(Boolean)
     );
-    const patientEmail = String(user?.email || '').trim().toLowerCase();
+    // A guardian email can belong to multiple children. Never infer the
+    // patient for clinical photos or rewards from that shared identifier.
     return (Array.isArray(history) ? history : []).filter((item: any) => {
       const isFamily = ['family_note', 'patient_note', 'photo'].includes(String(item?.type || '').toLowerCase());
       if (!isFamily) return false;
       const itemPatientId = String(item?.patientId || item?.patient_id || '').trim();
-      const itemPatientEmail = String(item?.patient_email || item?.patientEmail || item?.email || '').trim().toLowerCase();
-      if (itemPatientId) return patientKeys.has(itemPatientId);
-      if (itemPatientEmail) return Boolean(patientEmail && itemPatientEmail === patientEmail);
-      return false;
+      return Boolean(itemPatientId && patientKeys.has(itemPatientId));
     });
-  }, [history, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
+  }, [history, portalPatientId, user?.id, user?.patientId, user?.patient_id]);
 
   const persistedFamilyDiaryHistory = useMemo(() => {
     return [...portalFamilyHistory]
@@ -1822,13 +1820,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         .map((value) => String(value || '').trim())
         .filter(Boolean)
     );
-    const portalStarPatientEmail = String(user?.email || '').trim().toLowerCase();
     const sharedNoteBelongsToPortalPatient = (item: any) => {
       const notePatientId = String(item?.patientId ?? item?.patient_id ?? '').trim();
-      const notePatientEmail = String(item?.patient_email ?? item?.email ?? '').trim().toLowerCase();
-      if (notePatientId) return portalStarPatientKeys.has(notePatientId);
-      if (notePatientEmail) return Boolean(portalStarPatientEmail && notePatientEmail === portalStarPatientEmail);
-      return false;
+      return Boolean(notePatientId && portalStarPatientKeys.has(notePatientId));
     };
     const scopedSharedNotes = (Array.isArray(sharedNotes) ? sharedNotes : []).filter(sharedNoteBelongsToPortalPatient);
     const milestoneBySource = new Map<string, { awarded: boolean; ts: number }>();
@@ -1849,7 +1843,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       }
     });
     return { weekLogs, weekPhotos, stars: countCanonicalFamilyStars(portalFamilyHistory, scopedSharedNotes, milestoneBySource) };
-  }, [portalFamilyHistory, sharedNotes, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
+  }, [portalFamilyHistory, sharedNotes, portalPatientId, user?.id, user?.patientId, user?.patient_id]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
   const normalizePortalText = (value: any) => String(value || '').trim();
