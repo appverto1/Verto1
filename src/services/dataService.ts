@@ -2621,9 +2621,7 @@ export const dataService = {
   // A professional's star is a clinical decision: only the confirmed server
   // response may alter the displayed state. Never enqueue offline/pending
   // mutations that could silently change a patient's reward after an error.
-  async updateFamilyNoteStar(noteId: string, updates: {
-    score: 0 | 1; subject: string; text: string;
-  }) {
+  async updateFamilyNoteStar(noteId: string, updates: { score: 0 | 1 }) {
     try {
       const response = await fetchWithAuthRetry(`/api/notes/${encodeURIComponent(noteId)}`, {
         method: 'PATCH',
