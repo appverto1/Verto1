@@ -75,16 +75,16 @@ assert.equal(stoppedTask.started, false);
 assert.equal(stoppedTaskCreations, 1);
 assert.equal(directScheduleCalls, 0, 'economy suppresses generic automatic schedules');
 assert.equal(isEssentialEconomyNotificationSchedule('* * * * *', { name:'verto-notification-jobs' }),true);
-assert.equal(isEssentialEconomyNotificationSchedule('* * * * *', { name:'verto-clinic-announcements' }),true);
+assert.equal(isEssentialEconomyNotificationSchedule('* * * * *', { name:'verto-clinic-announcements' }),false,'announcements are drained by the unified cron');
 assert.equal(isEssentialEconomyNotificationSchedule('*/5 * * * *',{ name:'verto-notification-jobs' }),false,'do not allow arbitrary cadence');
 assert.equal(isEssentialEconomyNotificationSchedule('* * * * *',{ name:'unrelated-worker' }),false);
 const notificationTask=fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'verto-notification-jobs'});
 const announcementTask=fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'verto-clinic-announcements'});
 assert.equal(notificationTask.started,true,'essential patient reminders must run in economy');
-assert.equal(announcementTask.started,true,'essential patient announcements must run in economy');
-assert.equal(directScheduleCalls,2,'only two essential queues are allowed to run');
+assert.equal(announcementTask.started,false,'announcements must not register a second poller');
+assert.equal(directScheduleCalls,1,'only the unified delivery cron may poll the backend');
 assert.equal(fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'unsafe-job'}).started,false);
-assert.equal(stoppedTaskCreations,2,'other work remains stopped');
+assert.equal(stoppedTaskCreations,3,'other work and the old announcement scheduler remain stopped');
 
 let activeScheduleCalls = 0;
 const fakeActiveScheduler: any = {
@@ -232,7 +232,7 @@ const server = read('server.ts');
 const envExample = read('.env.example');
 
 // All known node-cron recurring workers use the singleton guarded by backgroundWorkerMode.
-assert.equal((recurringCronSources.match(/cron\.schedule\(/g) || []).length, 2);
+assert.equal((recurringCronSources.match(/cron\.schedule\(/g) || []).length, 1);
 assert.equal((noShowService.match(/cron\.schedule\(/g) || []).length, 1);
 assert.match(recurringCronSources, /from 'node-cron'/);
 assert.match(noShowService, /from 'node-cron'/);
@@ -240,7 +240,7 @@ assert.match(backgroundWorkerMode, /from 'node-cron'/);
 assert.match(backgroundWorkerMode, /scheduler\.createTask/);
 assert.match(backgroundWorkerMode, /notification_jobs_startup/);
 assert.match(cronService, /name:\s*'verto-notification-jobs'/);
-assert.match(clinicAnnouncementCronService, /name:\s*'verto-clinic-announcements'/);
+assert.doesNotMatch(clinicAnnouncementCronService, /cron\.schedule\(/, 'announcements must not run a second per-minute poller');
 assert.match(backgroundWorkerMode, /isEssentialEconomyNotificationSchedule/);
 assert.match(backgroundWorkerMode, /startup_warmup/);
 assert.match(backgroundWorkerModeConfig, /VERTO_BACKGROUND_WORKER_MODE=economy é proibido em production/);
