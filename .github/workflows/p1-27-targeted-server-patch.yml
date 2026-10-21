@@ -1,0 +1,31 @@
+name: P1 27 exact backend route patch (temporary)
+on:
+  push:
+    branches:
+      - fix/staging-p1-27-verified-24h-reminder-auto-cancel-20261021
+    paths:
+      - scripts/patch-p1-27-verified-reminder-route.mjs
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply precise 24h-origin cancellation branch to existing portal route
+        run: |
+          node scripts/patch-p1-27-verified-reminder-route.mjs
+          git diff --check
+          test "$(git diff --name-only)" = "server.ts"
+          git config user.name "verto-staging-ci"
+          git config user.email "verto-staging-ci@users.noreply.github.com"
+          git add server.ts
+          git commit -m "feat(P1-27): gate portal auto-cancel by verified 24h reminder"
+          git push origin HEAD:refs/heads/fix/staging-p1-27-verified-24h-reminder-auto-cancel-20261021
