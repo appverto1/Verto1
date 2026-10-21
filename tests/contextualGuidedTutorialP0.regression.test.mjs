@@ -68,6 +68,24 @@ assert.match(tutorial, /maxHeight: 'calc\(100dvh - 24px\)'/);
 assert.match(tutorial, /onClick=\{\(\) => onClose\('pause'\)\}/);
 assert.match(tutorial, /onClick=\{\(\) => onClose\('skip'\)\}/);
 assert.match(tutorial, /onStepChange\(currentStepIndex \+ 1\)/);
+// All clinic professional roles, including reception, share the coordinator's
+// mobile navigation. Both its patient-record and normal drawers must begin
+// with the professional identity and an accessible theme switch.
+assert.match(coordinator, /import \\{ ProfessionalMobileDrawerHeader, SettingsMenu \\} from "\\.\\/SettingsMenu";/);
+assert.equal((coordinator.match(/<ProfessionalMobileDrawerHeader/g) || []).length, 2,
+  'professional header is present in both mobile drawer variants');
+assert.match(coordinator, /showAccountIdentity=\\{false\\}/,
+  'the account links below navigation must not repeat photo, name or theme');
+assert.match(settings, /export function ProfessionalMobileDrawerHeader\\(/);
+assert.match(settings, /data-mobile-professional-header/);
+assert.match(settings, /<ProfessionalAccountIdentity user=\\{user\\} \\/>/);
+assert.match(settings, /<SecureImage[\\s\\S]*?src=\\{profileImageUrl\\}/,
+  'profile header uses the registered professional photo with initials fallback');
+assert.match(settings, /aria-label=\\{themeMode === 'light' \\? 'Ativar tema escuro' : 'Ativar tema claro'\\}/,
+  'theme action remains accessible in the drawer top');
+assert.match(settings, /showAccountIdentity && \\(/,
+  'inline account actions can suppress the duplicate identity header');
+
 assert.match(coordinator, /<TutorialOverlay/);
 const detail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 assert.match(detail, /<TutorialOverlay/,
