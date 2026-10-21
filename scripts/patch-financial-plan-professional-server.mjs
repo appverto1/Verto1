@@ -20,8 +20,8 @@ const replacements = [
   ],
 ];
 replacements.push([
-  "const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [\\n  'id',\\n  'organization_id',\\n  'patient_id',\\n  'service_type',",
-  "const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [\\n  'id',\\n  'organization_id',\\n  'patient_id',\\n  'service_type',\\n  'professional_user_id',",
+  "const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [\n  'id',\n  'organization_id',\n  'patient_id',\n  'service_type',",
+  "const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [\n  'id',\n  'organization_id',\n  'patient_id',\n  'service_type',\n  'professional_user_id',",
 ]);
 for (const [oldText, newText] of replacements) {
   if (source.includes(newText)) continue;
