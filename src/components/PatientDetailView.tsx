@@ -6,6 +6,7 @@ import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
 import { ComparisonBarChart } from './Charts';
 import { HistoryCard } from './History';
+import { familyDiaryReadMarkerKey, familyDiaryNewCount, markFamilyDiarySeen, readFamilyDiarySeenAt } from '../utils/familyDiaryUnread';
 import { SessionMode } from './SessionMode';
 import { RadarDomainAssessmentChart } from './RadarDomainAssessmentChart';
 import { CumulativeGrowthChart } from './CumulativeGrowthChart';
@@ -4425,6 +4426,38 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         (item?.type === 'family_note' || item?.type === 'photo');
     });
   }, [visibleHistoryWithFamilyNotes, isKidsProfile, patient?.id]);
+
+  // Read status is purely a cosmetic device-local preference, scoped to
+  // actor, clinic and patient. Never use it for clinical authorization.
+  const familyDiaryMarkerKey = familyDiaryReadMarkerKey({
+    userId: clinicContext?.userId,
+    clinicId: clinicContext?.clinicId ?? clinicContext?.organizationId,
+    patientId: patient?.id,
+  });
+  const [familyDiarySeenVersion, setFamilyDiarySeenVersion] = useState(0);
+  const familyDiarySeenAt = useMemo(() => {
+    if (typeof window === 'undefined') return 0;
+    try { return readFamilyDiarySeenAt(familyDiaryMarkerKey, window.localStorage); }
+    catch { return 0; }
+  }, [familyDiaryMarkerKey, familyDiarySeenVersion]);
+  const familyDiaryUnreadCount = useMemo(
+    () => familyDiaryMarkerKey ? familyDiaryNewCount(familyDiaryEntries, familyDiarySeenAt) : 0,
+    [familyDiaryEntries, familyDiaryMarkerKey, familyDiarySeenAt]
+  );
+
+  useEffect(() => {
+    if (activeTab !== 'history' || historySubtab !== 'family' || !familyDiaryMarkerKey) return;
+    // Do not mark unread photos seen if the history is still loading, errored
+    // or came from an offline fallback. Wait for the authoritative load.
+    if (!historyPagination.initialized || historyPagination.loading || historyPagination.error || historyPagination.offline) return;
+    if (!familyDiaryEntries.length || typeof window === 'undefined') return;
+    try {
+      if (markFamilyDiarySeen(familyDiaryMarkerKey, familyDiaryEntries, window.localStorage)) {
+        setFamilyDiarySeenVersion((version) => version + 1);
+      }
+    } catch { /* storage unavailable; keep existing content accessible */ }
+  }, [activeTab, historySubtab, familyDiaryMarkerKey, familyDiaryEntries, historyPagination.initialized,
+    historyPagination.loading, historyPagination.error, historyPagination.offline]);
 
   const normalizeNoteText = (value: string) => decodeClinicalTextEntities(
     String(value || '')
@@ -11077,6 +11110,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     className={`min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${historySubtab === section ? 'bg-[#7551FF] text-white' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`}
                   >
                     {section === 'timeline' ? 'Linha do tempo' : 'Diário da Família'}
+                    {section === 'family' && familyDiaryUnreadCount > 0 && (
+                      <span
+                        aria-label={`${familyDiaryUnreadCount} novos registros da família`}
+                        className={`ml-2 inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold ${historySubtab === 'family' ? 'bg-white/20 text-white' : 'bg-violet-100 text-violet-700'}`}
+                      >
+                        {familyDiaryUnreadCount > 9 ? '9+' : familyDiaryUnreadCount}
+                      </span>
+                    )}
                   </button>
                 ))}
               </nav>
