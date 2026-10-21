@@ -30,11 +30,18 @@ export function registerGroupSessionPricePreviewRoute(app: Express, deps: GroupP
           supabase: deps.supabase,
           authenticatedClinicId: String(clinicId || ''),
           specialty: req.body?.specialty,
-          patientIds: req.body?.patientIds
+          patientIds: req.body?.patientIds,
+          scheduledStartAt: req.body?.scheduledStartAt,
+          localDate: req.body?.date,
         });
         if (!result.ok) return res.status(
           result.code.endsWith('_OUT_OF_SCOPE') ? 404 : result.code.includes('INVALID') ? 400 : 409
-        ).json({ success: false, code: result.code });
+        ).json({
+          success: false, code: result.code,
+          ...('patientId' in result && typeof result.patientId === 'string' &&
+            Array.isArray(req.body?.patientIds) && req.body.patientIds.includes(result.patientId)
+              ? { patientId: result.patientId } : {}),
+        });
         return res.json({ success: true, mode: 'GROUP', rates: result.rates });
       } catch (error: any) {
         const code = String(error?.code || '');
