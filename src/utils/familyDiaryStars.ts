@@ -15,10 +15,12 @@ export function countCanonicalFamilyStars(
   milestoneBySource: ReadonlyMap<string, MilestoneAward>
 ): number {
   const bySource = new Map<string, boolean>();
-  const awarded = (item: FamilyRecord) =>
-    Number(item?.score ?? 0) >= 1
-    || /\[STAR\]/i.test(String(item?.note ?? item?.text ?? ''))
-    || /\u2b50|⭐/.test(String(item?.subject || ''));
+  const awarded = (item: FamilyRecord) => {
+    const canonicalScore = item?.score === null || item?.score === undefined ? null : Number(item.score);
+    if (canonicalScore !== null && Number.isFinite(canonicalScore)) return canonicalScore >= 1;
+    return /\[STAR\]/i.test(String(item?.note ?? item?.text ?? ''))
+      || /\u2b50|⭐/.test(String(item?.subject || ''));
+  };
 
   for (const row of Array.isArray(history) ? history : []) {
     if (!['family_note', 'patient_note', 'photo'].includes(String(row?.type || '').toLowerCase())) continue;
