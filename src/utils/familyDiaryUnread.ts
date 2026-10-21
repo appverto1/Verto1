@@ -58,7 +58,7 @@ export function markFamilyDiarySeen(
   store?: Pick<Storage, 'getItem' | 'setItem'> | null,
 ): boolean {
   if (!key || !store) return false;
-  const latest = Math.max(0, ...(Array.isArray(entries) ? entries : []).map(familyDiaryEntryTime));
+  const latest = (Array.isArray(entries) ? entries : []).reduce((max, entry) => Math.max(max, familyDiaryEntryTime(entry)), 0);
   if (!latest) return false;
   try {
     const previous = readFamilyDiarySeenAt(key, store);
