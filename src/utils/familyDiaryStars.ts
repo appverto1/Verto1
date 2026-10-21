@@ -30,7 +30,9 @@ export function countCanonicalFamilyStars(
     const text = String(row?.text ?? row?.note ?? '');
     if (subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|')) continue;
     const familyNote = ['family_note', 'photo'].includes(String(row?.type || '').toLowerCase())
-      || String(row?.visibility || '').toLowerCase() === 'family';
+      || String(row?.visibility || '').toLowerCase() === 'family'
+      || /fam[ií]lia/i.test(subject)
+      || /registro da fam[ií]lia/i.test(text);
     if (!familyNote) continue;
     const source = String(row?.sourceRef || (row?.id ? `note-family-${row.id}` : '')).trim();
     if (source) bySource.set(source, awarded(row));
