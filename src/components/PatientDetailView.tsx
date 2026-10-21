@@ -4290,6 +4290,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       .map((n: any) => {
         const rawText = String(n?.text || '');
         const hasStarMarker = /\[STAR\]/i.test(rawText) || /\u2b50|⭐/.test(String(n?.subject || ''));
+        const storedScore = n?.score === null || n?.score === undefined ? null : Number(n.score);
+        const hasStoredScore = storedScore !== null && Number.isFinite(storedScore);
+        const awarded = hasStoredScore ? storedScore >= 1 : (Boolean(milestoneBySource.get(`note-family-${n?.id}`)?.awarded) || hasStarMarker);
         const media = resolveFamilyMediaForTimeline(n);
         const noteType = String(n?.type || n?.kind || '').toLowerCase() === 'photo' ? 'photo' : 'family_note';
         const normalizedText = rawText
@@ -4313,13 +4316,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           image: media.image,
           image_path: media.image_path,
           icon: noteType === 'photo' ? '📷' : '🏠',
-          score:
-            milestoneBySource.get(`note-family-${n?.id}`)?.awarded
-              ? 1
-              : hasStarMarker
-                ? 1
-                : (Number.isFinite(Number(n?.score)) ? Number(n.score) : 0),
-          milestoneAwarded: Boolean(milestoneBySource.get(`note-family-${n?.id}`)?.awarded),
+          score: awarded ? 1 : 0,
+          milestoneAwarded: awarded,
           dateGroup,
           date: createdAt,
           time: Number.isNaN(dateObj.getTime())
@@ -4355,11 +4353,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         patient_email: current?.patient_email || entry?.patient_email || patient?.email || null,
         sourceRef: current?.sourceRef || entry?.sourceRef || String(current?.id || entry?.id || ''),
         subject: current?.subject || entry?.subject,
-        score: Math.max(Number(current?.score ?? 0) || 0, Number(entry?.score ?? 0) || 0),
-        milestoneAwarded:
-          Boolean(current?.milestoneAwarded) ||
-          Boolean(entry?.milestoneAwarded) ||
-          Boolean(milestoneBySource.get(String(current?.sourceRef || current?.id || ''))?.awarded),
+        score: current?.score !== undefined && current?.score !== null
+          ? Number(current.score) || 0 : Number(entry?.score ?? 0) || 0,
+        milestoneAwarded: current?.score !== undefined && current?.score !== null
+          ? Number(current.score) >= 1 : Boolean(entry?.milestoneAwarded),
         type:
           current?.type === 'family_note' || current?.type === 'photo'
             ? current?.type
@@ -4372,6 +4369,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       const sourceRef = String(item?.sourceRef || item?.id || '');
       const eventAwarded = Boolean(milestoneBySource.get(sourceRef)?.awarded);
       const hasMarker = /\[STAR\]/i.test(String(item?.note || item?.text || '')) || /\u2b50|⭐/.test(String(item?.subject || ''));
+      const numericScore = item?.score === null || item?.score === undefined ? null : Number(item.score);
+      const awarded = numericScore !== null && Number.isFinite(numericScore)
+        ? numericScore >= 1 : (Boolean(item?.milestoneAwarded) || eventAwarded || hasMarker);
       const media = resolveFamilyMediaForTimeline(item);
       const resolvedPatientId = item?.patientId || item?.patient_id || patient?.id;
       return {
@@ -4382,8 +4382,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         patient_email: item?.patient_email || patient?.email || null,
         image: item?.image || media.image,
         image_path: item?.image_path || item?.imagePath || media.image_path,
-        milestoneAwarded: Boolean(item?.milestoneAwarded) || eventAwarded,
-        score: (Boolean(item?.milestoneAwarded) || eventAwarded || hasMarker || Number(item?.score ?? 0) >= 1) ? 1 : Number(item?.score ?? 0)
+        milestoneAwarded: awarded,
+        score: awarded ? 1 : 0
       };
     });
 
