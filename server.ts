@@ -50028,9 +50028,13 @@ async function startServer() {
       // The server derives the patient and family visibility from the existing
       // stored note. Frontend IDs, roles and score are not authorization sources.
       const existingFamilyNote = ['family_note', 'photo'].includes(String(existing.type || '').toLowerCase())
-        || String(existing.visibility || '').toLowerCase() === 'family';
+        || String(existing.visibility || '').toLowerCase() === 'family'
+        || /fam[ií]lia/i.test(String(existing.subject || ''))
+        || /registro da fam[ií]lia/i.test(String(existing.text || ''));
       const targetsFamily = ['family_note', 'photo'].includes(String(req.body?.type || '').toLowerCase())
-        || String(req.body?.visibility || '').toLowerCase() === 'family';
+        || String(req.body?.visibility || '').toLowerCase() === 'family'
+        || /fam[ií]lia/i.test(String(req.body?.subject || ''))
+        || /registro da fam[ií]lia/i.test(String(req.body?.text || ''));
       const scoreProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'score');
       if (existingFamilyNote || targetsFamily || scoreProvided) {
         if (!(await canAccessPatientInCurrentClinic(notePatientId, req.session.user, 'write'))) {
