@@ -161,6 +161,9 @@ jobs:
       - name: Expired server session and safe re-entry regression
         run: node tests/sessionExpiredCleanLogout.regression.test.mjs
 
+      - name: Clinic authorization-denial guidance regression
+        run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
+
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
 
