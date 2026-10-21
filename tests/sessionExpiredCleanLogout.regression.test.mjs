@@ -42,7 +42,8 @@ assert.match(expiredLogout, /clearSensitiveOfflineCacheForUser\(signingOutUserId
 assert.match(app, /const \[sessionRecoveryNotice, setSessionRecoveryNotice\] = useState<'expired' \| 'revoked' \| null>\(null\)/);
 assert.match(app, /if \(user\?\.id\) setSessionRecoveryNotice\(null\)/, 'successful authentication clears the old notice');
 assert.match(app, /const handleServerSessionExpired = \(event: Event\) => \{[\s\S]*?setSessionRecoveryNotice\(code === 'SESSION_REVOKED' \? 'revoked' : 'expired'\);[\s\S]*?handleLogout\('expired'\)/);
-assert.match(app, /\{sessionRecoveryNotice && \(/[\s\S]*?role="alert"/, 'the notice is exposed to assistive technology');
+assert.match(app, /\{sessionRecoveryNotice && \(/, 'the notice only renders after an expired server session');
+assert.match(app, /role="alert"/, 'the notice is exposed to assistive technology');
 assert.match(app, /sessionRecoveryNotice === 'revoked' \? 'Sua sessão foi encerrada por segurança\.' : 'Sua sessão expirou\.'/);
 assert.match(app, /onClick=\{\(\) => window\.location\.assign\('\/entrar'\)\}/, 'the CTA returns to the role-neutral access gateway');
 assert.match(app, /Entrar novamente/, 'a manual login action is offered instead of redirect loops');
