@@ -1297,6 +1297,7 @@ export const TherapistDashboard = ({
                   anamnesisTemplate={anamnesisTemplate}
                   clinicContext={{
                     userId: user?.id || "",
+                    clinicId: user?.activeWorkspaceId || user?.clinicId || "",
                     clinicTimeZone:
                       user?.clinicTimeZone ||
                       user?.clinic_timezone ||
