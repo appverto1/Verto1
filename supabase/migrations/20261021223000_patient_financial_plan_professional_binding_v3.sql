@@ -1,24 +1,15 @@
--- P0 #352 — Store a clinic-scoped therapist assignment for each logical
--- financial plan without rewriting/versioning historic billing snapshots.
+-- P0 #352 — Persist the selected clinic professional on the current canonical
+-- financial-plan version without rewriting historic billing snapshots.
 -- Staging candidate only; apply before deploying backend v3. No backfill.
 begin;
 
-create table if not exists public.patient_financial_plan_professional_bindings (
-  organization_id uuid not null,
-  patient_id uuid not null,
-  logical_plan_id uuid not null,
-  professional_user_id uuid not null,
-  specialty_key text not null,
-  created_by uuid,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
-  primary key (organization_id, patient_id, logical_plan_id)
-);
-create index if not exists patient_financial_plan_professional_bindings_user_idx
-  on public.patient_financial_plan_professional_bindings (organization_id, professional_user_id);
-alter table public.patient_financial_plan_professional_bindings enable row level security;
-revoke all on public.patient_financial_plan_professional_bindings from public, anon, authenticated;
-grant select, insert, update, delete on public.patient_financial_plan_professional_bindings to service_role;
+-- This column travels with the canonical versioned financial-plan row. It
+-- remains nullable for all historic/legacy plans; no historical backfill.
+alter table public.patient_financial_plans
+  add column if not exists professional_user_id uuid;
+create index if not exists patient_financial_plans_professional_active_idx
+  on public.patient_financial_plans(organization_id,professional_user_id)
+  where status='ACTIVE' and professional_user_id is not null;
 
 -- The service invokes one atomic reconciliation. The v2 financial-history
 -- engine is untouched: it still versions price changes and preserves receipts.
@@ -113,27 +104,18 @@ begin
         or (v_key is not null and plan.client_plan_key=v_key))
     order by plan.version desc limit 1;
     if not found then raise exception 'FINANCIAL_PLAN_BINDING_NOT_PERSISTED'; end if;
-    insert into public.patient_financial_plan_professional_bindings
-      (organization_id,patient_id,logical_plan_id,professional_user_id,specialty_key,created_by)
-    values(p_organization_id,p_patient_id,v_current.logical_plan_id,v_user,
-      public.appointment_financial_service_key_v1(
-        coalesce(nullif(v_current.service_name_snapshot,''),
-          nullif(v_current.custom_service_name,''),v_current.service_type)
-      ),p_actor_id)
-    on conflict (organization_id,patient_id,logical_plan_id)
-    do update set professional_user_id=excluded.professional_user_id,
-      specialty_key=excluded.specialty_key,updated_at=now();
+    -- No billing amount, charge, receipt or historic version is rewritten.
+    -- The currently ACTIVE version carries its own responsible professional.
+    update public.patient_financial_plans
+      set professional_user_id=v_user
+    where id=v_current.id and organization_id=p_organization_id
+      and patient_id=p_patient_id and status='ACTIVE';
+    if not found then raise exception 'FINANCIAL_PLAN_BINDING_NOT_PERSISTED'; end if;
   end loop;
 
-  select coalesce(jsonb_agg(to_jsonb(plan) ||
-      jsonb_build_object('professional_user_id',binding.professional_user_id)
-      order by plan.created_at asc),'[]'::jsonb)
+  select coalesce(jsonb_agg(to_jsonb(plan) order by plan.created_at asc),'[]'::jsonb)
     into v_data
   from public.patient_financial_plans plan
-  left join public.patient_financial_plan_professional_bindings binding
-    on binding.organization_id=plan.organization_id
-      and binding.patient_id=plan.patient_id
-      and binding.logical_plan_id=plan.logical_plan_id
   where plan.organization_id=p_organization_id and plan.patient_id=p_patient_id
     and plan.status='ACTIVE';
 
