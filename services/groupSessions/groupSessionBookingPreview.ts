@@ -76,7 +76,7 @@ export async function previewNewGroupBooking(params: GroupBookingInput & { supab
       .select('id,clinic_id,organization_id,is_active,capacity,prevent_overlapping_appointments')
       .eq('clinic_id',clinicId).eq('id',roomId).limit(1),
     params.supabase.from('patient_financial_plans')
-      .select('id,organization_id,patient_id,status,billing_mode,service_type,custom_service_name,service_name_snapshot,group_amount_cents')
+      .select('id,organization_id,patient_id,status,billing_mode,service_type,custom_service_name,service_name_snapshot,group_amount_cents,valid_from,valid_until,package_valid_until')
       .eq('organization_id',clinicId).eq('status','ACTIVE')
       .in('patient_id',patients).limit(201),
   ]);
