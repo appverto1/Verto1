@@ -5015,15 +5015,11 @@ export default function App() {
         alert('Não foi possível localizar o registro original da família. Atualize o prontuário e tente novamente.');
         return;
       }
-      const updatedNoteText = applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred);
-      const updatedNoteSubject = String(matchingNote?.subject || 'Geral').replace(/\u2b50|⭐/g, '').trim() || 'Geral';
       try {
         // Saving the existing record is authoritative. Do not optimistically
         // award a star or schedule an offline write before the server confirms.
         const noteUpdateResult = await dataService.updateFamilyNoteStar(String(noteId), {
-          score: starred ? 1 : 0,
-          subject: updatedNoteSubject,
-          text: updatedNoteText
+          score: starred ? 1 : 0
         });
         const persisted = noteUpdateResult?.data;
         if (noteUpdateResult?.success !== true
@@ -5037,10 +5033,7 @@ export default function App() {
               ...n,
               ...persisted,
               score: starred ? 1 : 0,
-              patientId: notePatientId,
-              text: updatedNoteText,
-              note: updatedNoteText,
-              subject: updatedNoteSubject
+              patientId: notePatientId
             }
           : n));
         // Legacy compatibility is best-effort only. The persisted note score
