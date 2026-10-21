@@ -11083,9 +11083,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             )}
             {isKidsProfile && historySubtab === 'family' ? (
               <section aria-label="Diário da Família" className="space-y-4">
-                <div>
-                  <h2 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Diário da Família</h2>
-                  <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Fotos e relatos enviados pela família, no histórico deste paciente.</p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h2 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Diário da Família</h2>
+                    <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Fotos e relatos enviados pela família, no histórico deste paciente.</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={historyPagination.loading || !historyRange.ready}
+                    onClick={() => void requestPatientHistoryPage('')}
+                    className={`min-h-11 rounded-xl border px-4 text-sm font-semibold disabled:opacity-60 ${isPanelDark ? 'border-slate-600 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                  >
+                    {historyPagination.loading ? 'Atualizando...' : 'Atualizar registros'}
+                  </button>
                 </div>
                 {renderHistoryTimelineControls()}
                 {historyPagination.loading && familyDiaryEntries.length === 0 ? (
