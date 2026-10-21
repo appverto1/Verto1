@@ -1,8 +1,8 @@
 name: One-time legacy family subject guard
 on:
-  push:
+  pull_request:
     branches:
-      - fix/staging-family-diary-legacy-stars-complete-20261021
+      - staging
     paths:
       - .github/workflows/one-time-family-diary-subject-patch.yml
 
@@ -11,11 +11,13 @@ permissions:
 
 jobs:
   bounded-server-patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'fix/staging-family-diary-legacy-stars-complete-20261021'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: true
       - uses: actions/setup-node@v4
         with:
