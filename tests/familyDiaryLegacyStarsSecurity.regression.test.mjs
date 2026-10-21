@@ -7,6 +7,14 @@ const historyCard = readFileSync('src/components/History.tsx', 'utf8');
 const dataService = readFileSync('src/services/dataService.ts', 'utf8');
 const portal = readFileSync('src/components/PatientDashboard.tsx', 'utf8');
 const detail = readFileSync('src/components/PatientDetailView.tsx', 'utf8');
+const schema = readFileSync('src/utils/routeSchemaFallbacks.ts', 'utf8');
+const migration = readFileSync('supabase/migrations/20261021160000_family_diary_note_star_score.sql', 'utf8');
+
+// Persisting a star must never depend on a missing optional column fallback.
+assert.match(migration, /alter table public\.notes add column if not exists score integer null/i);
+assert.doesNotMatch(migration, /update public\.notes|delete from public\.notes/i);
+assert.match(schema, /NOTE_SELECT_COLUMNS[\s\S]*'score'/);
+assert.match(schema, /NOTE_OPTIONAL_COLUMNS[\s\S]*'score'/);
 
 const routeStart = server.indexOf("app.patch('/api/notes/:noteId'");
 const routeEnd = server.indexOf("app.delete('/api/notes/:noteId'", routeStart);
