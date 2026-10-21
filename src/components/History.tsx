@@ -256,7 +256,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
           <p className="text-sm font-semibold text-emerald-800">{energyValue}%</p>
         </div>
       )}
-      {isTherapist && isFamilyEntry && !item?.isFromNotes && (
+      {isTherapist && isFamilyEntry && (
         <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end">
           <button type="button" onClick={() => void handleToggleMilestone()} disabled={isSavingMilestone} aria-busy={isSavingMilestone} className={`text-[10px] font-semibold px-4 py-2 rounded-xl shadow-sm transition-all uppercase tracking-widest disabled:cursor-wait disabled:opacity-60 ${isMilestoneAwarded ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-[#7551FF] text-white hover:opacity-90'}`}> 
             {isSavingMilestone ? 'Salvando...' : isMilestoneAwarded ? 'Remover Estrelinha' : 'Validar Marco ⭐'}
