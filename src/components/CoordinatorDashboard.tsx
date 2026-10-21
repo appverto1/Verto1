@@ -11303,14 +11303,15 @@ export function CoordinatorDashboard({
     user?.id,
   ]);
 
+  // The tutorial step array is recreated on each dashboard render. Depend on
+  // its stable target ID instead, so an explicit menu opening is not undone.
+  const guidedTutorialTargetId = guidedTutorialSteps[guidedTutorialStep]?.targetId || "";
   useEffect(() => {
-    if (!runGuidedTutorial) return;
-    const step = guidedTutorialSteps[guidedTutorialStep];
-    if (!step) return;
+    if (!runGuidedTutorial || !guidedTutorialTargetId) return;
     const mobile = typeof window !== "undefined" && window.matchMedia("(max-width: 1023px)").matches;
     if (!mobile) return;
-    setIsMobileMenuOpen(step.targetId.startsWith("nav-"));
-  }, [guidedTutorialStep, guidedTutorialSteps, runGuidedTutorial]);
+    setIsMobileMenuOpen(guidedTutorialTargetId.startsWith("nav-"));
+  }, [guidedTutorialTargetId, runGuidedTutorial]);
 
   const isFinancialBreadcrumbActive = (breadcrumb?: string[]) =>
     Boolean(
