@@ -1613,25 +1613,21 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
   return { skipped: false, totalCandidates: jobs.length, sent24h, sent12h, failed };
 }
 
-let deliveryQueuesRunning = false;
-
 async function runUnifiedDeliveryQueueScan(trigger: string) {
   const options = activeOptions;
-  if (!options || deliveryQueuesRunning) return;
-  deliveryQueuesRunning = true;
-  try {
-    await dispatchDueDeliveryQueues({
-      supabase: options.supabase,
-      deploymentEnv: options.deploymentEnv,
-      workerId: options.runtimeOwnerId,
-      trigger,
-      logger: options.logger,
-      processNotificationJobs: (rows) => runNotificationJobQueue(options, trigger, rows),
-      processClinicAnnouncements: (rows) => clinicAnnouncementService.runClinicAnnouncementDispatchScan(trigger, rows),
-    });
-  } finally {
-    deliveryQueuesRunning = false;
-  }
+  if (!options) return;
+  // Continue claiming once per minute even if an earlier batch is still being
+  // delivered. PostgreSQL's SKIP LOCKED/CLAIMED state prevents duplicate claims;
+  // pausing the next claim would unnecessarily delay new 24h/12h reminders.
+  await dispatchDueDeliveryQueues({
+    supabase: options.supabase,
+    deploymentEnv: options.deploymentEnv,
+    workerId: options.runtimeOwnerId,
+    trigger,
+    logger: options.logger,
+    processNotificationJobs: (rows) => runNotificationJobQueue(options, trigger, rows),
+    processClinicAnnouncements: (rows) => clinicAnnouncementService.runClinicAnnouncementDispatchScan(trigger, rows),
+  });
 }
 
 export function triggerAppointmentReminderScan(_trigger = 'manual_trigger') {
