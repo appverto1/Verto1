@@ -20,6 +20,10 @@ assert.equal(countCanonicalFamilyStars([h('one', 1)], [n('two', 1)], new Map([
 assert.equal(countCanonicalFamilyStars([], [
   { ...n('two', 1), subject: 'milestone_event', text: 'MILESTONE_EVENT|source=x|awarded=1' }
 ], new Map()), 0, 'the technical receipt does not independently become a family record');
+assert.equal(countCanonicalFamilyStars([], [
+  { id: 'shared-family', type: 'shared', visibility: 'shared_patient', subject: 'Diário da Família', score: 0, text: 'Conquista' }
+], new Map([['note-family-shared-family', event(true)]])), 0,
+  'legacy shared family note overrides stale event even without a family_note type');
 assert.equal(countCanonicalFamilyStars([], [{ ...n('legacy', 0), text: '[STAR] milestone' }], new Map()), 1,
   'legacy marker remains backward compatible until rewritten');
 
