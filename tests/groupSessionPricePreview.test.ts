@@ -60,4 +60,27 @@ assert.equal((await previewGroupSessionRates({
   supabase:makeDb([first,second],planRows.map(plan=>({...plan,group_amount_cents:0}))),
   authenticatedClinicId:clinic,specialty:'Fonoaudiólogo',patientIds:[first,second]
 })).ok,false,'never substitute individual rate for missing group rate');
+const datedDb = makeDb();
+const dated=await previewGroupSessionRates({
+  supabase:datedDb, authenticatedClinicId:clinic,specialty:'Fonoaudiólogo',
+  patientIds:[first,second],scheduledStartAt:'2026-11-02T13:00:00Z',localDate:'2026-11-02'
+});
+assert.equal(dated.ok,true);
+assert.equal(datedDb.calls.length,2,'date-aware added-participant preview must keep same two batched reads');
+assert.match(datedDb.calls[1].select||'',/valid_from,valid_until,package_valid_until/);
+const expired=await previewGroupSessionRates({
+  supabase:makeDb([first,second],planRows.map((plan,i)=>i===0
+    ? {...plan,valid_until:'2026-11-02T13:00:00Z'} : plan)),
+  authenticatedClinicId:clinic,specialty:'Fonoaudiólogo',
+  patientIds:[first,second],scheduledStartAt:'2026-11-02T13:00:00Z',localDate:'2026-11-02'
+});
+assert.deepEqual(expired,{ok:false,code:'GROUP_PRICING_PLAN_NOT_VALID_AT_DATE',patientId:first},
+  'adding a patient cannot quote a plan expired at the reserved group slot');
+const noDateDb=makeDb();
+assert.deepEqual(await previewGroupSessionRates({
+  supabase:noDateDb,authenticatedClinicId:clinic,specialty:'Fonoaudiólogo',patientIds:[first,second],
+  localDate:'2026-11-02',
+}),{ok:false,code:'GROUP_PREVIEW_DATE_INVALID'});
+assert.equal(noDateDb.calls.length,0,'malformed date preview must be rejected without DB I/O');
+
 console.log('groupSessionPricePreview.test.ts: ok');
