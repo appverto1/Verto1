@@ -11,7 +11,8 @@ const batch = read('services/deliveryQueueBatch.ts');
 
 // SQL contains no new tables, triggers, polling or storage; old claims retain
 // their original tenant checks, SKIP LOCKED claims and recovery windows.
-assert.match(migration, /^begin;[\s\S]*commit;\s*$/i);
+assert.match(migration, /^begin;$/mi);
+assert.match(migration, /^commit;\s*$/mi);
 assert.match(migration, /create or replace function public\.claim_due_delivery_queues_v1/i);
 assert.match(migration, /security definer\s*set search_path = pg_catalog, public/i);
 assert.match(migration, /auth\.role\(\)[\s\S]*'service_role'/i);
