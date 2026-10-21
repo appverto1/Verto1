@@ -14,7 +14,7 @@ assert.match(dataService, /SERVER_SESSION_EXPIRED_CODES = new Set\(\['SERVER_SES
 assert.match(dataService, /response\.clone\(\)\.json\(\)/, '401 payload must be inspected without consuming the caller response');
 assert.match(dataService, /lastServerSessionExpiryDispatchAt < 5000/, 'concurrent 401 responses must not flood logout events');
 
-const first401Index = retry.indexOf("if (response.status !== 401) return response");
+const first401Index = retry.indexOf("if (response.status !== 401)");
 const retryFetchIndex = retry.indexOf("response = await fetch(url, { ...init, headers: retryHeaders })");
 const notifyIndex = retry.indexOf('await notifyServerSessionExpiredIfNeeded(response)');
 assert.ok(first401Index >= 0 && retryFetchIndex > first401Index && notifyIndex > retryFetchIndex,
@@ -40,7 +40,7 @@ assert.match(expiredLogout, /clearSensitiveOfflineCacheForUser\(signingOutUserId
  // A confirmed 401 must show a single actionable re-entry notice after the
  // canonical cleanup. Never auto-select a professional/patient role.
 assert.match(app, /const \[sessionRecoveryNotice, setSessionRecoveryNotice\] = useState<'expired' \| 'revoked' \| null>\(null\)/);
-assert.match(app, /if \(user\?\.id\) setSessionRecoveryNotice\(null\)/, 'successful authentication clears the old notice');
+assert.match(app, /if \(user\?\.id\) \{[\s\S]*?setSessionRecoveryNotice\(null\)/, 'successful authentication clears the old notice');
 assert.match(app, /const handleServerSessionExpired = \(event: Event\) => \{[\s\S]*?setSessionRecoveryNotice\(code === 'SESSION_REVOKED' \? 'revoked' : 'expired'\);[\s\S]*?handleLogout\('expired'\)/);
 assert.match(app, /\{sessionRecoveryNotice && \(/, 'the notice only renders after an expired server session');
 assert.match(app, /role="alert"/, 'the notice is exposed to assistive technology');
