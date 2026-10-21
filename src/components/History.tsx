@@ -99,7 +99,8 @@ const getFamilyHistoryImageSource = (item: any) => {
 };
 
 export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protocols = [], id, isKid, fullHistory = [], peiGoals = [] }: any) => { 
-  const [isEvaluating, setIsEvaluating] = useState(false); 
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [isSavingMilestone, setIsSavingMilestone] = useState(false); 
   const [score, setScore] = useState(item.score !== undefined ? item.score : ''); 
   const [evalComment, setEvalComment] = useState(item.evalComment || ''); 
   const [linkedTask, setLinkedTask] = useState(item.linkedTask || '');
@@ -153,10 +154,9 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
   const emitEvaluate = (updates: any) => {
     if (typeof onEvaluate !== 'function') return;
     if (onEvaluate.length >= 3) {
-      onEvaluate(item.id, updates?.score, updates?.evalComment || '');
-      return;
+      return onEvaluate(item.id, updates?.score, updates?.evalComment || '');
     }
-    onEvaluate(item.id, updates);
+    return onEvaluate(item.id, updates);
   };
 
   const handleSave = () => { 
@@ -192,11 +192,17 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
         : null;
   const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
   const isMilestoneAwarded = Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
-  const handleToggleMilestone = () => {
-    emitEvaluate({
-      score: isMilestoneAwarded ? 0 : 1,
-      evalComment: evalComment || item.evalComment || ''
-    });
+  const handleToggleMilestone = async () => {
+    if (isSavingMilestone) return;
+    setIsSavingMilestone(true);
+    try {
+      await emitEvaluate({
+        score: isMilestoneAwarded ? 0 : 1,
+        evalComment: evalComment || item.evalComment || ''
+      });
+    } finally {
+      setIsSavingMilestone(false);
+    }
   };
 
   return ( 
@@ -250,10 +256,10 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
           <p className="text-sm font-semibold text-emerald-800">{energyValue}%</p>
         </div>
       )}
-      {isTherapist && isFamilyEntry && (
-        <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end"> 
-          <button onClick={handleToggleMilestone} className={`text-[10px] font-semibold px-4 py-2 rounded-xl shadow-sm transition-all uppercase tracking-widest ${isMilestoneAwarded ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-[#7551FF] text-white hover:opacity-90'}`}> 
-            {isMilestoneAwarded ? 'Remover Estrelinha' : 'Validar Marco ⭐'}
+      {isTherapist && isFamilyEntry && !item?.isFromNotes && (
+        <div className="mt-4 pt-3 border-t border-gray-100 flex justify-end">
+          <button type="button" onClick={() => void handleToggleMilestone()} disabled={isSavingMilestone} aria-busy={isSavingMilestone} className={`text-[10px] font-semibold px-4 py-2 rounded-xl shadow-sm transition-all uppercase tracking-widest disabled:cursor-wait disabled:opacity-60 ${isMilestoneAwarded ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-[#7551FF] text-white hover:opacity-90'}`}> 
+            {isSavingMilestone ? 'Salvando...' : isMilestoneAwarded ? 'Remover Estrelinha' : 'Validar Marco ⭐'}
           </button>
         </div>
       )}
