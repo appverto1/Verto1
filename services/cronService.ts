@@ -21,6 +21,7 @@ import {
 } from './distributedRuntimeState';
 import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 import { createClinicAnnouncementCronService } from './clinicAnnouncementCronService';
+import { dispatchDueDeliveryQueues } from './deliveryQueueBatch';
 import { createAppointmentReminderBrandingService } from './appointmentReminderBranding';
 import { validateClaimedAppointmentReminder } from './appointmentReminderJobGuards';
 import { parseReminderSourcePayload } from './reminderSourcePayload';
@@ -1346,12 +1347,14 @@ async function runAppointmentReminderJob(
   return summary;
 }
 
-async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigger: string): Promise<AppointmentReminderRunSummary> {
-  const claim = await options.supabase.rpc('claim_due_notification_jobs_v1', {
-    p_deployment_env: options.deploymentEnv,
-    p_worker: options.runtimeOwnerId,
-    p_limit: 100,
-  });
+async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigger: string, preclaimedRows?: any[]): Promise<AppointmentReminderRunSummary> {
+  const claim = preclaimedRows === undefined
+    ? await options.supabase.rpc('claim_due_notification_jobs_v1', {
+      p_deployment_env: options.deploymentEnv,
+      p_worker: options.runtimeOwnerId,
+      p_limit: 100,
+    })
+    : { data: preclaimedRows, error: null };
   if (claim.error) {
     options.logger.error('[Notification Jobs] claim falhou; o scanner legado não será reativado.', {
       trigger,
@@ -1610,6 +1613,27 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
   return { skipped: false, totalCandidates: jobs.length, sent24h, sent12h, failed };
 }
 
+let deliveryQueuesRunning = false;
+
+async function runUnifiedDeliveryQueueScan(trigger: string) {
+  const options = activeOptions;
+  if (!options || deliveryQueuesRunning) return;
+  deliveryQueuesRunning = true;
+  try {
+    await dispatchDueDeliveryQueues({
+      supabase: options.supabase,
+      deploymentEnv: options.deploymentEnv,
+      workerId: options.runtimeOwnerId,
+      trigger,
+      logger: options.logger,
+      processNotificationJobs: (rows) => runNotificationJobQueue(options, trigger, rows),
+      processClinicAnnouncements: (rows) => clinicAnnouncementService.runClinicAnnouncementDispatchScan(trigger, rows),
+    });
+  } finally {
+    deliveryQueuesRunning = false;
+  }
+}
+
 export function triggerAppointmentReminderScan(_trigger = 'manual_trigger') {
   // Appointment/task DB triggers already schedule precise notification_jobs.
   // Do not launch a global scan after each mutation; the one-minute queue claim will pick due work.
@@ -1646,9 +1670,9 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
     runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
     requireDistributedLease: false,
   };
-  cron.schedule('* * * * *', () => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_cron_1_minute'); }, { timezone: 'UTC', name: 'verto-notification-jobs' });
-  setTimeout(() => { void runNotificationJobQueue(activeOptions as ActiveCronServiceOptions, 'notification_jobs_startup'); }, 5 * 1000);
-  logger.log('[Notification Jobs] Fila de lembretes de sessão e tarefas iniciada.', { timezone: 'UTC', businessTimezone: BRAZIL_TIMEZONE, deploymentEnv, pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey) });
+  cron.schedule('* * * * *', () => { void runUnifiedDeliveryQueueScan('notification_jobs_cron_1_minute'); }, { timezone: 'UTC', name: 'verto-notification-jobs' });
+  setTimeout(() => { void runUnifiedDeliveryQueueScan('notification_jobs_startup'); }, 5 * 1000);
+  logger.log('[Notification Jobs] Filas de lembretes e avisos iniciadas com claim único.', { timezone: 'UTC', businessTimezone: BRAZIL_TIMEZONE, deploymentEnv, pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey) });
 }
 
 const clinicAnnouncementService = createClinicAnnouncementCronService({
