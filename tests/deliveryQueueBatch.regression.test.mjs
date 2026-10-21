@@ -40,7 +40,8 @@ assert.match(cron, /matchesVertoDeploymentEnvironment\(job\?\.deployment_env, op
 assert.match(cron, /runNotificationJobQueue\(activeOptions, trigger\)/);
 assert.match(announcements, /preclaimedRows === undefined[\s\S]*claim_due_clinic_announcements_v1/);
 assert.match(cron, /preclaimedRows === undefined[\s\S]*claim_due_notification_jobs_v1/);
-assert.match(announcements, /await clinicAnnouncementInFlight/, 'already claimed notices cannot be discarded while a manual scan is running');
+assert.match(announcements, /await previousScan/, 'already claimed notices must wait for the previous delivery batch');
+assert.match(announcements, /clinicAnnouncementScanTail = new Promise<void>/, 'preclaimed batches must be serialized');
 assert.match(announcements, /dispatchClinicAnnouncementById/);
 assert.match(cron, /finalize_notification_jobs_v1/);
 assert.match(cron, /upsert_portal_notifications_batch_v1/);
