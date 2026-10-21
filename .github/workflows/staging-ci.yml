@@ -141,6 +141,7 @@ jobs:
           node --import tsx tests/familyDiaryUnread.test.ts
           node tests/familyDiaryProfessionalSubtab.regression.test.mjs
           node tests/familyDiaryPersistence.regression.test.mjs
+          node tests/familyDiaryMilestoneSafety.regression.test.mjs
 
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
