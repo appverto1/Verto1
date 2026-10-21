@@ -20,7 +20,7 @@ const timeline = detail.slice(
 
 // Existing history is retained; the family view is a subtab, not another top-level area.
 assert.match(detail, /role="tablist" aria-label="Seções do histórico"/);
-assert.match(detail, /historySubtab === 'timeline'/);
+assert.match(detail, /\(\['timeline', 'family'\] as const\)\.map/);
 assert.match(detail, /historySubtab === 'family'/);
 assert.match(detail, /isKidsProfile && historySubtab === 'family'/);
 assert.match(timeline, /Relatórios de sessão/);
