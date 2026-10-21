@@ -19,7 +19,12 @@ const replacements = [
     "    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v3')) {",
   ],
 ];
+replacements.push([
+  "const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [\\n  'id',\\n  'organization_id',\\n  'patient_id',\\n  'service_type',",
+  "const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [\\n  'id',\\n  'organization_id',\\n  'patient_id',\\n  'service_type',\\n  'professional_user_id',",
+]);
 for (const [oldText, newText] of replacements) {
+  if (source.includes(newText)) continue;
   assert.equal(source.split(oldText).length - 1, 1, 'unexpected server source drift');
   source = source.replace(oldText, newText);
 }
