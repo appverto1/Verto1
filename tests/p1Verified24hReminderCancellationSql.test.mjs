@@ -115,6 +115,9 @@ try {
   assert.equal((await run(pending)).applied,true);
   assert.equal(await scalar(`select status from appointment_action_requests where appointment_id=$1 and request_type='RESCHEDULE'`,
     [pending.appointment]),'CANCELLED','superseded reschedule must not remain pending');
+  assert.equal(await scalar(`select count(*)::int from appointment_status_audit_logs
+    where appointment_id=$1 and action='RESCHEDULE_REJECTED'`,[pending.appointment]),1,
+    'concurrent reschedule invalidation must have a separate audit event');
   for (const role of ['anon','authenticated']){
     assert.equal(await scalar(`select has_function_privilege('${role}',
       'public.cancel_appointment_from_verified_24h_reminder_v1(uuid,uuid,uuid,uuid,uuid,text,uuid,text,text,text)','EXECUTE')`),false);
