@@ -1,4 +1,3 @@
-import cron from 'node-cron';
 import crypto from 'crypto';
 import { createClinicAnnouncementDeliveryService, type ActiveCronServiceOptions } from './clinicAnnouncementDelivery';
 import {
@@ -47,6 +46,7 @@ export function createClinicAnnouncementCronService(deps: ClinicAnnouncementCron
 
 let clinicAnnouncementCronStarted = false;
 let clinicAnnouncementCronRunning = false;
+let clinicAnnouncementInFlight: Promise<void> | null = null;
 let clinicAnnouncementOptions: ActiveCronServiceOptions | null = null;
 
 const CLINIC_ANNOUNCEMENT_BATCH_LIMIT = 20;
@@ -111,21 +111,32 @@ async function dispatchClinicAnnouncementNow(
 
 async function runClinicAnnouncementDispatchScan(
   trigger = 'internal_endpoint',
+  preclaimedRows?: any[],
 ): Promise<ClinicAnnouncementDispatchSummary> {
   const options = clinicAnnouncementOptions;
-  if (!options || clinicAnnouncementCronRunning) {
+  if (!options) {
     return { skipped: true, claimed: 0, delivered: 0, failed: 0 };
   }
+  // Do not abandon an already-claimed delivery if a manual scan is in flight.
+  // Wait for that scan before handling the new, disjoint SKIP LOCKED batch.
+  if (clinicAnnouncementCronRunning) {
+    if (preclaimedRows === undefined) return { skipped: true, claimed: 0, delivered: 0, failed: 0 };
+    await clinicAnnouncementInFlight;
+  }
   clinicAnnouncementCronRunning = true;
+  let finishRun!: () => void;
+  clinicAnnouncementInFlight = new Promise<void>((resolve) => { finishRun = resolve; });
   let claimed = 0;
   let delivered = 0;
   let failed = 0;
   try {
-    const claim = await options.supabase.rpc('claim_due_clinic_announcements_v1', {
-      p_deployment_env: options.deploymentEnv,
-      p_worker_id: options.runtimeOwnerId,
-      p_limit: CLINIC_ANNOUNCEMENT_BATCH_LIMIT,
-    });
+    const claim = preclaimedRows === undefined
+      ? await options.supabase.rpc('claim_due_clinic_announcements_v1', {
+        p_deployment_env: options.deploymentEnv,
+        p_worker_id: options.runtimeOwnerId,
+        p_limit: CLINIC_ANNOUNCEMENT_BATCH_LIMIT,
+      })
+      : { data: preclaimedRows, error: null };
     if (claim.error) {
       options.logger.warn('[Clinic Announcement Cron] Claim indisponivel.', {
         trigger,
@@ -150,6 +161,8 @@ async function runClinicAnnouncementDispatchScan(
     return { skipped: false, claimed, delivered, failed };
   } finally {
     clinicAnnouncementCronRunning = false;
+    clinicAnnouncementInFlight = null;
+    finishRun();
   }
 }
 
@@ -179,19 +192,9 @@ function startClinicAnnouncementCron(options: CronServiceOptions) {
     requireDistributedLease: options.requireDistributedLease === true,
   };
 
-  cron.schedule(
-    '* * * * *',
-    () => {
-      void runClinicAnnouncementDispatchScan('node_cron_1_minute');
-    },
-    { timezone: 'UTC', name: 'verto-clinic-announcements' },
-  );
-
-  setTimeout(() => {
-    void runClinicAnnouncementDispatchScan('startup_warmup');
-  }, 8 * 1000);
-
-  logger.log('[Clinic Announcement Cron] Servico iniciado no backend Node.js a cada minuto.', {
+  // The reminder cron now claims both queues in one transaction each minute.
+  // Keep this service's manual dispatch API; no second periodic RPC is needed.
+  logger.log('[Clinic Announcement Cron] Fila habilitada no despachante unificado.', {
     timezone: 'UTC',
     businessTimezone: BRAZIL_TIMEZONE,
     deploymentEnv,
