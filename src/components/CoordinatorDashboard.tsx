@@ -11943,7 +11943,7 @@ export function CoordinatorDashboard({
                 onEvaluateHistoryItem
                   ? (id: any, score: number, note: string) => {
                       if (!ensureTherapistClinicalProfile()) return;
-                      onEvaluateHistoryItem(id, score, note);
+                      return onEvaluateHistoryItem(id, score, note);
                     }
                   : undefined
               }
