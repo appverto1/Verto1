@@ -2618,6 +2618,27 @@ export const dataService = {
     return await saveOfflineFirst(noteId, updates || {}, 'note', `/api/notes/${noteId}`, 'PATCH');
   },
 
+  // A professional's star is a clinical decision: only the confirmed server
+  // response may alter the displayed state. Never enqueue offline/pending
+  // mutations that could silently change a patient's reward after an error.
+  async updateFamilyNoteStar(noteId: string, updates: { score: 0 | 1 }) {
+    try {
+      const response = await fetchWithAuthRetry(`/api/notes/${encodeURIComponent(noteId)}`, {
+        method: 'PATCH',
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+        body: JSON.stringify(updates),
+      });
+      const result = await safeJson(response);
+      if (!response.ok || result?.success !== true) {
+        return { success: false, error: result?.error || 'Falha ao salvar reconhecimento clínico.' };
+      }
+      return result;
+    } catch {
+      return { success: false, error: 'Sem conexão para salvar o reconhecimento clínico.' };
+    }
+  },
+
   async getHistory(patientId: string, params: { limit?: number; cursor?: string; from?: string; to?: string } = {}) {
     try {
       const endpoint = endpointWithQuery(`/api/history/${encodeURIComponent(patientId)}`, {

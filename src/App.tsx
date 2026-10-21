@@ -5011,53 +5011,40 @@ export default function App() {
       const matchingNote = (Array.isArray(therapistNotes) ? therapistNotes : []).find((n: any) => String(n.id) === String(noteId));
       const notePatientId = String(matchingNote?.patientId || matchingNote?.patient_id || '').trim();
       const notePatientEmail = resolvePatientEmailForMilestone(notePatientId, matchingNote?.patient_email);
-      if (!matchingNote) {
-        alert('Não foi possível localizar o registro original da família para validar este marco. Atualize o prontuário e tente novamente.');
+      if (!matchingNote || !notePatientId) {
+        alert('Não foi possível localizar o registro original da família. Atualize o prontuário e tente novamente.');
         return;
       }
-      const updatedNoteText = applyStarMarker(String(matchingNote?.text || matchingNote?.note || ''), starred);
-      const updatedNoteSubject = String(matchingNote?.subject || 'Geral').replace(/\u2b50|â­/g, '').trim() || 'Geral';
-      const previousTherapistNotes = therapistNotes;
-      setTherapistNotes(prev =>
-        prev.map((n: any) =>
-          String(n.id) === String(noteId)
-            ? {
-                ...n,
-                score,
-                visibility: n?.visibility || 'family',
-                type: n?.type || 'family_note',
-                subject: updatedNoteSubject,
-                text: applyStarMarker(String(n?.text || n?.note || ''), starred),
-                note: applyStarMarker(String(n?.note || n?.text || ''), starred)
-              }
-            : n
-        )
-      );
       try {
-        if (matchingNote) {
-          const noteUpdateResult = await dataService.updateNote(String(noteId), {
-            score,
-            patient_id: notePatientId,
-            patient_email: notePatientEmail,
-            visibility: matchingNote?.visibility || 'family',
-            subject: updatedNoteSubject,
-            text: updatedNoteText
-          });
-          if (noteUpdateResult?.success === false) {
-            throw new Error(noteUpdateResult?.error || 'Falha ao atualizar anotação familiar original.');
-          }
+        // Saving the existing record is authoritative. Do not optimistically
+        // award a star or schedule an offline write before the server confirms.
+        const noteUpdateResult = await dataService.updateFamilyNoteStar(String(noteId), {
+          score: starred ? 1 : 0
+        });
+        const persisted = noteUpdateResult?.data;
+        if (noteUpdateResult?.success !== true
+          || String(persisted?.id || '') !== String(noteId)
+          || String(persisted?.patient_id || persisted?.patientId || '') !== notePatientId
+          || Number(persisted?.score) !== (starred ? 1 : 0)) {
+          throw new Error(noteUpdateResult?.error || 'Servidor não confirmou o salvamento da estrelinha.');
         }
-        // A nota da família é a fonte canônica da estrela. O evento abaixo é apenas
-        // compatibilidade/auditoria legada e não pode desfazer uma validação já persistida.
+        setTherapistNotes(prev => prev.map((n: any) => String(n.id) === String(noteId)
+          ? {
+              ...n,
+              ...persisted,
+              score: starred ? 1 : 0,
+              patientId: notePatientId
+            }
+          : n));
+        // Legacy compatibility is best-effort only. The persisted note score
+        // remains authoritative, including when revoking a previous award.
         void persistMilestoneEvent({
           patientId: notePatientId,
           patientEmail: notePatientEmail,
           sourceRef: rawId,
           awarded: starred
         });
-      } catch (error) {
-        console.error('Falha ao persistir estrela em anotaÃ§Ã£o de famÃ­lia:', error);
-        setTherapistNotes(previousTherapistNotes);
+      } catch {
         alert('Não foi possível salvar a estrelinha agora. Tente novamente.');
       }
       return;
