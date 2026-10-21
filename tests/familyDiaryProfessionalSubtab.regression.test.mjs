@@ -32,8 +32,8 @@ assert.match(diarySubset, /recordPatientId === currentPatientId/);
 assert.match(diarySubset, /item\?\.type === 'family_note' \|\| item\?\.type === 'photo'/);
 assert.doesNotMatch(diarySubset, /fetch\(|dataService\.|\.insert\(|\.upsert\(/);
 assert.match(detail, /const scopedFamilyNotes = \(Array\.isArray\(notes\) \? notes : \[\]\)\.filter/);
-assert.match(detail, /if \(notePatientId\) return Boolean\(currentPatientId && notePatientId === currentPatientId\)/);
-assert.match(detail, /return Boolean\(noteEmail && patientEmail && noteEmail === patientEmail\)/);
+assert.match(detail, /return Boolean\(currentPatientId && notePatientId && notePatientId === currentPatientId\)/);
+assert.doesNotMatch(detail.slice(detail.indexOf('const scopedFamilyNotes ='), detail.indexOf('const milestoneBySource =')), /patientEmail|noteEmail/, 'guardian email must not authorize cross-patient diary notes');
 assert.match(detail, /scopedFamilyNotes\.forEach/);
 assert.match(detail, /const familyNotes = scopedFamilyNotes/);
 
