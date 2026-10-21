@@ -534,7 +534,12 @@ let lastClinicPermissionDeniedDispatchAt = 0;
 
 async function notifyClinicPermissionDeniedIfNeeded(response: Response, url: string) {
   if (response.status !== 403 || typeof window === 'undefined') return;
-  const pathname = new URL(url, window.location.origin).pathname;
+  let pathname = '';
+  try {
+    pathname = new URL(url, window.location.origin).pathname;
+  } catch {
+    return;
+  }
   if (!CLINIC_PERMISSION_ENDPOINT_RE.test(pathname)) return;
   // Proxy/HTML errors are not authoritative application authorization responses.
   if (!String(response.headers.get('content-type') || '').includes('application/json')) return;
