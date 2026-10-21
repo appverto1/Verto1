@@ -24,7 +24,9 @@ assert.equal(countCanonicalFamilyStars([], [
   { id: 'shared-family', type: 'shared', visibility: 'shared_patient', subject: 'Diário da Família', score: 0, text: 'Conquista' }
 ], new Map([['note-family-shared-family', event(true)]])), 0,
   'legacy shared family note overrides stale event even without a family_note type');
-assert.equal(countCanonicalFamilyStars([], [{ ...n('legacy', 0), text: '[STAR] milestone' }], new Map()), 1,
-  'legacy marker remains backward compatible until rewritten');
+assert.equal(countCanonicalFamilyStars([], [{ ...n('legacy', 0), text: '[STAR] milestone' }], new Map()), 0,
+  'an explicit persisted revocation must override a stale text marker');
+assert.equal(countCanonicalFamilyStars([], [{ ...n('legacy', 0), score: null, text: '[STAR] milestone' }], new Map()), 1,
+  'old note without a canonical score keeps its legacy marker until an explicit update');
 
 console.log('familyDiaryStars.test.ts: ok');
