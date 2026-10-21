@@ -111,7 +111,7 @@ export function GroupSessionDialog(props: Props) {
             ? raw : groupSessionErrorMessage(code || 'GROUP_OPERATION_FAILED');
           const patientId = String(result?.patientId || '');
           const patientLabel = patientId && patientIds.includes(patientId) &&
-            /GROUP_PRICING_(PLAN|RATE)_MISSING/.test(code) ? patientName(patientId) : '';
+            /GROUP_PRICING_(?:PLAN|RATE)_MISSING|GROUP_PRICING_PLAN_NOT_VALID_AT_DATE/.test(code) ? patientName(patientId) : '';
           setPreviewError(patientLabel ? `Paciente: ${patientLabel}. ${description}` : description);
         }
       }).finally(()=>{if(live)setPreviewLoading(false);});
@@ -157,7 +157,11 @@ export function GroupSessionDialog(props: Props) {
     try{
       const result=await(mode==='create'?dataService.createGroupSessions(payload):mode==='add'?dataService.addGroupSessionParticipants(bookingId,payload):mode==='edit'?dataService.rescheduleGroupSession(bookingId,payload):dataService.cancelGroupSession(bookingId,payload));
       if(!result?.success){setError(result?.error || 'Não foi possível concluir. Tente novamente mantendo os mesmos dados.');return;}
-      props.onPersisted(result);operation.current={payload:'',key:''};setDetail(result);setBookingId(result.bookings[0].id);setMode('detail');setPatientIds([]);setNotice('Alterações salvas.');
+      const savedOccurrences = mode === 'create' && Array.isArray(result.bookings) ? result.bookings.length : 0;
+      props.onPersisted(result);operation.current={payload:'',key:''};setDetail(result);setBookingId(result.bookings[0].id);setMode('detail');setPatientIds([]);
+      setNotice(savedOccurrences > 1
+        ? `${savedOccurrences} sessões recorrentes salvas, com ${sortedPatients.length} pacientes por sessão. Consulte os grupos para visualizar as próximas datas.`
+        : 'Alterações salvas.');
     }finally{busyRef.current=false;setBusy(false);}
   };
   const schedulingFields = <div className="grid grid-cols-2 gap-3">
@@ -183,7 +187,7 @@ export function GroupSessionDialog(props: Props) {
       <fieldset><legend className="font-medium">Dias da semana</legend><div className="mt-2 flex flex-wrap gap-3">{([['Seg',1],['Ter',2],['Qua',3],['Qui',4],['Sex',5],['Sáb',6],['Dom',0]] as const).map(([label,day])=><label key={day} className="flex items-center gap-1"><input type="checkbox" checked={weekdays.includes(day)} onChange={()=>setWeekdays(current=>current.includes(day)?current.filter(d=>d!==day):[...current,day])}/>{label}</label>)}</div></fieldset>
       {!recurrenceSlots.length?<p role="alert" className="text-red-800">Selecione o dia da primeira sessão nos dias da semana e informe de 2 a 12 sessões válidas.</p>:
         <p role="status" className="text-slate-700">{recurrenceSlots.length} sessões previstas, de {formattedSlotDate(recurrenceSlots[0].date)} até {formattedSlotDate(recurrenceSlots[recurrenceSlots.length-1].date)}, sempre às {time}. {recurrenceSlots.length*patientIds.length} atendimentos no total (limite: 120).</p>}
-      <p className="text-slate-600">Ao confirmar, todas as datas serão verificadas e reservadas juntas. Se houver conflito em qualquer ocorrência, nenhuma sessão será criada.</p>
+      <p className="text-slate-600">A prévia dos valores corresponde à primeira sessão. O banco verifica o plano e o valor vigente de cada participante em cada data. Todas as ocorrências são reservadas juntas; se houver conflito, nenhuma será criada.</p>
     </div>}
     <fieldset className="col-span-2"><legend>Profissionais da especialidade (até 8)</legend><div className="mt-2 flex flex-wrap gap-3">{professionals.map(p=><label key={p.id} className="flex items-center gap-2"><input type="checkbox" checked={professionalIds.includes(String(p.id))} onChange={()=>toggle(String(p.id),professionalIds,setProfessionalIds,8)}/>{p.label||p.name}</label>)}</div>{!professionals.length&&<p>Nenhum profissional autorizado nesta especialidade.</p>}</fieldset>
   </div>;
@@ -195,7 +199,7 @@ export function GroupSessionDialog(props: Props) {
       {notice&&<p role="status" className="mb-3 rounded-xl bg-green-50 p-3 text-green-800">{notice}</p>}
       {loading?<p>Carregando…</p>:<>
         <div className="mb-4 flex flex-wrap gap-2">
-          {mode!=='list'&&<button type="button" className={buttonClass} disabled={busy} onClick={()=>chooseMode('list')}>Consultar grupos</button>}
+          {mode!=='list'&&<button type="button" className={buttonClass} disabled={busy} onClick={()=>chooseMode('list')}>Consultar grupos e recorrências</button>}
           {props.canCreate&&mode!=='create'&&<button type="button" className={buttonClass} disabled={busy} onClick={()=>{setBookingId('');setDetail(null);chooseMode('create');}}>Novo grupo</button>}
           {header&&!['list','detail','create'].includes(mode)&&<button type="button" className={buttonClass} disabled={busy} onClick={()=>chooseMode('detail')}>Voltar ao grupo</button>}
         </div>

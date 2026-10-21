@@ -124,7 +124,9 @@ export function prepareNewGroupBooking(params: {
     authenticatedClinicId: clinicId,
     specialty,
     patientIds,
-    activeFinancialPlanRows: params.activeFinancialPlanRows
+    activeFinancialPlanRows: params.activeFinancialPlanRows,
+    scheduledStartAt,
+    localDate: date,
   });
   if (!rates.ok) return { ok: false, code: rates.code, ...('patientId' in rates ? { patientId: rates.patientId } : {}) };
 

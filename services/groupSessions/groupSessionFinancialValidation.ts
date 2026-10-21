@@ -22,6 +22,11 @@ export function resolveGroupPatientRates(params: {
   specialty: string;
   patientIds: string[];
   activeFinancialPlanRows: any[];
+  /** Optional appointment instant (UTC/offset ISO) for a date-aware preview.
+   * Database price resolution at booking remains authoritative. */
+  scheduledStartAt?: string;
+  /** Clinic-local yyyy-mm-dd, used only for package expiry. */
+  localDate?: string;
 }): GroupPriceDecision {
   const clinicId = id(params.authenticatedClinicId);
   const specialty = clinicalSpecialtyScopeKey(params.specialty);
@@ -45,9 +50,26 @@ export function resolveGroupPatientRates(params: {
         plan?.service_name_snapshot || plan?.custom_service_name || plan?.service_type
       ) === specialty
     );
-    if (matching.length !== 1)
-      return { ok: false, code: matching.length ? 'GROUP_PRICING_AMBIGUOUS' : 'GROUP_PRICING_PLAN_MISSING', patientId };
-    const chosen = matching[0];
+    // The eventual transactional resolver checks each appointment instant.
+    // A preview must not quote a plan that has already ended, starts later,
+    // or whose package validity ends before the local session date.
+    const effectiveAt = params.scheduledStartAt ? Date.parse(params.scheduledStartAt) : NaN;
+    const hasInstant = Number.isFinite(effectiveAt);
+    const eligible = hasInstant ? matching.filter(plan => {
+      const from = plan.valid_from == null ? -Infinity : Date.parse(String(plan.valid_from));
+      const until = plan.valid_until == null ? Infinity : Date.parse(String(plan.valid_until));
+      const packageUntil = plan.package_valid_until == null ? '' : String(plan.package_valid_until).slice(0, 10);
+      return Number.isFinite(from) || from === -Infinity
+        ? effectiveAt >= from && effectiveAt < until &&
+          (!packageUntil || !params.localDate || packageUntil >= params.localDate)
+        : false;
+    }) : matching;
+    if (eligible.length !== 1) {
+      const code = eligible.length > 1 ? 'GROUP_PRICING_AMBIGUOUS' :
+        matching.length > 0 ? 'GROUP_PRICING_PLAN_NOT_VALID_AT_DATE' : 'GROUP_PRICING_PLAN_MISSING';
+      return { ok: false, code, patientId };
+    }
+    const chosen = eligible[0];
     const price = resolveFinancialPlanSessionPrice(chosen, 'GROUP');
     if (!price || !UUID.test(id(chosen?.id)))
       return { ok: false, code: 'GROUP_PRICING_RATE_MISSING', patientId };
