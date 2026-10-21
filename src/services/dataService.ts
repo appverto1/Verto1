@@ -2622,8 +2622,7 @@ export const dataService = {
   // response may alter the displayed state. Never enqueue offline/pending
   // mutations that could silently change a patient's reward after an error.
   async updateFamilyNoteStar(noteId: string, updates: {
-    score: 0 | 1; patient_id: string; patient_email?: string | null;
-    visibility: string; subject: string; text: string;
+    score: 0 | 1; subject: string; text: string;
   }) {
     try {
       const response = await fetchWithAuthRetry(`/api/notes/${encodeURIComponent(noteId)}`, {
