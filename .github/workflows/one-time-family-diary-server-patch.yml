@@ -1,0 +1,36 @@
+name: One-time family diary security patch
+on:
+  push:
+    branches:
+      - fix/staging-family-diary-legacy-stars-complete-20261021
+    paths:
+      - .github/workflows/one-time-family-diary-server-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-large-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply exact authorized-note edit
+        run: node scripts/oneTimeFamilyDiaryScorePermissionPatch.mjs
+      - name: Verify limited diff and remove temporary helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git diff --name-only)" = "server.ts"
+          git rm .github/workflows/one-time-family-diary-server-patch.yml
+          git rm scripts/oneTimeFamilyDiaryScorePermissionPatch.mjs
+          git add server.ts
+          git diff --cached --check
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(staging): enforce case write permission on legacy family star mutations'
+          git push origin HEAD:fix/staging-family-diary-legacy-stars-complete-20261021
