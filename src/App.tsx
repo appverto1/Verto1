@@ -511,8 +511,12 @@ export default function App() {
     hasSupabaseAuthReturnParams;
   const [user, setUser] = useState<any>(null); 
   const [sessionRecoveryNotice, setSessionRecoveryNotice] = useState<'expired' | 'revoked' | null>(null);
+  const [clinicPermissionNotice, setClinicPermissionNotice] = useState(false);
   useEffect(() => {
-    if (user?.id) setSessionRecoveryNotice(null);
+    if (user?.id) {
+      setSessionRecoveryNotice(null);
+      setClinicPermissionNotice(false);
+    }
   }, [user?.id]);
   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
   const salesActivationOAuthLoginRef = useRef<{ accessToken: string; promise: Promise<any> } | null>(null);
@@ -8138,6 +8142,17 @@ export default function App() {
     };
   }, [user?.id]);
 
+  useEffect(() => {
+    if (!user?.id || !isProfessionalClinicRole(user?.role)) return;
+    const handleClinicPermissionDenied = () => {
+      if (!manualLogoutInProgressRef.current) setClinicPermissionNotice(true);
+    };
+    window.addEventListener('verto:clinic-permission-denied', handleClinicPermissionDenied);
+    return () => {
+      window.removeEventListener('verto:clinic-permission-denied', handleClinicPermissionDenied);
+    };
+  }, [user?.id, user?.role]);
+
   const handleAccessContextSelect = async (context: AccessContextOption) => {
     if (!context?.id || selectingAccessContextId) return;
     setSelectingAccessContextId(context.id);
@@ -8490,6 +8505,41 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+      {user && clinicPermissionNotice && (
+        <aside
+          role="alert"
+          className="fixed bottom-4 left-4 right-4 z-[9998] mx-auto max-w-md rounded-2xl border border-violet-200 bg-white p-4 shadow-xl sm:bottom-6 sm:p-5"
+        >
+          <div className="flex items-start gap-3">
+            <ShieldCheck size={21} className="mt-0.5 shrink-0 text-violet-700" aria-hidden="true" />
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Acesso não autorizado para esta ação</p>
+              <p className="mt-1 text-sm leading-5 text-slate-600">
+                A clínica pode ter atualizado seu papel ou suas permissões. Esta ação foi bloqueada; entre novamente para conferir seu acesso atual.
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setClinicPermissionNotice(false)}
+              className="min-h-11 flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+            >
+              Fechar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setClinicPermissionNotice(false);
+                void handleLogout('expired');
+              }}
+              className="min-h-11 flex-1 rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#6726df] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
+            >
+              Entrar novamente
+            </button>
+          </div>
+        </aside>
       )}
       {user && isDemoEnvironment && (
         <div className="pointer-events-none fixed bottom-3 left-3 z-[9997] max-w-[calc(100vw-24px)] rounded-lg border border-amber-200 bg-amber-50/95 px-3 py-2 text-left shadow-lg shadow-amber-900/10 backdrop-blur">
