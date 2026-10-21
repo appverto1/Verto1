@@ -4,6 +4,7 @@ import { clinicPolicyPayloadHash } from './clinicPolicyPayloadHash';
 import type { Express } from 'express';
 import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
 import { registerHelpCenterRoutes } from './helpCenterRoutes';
+import { registerPatientSharedChartRoutes } from './patientSharedChartRoutes';
 import { registerGroupSessionPricePreviewRoute } from './groupSessions/groupSessionPricePreviewRoute';
 import { registerGroupSessionBookingPreviewRoute } from './groupSessions/groupSessionBookingPreviewRoute';
 import { registerGroupSessionFinancialRateRoutes } from './groupSessions/groupSessionFinancialRateRoutes';
@@ -28,6 +29,7 @@ export function registerClinicAppointmentPolicyRoutes(
   deps: ClinicAppointmentPolicyRouteDeps
 ) {
   registerClinicSchedulingSpecialtyRoute(app, deps);
+  registerPatientSharedChartRoutes(app, deps);
   if (deps.serializeGroupAppointment) registerGroupSessionRoutes(app, deps);
 
   const {

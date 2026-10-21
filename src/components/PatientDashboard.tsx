@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, ChevronLeft, ChevronRight, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
-import { EvolutionBarChart } from './Charts';
-import { CumulativeGrowthChart } from './CumulativeGrowthChart';
+import { PortalSharedClinicalChart } from './PortalSharedClinicalChart';
 import { LogoVerto, SuccessOverlay, BigEnergySlider, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS } from './Common';
 import { HistoryCard } from './History';
 import { DrawingCanvas } from './DrawingCanvas';
@@ -3868,67 +3867,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <p className="text-lg font-extrabold text-green-700">{kidsGamification.weekPhotos}</p>
                       </div>
                     </div>
-                    <div className="mb-4 sm:mb-5 px-1 sm:px-2">
-                      <h2 className="text-2xl sm:text-3xl font-semibold text-[#7a32fc] flex items-center justify-center gap-2 text-center">
-                        <span role="img" aria-label="Troféu">🏆</span>
-                      </h2>
-                      <p className="mt-1 text-center text-[10px] font-bold uppercase tracking-widest text-gray-400">
-                        Protocolo ativo atual
-                      </p>
-                    </div>
-                    <div className="mb-4 sm:mb-5 px-1 sm:px-2 grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 items-end">
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wider font-bold text-blue-500 mb-1.5">Data Atual</p>
-                        <div className="relative">
-                          <select
-                            className="w-full bg-blue-50 border border-blue-100 text-[10px] sm:text-[11px] font-semibold text-[#7a32fc] px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
-                            value={selectedBaseDate}
-                            onChange={(e) => setSelectedBaseDate(e.target.value)}
-                            disabled={activeProtocolSnapshots.length === 0}
-                          >
-                            {activeProtocolSnapshots.length === 0 && <option value="">Sem dados avaliados</option>}
-                            {activeProtocolSnapshots.map((date: any) => (
-                              <option key={date} value={date}>{formatFilterDate(String(date))}</option>
-                            ))}
-                          </select>
-                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-[#7a32fc] pointer-events-none" size={10} />
-                        </div>
-                      </div>
-                      <div>
-                        <p className="text-[10px] uppercase tracking-wider font-bold text-emerald-600 mb-1.5">Data Comparação</p>
-                        <div className="relative">
-                          <select
-                            className="w-full bg-emerald-50 border border-emerald-100 text-[10px] sm:text-[11px] font-semibold text-emerald-700 px-3 py-2 rounded-xl outline-none appearance-none uppercase tracking-wider"
-                            value={selectedCompareDate}
-                            onChange={(e) => setSelectedCompareDate(e.target.value)}
-                            disabled={activeProtocolSnapshots.length === 0}
-                          >
-                            <option value="">Sem comparação</option>
-                            {activeProtocolSnapshots
-                              .filter((date: any) => date !== selectedBaseDate)
-                              .map((date: any) => (
-                                <option key={`compare-${date}`} value={date}>{formatFilterDate(String(date))}</option>
-                              ))}
-                          </select>
-                          <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 text-emerald-600 pointer-events-none" size={10} />
-                        </div>
-                      </div>
-                    </div>
-                    <div className="w-full min-h-[300px] sm:min-h-[350px]">
-                      <EvolutionBarChart chartData={kidChartData} maxScore={100} />
-                    </div>
-                    <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest text-center mt-2">Filtro por datas para comparação do progresso</p>
                 </div>
-
-                <div className="mb-6">
-                  <CumulativeGrowthChart
-                    patientId={portalPatientId || user.id}
-                    protocols={protocols}
-                    protocolId={activeKidsProtocol?.id}
-                    useCanonicalMastery
-                    portalMode
-                  />
-                </div>
+                <PortalSharedClinicalChart patientId={String(portalPatientId || user?.patientId || user?.id || '')} />
 
                 <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">
                   <div className="flex items-center justify-between mb-4">

@@ -46,7 +46,7 @@ import {
 } from '../utils/clinicalOutcomeAnalytics';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope, unscopedBehaviorSeriesBelongsToSpecialty } from '../utils/clinicalOutcomePlanScope';
-import { ClinicalPlanAnalyticsShell, type AnalyticsAxis } from './ClinicalPlanAnalyticsShell';
+import { ClinicalPlanAnalyticsShell, type AnalyticsAxis, type ClinicalPlanShareDescriptor } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 type ClinicalOutcomesDashboardProps = {
@@ -54,6 +54,7 @@ type ClinicalOutcomesDashboardProps = {
   organizationId?: string | null;
   isPanelDark?: boolean;
   onOpenSessionReport?: (sessionId: string) => void;
+  onShareDescriptorChange?: (descriptor: ClinicalPlanShareDescriptor | null) => void;
 };
 
 type DashboardData = {
@@ -534,7 +535,7 @@ function SeriesChart({ series, isDark, axis, compact = false }: { series: Clinic
   );
 }
 
-export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false, onOpenSessionReport }: ClinicalOutcomesDashboardProps) {
+export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false, onOpenSessionReport, onShareDescriptorChange }: ClinicalOutcomesDashboardProps) {
   const today = useMemo(() => localDateKey(new Date()), []);
   const [periodPreset, setPeriodPreset] = useState('90');
   const [customDateFrom, setCustomDateFrom] = useState(() => shiftDateKey(today, -89));
@@ -939,6 +940,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
           onAxisChange={setAnalyticsAxis}
           isDark={isPanelDark}
           onOpenSessionReport={onOpenSessionReport}
+          onShareDescriptorChange={onShareDescriptorChange}
           programs={data.programs || []}
         />
       )}
