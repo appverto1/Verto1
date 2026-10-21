@@ -89,7 +89,7 @@ begin
   if not found then return jsonb_build_object('applied',false,'reason','REMINDER_NOT_AUTHENTICATED'); end if;
 
   if coalesce(v_notice.metadata->>'scheduledAt','') !~
-    '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' then
+    '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$' then
     return jsonb_build_object('applied',false,'reason','REMINDER_INVALID_CYCLE');
   end if;
   v_cycle_start:=(v_notice.metadata->>'scheduledAt')::timestamptz;
