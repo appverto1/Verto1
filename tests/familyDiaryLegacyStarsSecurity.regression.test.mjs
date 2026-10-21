@@ -7,6 +7,7 @@ const historyCard = readFileSync('src/components/History.tsx', 'utf8');
 const dataService = readFileSync('src/services/dataService.ts', 'utf8');
 const portal = readFileSync('src/components/PatientDashboard.tsx', 'utf8');
 const detail = readFileSync('src/components/PatientDetailView.tsx', 'utf8');
+const coordinator = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const schema = readFileSync('src/utils/routeSchemaFallbacks.ts', 'utf8');
 const migration = readFileSync('supabase/migrations/20261021160000_family_diary_note_star_score.sql', 'utf8');
 
@@ -56,6 +57,8 @@ assert.doesNotMatch(serverOnly, /saveOfflineFirst|pending: true|queueOffline/);
 assert.match(historyCard, /isTherapist && isFamilyEntry && \(/);
 assert.doesNotMatch(historyCard, /isTherapist && isFamilyEntry && !item\?\.isFromNotes/);
 assert.match(historyCard, /disabled=\{isSavingMilestone\}/);
+assert.match(coordinator, /return onEvaluateHistoryItem\(id, score, note\)/,
+  'the professional dashboard must return the save promise so the star button remains locked');
 assert.match(detail, /const awarded = hasStoredScore \? storedScore >= 1/);
 assert.match(detail, /const awarded = numericScore !== null && Number\.isFinite\(numericScore\)/);
 assert.match(portal, /countCanonicalFamilyStars\(portalFamilyHistory, scopedSharedNotes, milestoneBySource\)/);
