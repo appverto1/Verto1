@@ -20,7 +20,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
   const sanitizeTextField = (value: unknown, limit = 256) => String(value ?? '').trim().slice(0, limit);
   const isMissingRelationError = (error: any) => /42P01|PGRST205|relation .* does not exist/i.test(String(error?.code || '') + ' ' + String(error?.message || ''));
   const hasMissingFinancialSchema = (error: any) => /PGRST202|42P01|42703|schema cache/i.test(String(error?.code || '') + ' ' + String(error?.message || ''));
-  const sendRouteDbError = (res: any, _route: string, error: any) => {
+  const sendRouteDbError = (res: any, _route: string, error: any, _details?: any) => {
     const status = /42501|denied/i.test(String(error?.code || '') + ' ' + String(error?.message || '')) ? 403 : 503;
     return res.status(status).json({ success: false, error: status === 403 ? 'SHARED_CHART_ACCESS_DENIED' : 'SHARED_CHART_UNAVAILABLE' });
   };
@@ -797,7 +797,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     requirePatientSharedChartPortalScope,
     async (req: any, res) => {
       try {
-        const context = req.portalContext || await resolvePatientPortalContext(req.session.user);
+        const context = req.portalContext;
         const requestedPatientId = sanitizeString(req.params.patientId, 120);
         const allowedPatientIds = new Set(
           (Array.isArray(context?.patientIds) ? context.patientIds : [])
