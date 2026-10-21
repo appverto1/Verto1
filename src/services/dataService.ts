@@ -6868,6 +6868,101 @@ export const dataService = {
     }
   },
 
+  async getPatientSharedChartSelection(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, data: null, error: 'Paciente inválido.' };
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/patients/' + encodeURIComponent(safePatientId) + '/shared-chart-selection',
+        {
+          method: 'GET',
+          headers: await getNoStoreAuthHeaders(),
+          credentials: 'include',
+          cache: 'no-store',
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      return {
+        success: false,
+        data: null,
+        error: getApiErrorMessage(error, 'Não foi possível carregar o gráfico compartilhado.'),
+      };
+    }
+  },
+
+  async setPatientSharedChartSelection(patientId: string, descriptor: any) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId || !descriptor || typeof descriptor !== 'object') {
+      return { success: false, data: null, error: 'Seleção de gráfico inválida.' };
+    }
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/patients/' + encodeURIComponent(safePatientId) + '/shared-chart-selection',
+        {
+          method: 'PUT',
+          headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
+          credentials: 'include',
+          cache: 'no-store',
+          body: JSON.stringify({ descriptor }),
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      return {
+        success: false,
+        data: null,
+        error: getApiErrorMessage(error, 'Não foi possível compartilhar este gráfico agora.'),
+      };
+    }
+  },
+
+  async clearPatientSharedChartSelection(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, cleared: false, error: 'Paciente inválido.' };
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/patients/' + encodeURIComponent(safePatientId) + '/shared-chart-selection',
+        {
+          method: 'DELETE',
+          headers: await getNoStoreAuthHeaders(),
+          credentials: 'include',
+          cache: 'no-store',
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      return {
+        success: false,
+        cleared: false,
+        error: getApiErrorMessage(error, 'Não foi possível remover o gráfico compartilhado agora.'),
+      };
+    }
+  },
+
+  async getPortalSharedChart(patientId: string) {
+    const safePatientId = String(patientId || '').trim();
+    if (!safePatientId) return { success: false, data: null, error: 'Paciente inválido.' };
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/portal/patients/' + encodeURIComponent(safePatientId) + '/shared-chart',
+        {
+          method: 'GET',
+          headers: await getNoStoreAuthHeaders(),
+          credentials: 'include',
+          cache: 'no-store',
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      return {
+        success: false,
+        data: null,
+        error: getApiErrorMessage(error, 'Não foi possível carregar o gráfico compartilhado agora.'),
+      };
+    }
+  },
+
   async getAbaClinicalChart(patientId: string, chart: 'targets' | 'behaviors' | 'mastery' | 'maintenance' | 'session-changes' | 'overview', options: any = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ points: [], insights: [], annotations: [] });
     const safeChart = ['targets', 'behaviors', 'mastery', 'maintenance', 'session-changes', 'overview'].includes(String(chart))
