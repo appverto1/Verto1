@@ -50021,8 +50021,24 @@ async function startServer() {
 
       if (existingError) throw existingError;
       if (!existing) return res.status(404).json({ success: false, error: 'Nota não encontrada.' });
-      if (!(await canAccessPatientInCurrentClinic(sanitizeString(existing.patient_id, 120), req.session.user))) {
+      const notePatientId = sanitizeString(existing.patient_id, 120);
+      if (!(await canAccessPatientInCurrentClinic(notePatientId, req.session.user))) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
+      }
+      // The server derives the patient and family visibility from the existing
+      // stored note. Frontend IDs, roles and score are not authorization sources.
+      const existingFamilyNote = ['family_note', 'photo'].includes(String(existing.type || '').toLowerCase())
+        || String(existing.visibility || '').toLowerCase() === 'family';
+      const targetsFamily = ['family_note', 'photo'].includes(String(req.body?.type || '').toLowerCase())
+        || String(req.body?.visibility || '').toLowerCase() === 'family';
+      const scoreProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'score');
+      if (existingFamilyNote || targetsFamily || scoreProvided) {
+        if (!(await canAccessPatientInCurrentClinic(notePatientId, req.session.user, 'write'))) {
+          return res.status(403).json({ success: false, error: 'Sem autorização para alterar o reconhecimento clínico deste paciente.' });
+        }
+      }
+      if ((existingFamilyNote || targetsFamily) && scoreProvided && req.body.score !== 0 && req.body.score !== 1) {
+        return res.status(400).json({ success: false, error: 'A estrelinha deve ser 0 ou 1.' });
       }
       const actorId = sanitizeString(req.session.user?.id, 120);
       if (
