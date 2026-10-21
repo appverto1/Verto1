@@ -149,15 +149,29 @@ begin
     ) returning * into v_request;
   end if;
 
-  update public.appointment_action_requests
-    set status='CANCELLED',resolved_by=v_actor,resolved_at=v_now,
-      resolution_note='Substituída por cancelamento autorizado pelo lembrete de 24h.',
-      metadata=coalesce(metadata,'{}'::jsonb)||
-        jsonb_build_object('resolvedByActionRequestId',v_request.id,
-                          'resolutionReason','automatic_reminder_24h_cancellation'),
-      updated_at=v_now
-    where organization_id=p_organization_id and appointment_id=p_appointment_id
-      and status='PENDING' and id<>v_request.id;
+  with invalidated as (
+    update public.appointment_action_requests r
+      set status='CANCELLED',resolved_by=v_actor,resolved_at=v_now,
+        resolution_note='Substituída por cancelamento autorizado pelo lembrete de 24h.',
+        metadata=coalesce(r.metadata,'{}'::jsonb)||
+          jsonb_build_object('resolvedByActionRequestId',v_request.id,
+                            'resolutionReason','automatic_reminder_24h_cancellation'),
+        updated_at=v_now
+      where r.organization_id=p_organization_id and r.appointment_id=p_appointment_id
+        and r.status='PENDING' and r.id<>v_request.id
+      returning r.id,r.request_type
+  )
+  insert into public.appointment_status_audit_logs(
+    organization_id,appointment_id,patient_id,action,previous_status,new_status,
+    performed_by,performed_by_role,performed_at,metadata
+  )
+  select p_organization_id,p_appointment_id,p_patient_id,
+    case when invalidated.request_type='RESCHEDULE' then 'RESCHEDULE_REJECTED'
+      else 'CANCEL_REJECTED' end,v_old_status,'CANCELLED',v_actor,'patient',
+    v_now,jsonb_build_object('actionRequestId',invalidated.id,
+      'resolvedByActionRequestId',v_request.id,
+      'resolutionReason','automatic_reminder_24h_cancellation')
+  from invalidated;
 
   update public.appointments
     set status='cancelled',patient_response='cancelled',
