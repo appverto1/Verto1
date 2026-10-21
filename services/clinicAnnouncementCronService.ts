@@ -46,7 +46,7 @@ export function createClinicAnnouncementCronService(deps: ClinicAnnouncementCron
 
 let clinicAnnouncementCronStarted = false;
 let clinicAnnouncementCronRunning = false;
-let clinicAnnouncementInFlight: Promise<void> | null = null;
+let clinicAnnouncementScanTail: Promise<void> = Promise.resolve();
 let clinicAnnouncementOptions: ActiveCronServiceOptions | null = null;
 
 const CLINIC_ANNOUNCEMENT_BATCH_LIMIT = 20;
@@ -117,15 +117,17 @@ async function runClinicAnnouncementDispatchScan(
   if (!options) {
     return { skipped: true, claimed: 0, delivered: 0, failed: 0 };
   }
-  // Do not abandon an already-claimed delivery if a manual scan is in flight.
-  // Wait for that scan before handling the new, disjoint SKIP LOCKED batch.
-  if (clinicAnnouncementCronRunning) {
-    if (preclaimedRows === undefined) return { skipped: true, claimed: 0, delivered: 0, failed: 0 };
-    await clinicAnnouncementInFlight;
+  // The durable SQL claim may run on the next minute before this worker has
+  // finished delivering its previous batch. Serialize each locally claimed
+  // announcement batch without dropping or concurrently reprocessing it.
+  if (clinicAnnouncementCronRunning && preclaimedRows === undefined) {
+    return { skipped: true, claimed: 0, delivered: 0, failed: 0 };
   }
-  clinicAnnouncementCronRunning = true;
+  const previousScan = clinicAnnouncementScanTail;
   let finishRun!: () => void;
-  clinicAnnouncementInFlight = new Promise<void>((resolve) => { finishRun = resolve; });
+  clinicAnnouncementScanTail = new Promise<void>((resolve) => { finishRun = resolve; });
+  await previousScan;
+  clinicAnnouncementCronRunning = true;
   let claimed = 0;
   let delivered = 0;
   let failed = 0;
@@ -161,7 +163,6 @@ async function runClinicAnnouncementDispatchScan(
     return { skipped: false, claimed, delivered, failed };
   } finally {
     clinicAnnouncementCronRunning = false;
-    clinicAnnouncementInFlight = null;
     finishRun();
   }
 }
