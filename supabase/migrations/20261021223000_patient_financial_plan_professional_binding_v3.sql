@@ -43,7 +43,7 @@ begin
   for v_row in select value from jsonb_array_elements(p_plans) loop
     v_key:=nullif(btrim(coalesce(v_row->>'client_plan_key','')),'');
     v_requested_id:=null;
-    if coalesce(v_row->>'id','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$' then
+    if coalesce(v_row->>'id','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
       v_requested_id:=(v_row->>'id')::uuid;
     end if;
     v_service_key:=public.appointment_financial_service_key_v1(
@@ -56,7 +56,7 @@ begin
     v_user:=null;
     if nullif(btrim(coalesce(v_row->>'professional_user_id','')),'') is not null then
       if (v_row->>'professional_user_id') !~*
-        '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$' then
+        '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
         raise exception 'FINANCIAL_PLAN_PROFESSIONAL_INVALID';
       end if;
       v_user:=(v_row->>'professional_user_id')::uuid;
@@ -94,7 +94,7 @@ begin
     v_user:=(v_row->>'professional_user_id')::uuid;
     v_key:=nullif(btrim(coalesce(v_row->>'client_plan_key','')),'');
     v_requested_id:=null;
-    if coalesce(v_row->>'id','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$' then
+    if coalesce(v_row->>'id','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
       v_requested_id:=(v_row->>'id')::uuid;
     end if;
     select plan.* into v_current from public.patient_financial_plans plan
