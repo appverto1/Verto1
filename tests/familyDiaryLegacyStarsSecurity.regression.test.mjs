@@ -16,6 +16,8 @@ assert.match(notesPatch, /requireClinicCapability\('clinical\.notes\.create'\)/)
 assert.match(notesPatch, /const notePatientId = sanitizeString\(existing\.patient_id, 120\)/);
 assert.match(notesPatch, /canAccessPatientInCurrentClinic\(notePatientId, req\.session\.user, 'write'\)/,
   'case write scope is a backend authorization check, not a role passed by the browser');
+assert.match(notesPatch, /fam\[ií\]lia.*existing\.subject/, 'family subject must remain protected even on shared legacy notes');
+assert.match(notesPatch, /fam\[ií\]lia.*req\.body\?\.subject/, 'frontend cannot forge a new family subject with read-only access');
 assert.match(notesPatch, /existingFamilyNote \|\| targetsFamily \|\| scoreProvided/,
   'cannot bypass via existing note type, forged visibility or generic score updates');
 assert.match(notesPatch, /Object\.prototype\.hasOwnProperty\.call\(req\.body \|\| \{\}, 'score'\)/);
