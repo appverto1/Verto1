@@ -4250,10 +4250,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const scopedFamilyNotes = (Array.isArray(notes) ? notes : []).filter((note: any) => {
       const notePatientId = String(note?.patientId ?? note?.patient_id ?? '').trim();
       const currentPatientId = String(patient?.id || '').trim();
-      if (notePatientId) return Boolean(currentPatientId && notePatientId === currentPatientId);
-      const noteEmail = String(note?.patient_email ?? note?.patientEmail ?? '').trim().toLowerCase();
-      const patientEmail = String(patient?.email || '').trim().toLowerCase();
-      return Boolean(noteEmail && patientEmail && noteEmail === patientEmail);
+      // A shared guardian email is not sufficient to identify a single patient.
+      return Boolean(currentPatientId && notePatientId && notePatientId === currentPatientId);
     });
 
     const milestoneBySource = new Map<string, { awarded: boolean; timestamp: number }>();
