@@ -510,6 +510,10 @@ export default function App() {
     isInvitationAcceptanceRoute ||
     hasSupabaseAuthReturnParams;
   const [user, setUser] = useState<any>(null); 
+  const [sessionRecoveryNotice, setSessionRecoveryNotice] = useState<'expired' | 'revoked' | null>(null);
+  useEffect(() => {
+    if (user?.id) setSessionRecoveryNotice(null);
+  }, [user?.id]);
   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
   const salesActivationOAuthLoginRef = useRef<{ accessToken: string; promise: Promise<any> } | null>(null);
 
@@ -8121,8 +8125,10 @@ export default function App() {
   useEffect(() => {
     if (!user?.id) return;
 
-    const handleServerSessionExpired = () => {
+    const handleServerSessionExpired = (event: Event) => {
       if (manualLogoutInProgressRef.current) return;
+      const code = (event as CustomEvent<{ code?: string }>).detail?.code;
+      setSessionRecoveryNotice(code === 'SESSION_REVOKED' ? 'revoked' : 'expired');
       void handleLogout('expired');
     };
 
@@ -8539,11 +8545,38 @@ export default function App() {
               <p className="text-sm font-semibold text-slate-500">Restaurando seu portal neste aparelho...</p>
             </div>
           ) : (
-            <LandingPage
-              onLogin={handleLoginSuccess}
-              setUser={setUser}
-              accessOnly={isAccessGatewayRoute || isRunningStandalone()}
-            />
+            <>
+              <LandingPage
+                onLogin={handleLoginSuccess}
+                setUser={setUser}
+                accessOnly={isAccessGatewayRoute || isRunningStandalone()}
+              />
+              {sessionRecoveryNotice && (
+                <div
+                  role="alert"
+                  className="fixed bottom-4 left-4 right-4 z-[90] mx-auto max-w-md rounded-2xl border border-violet-200 bg-white p-4 shadow-xl sm:bottom-6 sm:p-5"
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertCircle size={21} className="mt-0.5 shrink-0 text-violet-700" aria-hidden="true" />
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        {sessionRecoveryNotice === 'revoked' ? 'Sua sessão foi encerrada por segurança.' : 'Sua sessão expirou.'}
+                      </p>
+                      <p className="mt-1 text-sm leading-5 text-slate-600">
+                        Entre novamente para continuar. Confira se as alterações feitas antes de sair foram salvas.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.location.assign('/entrar')}
+                    className="mt-4 min-h-11 w-full rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#6726df] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
+                  >
+                    Entrar novamente
+                  </button>
+                </div>
+              )}
+            </>
           )
         ) : user?.isPlatformAdmin === true ? (
           <SuperAdminDashboard onLogout={handleLogout} />

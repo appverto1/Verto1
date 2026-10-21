@@ -158,6 +158,9 @@ jobs:
           PGDATABASE: verto_group_regression
         run: node tests/postgresGroupSessionConcurrency.test.mjs
 
+      - name: Expired server session and safe re-entry regression
+        run: node tests/sessionExpiredCleanLogout.regression.test.mjs
+
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
 
