@@ -12,13 +12,11 @@ export { normalizeVertoBackgroundWorkerMode, resolveVertoBackgroundWorkerMode, b
 const guardedSchedulers = new WeakSet<object>();
 const guardedTimerApis = new WeakSet<object>();
 
-// Patient-facing delivery is mandatory even in economy: disabling these two
-// bounded database queues silently prevents appointment reminders and notices.
-// Other expensive background scans remain disabled. Internal names are explicit
-// and cannot be taken from a request payload.
+// Patient-facing delivery is mandatory even in economy. A single minute-level
+// schedule now claims both durable queues (reminders and clinic announcements)
+// atomically. Other expensive scans stay stopped; the name is internal only.
 const ESSENTIAL_NOTIFICATION_SCHEDULES = new Set([
   'verto-notification-jobs',
-  'verto-clinic-announcements',
 ]);
 
 export function isEssentialEconomyNotificationSchedule(expression: unknown, options: unknown): boolean {
