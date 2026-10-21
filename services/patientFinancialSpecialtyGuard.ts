@@ -1,13 +1,18 @@
 import { patientFinancialPlanClinicalScopeKey } from '../src/utils/patientFinancialPlan';
 
 type ValidationResult = { ok: true } | { ok: false; error: string; code: string };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const id = (value: unknown) => String(value || '').trim().toLowerCase();
 
 /**
- * Reject new plans for specialties not actually served by active, accepted
- * professionals in this clinic. All access is tenant-scoped. Previously saved
- * plans for now-unavailable specialties are grandfathered only when their
- * identifier and specialty remain unchanged, so unrelated patient edits never
- * silently destroy historical financial records.
+ * New financial plans must select an ACTIVE therapist in the authenticated
+ * clinic, with a specialty that matches that plan. The membership is checked
+ * server-side immediately before reconciliation. The v3 transaction checks
+ * the same relationship again under PostgreSQL locks, preventing stale UI or
+ * forged IDs from authorizing a binding.
+ *
+ * Legacy financial plans remain editable when their identity and specialty
+ * have not changed, even if the clinic no longer offers that specialty.
  */
 export async function validateActiveClinicFinancialPlanSpecialties(params: {
   supabase: any;
@@ -19,29 +24,31 @@ export async function validateActiveClinicFinancialPlanSpecialties(params: {
   if (!rows.length) return { ok: true };
 
   const members = await params.supabase.from('clinic_memberships')
-    .select('specialty')
+    .select('user_id,specialty')
     .eq('clinic_id', params.clinicId)
     .eq('role', 'therapist')
     .eq('status', 'active');
   if (members.error || !Array.isArray(members.data)) {
     return { ok: false, code: 'CLINIC_FINANCIAL_SPECIALTIES_UNAVAILABLE',
-      error: 'Não foi possível validar as especialidades da equipe. Tente novamente.' };
+      error: 'Não foi possível validar os profissionais ativos da clínica. Tente novamente.' };
   }
 
-  const active = new Set(
-    members.data
-      .map((member: any) => patientFinancialPlanClinicalScopeKey({
-        serviceType: 'CUSTOM',
-        customServiceName: member.specialty
-      }))
-      .filter(Boolean)
-  );
+  const eligible = new Map<string, string>();
+  for (const member of members.data) {
+    const memberId = id(member.user_id);
+    const specialty = patientFinancialPlanClinicalScopeKey({
+      serviceType: 'CUSTOM', customServiceName: member.specialty
+    });
+    if (UUID.test(memberId) && specialty) eligible.set(memberId, specialty);
+  }
+  const available = new Set(eligible.values());
   const invalid = rows.filter((row: any) => {
     const scope = patientFinancialPlanClinicalScopeKey({
-      serviceType: row.service_type,
-      customServiceName: row.custom_service_name,
+      serviceType: row.service_type, customServiceName: row.custom_service_name,
     });
-    return !scope || !active.has(scope);
+    const professional = id(row.professional_user_id);
+    return !scope || !available.has(scope) ||
+      !UUID.test(professional) || eligible.get(professional) !== scope;
   });
   if (!invalid.length) return { ok: true };
 
@@ -56,25 +63,35 @@ export async function validateActiveClinicFinancialPlanSpecialties(params: {
   }
 
   for (const row of invalid) {
-    const rowId = String(row.id || '').trim();
+    const rowId = id(row.id);
     const clientKey = String(row.client_plan_key || '').trim();
     const old = previous.data.find((item: any) =>
-      (rowId && String(item.id || '') === rowId) ||
+      (UUID.test(rowId) && id(item.id) === rowId) ||
       (clientKey && String(item.client_plan_key || '') === clientKey)
     );
     const previousScope = old && patientFinancialPlanClinicalScopeKey({
-      serviceType: old.service_type,
-      customServiceName: old.custom_service_name
+      serviceType: old.service_type, customServiceName: old.custom_service_name
     });
     const requestedScope = patientFinancialPlanClinicalScopeKey({
-      serviceType: row.service_type,
-      customServiceName: row.custom_service_name
+      serviceType: row.service_type, customServiceName: row.custom_service_name
     });
-    if (!old || previousScope !== requestedScope ||
-        String(old.service_type || '').toUpperCase() !== String(row.service_type || '').toUpperCase() ||
-        String(old.custom_service_name || '').trim() !== String(row.custom_service_name || '').trim()) {
+    const unchanged = old && previousScope === requestedScope &&
+      String(old.service_type || '').toUpperCase() === String(row.service_type || '').toUpperCase() &&
+      String(old.custom_service_name || '').trim() === String(row.custom_service_name || '').trim();
+    if (!unchanged) {
+      if (!id(row.professional_user_id) && requestedScope && available.has(requestedScope)) {
+        return { ok: false, code: 'FINANCIAL_PLAN_PROFESSIONAL_REQUIRED',
+          error: 'Selecione o profissional ativo responsável pelo plano financeiro antes de salvar.' };
+      }
       return { ok: false, code: 'FINANCIAL_PLAN_SPECIALTY_NOT_ACTIVE',
-        error: 'Não é possível cadastrar plano financeiro de especialidade sem profissional ativo e vinculado à clínica.' };
+        error: 'O profissional e a especialidade devem estar ativos e vinculados à mesma clínica.' };
+    }
+    // Historical edits may omit a professional. An explicitly supplied but
+    // invalid new assignment is never trusted, even for historical records.
+    const proposedProfessional = id(row.professional_user_id);
+    if (proposedProfessional && (!UUID.test(proposedProfessional) || eligible.get(proposedProfessional) !== requestedScope)) {
+      return { ok: false, code: 'FINANCIAL_PLAN_PROFESSIONAL_NOT_ELIGIBLE',
+        error: 'O profissional selecionado não está ativo nesta especialidade da clínica.' };
     }
   }
   return { ok: true };
