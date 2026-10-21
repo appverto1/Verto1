@@ -113,6 +113,27 @@ begin
     if not found then raise exception 'FINANCIAL_PLAN_BINDING_NOT_PERSISTED'; end if;
   end loop;
 
+  -- Older authorized clients may omit the assignment when editing an
+  -- existing plan. If v2 versioned that same specialty, preserve its prior
+  -- assignment on the new active version instead of silently dropping it.
+  update public.patient_financial_plans current_plan
+    set professional_user_id=prior_plan.professional_user_id
+  from public.patient_financial_plans prior_plan
+  where current_plan.organization_id=p_organization_id
+    and current_plan.patient_id=p_patient_id and current_plan.status='ACTIVE'
+    and current_plan.professional_user_id is null
+    and current_plan.supersedes_plan_id=prior_plan.id
+    and prior_plan.organization_id=current_plan.organization_id
+    and prior_plan.patient_id=current_plan.patient_id
+    and prior_plan.professional_user_id is not null
+    and public.appointment_financial_service_key_v1(
+      coalesce(nullif(current_plan.service_name_snapshot,''),
+        nullif(current_plan.custom_service_name,''),current_plan.service_type)
+    )=public.appointment_financial_service_key_v1(
+      coalesce(nullif(prior_plan.service_name_snapshot,''),
+        nullif(prior_plan.custom_service_name,''),prior_plan.service_type)
+    );
+
   select coalesce(jsonb_agg(to_jsonb(plan) order by plan.created_at asc),'[]'::jsonb)
     into v_data
   from public.patient_financial_plans plan
