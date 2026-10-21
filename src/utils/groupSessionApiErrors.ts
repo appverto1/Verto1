@@ -7,6 +7,7 @@ export function groupSessionErrorMessage(code: string): string {
   if (/SLOT_BUSY|PROFESSIONAL_BUSY|ROOM_BUSY/.test(code)) return 'A sala ou um profissional está indisponível nesse horário.';
   if (/SCHEDULE_UNAVAILABLE|BUFFER_UNAVAILABLE|BREAK_UNAVAILABLE|EXCEPTION_UNAVAILABLE|ROOM_UNAVAILABLE|LOCATION_UNAVAILABLE/.test(code)) return 'O horário ou a sala não está disponível na agenda de um dos profissionais.';
   if (/RATE_PLAN_AMBIGUOUS|PRICING_AMBIGUOUS/.test(code)) return 'Há mais de um plano financeiro para a especialidade de um paciente. Revise o cadastro.';
+  if (code === 'GROUP_PRICING_PLAN_NOT_VALID_AT_DATE') return 'O paciente possui plano particular para essa especialidade, mas ele não está vigente na data escolhida. Revise as datas de validade no plano financeiro antes de agendar.';
   if (code === 'GROUP_PRICING_PLAN_MISSING') return 'Falta um plano financeiro particular ativo para a especialidade selecionada. Abra o cadastro do paciente, acesse Plano financeiro e cadastre o plano correspondente.';
   if (code === 'GROUP_PRICING_RATE_MISSING') return 'O plano financeiro do paciente está sem preço de sessão em grupo. Abra o cadastro do paciente, acesse Plano financeiro, informe o valor coletivo e salve.';
   if (/RATE_|PRICING_(RATE|PLAN)_MISSING/.test(code)) return 'Cadastre o valor da sessão em grupo para cada paciente nessa especialidade.';
