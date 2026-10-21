@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { countCanonicalFamilyStars } from '../utils/familyDiaryStars';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, ChevronLeft, ChevronRight, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
 import { PortalSharedClinicalChart } from './PortalSharedClinicalChart';
@@ -1816,11 +1817,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const when = new Date(item.date || item.created_at || 0);
       return item.type === 'photo' && when >= weekAgo;
     }).length;
-    const stars = portalFamilyHistory.filter((item: any) => {
-      const isFamily = ['family_note', 'patient_note', 'photo'].includes(String(item?.type || '').toLowerCase());
-      const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.note || item?.text || ''));
-      return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
-    }).length;
     const portalStarPatientKeys = new Set(
       [portalPatientId, user?.id, user?.patientId, user?.patient_id]
         .map((value) => String(value || '').trim())
@@ -1835,13 +1831,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return false;
     };
     const scopedSharedNotes = (Array.isArray(sharedNotes) ? sharedNotes : []).filter(sharedNoteBelongsToPortalPatient);
-    const sharedFamilyStars = scopedSharedNotes.filter((item: any) => {
-      const type = String(item?.type || '').toLowerCase();
-      const visibility = String(item?.visibility || '').toLowerCase();
-      const isFamily = type === 'family_note' || type === 'photo' || visibility === 'family';
-      const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || '')) || /\[STAR\]/i.test(String(item?.text || item?.note || ''));
-      return isFamily && (Number(item?.score ?? 0) >= 1 || hasStarMarker);
-    }).length;
     const milestoneBySource = new Map<string, { awarded: boolean; ts: number }>();
     scopedSharedNotes.forEach((item: any) => {
       const subject = String(item?.subject || '').trim().toLowerCase();
@@ -1859,8 +1848,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         milestoneBySource.set(source, { awarded, ts });
       }
     });
-    const milestoneEventStars = Array.from(milestoneBySource.values()).filter((e) => e.awarded).length;
-    return { weekLogs, weekPhotos, stars: Math.max(stars, sharedFamilyStars, milestoneEventStars) };
+    return { weekLogs, weekPhotos, stars: countCanonicalFamilyStars(portalFamilyHistory, scopedSharedNotes, milestoneBySource) };
   }, [portalFamilyHistory, sharedNotes, portalPatientId, user?.id, user?.patientId, user?.patient_id, user?.email]);
   const kidsCheckpointLevel = useMemo(() => Math.floor((kidsGamification.stars || 0) / 5), [kidsGamification.stars]);
 
