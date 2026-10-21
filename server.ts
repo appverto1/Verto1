@@ -7379,6 +7379,7 @@ const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'organization_id',
   'patient_id',
   'service_type',
+  'professional_user_id',
   'custom_service_name',
   'service_name_snapshot',
   'billing_mode',
