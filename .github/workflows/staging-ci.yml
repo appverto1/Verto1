@@ -152,6 +152,7 @@ jobs:
         run: |
           node --import tsx tests/patientFinancialSpecialtyClinicGate.test.ts
           node tests/p0FinancialProfessionalBindingV3.regression.test.mjs
+          node tests/p0FinancialProfessionalBindingSql.test.mjs
 
       - name: Group session PostgreSQL concurrency
         env:
