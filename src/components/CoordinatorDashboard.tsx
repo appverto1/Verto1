@@ -56,7 +56,7 @@ import {
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
-import { SettingsMenu } from "./SettingsMenu";
+import { ProfessionalMobileDrawerHeader, SettingsMenu } from "./SettingsMenu";
 import { TutorialOverlay } from "./Tutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
@@ -11595,8 +11595,7 @@ export function CoordinatorDashboard({
         </h3>
         <SettingsMenu
           inline
-          themeMode={theme}
-          onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
+          showAccountIdentity={false}
           onAction={() => setIsMobileMenuOpen(false)}
           user={user}
           onLogout={onLogout}
@@ -11798,17 +11797,12 @@ export function CoordinatorDashboard({
                   transition={{ type: "spring", damping: 25, stiffness: 200 }}
                   className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      <LogoVerto size={32} showText={true} />
-                    </div>
-                    <button
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className="p-2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X size={24} />
-                    </button>
-                  </div>
+                  <ProfessionalMobileDrawerHeader
+                    user={user}
+                    themeMode={theme}
+                    onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
+                    onClose={() => setIsMobileMenuOpen(false)}
+                  />
 
                   <button
                     type="button"
@@ -12133,17 +12127,12 @@ export function CoordinatorDashboard({
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
                 className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
               >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-3">
-                    <LogoVerto size={32} showText={true} />
-                  </div>
-                  <button
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="p-2 text-slate-400 hover:text-slate-600"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
+                <ProfessionalMobileDrawerHeader
+                  user={user}
+                  themeMode={theme}
+                  onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
+                  onClose={() => setIsMobileMenuOpen(false)}
+                />
 
                 <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
                   {renderNavigationGroups({

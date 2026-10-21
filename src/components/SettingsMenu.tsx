@@ -11,7 +11,8 @@ import {
   BookOpenCheck,
   CircleHelp,
   Moon,
-  Sun
+  Sun,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { createPortal } from 'react-dom';
@@ -38,58 +39,16 @@ interface SettingsMenuProps {
   /** Mobile drawer-only theme control, directly after professional identity. */
   themeMode?: 'light' | 'dark';
   onToggleTheme?: () => void;
+  /** The drawer renders professional identity and theme above navigation instead. */
+  showAccountIdentity?: boolean;
 }
 
-export function SettingsMenu({ 
-  user, 
-  onLogout, 
-  onViewTeam, 
-  onOpenInvitations, 
-  onViewProfile, 
-  onViewClinicSettings,
-  canManageClinicSettings = false,
-  onViewBilling,
-  onOpenOnboarding,
-  onOpenMarketplace,
-  onOpenGuidedTutorial,
-  inline = false,
-  onAction,
-  themeMode = 'light',
-  onToggleTheme
-}: SettingsMenuProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [logoutError, setLogoutError] = useState('');
+/**
+ * Reuse the account portrait, displayed name and workspace role across the
+ * desktop settings popover and the professional mobile navigation drawers.
+ */
+function ProfessionalAccountIdentity({ user }: { user: any }) {
   const [profileImageFailed, setProfileImageFailed] = useState(false);
-  const [moduleDiscoveryOpen, setModuleDiscoveryOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const firstActionRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    };
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || !isOpen || isLoggingOut) return;
-      setIsOpen(false);
-      triggerRef.current?.focus();
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [isLoggingOut, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    window.requestAnimationFrame(() => firstActionRef.current?.focus());
-  }, [isOpen]);
-
   const normalizedRole = String(
     user?.activeWorkspaceRole ||
     user?.activeOrganizationRole ||
@@ -97,21 +56,6 @@ export function SettingsMenu({
     user?.role ||
     ''
   ).trim().toLowerCase();
-  const isDirector = normalizedRole === 'director';
-  const isCoordinator = normalizedRole === 'coordinator' || normalizedRole === 'admin';
-  const isOwner = normalizedRole === 'owner';
-  const canManageTeam = isDirector || isCoordinator || isOwner;
-  const onboardingMode = String(user?.onboardingContext?.onboardingMode || '').trim().toLowerCase();
-  const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(onboardingMode);
-  const canSeeBilling = (isCoordinator || isOwner) && !isClinicManagedMember;
-  const accessContextCount = Array.isArray(user?.accessContexts) && user.accessContexts.length > 0
-    ? new Set(user.accessContexts.map((context: any) => String(context?.id || '').trim()).filter(Boolean)).size
-    : new Set(
-        (Array.isArray(user?.workspaces) ? user.workspaces : [])
-          .map((workspace: any) => String(workspace?.clinicId || '').trim())
-          .filter(Boolean)
-      ).size;
-  const canSwitchAccessContext = accessContextCount > 1;
   const roleLabel = normalizedRole === 'director'
     ? 'Diretor'
     : normalizedRole === 'coordinator'
@@ -165,6 +109,137 @@ export function SettingsMenu({
     setProfileImageFailed(false);
   }, [profileImageUrl]);
 
+  return (
+    <div className="flex min-w-0 items-center gap-3">
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-purple-50 text-sm font-medium text-[#7a32fc]">
+        {profileImageUrl && !profileImageFailed ? (
+          <SecureImage
+            src={profileImageUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            fallback={userInitials}
+            onError={() => setProfileImageFailed(true)}
+          />
+        ) : userInitials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-semibold text-slate-900">{user?.name || 'Usuário'}</p>
+        <p className="truncate text-xs text-slate-500">{roleLabel}</p>
+        {organizationName && <p className="mt-0.5 truncate text-[11px] text-slate-400">{organizationName}</p>}
+      </div>
+    </div>
+  );
+}
+
+interface ProfessionalMobileDrawerHeaderProps {
+  user: any;
+  themeMode: 'light' | 'dark';
+  onToggleTheme: () => void;
+  onClose: () => void;
+}
+
+/** Shared top section for every clinic professional's mobile hamburger menu. */
+export function ProfessionalMobileDrawerHeader({
+  user, themeMode, onToggleTheme, onClose
+}: ProfessionalMobileDrawerHeaderProps) {
+  return (
+    <div className="mb-4 shrink-0 border-b border-slate-100 pb-3" data-mobile-professional-header>
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="min-w-0 flex-1"><ProfessionalAccountIdentity user={user} /></div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Fechar menu"
+          className="shrink-0 rounded-xl p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      <button
+        type="button"
+        onClick={onToggleTheme}
+        aria-label={themeMode === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'}
+        className="mt-3 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+      >
+        {themeMode === 'light' ? <Moon size={18} /> : <Sun size={18} />}
+        <span>{themeMode === 'light' ? 'Tema escuro' : 'Tema claro'}</span>
+      </button>
+    </div>
+  );
+}
+
+export function SettingsMenu({ 
+  user, 
+  onLogout, 
+  onViewTeam, 
+  onOpenInvitations, 
+  onViewProfile, 
+  onViewClinicSettings,
+  canManageClinicSettings = false,
+  onViewBilling,
+  onOpenOnboarding,
+  onOpenMarketplace,
+  onOpenGuidedTutorial,
+  inline = false,
+  onAction,
+  themeMode = 'light',
+  onToggleTheme,
+  showAccountIdentity = true
+}: SettingsMenuProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [logoutError, setLogoutError] = useState('');
+  const [moduleDiscoveryOpen, setModuleDiscoveryOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const firstActionRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !isOpen || isLoggingOut) return;
+      setIsOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isLoggingOut, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    window.requestAnimationFrame(() => firstActionRef.current?.focus());
+  }, [isOpen]);
+
+  const normalizedRole = String(
+    user?.activeWorkspaceRole ||
+    user?.activeOrganizationRole ||
+    user?.organizationRole ||
+    user?.role ||
+    ''
+  ).trim().toLowerCase();
+  const isDirector = normalizedRole === 'director';
+  const isCoordinator = normalizedRole === 'coordinator' || normalizedRole === 'admin';
+  const isOwner = normalizedRole === 'owner';
+  const canManageTeam = isDirector || isCoordinator || isOwner;
+  const onboardingMode = String(user?.onboardingContext?.onboardingMode || '').trim().toLowerCase();
+  const isClinicManagedMember = ['invited_professional', 'clinic_member'].includes(onboardingMode);
+  const canSeeBilling = (isCoordinator || isOwner) && !isClinicManagedMember;
+  const accessContextCount = Array.isArray(user?.accessContexts) && user.accessContexts.length > 0
+    ? new Set(user.accessContexts.map((context: any) => String(context?.id || '').trim()).filter(Boolean)).size
+    : new Set(
+        (Array.isArray(user?.workspaces) ? user.workspaces : [])
+          .map((workspace: any) => String(workspace?.clinicId || '').trim())
+          .filter(Boolean)
+      ).size;
+  const canSwitchAccessContext = accessContextCount > 1;
   const handleLogout = async () => {
     if (isLoggingOut) return;
     setLogoutError('');
@@ -181,26 +256,11 @@ export function SettingsMenu({
 
   const accountActions = (
     <>
-            <div className={inline ? "px-3 py-3" : "p-4 border-b border-slate-50"}>
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-purple-50 text-sm font-medium text-[#7a32fc]">
-                  {profileImageUrl && !profileImageFailed ? (
-                    <SecureImage
-                      src={profileImageUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                      fallback={userInitials}
-                      onError={() => setProfileImageFailed(true)}
-                    />
-                  ) : userInitials}
-                </div>
-                <div className="overflow-hidden">
-                  <p className="text-sm font-medium text-slate-900 truncate">{user?.name || 'Usuário'}</p>
-                  <p className="text-xs text-slate-500 truncate">{roleLabel}</p>
-                  {organizationName && <p className="mt-0.5 text-[11px] text-slate-400 truncate">{organizationName}</p>}
-                </div>
+            {showAccountIdentity && (
+              <div className={inline ? "px-3 py-3" : "p-4 border-b border-slate-50"}>
+                <ProfessionalAccountIdentity user={user} />
               </div>
-            </div>
+            )}
             {inline && onToggleTheme && (
               <div className="px-2 pb-3">
                 <button
