@@ -18,7 +18,7 @@ dataService.getClinicRooms=async()=>({success:true,data:[room]});
 dataService.getGroupSession=async()=>detail;
 let previewFailure: any = null;
 dataService.previewGroupSession=async()=>previewFailure || ({success:true,patientRates:patients.map((p,i)=>({patientId:p.id,amountCents:8000-i*1000}))});
-dataService.createGroupSessions=async(payload:any)=>{creates.push(payload);return creates.length===1?{success:false,error:'Falha transitória de teste'}:{...detail,action:'created'};};
+dataService.createGroupSessions=async(payload:any)=>{creates.push(payload);return creates.length===1?{success:false,error:'Falha transitória de teste'}:{...detail,bookings:[booking,{...booking,id:id(16)},{...booking,id:id(17)}],action:'created'};};
 dataService.cancelGroupSession=async(bookingId:string,payload:any)=>{cancels.push({bookingId,payload});return {...detail,action:'canceled'};};
 const root=createRoot(document.getElementById('test')!);
 const label=(prefix:string)=>Array.from(document.querySelectorAll('label')).find(el=>el.textContent?.trim().startsWith(prefix))!;
@@ -58,6 +58,8 @@ try{
   ],'weekly recurrence must be included atomically in the create request');
   assert.deepEqual(creates[1].patientIds,patients.map(p=>p.id));assert.deepEqual(creates[1].professionalIds,team.map(p=>p.id));
   assert.equal(creates[1].amountCents,undefined);assert.equal(creates[1].sessionGroupId,undefined);assert.equal(persisted.length,1);
+  assert.match(document.body.textContent!,/3 sessões recorrentes salvas, com 2 pacientes por sessão/,
+    'show the entire saved series rather than implying only one appointment was created');
   assert.match(document.body.textContent!,/50 minutos/);assert.match(document.body.textContent!,/80,00/,'detail reads unit_amount_cents');
   await click('Cancelar');await fill('Motivo','Imprevisto da clínica');
   await fill('Cobrança manual de Paciente fictício um','30,00');await fill('Cobrança manual de Paciente fictício dois','25,00');await submit();
