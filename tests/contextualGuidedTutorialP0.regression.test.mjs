@@ -27,8 +27,12 @@ assert.ok(!tutorialSteps.includes('targetId: "nav-')
   'no sidebar, navigation or account menu steps on desktop/mobile');
 assert.ok(coordinator.includes('Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0))'),
   'old active multistep state must safely resume on the only help step');
-assert.ok(coordinator.includes('setIsMobileMenuOpen(step.targetId.startsWith("nav-"))'),
-  'resuming the help step closes a previously open mobile drawer');
+assert.ok(coordinator.includes('const guidedTutorialTargetId = guidedTutorialSteps[guidedTutorialStep]?.targetId || "";'),
+  'guided help uses the stable target ID rather than the recreated step array');
+assert.match(coordinator, /\}, \[guidedTutorialTargetId, runGuidedTutorial\]\);/,
+  'opening the mobile drawer manually must not retrigger the tutorial drawer synchronization');
+assert.doesNotMatch(coordinator, /\}, \[guidedTutorialStep, guidedTutorialSteps, runGuidedTutorial\]\);/,
+  'a freshly allocated guidedTutorialSteps array must never force-close an opened drawer');
 assert.ok(tutorial.includes('steps.length > 1 && (')
   && tutorial.includes('Passo {currentStepIndex + 1} de {steps.length}'),
   'one-step help must not show a meaningless step counter');
@@ -48,7 +52,7 @@ assert.match(coordinator, /stored\.status === "active"/);
 assert.match(coordinator, /reason === "skip" \? "skipped" : reason === "complete" \? "completed" : "active"/);
 assert.match(coordinator, /onOpenGuidedTutorial=\{startGuidedTutorial\}/);
 assert.match(coordinator, /window\.matchMedia\("\(max-width: 1023px\)"\)/);
-assert.match(coordinator, /setIsMobileMenuOpen\(step\.targetId\.startsWith\("nav-"\)\)/);
+assert.match(coordinator, /setIsMobileMenuOpen\(guidedTutorialTargetId\.startsWith\("nav-"\)\)/);
 
 // Render outside sticky, transformed or animated headers: a local z-index
 // cannot escape its parent's stacking context over the patient record drawer.
