@@ -191,7 +191,10 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
         ? Number(item.patientEffort)
         : null;
   const hasStarMarker = /\u2b50|⭐/.test(String(item?.subject || ''));
-  const isMilestoneAwarded = Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
+  const savedFamilyScore = item?.score === null || item?.score === undefined ? null : Number(item.score);
+  const isMilestoneAwarded = isFamilyEntry && savedFamilyScore !== null && Number.isFinite(savedFamilyScore)
+    ? savedFamilyScore >= 1
+    : Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
   const handleToggleMilestone = async () => {
     if (isSavingMilestone) return;
     setIsSavingMilestone(true);
