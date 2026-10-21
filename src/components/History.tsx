@@ -100,7 +100,8 @@ const getFamilyHistoryImageSource = (item: any) => {
 
 export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protocols = [], id, isKid, fullHistory = [], peiGoals = [] }: any) => { 
   const [isEvaluating, setIsEvaluating] = useState(false);
-  const [isSavingMilestone, setIsSavingMilestone] = useState(false); 
+  const [isSavingMilestone, setIsSavingMilestone] = useState(false);
+  const savingMilestoneRef = React.useRef(false); 
   const [score, setScore] = useState(item.score !== undefined ? item.score : ''); 
   const [evalComment, setEvalComment] = useState(item.evalComment || ''); 
   const [linkedTask, setLinkedTask] = useState(item.linkedTask || '');
@@ -196,7 +197,8 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
     ? savedFamilyScore >= 1
     : Boolean(item?.milestoneAwarded) || Number(item?.score ?? 0) >= 1 || hasStarMarker;
   const handleToggleMilestone = async () => {
-    if (isSavingMilestone) return;
+    if (savingMilestoneRef.current) return;
+    savingMilestoneRef.current = true;
     setIsSavingMilestone(true);
     try {
       await emitEvaluate({
@@ -204,6 +206,7 @@ export const HistoryCard = ({ item, energyTags, isTherapist, onEvaluate, protoco
         evalComment: evalComment || item.evalComment || ''
       });
     } finally {
+      savingMilestoneRef.current = false;
       setIsSavingMilestone(false);
     }
   };
