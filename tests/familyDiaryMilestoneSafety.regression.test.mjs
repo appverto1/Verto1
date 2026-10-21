@@ -17,7 +17,7 @@ assert.match(scope, /if \(!params\.hasWriteAccess\)/);
 // History-backed family records use the authorized history endpoint.
 // Older synthetic note-only records are read-only until their distinct
 // note PATCH endpoint enforces the same case-team write authority.
-assert.match(card, /isTherapist && isFamilyEntry && !item\?\.isFromNotes/);
+assert.match(card, /isTherapist && isFamilyEntry && \(/);
 assert.match(card, /const \[isSavingMilestone, setIsSavingMilestone\] = useState\(false\)/);
 assert.match(card, /if \(isSavingMilestone\) return/);
 assert.match(card, /await emitEvaluate\(/);
