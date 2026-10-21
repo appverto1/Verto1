@@ -62,4 +62,15 @@ assert.match(coordinator, /return onEvaluateHistoryItem\(id, score, note\)/,
 assert.match(detail, /const awarded = hasStoredScore \? storedScore >= 1/);
 assert.match(detail, /const awarded = numericScore !== null && Number\.isFinite\(numericScore\)/);
 assert.match(portal, /countCanonicalFamilyStars\(portalFamilyHistory, scopedSharedNotes, milestoneBySource\)/);
+const familyScopeStart = portal.indexOf('const portalFamilyHistory = useMemo(');
+const familyScopeEnd = portal.indexOf('const persistedFamilyDiaryHistory', familyScopeStart);
+const familyScope = portal.slice(familyScopeStart, familyScopeEnd);
+assert.match(familyScope, /return Boolean\(itemPatientId && patientKeys\.has\(itemPatientId\)\)/);
+assert.doesNotMatch(familyScope, /itemPatientEmail|patientEmail/, 'guardian email cannot authorize sibling photos');
+const sharedScopeStart = portal.indexOf('const sharedNoteBelongsToPortalPatient');
+const sharedScopeEnd = portal.indexOf('const scopedSharedNotes', sharedScopeStart);
+const sharedScope = portal.slice(sharedScopeStart, sharedScopeEnd);
+assert.match(sharedScope, /notePatientId && portalStarPatientKeys\.has\(notePatientId\)/);
+assert.doesNotMatch(sharedScope, /notePatientEmail|portalStarPatientEmail/, 'shared email must not count another child stars');
+
 console.log('familyDiaryLegacyStarsSecurity.regression.test.mjs: ok');
