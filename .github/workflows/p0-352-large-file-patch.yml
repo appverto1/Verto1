@@ -1,0 +1,31 @@
+name: P0 352 targeted server patch (temporary)
+on:
+  push:
+    branches:
+      - fix/staging-financial-plan-professional-binding-p0-352-20261021
+    paths:
+      - scripts/patch-financial-plan-professional-server.mjs
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Patch only the verified server entry points
+        run: |
+          node scripts/patch-financial-plan-professional-server.mjs
+          git diff --check
+          test "$(git diff --name-only)" = "server.ts"
+          git config user.name "verto-staging-ci"
+          git config user.email "verto-staging-ci@users.noreply.github.com"
+          git add server.ts
+          git commit -m "feat(finance P0): persist therapist binding in canonical plan API"
+          git push origin HEAD:refs/heads/fix/staging-financial-plan-professional-binding-p0-352-20261021
