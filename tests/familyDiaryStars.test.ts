@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { countCanonicalFamilyStars } from '../src/utils/familyDiaryStars';
+
+const event = (awarded: boolean) => ({ awarded });
+const h = (id: string, score: number) => ({ id, type: 'photo', score, note: 'Registro da família' });
+const n = (id: string, score: number) => ({ id, type: 'family_note', visibility: 'family', score, text: 'Conquista' });
+
+assert.equal(countCanonicalFamilyStars([], [], new Map()), 0);
+assert.equal(countCanonicalFamilyStars([h('one', 1)], [], new Map()), 1);
+assert.equal(countCanonicalFamilyStars([h('one', 0)], [], new Map([['one', event(true)]])), 0,
+  'a previous award cannot override an explicit canonical revocation');
+assert.equal(countCanonicalFamilyStars([], [n('two', 0)], new Map([['note-family-two', event(true)]])), 0,
+  'legacy milestone receipt cannot resurrect a revoked family note');
+assert.equal(countCanonicalFamilyStars([h('one', 1)], [n('two', 1)], new Map([
+  ['one', event(true)], ['note-family-two', event(true)],
+])), 2, 'distinct records count once each, no event double counting');
+assert.equal(countCanonicalFamilyStars([h('one', 1)], [n('two', 1)], new Map([
+  ['legacy', event(true)]
+])), 3, 'independent legacy award remains visible if source no longer loaded');
+assert.equal(countCanonicalFamilyStars([], [
+  { ...n('two', 1), subject: 'milestone_event', text: 'MILESTONE_EVENT|source=x|awarded=1' }
+], new Map()), 0, 'the technical receipt does not independently become a family record');
+assert.equal(countCanonicalFamilyStars([], [{ ...n('legacy', 0), text: '[STAR] milestone' }], new Map()), 1,
+  'legacy marker remains backward compatible until rewritten');
+
+console.log('familyDiaryStars.test.ts: ok');
