@@ -526,6 +526,30 @@ async function fetchNoStoreJsonWithRetry(
 }
 
 const SERVER_SESSION_EXPIRED_EVENT = 'verto:server-session-expired';
+const CLINIC_PERMISSION_DENIED_EVENT = 'verto:clinic-permission-denied';
+// These endpoints operate on clinic data. A 403 is not proof that an entire
+// membership was revoked, so the UI must offer reauthentication, not log out.
+const CLINIC_PERMISSION_ENDPOINT_RE = /^\/api\/(?:clinic|patients|patient-records|calendar|appointments|aba|history|notes|tasks|assigned-tasks)(?:\/|\?|$)/;
+let lastClinicPermissionDeniedDispatchAt = 0;
+
+async function notifyClinicPermissionDeniedIfNeeded(response: Response, url: string) {
+  if (response.status !== 403 || typeof window === 'undefined') return;
+  const pathname = new URL(url, window.location.origin).pathname;
+  if (!CLINIC_PERMISSION_ENDPOINT_RE.test(pathname)) return;
+  // Proxy/HTML errors are not authoritative application authorization responses.
+  if (!String(response.headers.get('content-type') || '').includes('application/json')) return;
+  let payload: any;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return;
+  }
+  if (!payload || typeof payload !== 'object' || typeof (payload.code || payload.error || payload.message) !== 'string') return;
+  const now = Date.now();
+  if (now - lastClinicPermissionDeniedDispatchAt < 30000) return;
+  lastClinicPermissionDeniedDispatchAt = now;
+  window.dispatchEvent(new CustomEvent(CLINIC_PERMISSION_DENIED_EVENT));
+}
 const SERVER_SESSION_EXPIRED_CODES = new Set(['SERVER_SESSION_REQUIRED', 'SESSION_REVOKED']);
 let lastServerSessionExpiryDispatchAt = 0;
 
@@ -550,7 +574,10 @@ async function notifyServerSessionExpiredIfNeeded(response: Response) {
 
 async function fetchWithAuthRetry(url: string, init: RequestInit) {
   let response = await fetch(url, init);
-  if (response.status !== 401) return response;
+  if (response.status !== 401) {
+    await notifyClinicPermissionDeniedIfNeeded(response, url);
+    return response;
+  }
 
   const retryHeaders = {
     ...(init.headers as Record<string, string>),
@@ -562,6 +589,8 @@ async function fetchWithAuthRetry(url: string, init: RequestInit) {
   // remains refreshable and must never force a logout by itself.
   if (response.status === 401) {
     await notifyServerSessionExpiredIfNeeded(response);
+  } else {
+    await notifyClinicPermissionDeniedIfNeeded(response, url);
   }
   return response;
 }
