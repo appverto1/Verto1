@@ -62,6 +62,8 @@ for(const query of calls) {
   assert.ok(query.cols && !query.cols.includes('*'));
 }
 assert.equal(calls.find(q=>q.table==='patient_financial_plans')?.limit,201);
+assert.match(calls.find(q=>q.table==='patient_financial_plans')?.cols || '', /valid_from,valid_until,package_valid_until/,
+  'read-only preview must fetch canonical plan validity in its existing batched query');
 calls.length=0;
 const bad=await previewNewGroupBooking({...input,patientIds:[patient1,patient1],supabase:supabaseWith()});
 assert.equal(bad.ok,false);
@@ -95,6 +97,12 @@ const blockedRoom=await previewNewGroupBooking({...input,supabase:supabaseWith({
   clinic_rooms:[{...rows.clinic_rooms[0],capacity:1}]
 })});
 assert.equal(blockedRoom.ok,false,'room capacity enforced');
+const expiredPreview=await previewNewGroupBooking({...input,supabase:supabaseWith({
+  patient_financial_plans:rows.patient_financial_plans.map((plan, index) => index === 0
+    ? {...plan,valid_from:'2026-10-18T00:00:00Z'} : plan)
+})});
+assert.deepEqual(expiredPreview,{ok:false,code:'GROUP_PRICING_PLAN_NOT_VALID_AT_DATE',patientId:patient1},
+  'preview must not claim the first session can be charged to a future-dated plan');
 const missingPrice=await previewNewGroupBooking({...input,supabase:supabaseWith({
   patient_financial_plans:[rows.patient_financial_plans[0]]
 })});
