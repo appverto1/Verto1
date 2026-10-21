@@ -3,13 +3,16 @@ import { readFileSync } from 'node:fs';
 import { createClinicAnnouncementDeliveryService, type ActiveCronServiceOptions } from '../services/clinicAnnouncementDelivery';
 
 const cronSource = readFileSync('services/clinicAnnouncementCronService.ts', 'utf8');
+const unifiedCron = readFileSync('services/cronService.ts', 'utf8');
 const deliverySource = readFileSync('services/clinicAnnouncementDelivery.ts', 'utf8');
 assert.match(cronSource, /createClinicAnnouncementDeliveryService\(/);
 assert.match(deliverySource, /async function dispatchClinicAnnouncementById\(/);
 assert.doesNotMatch(cronSource, /async function dispatchClinicAnnouncementById\(/);
 assert.match(cronSource, /async function recoverClinicAnnouncementAfterFailure\(/);
 assert.match(cronSource, /claim_due_clinic_announcements_v1/);
-assert.match(cronSource, /cron\.schedule\(/);
+assert.doesNotMatch(cronSource, /cron\.schedule\(/, 'announcements must not start a second worker');
+assert.match(unifiedCron, /cron\.schedule\('\* \* \* \* \*'/, 'unified delivery runs each minute');
+assert.match(unifiedCron, /clinicAnnouncementService\.runClinicAnnouncementDispatchScan\(trigger, rows\)/);
 
 const aid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const patient = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
