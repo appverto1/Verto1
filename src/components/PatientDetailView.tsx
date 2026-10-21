@@ -458,6 +458,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
   const initialChartFilters = readPersistedChartFilters();
   const [activeTab, setActiveTab] = useState(initialTab); 
+  const [historySubtab, setHistorySubtab] = useState<'timeline' | 'family'>('timeline');
   const [wellbeingCheckins, setWellbeingCheckins] = useState<any[]>([]);
   const [wellbeingPeriod, setWellbeingPeriod] = useState<WellbeingPeriod>('month');
   const [wellbeingCheckinsError, setWellbeingCheckinsError] = useState('');
@@ -4245,8 +4246,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const baseHistory = Array.isArray(history) ? history : [];
     if (!isKidsProfile) return baseHistory;
 
+    // Patient identity comes from the selected clinical chart, not from note content.
+    const scopedFamilyNotes = (Array.isArray(notes) ? notes : []).filter((note: any) => {
+      const notePatientId = String(note?.patientId ?? note?.patient_id ?? '').trim();
+      const currentPatientId = String(patient?.id || '').trim();
+      if (notePatientId) return Boolean(currentPatientId && notePatientId === currentPatientId);
+      const noteEmail = String(note?.patient_email ?? note?.patientEmail ?? '').trim().toLowerCase();
+      const patientEmail = String(patient?.email || '').trim().toLowerCase();
+      return Boolean(noteEmail && patientEmail && noteEmail === patientEmail);
+    });
+
     const milestoneBySource = new Map<string, { awarded: boolean; timestamp: number }>();
-    (Array.isArray(notes) ? notes : []).forEach((n: any) => {
+    scopedFamilyNotes.forEach((n: any) => {
       const subject = String(n?.subject || '').trim().toLowerCase();
       const text = String(n?.text || '').trim();
       const isMilestoneEvent = subject === 'milestone_event' || text.startsWith('MILESTONE_EVENT|');
@@ -4263,7 +4274,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       }
     });
 
-    const familyNotes = (Array.isArray(notes) ? notes : [])
+    const familyNotes = scopedFamilyNotes
       .filter((n: any) => {
         const visibility = String(n?.visibility || n?.type || '').toLowerCase();
         const subject = String(n?.subject || '').toLowerCase();
@@ -4406,6 +4417,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return Number.isFinite(timestamp) && timestamp >= fromMs && timestamp <= toMs;
     });
   }, [historyPeriod, historyRange.from, historyRange.ready, historyRange.to, historyWithFamilyNotes]);
+
+  const familyDiaryEntries = useMemo(() => {
+    const currentPatientId = String(patient?.id || '').trim();
+    if (!isKidsProfile || !currentPatientId) return [];
+    return visibleHistoryWithFamilyNotes.filter((item: any) => {
+      const recordPatientId = String(item?.patientId ?? item?.patient_id ?? '').trim();
+      return recordPatientId === currentPatientId &&
+        (item?.type === 'family_note' || item?.type === 'photo');
+    });
+  }, [visibleHistoryWithFamilyNotes, isKidsProfile, patient?.id]);
 
   const normalizeNoteText = (value: string) => decodeClinicalTextEntities(
     String(value || '')
@@ -11044,8 +11065,66 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       </div>
       <div className={`min-w-0 p-4 transition-colors sm:p-6 ${isPanelDark ? 'bg-[#081324]' : 'bg-gray-50'}`}>
         <div className="mx-auto w-full max-w-[1480px]">
-        {activeTab === 'history' ? ( 
-          <div className="space-y-6"> 
+        {activeTab === 'history' ? (
+          <div className="space-y-6">
+            {isKidsProfile && (
+              <nav role="tablist" aria-label="Seções do histórico" className={`flex flex-wrap gap-2 rounded-2xl border p-2 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                {(['timeline', 'family'] as const).map((section) => (
+                  <button
+                    key={section}
+                    type="button"
+                    role="tab"
+                    aria-selected={historySubtab === section}
+                    onClick={() => setHistorySubtab(section)}
+                    className={`min-h-11 rounded-xl px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${historySubtab === section ? 'bg-[#7551FF] text-white' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-100'}`}
+                  >
+                    {section === 'timeline' ? 'Linha do tempo' : 'Diário da Família'}
+                  </button>
+                ))}
+              </nav>
+            )}
+            {isKidsProfile && historySubtab === 'family' ? (
+              <section aria-label="Diário da Família" className="space-y-4">
+                <div>
+                  <h2 className={`text-lg font-semibold ${isPanelDark ? 'text-slate-100' : 'text-slate-900'}`}>Diário da Família</h2>
+                  <p className={`mt-1 text-sm ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>Fotos e relatos enviados pela família, no histórico deste paciente.</p>
+                </div>
+                {renderHistoryTimelineControls()}
+                {historyPagination.loading && familyDiaryEntries.length === 0 ? (
+                  <p className={`rounded-2xl p-4 text-sm ${isPanelDark ? 'bg-slate-800 text-slate-300' : 'bg-white text-slate-600'}`}>Carregando registros da família...</p>
+                ) : familyDiaryEntries.length === 0 && !historyPagination.error ? (
+                  <div className={`rounded-2xl border border-dashed p-6 text-center text-sm ${isPanelDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 bg-white text-slate-600'}`}>Nenhum registro da família encontrado neste período.</div>
+                ) : null}
+                <div className="space-y-3">
+                  {familyDiaryEntries.map((item: any) => (
+                    <HistoryCard
+                      key={item.id}
+                      item={item}
+                      energyTags={ENERGY_TAGS}
+                      isTherapist={['director', 'coordinator', 'supervisor', 'therapist'].includes(effectiveCaseTeamRole)}
+                      onEvaluate={onEvaluateHistoryItem}
+                      protocols={protocols}
+                      isKid={patientCategory === 'Criança'}
+                      fullHistory={(history || []).filter((record: any) => String(record?.patientId ?? record?.patient_id ?? '') === String(patient.id))}
+                      peiGoals={peiGoals || []}
+                    />
+                  ))}
+                </div>
+                {historyPagination.hasMore && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      disabled={historyPagination.loadingMore || !historyPagination.nextCursor}
+                      onClick={() => void requestPatientHistoryPage(historyPagination.nextCursor)}
+                      className={`min-h-11 rounded-xl border px-5 text-sm font-medium disabled:opacity-60 ${isPanelDark ? 'border-slate-600 text-slate-100' : 'border-slate-200 bg-white text-slate-700'}`}
+                    >
+                      {historyPagination.loadingMore ? 'Carregando registros...' : 'Carregar registros anteriores'}
+                    </button>
+                  </div>
+                )}
+              </section>
+            ) : (
+              <React.Fragment>
             {conventionalSessionEvolutions.length > 0 && (
               <section className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-labelledby="conventional-session-evolutions-heading">
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
@@ -11492,6 +11571,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   {historyPagination.loadingMore ? 'Carregando registros...' : 'Carregar registros anteriores'}
                 </button>
               </div>
+            )}
+              </React.Fragment>
             )}
           </div> 
         ) : activeTab === 'notes' ? ( 
