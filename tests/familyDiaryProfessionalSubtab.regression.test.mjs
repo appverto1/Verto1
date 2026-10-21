@@ -45,6 +45,8 @@ assert.match(diaryPanel, /\['director', 'coordinator', 'supervisor', 'therapist'
 assert.match(card, /<SecureImage src=\{familyImageSource\}/);
 assert.match(card, /Validar Marco ⭐/);
 assert.match(diaryPanel, /renderHistoryTimelineControls\(\)/);
+assert.match(diaryPanel, /Atualizar registros/);
+assert.match(diaryPanel, /onClick=\{\(\) => void requestPatientHistoryPage\(''\)\}/);
 assert.match(diaryPanel, /historyPagination\.hasMore/);
 assert.match(diaryPanel, /requestPatientHistoryPage\(historyPagination\.nextCursor\)/);
 assert.match(diaryPanel, /historyPagination\.error/);
