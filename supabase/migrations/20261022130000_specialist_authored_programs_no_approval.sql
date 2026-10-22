@@ -56,7 +56,7 @@ begin
       'specialist-self-authored-activation:' || candidate.program_id || ':' || candidate.program_version::text,
       candidate.specialist_id
     );
-    if coalesce(result->>'status','') <> 'teaching' then
+    if coalesce(result->'program'->>'status','') <> 'teaching' then
       raise exception 'SPECIALIST_LEGACY_ACTIVATION_NOT_CONFIRMED';
     end if;
   end loop;
