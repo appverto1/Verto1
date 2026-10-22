@@ -128,6 +128,17 @@ begin
     return jsonb_build_object('canceled',false,'code','APPOINTMENT_TERMINAL');
   end if;
 
+  -- Do not silently supersede an earlier 12h cancellation request or
+  -- a reschedule awaiting the clinic. In this case the regular portal route
+  -- updates the pending request and retains the clinical approval gate.
+  if exists (
+    select 1 from public.appointment_action_requests ar
+    where ar.organization_id=p_organization_id and ar.appointment_id=p_appointment_id
+      and ar.status='PENDING' and ar.request_type in ('CANCEL','RESCHEDULE')
+  ) then
+    return jsonb_build_object('canceled',false,'code','CLINIC_REQUEST_PENDING');
+  end if;
+
   select ar.* into v_request from public.appointment_action_requests ar
   where ar.organization_id=p_organization_id and ar.appointment_id=p_appointment_id
     and ar.patient_id=p_patient_id and ar.request_type='CANCEL' and ar.status='PENDING'
