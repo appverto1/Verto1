@@ -39,7 +39,7 @@ try {
         returning to_jsonb(aba_programs.*) into v;
       if v is null then raise exception 'VERSION_CONFLICT'; end if;
       insert into activation_audit values(p_program_id,p_reason,p_actor_id);
-      return v;
+      return jsonb_build_object('program',v,'history','[]'::jsonb,'targets','[]'::jsonb);
     end;
     $fn$;
   `);
@@ -60,6 +60,7 @@ try {
     ('pts-scope',$1,$2,'scope-pts',$3,'awaiting_approval',1)`,
     [clinic,patient,specialist,manager]);
   const migration=fs.readFileSync('supabase/migrations/20261022130000_specialist_authored_programs_no_approval.sql','utf8');
+  assert.match(migration, /result->'program'->>'status'/, 'read actual program payload envelope');
   await db.exec(migration);
   let rows=(await run('select id,status,version from aba_programs order by id')).rows;
   assert.deepEqual(rows,[
