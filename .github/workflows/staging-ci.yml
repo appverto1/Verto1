@@ -135,6 +135,8 @@ jobs:
           node tests/rescheduleApprovalClinicAuthorizedRoles.regression.test.mjs
           node tests/rescheduleApprovalDelegatedAgendaCapability.regression.test.mjs
           node tests/portalRescheduleSubmissionAndReminderCycle.regression.test.mjs
+          node tests/p127PortalReminderOrigin.regression.test.mjs
+          node tests/p127Portal24hReminderCancellation.test.mjs
 
       - name: Family diary unread and professional history regressions
         run: |
