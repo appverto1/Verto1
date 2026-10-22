@@ -140,6 +140,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalFileState, setPortalFileState] = useState({ uploading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
+  const [portalReminderOrigin, setPortalReminderOrigin] = useState<{ appointmentId: string; notificationId: string } | null>(null);
   const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
   const [portalActionForm, setPortalActionForm] = useState({ reason: '', note: '', requestedStart: '', accepted: false });
   const [portalRescheduleAvailability, setPortalRescheduleAvailability] = useState<any>({ loading: false, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
@@ -747,6 +748,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading, hasPendingPortalAnamnesisHint, isKidsProfile]);
 
   const openPortalAppointmentDetail = async (appointment: any) => {
+    setPortalReminderOrigin(null);
     setSelectedPortalAppointment(appointment);
     setPortalAppointmentDetail(null);
     setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: '' }));
@@ -807,6 +809,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       ),
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
     });
+    // Carry only the source notification ID; the backend verifies the exact
+    // 24h SENT job, patient, clinic, environment and unchanged appointment slot.
+    if (notificationType === 'appointment_reminder' && notification?.id) {
+      setPortalReminderOrigin({ appointmentId, notificationId: String(notification.id) });
+    }
   };
 
   const updatePortalAppointmentInList = (appointment: any) => {
@@ -958,6 +965,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const payload = {
       reason: portalActionForm.reason,
       note: portalActionForm.note,
+      ...(portalModal === 'cancel' && portalReminderOrigin?.appointmentId === appointmentId
+        ? { notificationId: portalReminderOrigin.notificationId }
+        : {}),
       rescheduleOptions: selectedRescheduleOptions,
       requestedStart: primaryRescheduleOption?.scheduledStart,
       requestedEnd: primaryRescheduleOption?.scheduledEnd,
@@ -979,6 +989,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (resultAppointment) updatePortalAppointmentInList(resultAppointment);
     setPortalModal('');
     setPortalSelectedRescheduleSlots([]);
+    setPortalReminderOrigin(null);
     setPortalActionForm({ reason: '', note: '', requestedStart: '', accepted: false });
     setPortalAppointmentsState((prev) => ({
       ...prev,
