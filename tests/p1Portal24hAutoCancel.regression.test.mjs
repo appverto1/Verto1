@@ -24,6 +24,8 @@ assert.match(migration, /v_notification\.idempotency_key=p_deployment_env/);
 assert.match(migration, /v_job\.payload->>'scheduledAt'/);
 assert.match(migration, /for update/);
 assert.match(migration, /'autoCancelNotificationId'/);
+assert.match(migration, /GROUP_SESSION_REQUIRES_CLINIC_APPROVAL/);
+assert.match(migration, /scheduled_start_at is distinct from v_appointment.scheduled_at/);
 assert.match(migration, /status='APPROVED'/);
 assert.match(migration, /status='CANCELLED'/);
 assert.match(migration, /'CANCEL_APPROVED'/);
