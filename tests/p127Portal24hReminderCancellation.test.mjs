@@ -69,6 +69,9 @@ try {
   assert.equal((await call(notification,clinic,'production')).autoCancelled,false,'environment isolation');
   assert.equal((await call(notification,otherClinic)).autoCancelled,false,'tenant isolation');
   assert.equal((await call(id(999))).autoCancelled,false,'forged notification');
+  await query("update appointments set scheduled_at=scheduled_at+interval '30 minutes' where id=$1",[appointment]);
+  assert.equal((await call(notification)).autoCancelled,false,'a reminder for the original clock time cannot cancel a rescheduled session');
+  await query("update appointments set scheduled_at=scheduled_at-interval '30 minutes' where id=$1",[appointment]);
   assert.equal((await scalar('select status from appointments where id=$1',[appointment])).status,'scheduled','negative probes must not modify appointment');
   assert.equal((await scalar('select count(*)::int as total from appointment_action_requests')).total,0,'negative probes create no pending requests');
 
