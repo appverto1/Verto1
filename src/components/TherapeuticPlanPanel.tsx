@@ -31,6 +31,7 @@ import { ResponsiveDrawer } from './ui/ResponsiveDrawer';
 import { AlertDialog } from './ui/AlertDialog';
 import { dataService } from '../services/dataService';
 import { pendingSpecialistProgramActivations } from '../utils/specialistProgramActivation';
+import { currentSpecialtyPlanScope } from '../utils/specialtyPlanRenewal';
 import { PtsWorkspaceEditor } from './PtsWorkspaceEditor';
 import { PtsTherapeuticDashboard } from './PtsTherapeuticDashboard';
 import { PtsEventForm } from './PtsEventForm';
@@ -579,6 +580,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     : actorProfessional?.planEligible === true
       ? [actorProfessional]
       : [];
+  const existingSpecialtyScopeInForm = scopeDraft.mode === 'specialty'
+    ? currentSpecialtyPlanScope(specialtyScopes, scopeDraft.specialty)
+    : null;
   const summary = useMemo(() => buildTherapeuticPlanSummary(programs, objectives), [objectives, programs]);
   const groupedRecommendations = useMemo(() => groupTherapeuticRecommendations(recommendations), [recommendations]);
   const visibleRecommendationGroups = useMemo(() => filterTherapeuticRecommendationGroups(groupedRecommendations, {
@@ -1356,6 +1360,24 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     if (scopeDraft.mode === 'interdisciplinary' && participantIds.length < 2) {
       setError('O responsável já conta como participante. Selecione pelo menos mais um profissional para o Projeto Terapêutico Singular.');
       return;
+    }
+    // The DB has one current plan per patient and canonical specialty.
+    // Never POST a duplicate or remove the existing clinical record to bypass it.
+    if (scopeDraft.mode === 'specialty') {
+      const existingScope = currentSpecialtyPlanScope(specialtyScopes, derivedSpecialty);
+      if (existingScope) {
+        if (existingScope.canEdit !== true) {
+          setError('Já existe um plano vigente desta especialidade, mas você não tem permissão para editá-lo. Solicite o vínculo ao responsável ou à coordenação da clínica.');
+          return;
+        }
+        setScopeFormOpen(false);
+        scopeIdempotencyKeyRef.current = '';
+        setWorkspaceScopeId(String(existingScope.id));
+        setShowPlanManager(false);
+        startEditingScope(existingScope);
+        setNotice('Este paciente já possui um plano vigente desta especialidade. Você pode criar uma nova versão do plano, preservando o histórico e os programas anteriores.');
+        return;
+      }
     }
     if (!scopeIdempotencyKeyRef.current) {
       scopeIdempotencyKeyRef.current = newIdempotencyKey(
@@ -2837,6 +2859,17 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           </p>
         </div>
 
+        {existingSpecialtyScopeInForm && (
+          <div className={`md:col-span-2 rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-amber-400/30 bg-amber-400/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'}`} role="status" data-testid="specialty-plan-existing-guidance">
+            <p className="font-medium">Já existe um plano vigente desta especialidade.</p>
+            <p className="mt-1 text-xs leading-5">
+              {existingSpecialtyScopeInForm.canEdit === true
+                ? 'Para planejar um novo ciclo, continue em Nova versão. Você poderá substituir os objetivos e adicionar novos programas; o histórico clínico anterior não será apagado.'
+                : 'Você não tem permissão para alterar esse plano. Solicite acesso ao responsável ou à coordenação antes de continuar.'}
+            </p>
+          </div>
+        )}
+
         <fieldset className="md:col-span-2">
           <legend className={`text-xs ${muted}`}>
             {scopeDraft.mode === 'interdisciplinary'
@@ -2889,11 +2922,13 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>Cancelar</button>
           <button
             type="button"
-            disabled={scopeSaving}
+            disabled={scopeSaving || Boolean(existingSpecialtyScopeInForm && existingSpecialtyScopeInForm.canEdit !== true)}
             className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50"
             onClick={() => void createPlanScope()}
           >
-            {scopeSaving ? 'Salvando...' : scopeDraft.mode === 'interdisciplinary' ? 'Criar PTS' : 'Criar plano por especialidade'}
+            {scopeSaving ? 'Salvando...' : scopeDraft.mode === 'interdisciplinary'
+              ? 'Criar PTS'
+              : existingSpecialtyScopeInForm ? 'Criar nova versão' : 'Criar plano por especialidade'}
           </button>
         </div>
       </div>
@@ -2952,6 +2987,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                       </button>
                     )}
                     <button type="button" className={workspaceButton} onClick={() => openWorkspace(scope)}>Abrir plano</button>
+                    {scope?.canEdit === true && (
+                      <button type="button" className={secondaryButton} onClick={() => { openWorkspace(scope); startEditingScope(scope); }}>
+                        <Pencil size={15} /> Nova versão
+                      </button>
+                    )}
                   </div>
                 </div>
               </article>
@@ -3033,11 +3073,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h3 className={`text-sm font-medium ${text}`}>Planos por especialidade</h3>
-              <p className={`mt-1 text-xs leading-5 ${muted}`}>A lista já respeita seu vínculo com o caso, participação no plano e relações ativas de supervisão.</p>
+              <p className={`mt-1 text-xs leading-5 ${muted}`}>Apenas um plano vigente por especialidade. Para iniciar um novo ciclo, abra o plano atual e salve uma nova versão; o histórico fica preservado.</p>
             </div>
             {canCreateSpecialty && !scopeFormOpen && (
               <button type="button" className={createPlanButton} onClick={() => openPlanScopeForm('specialty')}>
-                <Plus size={15} /> Novo plano por especialidade
+                <Plus size={15} /> Novo plano ou nova versão
               </button>
             )}
           </div>
