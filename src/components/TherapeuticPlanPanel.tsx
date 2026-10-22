@@ -30,6 +30,7 @@ import {
 import { ResponsiveDrawer } from './ui/ResponsiveDrawer';
 import { AlertDialog } from './ui/AlertDialog';
 import { dataService } from '../services/dataService';
+import { pendingSpecialistProgramActivations } from '../utils/specialistProgramActivation';
 import { PtsWorkspaceEditor } from './PtsWorkspaceEditor';
 import { PtsTherapeuticDashboard } from './PtsTherapeuticDashboard';
 import { PtsEventForm } from './PtsEventForm';
@@ -407,6 +408,10 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [ptsEventSaving, setPtsEventSaving] = useState(false);
   const [scopeEditDraft, setScopeEditDraft] = useState<any>({ commonObjectives: '', specialtyObjectives: {}, status: 'draft', expectedVersion: 1 });
   const requestSequence = useRef(0);
+  const specialistActivationAttemptsRef = useRef(new Set<string>());
+  const specialistActivationBusyRef = useRef('');
+  const specialistActivationPatientRef = useRef(patientId);
+  specialistActivationPatientRef.current = patientId;
   const scopeIdempotencyKeyRef = useRef('');
   const addProgramButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerScrollRef = useRef<HTMLDivElement | null>(null);
@@ -696,6 +701,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   };
 
   useEffect(() => {
+    specialistActivationAttemptsRef.current.clear();
+    specialistActivationBusyRef.current = '';
     requestSequence.current += 1;
     setPlanData({
       programs: [],
@@ -726,6 +733,58 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [patientId]);
+
+  // Historic programs may carry the obsolete awaiting_approval phase. For a
+  // specialty plan that is already ACTIVE, its current specialist is the
+  // clinical authority; no second approval is necessary. Use the existing
+  // authenticated, versioned PATCH, never fake an active badge client-side.
+  useEffect(() => {
+    if (loading || !patientId || specialistActivationBusyRef.current) return;
+    const candidates = pendingSpecialistProgramActivations({
+      programs: planData.programs,
+      planScopes: planData.planScopes,
+      actorId,
+      actorRole: effectiveRole,
+      patientId,
+      readOnlyHistory: planData.readOnlyHistory,
+    });
+    const next = candidates.find((item) =>
+      !specialistActivationAttemptsRef.current.has(`${patientId}:${item.id}:${item.version}`)
+    );
+    if (!next) return;
+    const key = `${patientId}:${next.id}:${next.version}`;
+    specialistActivationAttemptsRef.current.add(key);
+    specialistActivationBusyRef.current = patientId;
+    void (async () => {
+      try {
+        const result = await dataService.updateTherapeuticProgramStatus(patientId, next.id, {
+          status: 'teaching',
+          expectedVersion: next.version,
+          reason: 'Ativação pelo especialista responsável, sem etapa de aprovação adicional',
+          idempotencyKey: `specialist-plan-activation:${patientId}:${next.id}:${next.version}`,
+        });
+        if (specialistActivationPatientRef.current !== patientId) return;
+        if (result?.success === false) {
+          // A permission, scope or version conflict must NEVER be bypassed.
+          // Keep the original status and let the professional see the failure.
+          setError(result?.message || 'Não foi possível ativar o programa. Atualize o plano e confira o acesso à especialidade.');
+          return;
+        }
+        setNotice('Programa do especialista ativado para as sessões, sem aprovação adicional.');
+        await loadPlan(true);
+      } catch {
+        if (specialistActivationPatientRef.current === patientId) {
+          setError('Não foi possível ativar o programa. Tente atualizar o plano.');
+        }
+      } finally {
+        if (specialistActivationBusyRef.current === patientId) {
+          specialistActivationBusyRef.current = '';
+        }
+      }
+    })();
+    // Every attempt is keyed by persisted program ID and version. No polling.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patientId, loading, planData.programs, planData.planScopes, planData.readOnlyHistory, actorId, effectiveRole]);
 
   useEffect(() => {
     if (!workspaceScopeId) return;

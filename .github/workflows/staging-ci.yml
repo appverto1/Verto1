@@ -165,7 +165,9 @@ jobs:
         run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
 
       - name: Specialist-owned therapeutic plan activation regression
-        run: node --import tsx tests/therapeuticSpecialistActivation.test.ts
+        run: |
+          node --import tsx tests/therapeuticSpecialistActivation.test.ts
+          node --import tsx tests/specialistProgramImmediateActivation.test.ts
 
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
