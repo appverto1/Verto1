@@ -26,6 +26,14 @@ try {
       permissions jsonb
     );
     create table public.activation_audit(program_id text,reason text,actor text);
+    -- Minimal fixture of the canonical key RPC already deployed in Staging.
+    create function public.clinical_specialty_scope_key_v1(p_value text)
+      returns text language sql immutable as $key$
+      select case
+        when lower(btrim(p_value)) in ('fonoaudiólogo','fonoaudiologia') then 'speech_therapy'
+        when lower(btrim(p_value)) in ('terapeuta ocupacional','terapia ocupacional') then 'occupational_therapy'
+        else null end;
+      $key$;
     create function public.update_therapeutic_program_status(
       p_organization_id text,p_patient_id uuid,p_program_id text,p_status text,
       p_expected_version integer,p_reason text,p_idempotency_key text,p_actor_id text
@@ -44,30 +52,37 @@ try {
     $fn$;
   `);
   const run = (sql,params=[]) => db.query(sql,params);
-  await run('insert into clinic_memberships values ($1,$2,\'therapist\',\'active\',\'Fonoaudiólogo\')',
+  await run('insert into clinic_memberships values ($1,$2,\'therapist\',\'active\',\'Fonoaudiologia\')',
     [clinic,specialist]);
   await run('insert into patient_professional_links values ($1,$2,$3,\'active\',\'{"write":true}\'::jsonb)',
     [clinic,patient,specialist]);
   await run(`insert into patient_therapeutic_plans values
     ('scope-active',$1,$2,$1,$3,'specialty','active','Fonoaudiólogo'),
     ('scope-draft',$1,$2,$1,$3,'specialty','draft','Fonoaudiólogo'),
-    ('scope-pts',$1,$2,$1,$3,'interdisciplinary','active','Fonoaudiólogo')`,
+    ('scope-pts',$1,$2,$1,$3,'interdisciplinary','active','Fonoaudiólogo'),
+    ('scope-wrong-specialty',$1,$2,$1,$3,'specialty','active','Terapeuta Ocupacional')`,
     [clinic,patient,specialist]);
   await run(`insert into aba_programs values
     ('self-authored',$1,$2,'scope-active',$3,'awaiting_approval',2),
     ('manager-authored',$1,$2,'scope-active',$4,'awaiting_approval',1),
     ('draft-scope',$1,$2,'scope-draft',$3,'awaiting_approval',1),
-    ('pts-scope',$1,$2,'scope-pts',$3,'awaiting_approval',1)`,
+    ('pts-scope',$1,$2,'scope-pts',$3,'awaiting_approval',1),
+    ('wrong-specialty',$1,$2,'scope-wrong-specialty',$3,'awaiting_approval',1)`,
     [clinic,patient,specialist,manager]);
   const migration=fs.readFileSync('supabase/migrations/20261022130000_specialist_authored_programs_no_approval.sql','utf8');
   assert.match(migration, /result->'program'->>'status'/, 'read actual program payload envelope');
+  assert.match(migration, /clinical_specialty_scope_key_v1\(cm\.specialty\)/,
+    'migration must recognize historical aliases through canonical scope keys');
+  assert.doesNotMatch(migration, /lower\(btrim\(coalesce\(cm\.specialty/,
+    'a byte-for-byte label comparison would silently skip legitimate specialist programs');
   await db.exec(migration);
   let rows=(await run('select id,status,version from aba_programs order by id')).rows;
   assert.deepEqual(rows,[
     {id:'draft-scope',status:'awaiting_approval',version:1},
     {id:'manager-authored',status:'awaiting_approval',version:1},
     {id:'pts-scope',status:'awaiting_approval',version:1},
-    {id:'self-authored',status:'teaching',version:3}
+    {id:'self-authored',status:'teaching',version:3},
+    {id:'wrong-specialty',status:'awaiting_approval',version:1}
   ]);
   assert.deepEqual((await run('select program_id,actor from activation_audit')).rows,
     [{program_id:'self-authored',actor:specialist}]);
