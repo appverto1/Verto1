@@ -33,7 +33,12 @@ begin
           and cm.user_id::text = t.responsible_professional_id::text
           and cm.role = 'therapist'
           and cm.status = 'active'
-          and lower(btrim(coalesce(cm.specialty,''))) = lower(btrim(coalesce(t.specialty,'')))
+          -- Match canonical clinical specialties rather than display labels.
+          -- Historical records may store Fonoaudiologia vs Fonoaudiólogo.
+          -- A null/unrecognized specialty must fail closed, not authorize.
+          and public.clinical_specialty_scope_key_v1(cm.specialty) is not null
+          and public.clinical_specialty_scope_key_v1(cm.specialty)
+              = public.clinical_specialty_scope_key_v1(t.specialty)
       )
       and exists (
         select 1 from public.patient_professional_links link
