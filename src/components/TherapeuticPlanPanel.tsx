@@ -1322,9 +1322,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setActivationWarning('');
     scopeIdempotencyKeyRef.current = '';
     setScopeDraft({ mode: 'specialty', specialty: '', responsibleProfessionalId: '', participantProfessionalIds: [] });
+    const createdScopeStatus = String(response?.data?.status || '').toLowerCase();
     setNotice(scopeDraft.mode === 'interdisciplinary'
       ? 'Projeto Terapêutico Singular criado. Alterações futuras serão versionadas.'
-      : `Plano de ${derivedSpecialty} criado. Alterações futuras serão versionadas.`);
+      : createdScopeStatus === 'active'
+        ? `Plano de ${derivedSpecialty} criado e ativo para as sessões. Alterações futuras serão versionadas.`
+        : `Plano de ${derivedSpecialty} criado como rascunho. O especialista responsável pode ativá-lo para as sessões.`);
     await loadPlan(true);
   };
 
@@ -2194,7 +2197,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     if (creationStep === 'form') {
       return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={requestCloseCreation}>Cancelar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white hover:bg-violet-700 disabled:opacity-50" disabled={saving} onClick={continueToReview}>Revisar programa <ChevronLeft size={16} className="rotate-180" /></button></div></div>;
     }
-    return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} {editingProgramId ? 'Salvar alterações' : 'Salvar como rascunho'}</button>{!editingProgramId && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('teaching')}>{saving ? <Loader2 size={16} className="animate-spin" /> : isDraftPlanScope(planScopes.find((scope: any) => String(scope?.id || '') === String(selectedPlanScopeId || ''))) ? <FileText size={16} /> : canManageStructure ? <Play size={16} /> : <Check size={16} />}{isDraftPlanScope(planScopes.find((scope: any) => String(scope?.id || '') === String(selectedPlanScopeId || ''))) ? 'Salvar no rascunho' : canManageStructure ? 'Ativar programa' : 'Enviar para aprovação'}</button>}</div></div>;
+    return <div className="flex flex-col-reverse justify-between gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={goBackCreation}><ChevronLeft size={16} /> Voltar</button><div className="flex flex-col-reverse gap-2 sm:flex-row"><button type="button" className={secondaryButton} disabled={saving} onClick={() => void submitProgram('draft')}>{saving ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />} {editingProgramId ? 'Salvar alterações' : 'Salvar como rascunho'}</button>{!editingProgramId && <button type="button" className="inline-flex min-h-[42px] items-center justify-center gap-2 rounded-xl bg-violet-600 px-5 py-2.5 text-sm text-white disabled:opacity-50" disabled={saving} onClick={() => void submitProgram('teaching')}>{saving ? <Loader2 size={16} className="animate-spin" /> : isDraftPlanScope(planScopes.find((scope: any) => String(scope?.id || '') === String(selectedPlanScopeId || ''))) ? <FileText size={16} /> : <Play size={16} />}{isDraftPlanScope(planScopes.find((scope: any) => String(scope?.id || '') === String(selectedPlanScopeId || ''))) ? 'Salvar no rascunho' : 'Ativar para sessões'}</button>}</div></div>;
   };
 
   const creationTitle = editingProgramId
@@ -2246,6 +2249,12 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const renderProgramCard = (program: any) => {
     const rawStatus = normalizeTherapeuticProgramStatus(program.status);
     const programScope = planScopeForProgram(program);
+    const mayActivateThisProgram = canManageStructure || (
+      effectiveRole === 'therapist' &&
+      String(programScope?.mode || '') === 'specialty' &&
+      String(programScope?.responsible_professional_id || '') === actorId &&
+      canEditProgram(program)
+    );
     const programScopeStatus = String(programScope?.status || '').trim().toLowerCase();
     const draftContext = isDraftPlanScope(programScope);
     const status = effectiveProgramStatus(program);
@@ -2306,6 +2315,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
         {openMenuId === String(program.id) && <div className={`absolute right-5 top-14 z-20 w-56 rounded-xl border p-1.5 shadow-xl ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}>
           {canEditProgram(program) && !cancelledContext && !['completed', 'archived'].includes(status) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => editProgram(program)}><Pencil size={15} /> Editar</button>}
+          {mayActivateThisProgram && clinicalLifecycleEnabled && ['draft', 'awaiting_approval'].includes(rawStatus) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'teaching')}><Play size={15} /> Ativar para sessão</button>}
           {canManageStructure && clinicalLifecycleEnabled && rawStatus === 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'teaching')}><Play size={15} /> Retomar ensino</button>}
           {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'paused' && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'paused')}><Pause size={15} /> Pausar</button>}
           {canManageStructure && clinicalLifecycleEnabled && rawStatus !== 'maintenance' && !['completed', 'archived'].includes(rawStatus) && <button className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm ${isDark ? 'text-slate-200 hover:bg-slate-800' : 'text-slate-700 hover:bg-slate-50'}`} onClick={() => void updateStatus(program, 'maintenance')}><Clock3 size={15} /> Mover para manutenção</button>}
