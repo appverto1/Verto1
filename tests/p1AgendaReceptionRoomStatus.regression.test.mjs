@@ -50,5 +50,5 @@ assert.match(cancelRoute, /fetchPortalAppointmentForUser/);
 assert.match(cancelRoute, /createOrUpdateAppointmentActionRequest/);
 assert.match(cancelRoute, /patient_confirmation_status: 'CANCEL_REQUESTED'/);
 assert.match(cancelRoute, /cancel_appointment_from_24h_reminder_v1/);
-assert.match(cancelRoute, /automaticCancellation\\?\\.autoCancelled === true/);
+assert.ok(cancelRoute.includes('automaticCancellation?.autoCancelled === true'), 'only a verified 24h cancellation returns immediately');
 console.log('p1AgendaReceptionRoomStatus.regression.test.mjs: ok — P1-27 24h scoped atomic cancellation and fallback');
