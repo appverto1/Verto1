@@ -173,6 +173,7 @@ jobs:
         run: |
           node --import tsx tests/therapeuticSpecialistActivation.test.ts
           node --import tsx tests/specialistProgramImmediateActivation.test.ts
+          node --import tsx tests/specialtyPlanRenewal.test.ts
 
       - name: Tutorial support isolation
         run: node --import tsx tests/helpTutorialSupport.test.ts
