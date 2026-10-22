@@ -72,17 +72,18 @@ begin
     and j.deployment_env=p_deployment_env
     and j.notification_kind='APPOINTMENT_REMINDER_24H'
     and j.status='SENT' and j.sent_at is not null and j.sent_at<=v_now
-    and pn_null_guard(j.payload->>'scheduledAt') is not null
+    and j.payload->>'scheduledAt' is not null
     and j.payload->>'scheduledAt'=v_notification.metadata->>'scheduledAt'
     and v_notification.idempotency_key=p_deployment_env||':notification-job:'||j.id::text
   limit 1;
 
   if not found then return jsonb_build_object('canceled',false,'code','REMINDER_DELIVERY_NOT_PROVEN'); end if;
 
-  if v_appointment.scheduled_at is null or
-     v_appointment.scheduled_at<=v_now or
-     v_job.payload->>'scheduledAt' is distinct from to_jsonb(v_appointment.scheduled_at)::text and
-       (v_job.payload->>'scheduledAt')::timestamptz is distinct from v_appointment.scheduled_at then
+  if v_appointment.scheduled_at is null or v_appointment.scheduled_at<=v_now
+    or coalesce(v_job.payload->>'scheduledAt','') !~
+      '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}'
+    or (v_job.payload->>'scheduledAt')::timestamptz
+      is distinct from v_appointment.scheduled_at then
     return jsonb_build_object('canceled',false,'code','REMINDER_SCHEDULE_CHANGED');
   end if;
 
