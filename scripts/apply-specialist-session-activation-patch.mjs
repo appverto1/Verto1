@@ -14,11 +14,11 @@ const edits = [
   ],
   [
     "      const hasSpecialtyObjectivesUpdate =\n",
-    "      if (!canManageAny && nextStatus === 'active' && currentStatus !== 'active') {\n        const canActivate = await canActivateSpecialtyPlanForCase({\n          supabase, clinicId, patientId, actorId, actorRole: role, plan: existing\n        });\n        if (!canActivate) return res.status(403).json({\n          success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',\n          message: 'A ativação exige que você seja o especialista responsável, com vínculo clínico ativo nesta especialidade.'\n        });\n      }\n\n      const hasSpecialtyObjectivesUpdate =\n"
+    "      if (!canManageAny && nextStatus === 'active' && currentStatus !== 'active') {\n        const canActivate = await canActivateSpecialtyPlanForCase({\n          supabase, clinicId, organizationId, patientId, actorId, actorRole: role, plan: existing\n        });\n        if (!canActivate) return res.status(403).json({\n          success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',\n          message: 'A ativação exige que você seja o especialista responsável, com vínculo clínico ativo nesta especialidade.'\n        });\n      }\n\n      const hasSpecialtyObjectivesUpdate =\n"
   ],
   [
     "      const canApprove = isTherapeuticPlanManager(role);\n      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();\n      const status = canApprove\n        ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')\n        : (requestedStatus === 'draft' ? 'draft' : 'awaiting_approval');",
-    "      const canApprove = isTherapeuticPlanManager(role);\n      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();\n      const specialistCanActivate = !canApprove && therapeuticPlanScope?.status === 'active'\n        && await canActivateSpecialtyPlanForCase({ supabase, clinicId, patientId,\n          actorId, actorRole: role, plan: therapeuticPlanScope });\n      const status = canApprove\n        ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')\n        : (requestedStatus === 'draft' ? 'draft' : specialistCanActivate ? 'teaching' : 'draft');"
+    "      const canApprove = isTherapeuticPlanManager(role);\n      const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();\n      const specialistCanActivate = !canApprove && therapeuticPlanScope?.status === 'active'\n        && await canActivateSpecialtyPlanForCase({ supabase, clinicId, patientId,\n          actorId, actorRole: role, organizationId, plan: therapeuticPlanScope });\n      const status = canApprove\n        ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')\n        : (requestedStatus === 'draft' ? 'draft' : specialistCanActivate ? 'teaching' : 'draft');"
   ],
   [
     "      if (!isTherapeuticPlanManager(role) && status !== 'awaiting_approval') {\n        return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });\n      }",
@@ -30,11 +30,11 @@ const edits = [
   ],
   [
     "          .from('patient_therapeutic_plans')\n          .select('id,status')\n          .eq('id', therapeuticPlanId)",
-    "          .from('patient_therapeutic_plans')\n          .select('id,status,mode,specialty,clinic_id,patient_id,responsible_professional_id')\n          .eq('id', therapeuticPlanId)"
+    "          .from('patient_therapeutic_plans')\n          .select('id,status,mode,specialty,clinic_id,organization_id,patient_id,responsible_professional_id')\n          .eq('id', therapeuticPlanId)"
   ],
   [
     "        if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });\n        const parentPlanStatus",
-    "        if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });\n        if (!isTherapeuticPlanManager(role) && status === 'teaching') {\n          const mayActivate = await canActivateSpecialtyPlanForCase({\n            supabase, clinicId, patientId, actorId, actorRole: role, plan: parentPlan\n          });\n          if (!mayActivate) return res.status(403).json({\n            success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',\n            message: 'Apenas o especialista responsável por este plano ativo pode ativar o programa para as sessões.'\n          });\n        }\n        const parentPlanStatus"
+    "        if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });\n        if (!isTherapeuticPlanManager(role) && status === 'teaching') {\n          const mayActivate = await canActivateSpecialtyPlanForCase({\n            supabase, clinicId, organizationId, patientId, actorId, actorRole: role, plan: parentPlan\n          });\n          if (!mayActivate) return res.status(403).json({\n            success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',\n            message: 'Apenas o especialista responsável por este plano ativo pode ativar o programa para as sessões.'\n          });\n        }\n        const parentPlanStatus"
   ]
 ];
 for (const [from,to] of edits) {
