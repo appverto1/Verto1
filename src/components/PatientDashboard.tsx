@@ -775,6 +775,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
     await openPortalAppointmentDetail({
       id: appointmentId,
+      // The backend verifies this persisted notification against a SENT job;
+      // reminderKind from browser metadata is never an authorization source.
+      reminderNotificationId: String(notification?.id || ''),
       patientName: firstPortalPatientName(
         notification?.patientName,
         notification?.patient_name,
@@ -958,6 +961,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const payload = {
       reason: portalActionForm.reason,
       note: portalActionForm.note,
+      ...(portalModal === 'cancel' && selectedPortalAppointment?.reminderNotificationId
+        ? { notificationId: String(selectedPortalAppointment.reminderNotificationId) }
+        : {}),
       rescheduleOptions: selectedRescheduleOptions,
       requestedStart: primaryRescheduleOption?.scheduledStart,
       requestedEnd: primaryRescheduleOption?.scheduledEnd,
