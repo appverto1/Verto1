@@ -101,6 +101,24 @@ begin
     return jsonb_build_object('canceled',false,'code','REMINDER_SCHEDULE_CHANGED');
   end if;
 
+  -- The group module has its own participant/financial lifecycle. A single
+  -- appointment cancellation may not safely dissolve its group reservation.
+  -- Route those cases through the clinic approval workflow instead.
+  if to_regclass('public.group_session_participants') is not null then
+    if exists (
+      select 1 from public.group_session_participants gp
+      where gp.organization_id=p_organization_id
+        and gp.appointment_id=p_appointment_id
+    ) then
+      return jsonb_build_object('canceled',false,'code','GROUP_SESSION_REQUIRES_CLINIC_APPROVAL');
+    end if;
+  end if;
+
+  if v_appointment.scheduled_start_at is not null and
+     v_appointment.scheduled_start_at is distinct from v_appointment.scheduled_at then
+    return jsonb_build_object('canceled',false,'code','REMINDER_SCHEDULE_CHANGED');
+  end if;
+
   perform 1 from public.appointment_action_requests ar
   where ar.organization_id=p_organization_id and ar.appointment_id=p_appointment_id
   order by ar.id for update;
