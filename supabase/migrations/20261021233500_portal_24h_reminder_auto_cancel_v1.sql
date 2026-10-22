@@ -63,6 +63,20 @@ begin
     return jsonb_build_object('canceled',false,'code','REMINDER_NOT_ELIGIBLE');
   end if;
 
+  -- Repeating the exact auto-cancel is safe even if cancellation triggers
+  -- have since invalidated or cleared the original delivery job.
+  if lower(coalesce(v_appointment.status,'')) in ('cancelled','canceled') then
+    select ar.id into v_request_id from public.appointment_action_requests ar
+    where ar.organization_id=p_organization_id and ar.appointment_id=p_appointment_id
+      and ar.patient_id=p_patient_id and ar.request_type='CANCEL' and ar.status='APPROVED'
+      and ar.metadata->>'autoCancelNotificationId'=p_notification_id::text
+    order by ar.resolved_at desc limit 1;
+    if v_request_id is not null then
+      return jsonb_build_object('canceled',true,'idempotent',true,'requestId',v_request_id);
+    end if;
+    return jsonb_build_object('canceled',false,'code','APPOINTMENT_ALREADY_CANCELLED');
+  end if;
+
   -- A visible portal notification alone does NOT prove delivery. It must map
   -- 1:1 to a finalized SENT queue job from this environment and appointment.
   select j.* into v_job from public.notification_jobs j
@@ -91,17 +105,6 @@ begin
   where ar.organization_id=p_organization_id and ar.appointment_id=p_appointment_id
   order by ar.id for update;
 
-  if lower(coalesce(v_appointment.status,'')) in ('cancelled','canceled') then
-    select ar.id into v_request_id from public.appointment_action_requests ar
-    where ar.organization_id=p_organization_id and ar.appointment_id=p_appointment_id
-      and ar.patient_id=p_patient_id and ar.request_type='CANCEL' and ar.status='APPROVED'
-      and ar.metadata->>'autoCancelNotificationId'=p_notification_id::text
-    order by ar.resolved_at desc limit 1;
-    if v_request_id is not null then
-      return jsonb_build_object('canceled',true,'idempotent',true,'requestId',v_request_id);
-    end if;
-    return jsonb_build_object('canceled',false,'code','APPOINTMENT_ALREADY_CANCELLED');
-  end if;
   if lower(coalesce(v_appointment.status,'')) in
     ('completed','concluded','no_show','missed','deleted','rescheduled') then
     return jsonb_build_object('canceled',false,'code','APPOINTMENT_TERMINAL');
