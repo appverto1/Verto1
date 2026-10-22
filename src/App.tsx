@@ -8255,7 +8255,9 @@ export default function App() {
             : serverStatus === 'canceled'
               ? 'Esse agendamento já estava cancelado.'
               : 'Essa sessão já tinha uma resposta registrada.'
-        : feedback;
+        : result?.automatic === true
+          ? 'Sessão cancelada automaticamente. A clínica já foi informada.'
+          : feedback;
       setAppointmentConfirmation((prev) => prev ? {
         ...prev,
         scheduledAt: String(resultAppointment?.scheduledAt || resultAppointment?.scheduled_at || prev.scheduledAt || '').trim(),
