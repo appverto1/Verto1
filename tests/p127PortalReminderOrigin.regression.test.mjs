@@ -21,6 +21,8 @@ assert.ok(route.indexOf('cancel_appointment_from_24h_reminder_v1') < route.index
   'atomic path must precede any non-atomic pending writes');
 assert.match(patient,/reminderNotificationId: String\(notification\?\.id \|\| ''\)/);
 assert.match(patient,/portalModal === 'cancel' && selectedPortalAppointment\?\.reminderNotificationId/);
+assert.match(patient,/result\?\.action === 'cancelled_by_family_from_24h_reminder'/);
+assert.match(patient,/setPortalAppointmentDetail\(\(current: any\) => current\?\.appointment\?\.id === resultAppointment\.id/);
 assert.doesNotMatch(route,/req\.body\?\.reminderKind/,'browser-supplied kind never authorizes cancellation');
 assert.match(migration,/security invoker/);
 assert.match(migration,/notification_kind='APPOINTMENT_REMINDER_24H'/);
