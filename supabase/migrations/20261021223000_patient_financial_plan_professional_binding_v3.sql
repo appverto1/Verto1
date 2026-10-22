@@ -28,6 +28,7 @@ declare
   v_requested_id uuid;
   v_user uuid;
   v_service_key text;
+  v_canonical_service_key text;
   v_current public.patient_financial_plans%rowtype;
   v_previous public.patient_financial_plans%rowtype;
   v_result jsonb;
@@ -60,6 +61,21 @@ begin
         raise exception 'FINANCIAL_PLAN_PROFESSIONAL_INVALID';
       end if;
       v_user:=(v_row->>'professional_user_id')::uuid;
+      -- Do not trust the display snapshot as the authority for a NEW
+      -- therapist binding: v2 uses it for pricing, but the professional
+      -- must match both the canonical service type and that snapshot.
+      -- Legacy unbound plans retain their original compatibility path.
+      v_canonical_service_key:=public.appointment_financial_service_key_v1(
+        case when upper(coalesce(v_row->>'service_type',''))='CUSTOM'
+          then coalesce(nullif(v_row->>'custom_service_name',''),
+            nullif(v_row->>'service_name_snapshot',''))
+          else v_row->>'service_type'
+        end
+      );
+      if nullif(v_canonical_service_key,'') is null
+         or v_canonical_service_key is distinct from v_service_key then
+        raise exception 'FINANCIAL_PLAN_SPECIALTY_INVALID';
+      end if;
       perform 1 from public.clinic_memberships m
       where m.clinic_id=p_organization_id and m.user_id=v_user
         and m.role='therapist' and m.status='active'
