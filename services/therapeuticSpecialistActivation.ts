@@ -8,7 +8,7 @@ import { clinicalSpecialtiesMatch } from '../src/utils/clinicalSpecialties';
 export const isSelfAuthoredSpecialtyPlan = (params: {
   actorId: string; actorRole: string; mode?: unknown;
   responsibleProfessionalId?: unknown; membership?: any; patientLink?: any;
-  specialty?: unknown; clinicId: string; patientId: string;
+  specialty?: unknown; clinicId: string; organizationId: string; patientId: string;
 }): boolean => {
   const member = params.membership;
   const link = params.patientLink;
@@ -22,14 +22,14 @@ export const isSelfAuthoredSpecialtyPlan = (params: {
     String(member?.status || '') === 'active' &&
     clinicalSpecialtiesMatch(member?.specialty, params.specialty) &&
     String(link?.professional_id || '') === params.actorId &&
-    String(link?.organization_id || '') === params.clinicId &&
+    String(link?.organization_id || '') === params.organizationId &&
     String(link?.patient_id || '') === params.patientId &&
     String(link?.status || '') === 'active' &&
     link?.permissions?.write !== false;
 };
 
 export const canActivateSpecialtyPlanForCase = async (params: {
-  supabase: any; clinicId: string; patientId: string;
+  supabase: any; clinicId: string; organizationId: string; patientId: string;
   actorId: string; actorRole: string; plan: any;
 }): Promise<boolean> => {
   const plan = params.plan;
@@ -37,6 +37,7 @@ export const canActivateSpecialtyPlanForCase = async (params: {
       String(plan?.mode || '') !== 'specialty' ||
       String(plan?.responsible_professional_id || '') !== params.actorId ||
       String(plan?.clinic_id || '') !== params.clinicId ||
+      String(plan?.organization_id || '') !== params.organizationId ||
       String(plan?.patient_id || '') !== params.patientId ||
       String(plan?.status || '') === 'archived') return false;
 
@@ -47,7 +48,7 @@ export const canActivateSpecialtyPlanForCase = async (params: {
       .eq('role', 'therapist').eq('status', 'active').limit(1).maybeSingle(),
     params.supabase.from('patient_professional_links')
       .select('organization_id,patient_id,professional_id,status,permissions')
-      .eq('organization_id', params.clinicId).eq('patient_id', params.patientId)
+      .eq('organization_id', params.organizationId).eq('patient_id', params.patientId)
       .eq('professional_id', params.actorId).eq('status','active').limit(1).maybeSingle(),
   ]);
   if (memberResult.error || linkResult.error) {
@@ -57,6 +58,6 @@ export const canActivateSpecialtyPlanForCase = async (params: {
     actorId: params.actorId, actorRole: params.actorRole,
     mode: plan.mode, responsibleProfessionalId: plan.responsible_professional_id,
     membership: memberResult.data, patientLink: linkResult.data,
-    specialty: plan.specialty, clinicId: params.clinicId, patientId: params.patientId,
+    specialty: plan.specialty, clinicId: params.clinicId, organizationId: params.organizationId, patientId: params.patientId,
   });
 };
