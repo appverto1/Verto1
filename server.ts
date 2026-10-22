@@ -1,3 +1,4 @@
+import { canActivateSpecialtyPlanForCase } from './services/therapeuticSpecialistActivation';
 import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';
 import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './services/groupSessions/groupSessionScheduleConflicts';
 import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';
@@ -75094,7 +75095,9 @@ async function startServer() {
         source_template_version: sourceTemplateVersion,
         idempotency_key: idempotencyKey,
         request_hash: requestHash,
-        status: 'draft',
+        // Self-authored specialty plans are eligible for immediate clinical use.
+        // Membership, case link and specialty were verified above. PTS remains draft.
+        status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId ? 'active' : 'draft',
         edit_version: 1,
         created_by: actorId,
         updated_by: actorId,
@@ -75214,6 +75217,16 @@ async function startServer() {
           message: currentStatus === 'paused'
             ? 'Um plano pausado pode ser retomado como ativo, concluído ou arquivado.'
             : 'Esta transição de estado não é permitida para o plano clínico.',
+        });
+      }
+
+      if (!canManageAny && nextStatus === 'active' && currentStatus !== 'active') {
+        const canActivate = await canActivateSpecialtyPlanForCase({
+          supabase, clinicId, organizationId, patientId, actorId, actorRole: role, plan: existing
+        });
+        if (!canActivate) return res.status(403).json({
+          success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',
+          message: 'A ativação exige que você seja o especialista responsável, com vínculo clínico ativo nesta especialidade.'
         });
       }
 
@@ -75624,9 +75637,12 @@ async function startServer() {
       }
       const canApprove = isTherapeuticPlanManager(role);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
+      const specialistCanActivate = !canApprove && therapeuticPlanScope?.status === 'active'
+        && await canActivateSpecialtyPlanForCase({ supabase, clinicId, patientId,
+          actorId, actorRole: role, organizationId, plan: therapeuticPlanScope });
       const status = canApprove
         ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
-        : (requestedStatus === 'draft' ? 'draft' : 'awaiting_approval');
+        : (requestedStatus === 'draft' ? 'draft' : specialistCanActivate ? 'teaching' : 'draft');
       const originType = sanitizeString(req.body?.originType || req.body?.origin_type || 'manual', 40).toLowerCase();
       const originId = sanitizeString(req.body?.originId || req.body?.origin_id, 180) || null;
       let resolvedProtocolId = sanitizeString(req.body?.protocolId || req.body?.protocol_id, 180) || null;
@@ -75859,8 +75875,8 @@ async function startServer() {
       if (!allowedProgramStatuses.includes(status)) {
         return res.status(400).json({ success: false, error: 'THERAPEUTIC_PROGRAM_STATUS_INVALID' });
       }
-      if (!isTherapeuticPlanManager(role) && status !== 'awaiting_approval') {
-        return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
+      if (!isTherapeuticPlanManager(role) && !['awaiting_approval', 'teaching'].includes(status)) {
+        return res.status(403).json({ success: false, error: 'Esta fase requer gestão clínica.' });
       }
       if (!isTherapeuticPlanManager(role)) {
         const canEdit = await canActorEditTherapeuticProgram({
@@ -75911,10 +75927,13 @@ async function startServer() {
       }
 
       const therapeuticPlanId = sanitizeString(currentProgram.therapeutic_plan_id, 120);
+      if (!isTherapeuticPlanManager(role) && status === 'teaching' && !therapeuticPlanId) {
+        return res.status(403).json({ success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED' });
+      }
       if (therapeuticPlanId && ['teaching', 'maintenance'].includes(status)) {
         const { data: parentPlan, error: parentPlanError } = await supabase
           .from('patient_therapeutic_plans')
-          .select('id,status')
+          .select('id,status,mode,specialty,clinic_id,organization_id,patient_id,responsible_professional_id')
           .eq('id', therapeuticPlanId)
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
@@ -75922,6 +75941,15 @@ async function startServer() {
           .maybeSingle();
         if (parentPlanError) throw parentPlanError;
         if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
+        if (!isTherapeuticPlanManager(role) && status === 'teaching') {
+          const mayActivate = await canActivateSpecialtyPlanForCase({
+            supabase, clinicId, organizationId, patientId, actorId, actorRole: role, plan: parentPlan
+          });
+          if (!mayActivate) return res.status(403).json({
+            success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',
+            message: 'Apenas o especialista responsável por este plano ativo pode ativar o programa para as sessões.'
+          });
+        }
         const parentPlanStatus = sanitizeString(parentPlan.status, 40).toLowerCase();
         if (parentPlanStatus !== 'active') {
           return res.status(409).json({
