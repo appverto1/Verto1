@@ -1,0 +1,31 @@
+name: P1-27 one-time large server patch
+on:
+  push:
+    branches:
+      - fix/staging-portal-24h-reminder-atomic-cancel-p1-27-20261022
+    paths:
+      - scripts/patch-p1-27-server.mjs
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Patch only the checked portal cancellation route
+        run: |
+          node scripts/patch-p1-27-server.mjs
+          git diff --check
+          test "$(git diff --name-only)" = "server.ts"
+          git config user.name "verto-staging-ci"
+          git config user.email "verto-staging-ci@users.noreply.github.com"
+          git add server.ts
+          git commit -m "feat(P1-27): verify 24h reminder and atomically cancel via scoped RPC"
+          git push origin HEAD:refs/heads/fix/staging-portal-24h-reminder-atomic-cancel-p1-27-20261022
