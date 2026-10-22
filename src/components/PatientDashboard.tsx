@@ -982,7 +982,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return;
     }
     const resultAppointment = result?.item || result?.appointment;
-    if (resultAppointment) updatePortalAppointmentInList(resultAppointment);
+    if (resultAppointment) {
+      updatePortalAppointmentInList(resultAppointment);
+      // A confirmed automatic cancellation must immediately replace the old
+      // open detail; otherwise the modal could still offer cancel/confirm.
+      if (portalModal === 'cancel' && result?.action === 'cancelled_by_family_from_24h_reminder') {
+        setSelectedPortalAppointment((current: any) => current?.id === resultAppointment.id
+          ? { ...current, ...resultAppointment } : current);
+        setPortalAppointmentDetail((current: any) => current?.appointment?.id === resultAppointment.id
+          ? { ...current, appointment: { ...current.appointment, ...resultAppointment } } : current);
+      }
+    }
     setPortalModal('');
     setPortalSelectedRescheduleSlots([]);
     setPortalActionForm({ reason: '', note: '', requestedStart: '', accepted: false });
