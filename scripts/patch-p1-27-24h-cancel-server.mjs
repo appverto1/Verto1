@@ -76,4 +76,4 @@ source=source.replace(oldText,newText);
 assert.match(source,/cancel_appointment_from_24h_reminder_v1/);
 assert.match(source,/patient_confirmation_status: 'CANCEL_REQUESTED'/);
 writeFileSync(p,source,'utf8');
-console.log('P1-27: backend 24h verified cancellation branch installed');
+console.log('P1-27: verified 24h cancellation installed in portal request route');
