@@ -145,6 +145,11 @@ jobs:
           node --import tsx tests/familyDiaryStars.test.ts
           node tests/familyDiaryLegacyStarsSecurity.regression.test.mjs
 
+      - name: Specialist program activation without approval regression
+        run: |
+          node tests/specialistProgramLegacyActivationPostgres.test.mjs
+          node --import tsx tests/therapistSpecialtyPlanPermission.test.ts
+
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
 
