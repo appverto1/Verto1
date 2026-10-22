@@ -56,10 +56,10 @@ try {
   await db.exec(fs.readFileSync('supabase/migrations/20261021223000_patient_financial_plan_professional_binding_v3.sql','utf8'));
   await query('insert into clinic_memberships(clinic_id,user_id,role,status,specialty) values ($1,$2,\'therapist\',\'active\',\'Fonoaudiólogo\'),($3,$4,\'therapist\',\'active\',\'Fonoaudiólogo\')',
     [clinic,professional,other,otherProfessional]);
-  const call=async(key,prof,service='SPEECH_THERAPY')=>
+  const call=async(key,prof,service='SPEECH_THERAPY',snapshot=service)=>
     (await query('select public.reconcile_patient_financial_plans_v3($1,$2,$3,$4::jsonb,false) as output',
       [clinic,patient,actor,JSON.stringify([{client_plan_key:key,service_type:service,
-        service_name_snapshot:service,professional_user_id:prof}])]))[0].output;
+        service_name_snapshot:snapshot,professional_user_id:prof}])]))[0].output;
   let result=await call('first',professional);
   assert.equal(result.success,true);
   assert.equal(result.data[0].professional_user_id,professional);
@@ -68,14 +68,17 @@ try {
   assert.equal(result.data[0].professional_user_id,professional);
   assert.equal((await query('select count(*)::int as n from patient_financial_plans'))[0].n,1,
     'idempotent replay must not duplicate the plan');
-  const rejection=async (key,prof,service='SPEECH_THERAPY')=>{
-    await assert.rejects(()=>call(key,prof,service));
+  const rejection=async (key,prof,service='SPEECH_THERAPY',snapshot=service)=>{
+    await assert.rejects(()=>call(key,prof,service,snapshot));
     assert.equal((await query('select count(*)::int as n from patient_financial_plans'))[0].n,1,
       'denied write must not leave a partial financial row');
   };
   await rejection('no-member',null);
   await rejection('other-clinic',otherProfessional);
   await rejection('wrong-specialty',professional,'OCCUPATIONAL_THERAPY');
+  // A forged snapshot must not override the canonical specialty or bind a
+  // Fono specialist to a Psychology financial plan (direct RPC payload).
+  await rejection('spoofed-snapshot',professional,'PSYCHOLOGY','SPEECH_THERAPY');
   await query("update clinic_memberships set status='inactive' where clinic_id=$1 and user_id=$2",
     [clinic,professional]);
   await rejection('revoked',professional);
@@ -89,6 +92,8 @@ try {
     'public.reconcile_patient_financial_plans_v3(uuid,uuid,uuid,jsonb,boolean)','EXECUTE') as allowed`))[0].allowed,false);
   assert.equal((await query(`select has_function_privilege('authenticated',
     'public.reconcile_patient_financial_plans_v3(uuid,uuid,uuid,jsonb,boolean)','EXECUTE') as allowed`))[0].allowed,false);
+  assert.equal((await query(`select has_function_privilege('service_role',
+    'public.reconcile_patient_financial_plans_v3(uuid,uuid,uuid,jsonb,boolean)','EXECUTE') as allowed`))[0].allowed,true);
   console.log('p0FinancialProfessionalBindingSql: PostgreSQL 17 transaction/security regressions PASS');
 } finally {
   await db.close();
