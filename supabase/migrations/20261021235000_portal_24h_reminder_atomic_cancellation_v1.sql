@@ -69,7 +69,7 @@ begin
      or n.sent_at is null or n.sent_at > v_now
      or n.metadata->>'deploymentEnv' is distinct from p_deployment_env
      or nullif(n.metadata->>'scheduledAt','') is null
-     or n.metadata->>'scheduledAt' !~ '^\\d{4}-\\d{2}-\\d{2}'
+     or n.metadata->>'scheduledAt' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'
      or (n.metadata->>'scheduledAt')::timestamptz is distinct from a.scheduled_at then
     return jsonb_build_object('autoCanceled', false, 'reason', 'NOT_A_CURRENT_24H_REMINDER');
   end if;
