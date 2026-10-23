@@ -19,7 +19,7 @@ assert.equal(helpThemeIsExpanded('Agenda', {},'Agenda',false),true,'selected the
 assert.equal(helpThemeIsExpanded('Agenda', {},'Atendimento',false),false,'other themes start closed');
 assert.equal(helpThemeIsExpanded('Agenda', {Agenda:true},'Atendimento',false),true,'manual theme toggle can expand');
 const source=readFileSync('src/components/HelpCenter.tsx','utf8');
-assert.match(source,/visibleHelpArticle\(topics,filtered,selected,searching\)/,'UI must apply search-aware selection');
+assert.match(source,/visibleHelpArticle<Topic>\(topics,filtered,selected,searching\)/,'UI must apply search-aware selection');
 assert.match(source,/helpThemeIsExpanded\(group\.theme,expandedThemes,article\?\.theme,searching\)/,'UI must show search matches in theme drawer');
 assert.match(source,/onClick=\{\(\)=>selectTopic\(item\.articleId\)\}/,'related topics use same route-aware selection');
 assert.match(source,/fetch\('\/api\/help\/catalog',\{credentials:'include',cache:'no-store'\}\)/,'topic catalog remains server-authorized, not hardcoded client data');
