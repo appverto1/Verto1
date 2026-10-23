@@ -263,6 +263,8 @@ const criticalTests = [
   'tests/p000PediatricAnamnesisSnapshot.regression.test.mjs',
   'tests/p000PatientProfilePartialPatch.regression.test.mjs',
   'tests/p0HelpNavigationSearch.test.ts',
+  'tests/p0HelpRoleProgressContract.test.ts',
+  'tests/helpTutorialSupport.test.ts',
   'tests/patientTimeReportRoute.test.ts',
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
