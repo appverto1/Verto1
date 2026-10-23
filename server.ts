@@ -74762,6 +74762,8 @@ async function startServer() {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const mode = sanitizeString(req.body?.mode, 40).toLowerCase();
+      const startAsDraft = mode === 'specialty' && req.body?.startAsDraft === true;
+      const planLabel = mode === 'specialty' ? sanitizeString(req.body?.planLabel, 120) : '';
       const idempotencyKey = sanitizeString(
         req.body?.idempotencyKey || req.body?.idempotency_key,
         180
@@ -75029,6 +75031,8 @@ async function startServer() {
             patientId,
             mode,
             specialty,
+            startAsDraft,
+            planLabel,
             responsibleProfessionalId,
             participantProfessionalIds: [...participantProfessionalIds].sort(),
             participantSpecialties: [...participantSpecialties].sort(),
@@ -75086,6 +75090,7 @@ async function startServer() {
         scope_snapshot: sanitizeClinicalPayload({
           mode,
           specialty,
+          planLabel,
           responsibleProfessionalId,
           participantProfessionalIds,
           participantSpecialties,
@@ -75097,7 +75102,7 @@ async function startServer() {
         request_hash: requestHash,
         // Self-authored specialty plans are eligible for immediate clinical use.
         // Membership, case link and specialty were verified above. PTS remains draft.
-        status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId ? 'active' : 'draft',
+        status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft ? 'active' : 'draft',
         edit_version: 1,
         created_by: actorId,
         updated_by: actorId,
@@ -75137,7 +75142,7 @@ async function startServer() {
             message:
               mode === 'interdisciplinary'
                 ? 'Já existe um Projeto Terapêutico Singular vigente para este paciente.'
-                : 'Já existe um plano ativo para esta especialidade.'
+                : 'Já existe um plano ativo desta especialidade. Crie o novo plano como rascunho para prepará-lo sem alterar as sessões atuais.'
           });
         }
         throw error;
@@ -75313,7 +75318,15 @@ async function startServer() {
       const specialtyObjectives = sanitizeClinicalPayload(normalizedSpecialtyObjectives);
       const now = new Date().toISOString();
 
-      const { data, error } = await supabase.rpc('update_patient_therapeutic_plan_v3', {
+      // Activating a prepared specialty cycle must complete the previous active
+      // cycle and activate the new one atomically in the database.
+      const switchingSpecialtyCycle =
+        String(existing.mode || '').toLowerCase() === 'specialty' &&
+        nextStatus === 'active' && currentStatus !== 'active';
+      const rpcName = switchingSpecialtyCycle
+        ? 'activate_patient_specialty_plan_v1'
+        : 'update_patient_therapeutic_plan_v3';
+      const { data, error } = await supabase.rpc(rpcName, {
         p_plan_id: planId,
         p_organization_id: organizationId,
         p_patient_id: patientId,
@@ -75323,7 +75336,9 @@ async function startServer() {
         p_pts_payload: sanitizeClinicalPayload(ptsPayload),
         p_review_due_date: reviewDueDate,
         p_last_reviewed_at: lastReviewedAt,
-        p_status: nextStatus,
+        ...(switchingSpecialtyCycle
+          ? { p_actor_can_manage_all: canManageAny }
+          : { p_status: nextStatus }),
         p_actor_id: actorId,
         p_now: now,
       });
@@ -75335,8 +75350,17 @@ async function startServer() {
         if (code.includes('THERAPEUTIC_PLAN_PAYLOAD_INVALID')) {
           return res.status(422).json({ success: false, error: 'THERAPEUTIC_PLAN_PAYLOAD_INVALID', message: 'Revise os campos do PTS antes de salvar.' });
         }
-        if (code.includes('PGRST202') || code.includes('update_patient_therapeutic_plan_v3')) {
-          return res.status(503).json({ success: false, error: 'PTS_SCHEMA_MIGRATION_REQUIRED', message: 'A atualização estrutural do PTS ainda não foi aplicada no banco.' });
+        if (code.includes('SPECIALTY_PLAN_SCOPE_DENIED')) {
+          return res.status(403).json({ success: false, error: 'SPECIALTY_PLAN_SCOPE_DENIED',
+            message: 'A ativação exige autorização sobre o plano vigente e o futuro, ou permissão da gestão clínica.' });
+        }
+        if (code.includes('SPECIALTY_PLAN_NOT_ACTIVATABLE') || code.includes('SPECIALTY_PLAN_TRANSITION_FAILED')) {
+          return res.status(409).json({ success: false, error: 'SPECIALTY_PLAN_ACTIVATION_CONFLICT',
+            message: 'O plano não pode ser ativado neste estado. Atualize e confirme qual plano está vigente.' });
+        }
+        if (code.includes('PGRST202') || code.includes(rpcName)) {
+          return res.status(503).json({ success: false, error: 'THERAPEUTIC_PLAN_SCHEMA_MIGRATION_REQUIRED',
+            message: 'A migração de planos terapêuticos ainda não foi aplicada no Staging.' });
         }
         throw error;
       }
@@ -75640,9 +75664,11 @@ async function startServer() {
       const specialistCanActivate = !canApprove && therapeuticPlanScope?.status === 'active'
         && await canActivateSpecialtyPlanForCase({ supabase, clinicId, patientId,
           actorId, actorRole: role, organizationId, plan: therapeuticPlanScope });
-      const status = canApprove
-        ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
-        : (requestedStatus === 'draft' ? 'draft' : specialistCanActivate ? 'teaching' : 'draft');
+      const status = therapeuticPlanScope?.status !== 'active'
+        ? 'draft' // Future plans are editable, but cannot collect clinical data.
+        : canApprove
+          ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
+          : (requestedStatus === 'draft' ? 'draft' : specialistCanActivate ? 'teaching' : 'draft');
       const originType = sanitizeString(req.body?.originType || req.body?.origin_type || 'manual', 40).toLowerCase();
       const originId = sanitizeString(req.body?.originId || req.body?.origin_id, 180) || null;
       let resolvedProtocolId = sanitizeString(req.body?.protocolId || req.body?.protocol_id, 180) || null;
