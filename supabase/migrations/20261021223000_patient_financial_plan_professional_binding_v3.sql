@@ -39,6 +39,14 @@ begin
     raise exception 'FINANCIAL_PLAN_INPUT_INVALID';
   end if;
 
+  -- Share the exact per-clinic/patient transaction lock used by v2 BEFORE
+  -- inspecting legacy plans. Otherwise a concurrent v2 save could change
+  -- an unbound plan between the eligibility check and reconciliation.
+  -- Reacquiring the same advisory lock inside v2 is transaction-reentrant.
+  perform pg_advisory_xact_lock(
+    hashtextextended(p_organization_id::text || ':' || p_patient_id::text, 0)
+  );
+
   -- Every new plan must have an explicit valid assignment. Existing unbound
   -- plans are grandfathered only with their unchanged canonical specialty.
   for v_row in select value from jsonb_array_elements(p_plans) loop
