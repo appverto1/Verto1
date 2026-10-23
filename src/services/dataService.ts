@@ -6996,6 +6996,41 @@ export const dataService = {
     }
   },
 
+  async getPatientSharedChartDelegations(patientId: string) {
+    const id = String(patientId || '').trim();
+    if (!id) return { success: false, data: [], error: 'Paciente inválido.' };
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/patients/' + encodeURIComponent(id) + '/shared-chart/delegations',
+        { method: 'GET', headers: await getNoStoreAuthHeaders(), credentials: 'include', cache: 'no-store' }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, data: [], error: getApiErrorMessage(error, 'Não foi possível carregar as autorizações.') };
+    }
+  },
+
+  async savePatientSharedChartDelegation(patientId: string, professionalId: string, allow: boolean) {
+    const id = String(patientId || '').trim();
+    const professional = String(professionalId || '').trim();
+    if (!id || !professional || typeof allow !== 'boolean') {
+      return { success: false, error: 'Autorização inválida.' };
+    }
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/patients/' + encodeURIComponent(id) + '/shared-chart/delegations',
+        {
+          method: 'POST', credentials: 'include', cache: 'no-store',
+          headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ professionalId: professional, allow }),
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      return { success: false, error: getApiErrorMessage(error, 'Não foi possível salvar a autorização.') };
+    }
+  },
+
   async getPortalSharedChart(patientId: string) {
     const safePatientId = String(patientId || '').trim();
     if (!safePatientId) return { success: false, data: null, error: 'Paciente inválido.' };
