@@ -260,6 +260,7 @@ const criticalTests = [
   'tests/clinicalOutcomePlanScope.regression.test.ts',
   'tests/p1ClinicalChartHydration.regression.test.mjs',
   'tests/p1AdultChartsSessionFinancial.regression.test.mjs',
+  'tests/p000PediatricAnamnesisSnapshot.regression.test.mjs',
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/p000PatientCategoryPersistence.regression.test.mjs',
