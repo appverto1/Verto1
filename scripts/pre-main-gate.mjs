@@ -266,6 +266,7 @@ const criticalTests = [
   'tests/p0HelpRoleProgressContract.test.ts',
   'tests/helpTutorialSupport.test.ts',
   'tests/patientTimeReportRoute.test.ts',
+  'tests/abaV3DrainStatusHandler.test.ts',
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/p000PatientCategoryPersistence.regression.test.mjs',
