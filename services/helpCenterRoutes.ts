@@ -23,16 +23,17 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   const helpContext = (req:any) => buildHelpContext(req, currentClinicId);
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
-    const { clinicId, clinicName, audience, capabilities, modules, userId, contextKey } = helpContext(req);
+    const { clinicId, clinicName, audience, capabilities, modules, userId, membershipId, contextKey } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const articles = projectArticles(audience, capabilities, modules);
     const tutorials=articles.filter(article=>article.contentRevision);
     let progress:any[]=[];
     if(tutorials.length){
-      if(!userId)return res.status(403).json({error:'HELP_USER_CONTEXT_REQUIRED'});
+      if(!userId||!membershipId)return res.status(403).json({error:'HELP_USER_CONTEXT_REQUIRED'});
       try{
-        const result=await supabase.from('help_tutorial_progress').select('article_id,content_revision,completed_at')
+        const result=await supabase.from('help_tutorial_role_progress_v2').select('article_id,content_revision,completed_at')
           .eq('user_id',userId).eq('clinic_id',clinicId)
+          .eq('membership_id',membershipId).eq('role',audience)
           .in('article_id',tutorials.map(a=>a.articleId)).in('content_revision',tutorials.map(a=>a.contentRevision))
           .limit(200);
         if(result.error)return res.status(503).json({error:'HELP_PROGRESS_UNAVAILABLE'});
@@ -79,7 +80,7 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
       const params:any={p_user_id:context.userId,p_clinic_id:context.clinicId,p_membership_id:context.membershipId,p_role:context.audience,
         p_article_id:article.articleId,p_content_revision:article.contentRevision};
       if(!support)params.p_completed=req.body.completed;
-      const result=await supabase.rpc(support?'get_help_tutorial_completion':'set_help_tutorial_completion',params);
+      const result=await supabase.rpc(support?'get_help_tutorial_completion_v2':'set_help_tutorial_completion_v2',params);
       if(result.error){
         const denied=result.error.code==='42501';
         return res.status(denied?403:503).json({error:denied?'HELP_ACCESS_DENIED':'HELP_PROGRESS_UNAVAILABLE'});

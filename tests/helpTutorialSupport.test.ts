@@ -64,19 +64,20 @@ const contexts=new Map<string,any>([
   ['a',{userId:'user-a',clinicId:'clinic-a',membershipId:'membership-a',role:'director',capabilities:new Set(caps),modules:new Set(modules)}],
   ['b',{userId:'user-b',clinicId:'clinic-a',membershipId:'membership-b',role:'director',capabilities:new Set(caps),modules:new Set(modules)}],
   ['other-clinic',{userId:'user-a',clinicId:'clinic-b',membershipId:'membership-c',role:'director',capabilities:new Set(caps),modules:new Set(modules)}],
+  ['other-role',{userId:'user-a',clinicId:'clinic-a',membershipId:'membership-a',role:'receptionist',capabilities:new Set(caps),modules:new Set(modules)}],
 ]);
 const rows=new Map<string,any>();let fail=false,dbDenied=false,rpcCalls=0;let number='+55 11 99999-0000';
 const supabase:any={
   from:(table:string)=>{
-    assert.equal(table,'help_tutorial_progress');const filters:any={};const q:any={
+    assert.equal(table,'help_tutorial_role_progress_v2');const filters:any={};const q:any={
       select:()=>q,eq:(key:string,value:any)=>{filters[key]=value;return q;},in:()=>q,
-      limit:async()=>({error:fail?{code:'DB_UNAVAILABLE'}:null,data:[...rows.values()].filter(row=>row.user_id===filters.user_id&&row.clinic_id===filters.clinic_id)})};return q;
+      limit:async()=>({error:fail?{code:'DB_UNAVAILABLE'}:null,data:[...rows.values()].filter(row=>row.user_id===filters.user_id&&row.clinic_id===filters.clinic_id&&row.membership_id===filters.membership_id&&row.role===filters.role)})};return q;
   },
   rpc:async(name:string,p:any)=>{
-    rpcCalls++;assert.ok(['set_help_tutorial_completion','get_help_tutorial_completion'].includes(name));
+    rpcCalls++;assert.ok(['set_help_tutorial_completion_v2','get_help_tutorial_completion_v2'].includes(name));
     if(fail||dbDenied)return {error:{code:dbDenied?'42501':'DB_UNAVAILABLE'}};
-    const key=JSON.stringify([p.p_user_id,p.p_clinic_id,p.p_article_id,p.p_content_revision]);
-    if(name==='set_help_tutorial_completion')rows.set(key,{user_id:p.p_user_id,clinic_id:p.p_clinic_id,article_id:p.p_article_id,content_revision:p.p_content_revision,
+    const key=JSON.stringify([p.p_user_id,p.p_clinic_id,p.p_membership_id,p.p_role,p.p_article_id,p.p_content_revision]);
+    if(name==='set_help_tutorial_completion_v2')rows.set(key,{user_id:p.p_user_id,clinic_id:p.p_clinic_id,membership_id:p.p_membership_id,role:p.p_role,article_id:p.p_article_id,content_revision:p.p_content_revision,
       completed_at:p.p_completed?(rows.get(key)?.completed_at||'2026-10-06T19:00:00Z'):null});
     return {data:{completedAt:rows.get(key)?.completed_at||null},error:null};
   }
@@ -111,6 +112,14 @@ try{
   assert.equal((await call('/api/help/tutorial-progress','a',{...body,completed:true})).status,200);
   const first=(await call('/api/help/tutorial-progress','a',{...body,completed:true})).body().completedAt;
   assert.ok(first);assert.equal(rows.size,1,'duplicate save is idempotent');
+  const roleCatalog=await call('/api/help/catalog','other-role');
+  const roleTopic=roleCatalog.body().articles.find((t:any)=>t.articleId==='agenda-confirmar');
+  assert.ok(roleTopic,'same tutorial can be authorized for two distinct clinical roles');
+  const roleBody={articleId:roleTopic.articleId,contentRevision:roleTopic.contentRevision,contextKey:roleCatalog.body().contextKey};
+  assert.equal((await call('/api/help/support','other-role',roleBody)).body().completed,false,'role change does not inherit director completion');
+  assert.equal((await call('/api/help/tutorial-progress','other-role',{...roleBody,completed:true})).status,200);
+  assert.equal(rows.size,2,'identical user/clinic/article/revision has independent role state');
+  assert.ok((await call('/api/help/support','a',body)).body().completed,'prior role completion remains intact');
   response=await call('/api/help/support','a',body);assert.equal(response.body().completed,true);assert.ok(response.text.includes(number));assert.ok(!response.text.includes('wa.me'));
   for(const session of ['b','other-clinic']){
     assert.equal((await call('/api/help/support',session,body)).status,409,'stale user/clinic context rejected');
