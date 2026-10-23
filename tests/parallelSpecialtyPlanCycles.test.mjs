@@ -97,7 +97,7 @@ try {
   await db.exec(`
     create table public.aba_sessions(
       id uuid primary key,organization_id text,clinic_id text,patient_id uuid,
-      therapeutic_plan_id uuid,note text
+      therapeutic_plan_id uuid,status text not null default 'completed',note text
     );
     create trigger test_aba_session_plan_guard before insert or update
       on public.aba_sessions for each row
@@ -137,6 +137,11 @@ try {
   assert.equal((await sql('select therapeutic_plan_id from aba_sessions where id=$1',[session])).rows[0].therapeutic_plan_id,old);
   await sql('insert into aba_sessions(id,organization_id,clinic_id,patient_id,therapeutic_plan_id) values ($1,$2,$2,$3,$4)',
     [uuid(24),org,patient,future]);
+  await sql("update aba_sessions set status='active' where id=$1",[uuid(24)]);
+  await assert.rejects(sql(activate,[anotherFuture,org,patient,1,fono,false]),
+    /SPECIALTY_PLAN_NOT_ACTIVATABLE/,
+    'switching must be refused while an active session uses the current cycle');
+  assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[future])).rows[0].status,'active');
   console.log('parallelSpecialtyPlanCycles: multiple drafts, atomic switch and immutable session binding PASS');
 } finally {
   await db.close();
