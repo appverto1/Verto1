@@ -4,9 +4,38 @@
 >
 > **Hierarquia de autoridade:** a **Issue GitHub** continua sendo fonte de verdade para requisitos, proprietário, `FACTORY_STATE`, claims, locks, gates e aceite, conforme `docs/factory/GUARDRAILS.md`. **Este arquivo é a fonte oficial única do INVENTÁRIO/visão de prioridades, progresso e links**. Em conflito, revalidar a Issue e a evidência real antes de editar este inventário. O histórico abaixo não reverte o registro atualizado do presente sumário.
 
-## Estado corrente verificado — 23/10/2026 (autoridade sobre os registros datados abaixo)
+## Painel corrente P0–P4 — 23/10/2026 (prevalece sobre histórico abaixo)
 
-> **Este painel prevalece sobre todas as descrições históricas da mesma tarefa** no restante deste documento, inclusive o quadro conciliado em 09–21/10 e o histórico importado de 08–09/10. Indicadores verdes continuam reservados exclusivamente a smoke humano autenticado e confirmado; `CI SUCCESS`, merge e deploy `SUCCESS` por si só são **amarelos**. Evidências de correções posteriores devem ser acrescentadas por item, sem reescrever o histórico. Produção não foi alterada nessas entregas.
+**Fonte conferida:** GitHub `staging`, CI dos PRs e Railway Verto-Staging. O deploy ativo `73c21f74-ed96-462d-b295-d293d75af8f2` corresponde ao commit `463a706d5eae0ec14fe26ee3cd0eb8f2a78387cc` (#470), status **SUCCESS**, 1/1 réplica online, nenhum alerta recente. Merges anteriores fazem parte da história dessa branch, não são deployments simultaneamente ativos. **Produção não foi alterada.** As cores se referem à **funcionalidade específica**, não à integralidade de cada prioridade.
+
+| Prioridade | Funcionalidade / item | Estado validado | Evidência / próximo gate |
+|---|---|---|---|
+| **P000** | Entrada do tutorial apenas no balão `?` | 🟢 **Smoke humano homologado (5/5)** | [#349](https://github.com/appverto1/Verto1/pull/349); entrada, F5 e relogin aprovados |
+| **P0 — Infantil** | Categoria Infantil ao Salvar e F5 | 🟢 **Smoke limitado homologado** | Cadastro persistiu após F5; **não** homologa a sessão clínica completa |
+| **P0 — Infantil** | Hidratação do perfil e proteção contra PATCH parcial indevido | 🟡 **Código publicado; smoke pendente** | [#467](https://github.com/appverto1/Verto1/pull/467) `02f970ce` e [#468](https://github.com/appverto1/Verto1/pull/468) `dc24db80`; ambos Railway SUCCESS; testar Infantil/Adulto ABA/Salvar/F5/API direta |
+| **P0 — Infantil** | Abertura e persistência da sessão clínica após o cadastro | 🟡 **Smoke integrado pendente** | Corrigido fluxo de permissões; verificar ao vivo sem loop ou troca para coleta adulta |
+| **P0 — Financeiro** | Plano por especialidade e profissional ativo | 🟡 **Publicado; smoke pendente** | [#450](https://github.com/appverto1/Verto1/pull/450) `83f068e4` + migração v3 Supabase Staging; preservar histórico e clínica |
+| **P0 — Clínico** | Planos independentes e ativação pelo próprio especialista | 🟡 **Publicado; smoke pendente** | [#462](https://github.com/appverto1/Verto1/pull/462) e [#463](https://github.com/appverto1/Verto1/pull/463) |
+| **P0 — Convites** | Onboarding profissional autenticado e upload | 🟡 **Publicado; smoke pendente** | [#464](https://github.com/appverto1/Verto1/pull/464) |
+| **P0 — Gráficos** | Publicar somente gráfico infantil permitido, com revogação após vínculo encerrado | 🟡 **Publicado; smoke pendente** | Funcionalidade canônica [#440](https://github.com/appverto1/Verto1/pull/440); proteção adicional [#466](https://github.com/appverto1/Verto1/pull/466) `cf9e1538`; adulto permanece com bem-estar fixo |
+| **P0 — Gráficos** | Regras **adicionais** de identidade global e delegação por caso entre clínicas | 🔴 **Não integrado** | [#429](https://github.com/appverto1/Verto1/pull/429) em Draft, código divergente; não mergear sem contrato de autorização e isolamento |
+| **P0 — Ajuda** | Central de Ajuda: expandir resultados, selecionar artigos por tópico, busca | 🟡 **Publicado; smoke pendente** | [#470](https://github.com/appverto1/Verto1/pull/470), merge `463a706d`, Railway SUCCESS |
+| **P0 — Agenda/sessões** | Início/finalização, timers, offline, permissões, especialidades e financeiro | 🟡 **Entregas técnicas; smoke do ciclo pendente** | Conferir itens individualmente; testes de papéis, persistência e isolamento cross-clinic |
+| **P0 — Mobile** | Menu e cabeçalho nos papéis efetivamente testados | 🟢 **Smoke humano homologado no recorte testado** | [#437](https://github.com/appverto1/Verto1/pull/437) e [#438](https://github.com/appverto1/Verto1/pull/438); não extrapolar a todos papéis |
+| **P1 — Cancelamento** | Cancelar automaticamente a partir de lembrete autêntico 24h | 🟡 **Publicado; smoke pendente** | [#457](https://github.com/appverto1/Verto1/pull/457) `f652071b` + RPC Staging; 12h exige aprovação |
+| **P1 — Remarcação** | Pedir 3 opções, aceite da clínica, novo lembrete 24h/12h | 🟡 **Smoke integrado pendente** | Validar papéis de agenda, novo horário e deduplicação |
+| **P1 — Relatório** | Rota GET de tempo por paciente (extração sem mudança funcional) | 🟡 **CI/merge/deploy concluídos; smoke pendente** | [#469](https://github.com/appverto1/Verto1/pull/469), merge `3a1fa5749128c1b8211f5831e94aae1228c39958` e Railway SUCCESS (posteriormente substituído pelo deploy #470). Não mergear [#394](https://github.com/appverto1/Verto1/pull/394) antigo por duplicação |
+| **P1 — Agenda** | Impedir agendamento em dias não habilitados pela clínica por validação server-side | 🔴 **Implementação ainda não confirmada** | Exige regra canônica de disponibilidade, API e testes negativos |
+| **P1 — Outros 28–44** | Notificações, repasses, dashboards e outros | ⚪ **Conciliação individual pendente** | Há entregas posteriores em vários itens; não interpretar como todos não implementados |
+| **P2 — 41 itens** | Sessões em grupo, tarefas, relatórios, finanças e demais backlog | ⚪ **Conciliação individual pendente** | Há entregas posteriores ao inventário original; não classificar o grupo inteiro como vermelho |
+| **P3 — 21 itens** | UX, configuração, menus, onboarding e comercial | ⚪ **Conciliação individual pendente** | Itens homologados parcialmente, como menu mobile, não conferem aceite geral |
+| **P4 — 3 itens** | Escola, Convênios/TISS amplo e biblioteca/sugestões opcionais | ⏸️ **Pausado por decisão do fundador** | Não reativar sem solicitação expressa |
+
+**Regra de estado:** 🟢 homologação humana real no recorte indicado; 🟡 código implantado, sem smoke completo; 🔴 implementação faltante confirmada ou não integrada; ⚪ não conciliado, **não necessariamente inexistente**; ⏸️ adiado intencionalmente. Não usar merge/CI como prova automática de persistência após F5. O botão **Salvar** continua autoridade exclusiva para alterações clínicas e cadastrais.
+
+## Histórico de conciliação de 23/10/2026 — registro anterior (subordinado ao painel corrente acima)
+
+> **Este painel registra um checkpoint anterior; o painel corrente P0–P4 acima prevalece em caso de divergência** com as linhas abaixo, inclusive o quadro conciliado em 09–21/10 e o histórico importado de 08–09/10. Indicadores verdes continuam reservados exclusivamente a smoke humano autenticado e confirmado; `CI SUCCESS`, merge e deploy `SUCCESS` por si só são **amarelos**. Evidências de correções posteriores devem ser acrescentadas por item, sem reescrever o histórico. Produção não foi alterada nessas entregas.
 
 | Prioridade | Funcionalidade | Estado corrente | Evidência verificada / próxima ação |
 |---|---|---|---|
