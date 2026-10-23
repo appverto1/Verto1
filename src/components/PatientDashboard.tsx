@@ -775,6 +775,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     );
     await openPortalAppointmentDetail({
       id: appointmentId,
+      // The backend verifies this persisted notification against a SENT job;
+      // reminderKind from browser metadata is never an authorization source.
+      reminderNotificationId: String(notification?.id || ''),
       patientName: firstPortalPatientName(
         notification?.patientName,
         notification?.patient_name,
@@ -958,6 +961,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const payload = {
       reason: portalActionForm.reason,
       note: portalActionForm.note,
+      ...(portalModal === 'cancel' && selectedPortalAppointment?.reminderNotificationId
+        ? { notificationId: String(selectedPortalAppointment.reminderNotificationId) }
+        : {}),
       rescheduleOptions: selectedRescheduleOptions,
       requestedStart: primaryRescheduleOption?.scheduledStart,
       requestedEnd: primaryRescheduleOption?.scheduledEnd,
@@ -976,7 +982,17 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return;
     }
     const resultAppointment = result?.item || result?.appointment;
-    if (resultAppointment) updatePortalAppointmentInList(resultAppointment);
+    if (resultAppointment) {
+      updatePortalAppointmentInList(resultAppointment);
+      // A confirmed automatic cancellation must immediately replace the old
+      // open detail; otherwise the modal could still offer cancel/confirm.
+      if (portalModal === 'cancel' && result?.action === 'cancelled_by_family_from_24h_reminder') {
+        setSelectedPortalAppointment((current: any) => current?.id === resultAppointment.id
+          ? { ...current, ...resultAppointment } : current);
+        setPortalAppointmentDetail((current: any) => current?.appointment?.id === resultAppointment.id
+          ? { ...current, appointment: { ...current.appointment, ...resultAppointment } } : current);
+      }
+    }
     setPortalModal('');
     setPortalSelectedRescheduleSlots([]);
     setPortalActionForm({ reason: '', note: '', requestedStart: '', accepted: false });
