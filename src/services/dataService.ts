@@ -1739,7 +1739,8 @@ export const dataService = {
       convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
-      group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
+      // Server-confirmed patient category wins over stale anamnesis/offline snapshots.
+      group: patient?.patient_group || patient?.group || recordPayload?.grupo || null,
       source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
       rg: recordPayload?.rg || patient?.rg || null,
       cep: recordPayload?.cep || patient?.cep || null,
