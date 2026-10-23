@@ -130,7 +130,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
     return Array.from(groups,([theme,items])=>({theme,items}));
   },[filtered]);
   const searching=Boolean(query.trim());
-  const article=visibleHelpArticle(topics,filtered,selected,searching);
+  const article=visibleHelpArticle<Topic>(topics,filtered,selected,searching);
   React.useEffect(()=>{
     if(article?.theme)setExpandedThemes(old=>({...old,[article.theme]:true}));
   },[article?.articleId,article?.theme]);
