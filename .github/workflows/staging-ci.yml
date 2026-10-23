@@ -169,6 +169,9 @@ jobs:
       - name: Clinic authorization-denial guidance regression
         run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
 
+      - name: Professional onboarding bearer regression
+        run: node tests/professionalOnboardingAuth.regression.test.mjs
+
       - name: Specialist-owned therapeutic plan activation regression
         run: |
           node --import tsx tests/therapeuticSpecialistActivation.test.ts
