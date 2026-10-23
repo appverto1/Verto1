@@ -184,6 +184,7 @@ const criticalTests = [
   'tests/distributedSessionSafety.regression.test.mjs',
   'tests/productionSessionPersistence.regression.test.mjs',
   'tests/healthRouteHandler.test.ts',
+  'tests/internalSchemaStatusRouteHandler.test.ts',
   'tests/backgroundWorkerEconomyMode.test.ts',
   'tests/pushSubscriptionInvalidation.test.ts',
   'tests/patientNotificationPushPresentation.test.mjs',
