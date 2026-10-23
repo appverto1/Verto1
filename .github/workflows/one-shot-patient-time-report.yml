@@ -1,0 +1,32 @@
+name: One Time Patient Time Report Route Extraction
+on:
+  push:
+    branches:
+      - refactor/staging-time-report-patient-current-20261023
+    paths:
+      - .github/workflows/one-shot-patient-time-report.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: "github.event.head_commit.message == 'chore(reports): execute one-time bounded extraction'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Extract only identical route and remove temporary executor
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'refactor/staging-time-report-patient-current-20261023'
+          python3 scripts/one-shot-patient-time-report.py
+          git diff --check
+          git rm -- scripts/one-shot-patient-time-report.py .github/workflows/one-shot-patient-time-report.yml
+          git add -- server.ts
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'refactor(reports): extract unchanged patient time report handler'
+          git push origin 'HEAD:refactor/staging-time-report-patient-current-20261023'
