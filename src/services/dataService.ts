@@ -8862,6 +8862,37 @@ export const dataService = {
     return result?.pending === true ? { ...result, queued: true } : result;
   },
 
+  /**
+   * The onboarding context/profile GET requests already use getAuthHeaders().
+   * The final POST and photo/signature uploads must use the SAME credentials:
+   * a Supabase Bearer token when available, or the canonical HTTP session.
+   * Never bypass the server's sensitive-mutation guard.
+   */
+  async uploadProfessionalOnboardingMedia(payload: {
+    bucket: 'patient-photos'; path: string; contentType: string; fileBase64: string;
+  }) {
+    const response = await fetchWithAuthRetry('/api/storage/upload', {
+      method: 'POST',
+      credentials: 'include',
+      headers: await getAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+    return await safeJson(response);
+  },
+
+  async completeProfessionalOnboarding(userId: string, payload: Record<string, any>) {
+    const response = await fetchWithAuthRetry(
+      `/api/profile/${encodeURIComponent(userId)}/complete-onboarding`,
+      {
+        method: 'POST',
+        credentials: 'include',
+        headers: await getAuthHeaders(),
+        body: JSON.stringify(payload)
+      }
+    );
+    return await safeJson(response);
+  },
+
   async getOnboardingContext() {
     try {
       const response = await fetch('/api/onboarding/context', {
