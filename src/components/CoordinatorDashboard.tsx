@@ -6760,6 +6760,16 @@ export function CoordinatorDashboard({
   };
 
   const handleFinancialPlanChange = (planId: string, field: string, value: any) => {
+    const selectedProfessional = field === "professionalUserId"
+      ? appointmentProfessionalOptions.find((member: any) => String(member.id) === String(value))
+      : null;
+    const professionalSpecialty = selectedProfessional && clinicFinancialPlanServiceOptions.find(
+      (option) => clinicalSpecialtiesMatch(option.label, selectedProfessional.clinicSpecialty)
+    );
+    if (field === "professionalUserId" && value && !professionalSpecialty) {
+      showToast("Selecione um profissional ativo e vinculado à especialidade desta clínica.", "error");
+      return;
+    }
     const selectedSpecialty = field === "serviceType"
       ? clinicFinancialPlanServiceOptions.find((option) => option.value === value)
       : null;
@@ -6781,9 +6791,16 @@ export function CoordinatorDashboard({
         }
         return createPatientFinancialPlan({
           ...plan,
-          ...(field === "serviceType" && selectedSpecialty
-            ? { serviceType: selectedSpecialty.serviceType, customServiceName: selectedSpecialty.customServiceName }
-            : { [field]: value }),
+          ...(field === "professionalUserId"
+            ? {
+                professionalUserId: value,
+                ...(professionalSpecialty
+                  ? { serviceType: professionalSpecialty.serviceType, customServiceName: professionalSpecialty.customServiceName }
+                  : { serviceType: "", customServiceName: "" }),
+              }
+            : field === "serviceType" && selectedSpecialty
+              ? { serviceType: selectedSpecialty.serviceType, customServiceName: selectedSpecialty.customServiceName }
+              : { [field]: value }),
           ...(field === "billingMode" && value === "INSURANCE"
             ? {
                 payerId: plan.payerId || prev.convenioPayerId || "",
@@ -18463,11 +18480,34 @@ export function CoordinatorDashboard({
                           <div key={plan.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
                               <div className="xl:col-span-2">
+                                <FormField label="Profissional responsável pelo plano">
+                                  <select
+                                    className={patientFormInputClass}
+                                    value={plan.professionalUserId || ""}
+                                    disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError)}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "professionalUserId", e.target.value)}
+                                  >
+                                    <option value="">Selecione o profissional</option>
+                                    {plan.professionalUserId && !appointmentProfessionalOptions.some((member: any) => String(member.id) === plan.professionalUserId) && (
+                                      <option value={plan.professionalUserId} disabled>Profissional anterior (vínculo inativo)</option>
+                                    )}
+                                    {appointmentProfessionalOptions.map((member: any) => (
+                                      <option key={String(member.id)} value={String(member.id)}>
+                                        {member.label || member.name || "Profissional"} · {member.clinicSpecialty}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {!plan.professionalUserId && <p className="mt-1 text-xs text-slate-500">
+                                    Para planos novos, selecione primeiro o profissional. A especialidade será preenchida automaticamente.
+                                  </p>}
+                                </FormField>
+                              </div>
+                              <div className="xl:col-span-2">
                                 <FormField label="Linha de cuidado / especialidade">
                                   <select
                                     className={patientFormInputClass}
                                     value={patientFinancialPlanSelectionValue(plan)}
-                                    disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError) || !clinicFinancialPlanServiceOptions.length}
+                                    disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError) || !clinicFinancialPlanServiceOptions.length || Boolean(plan.professionalUserId)}
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "serviceType", e.target.value)}
                                   >
                                     <option value="">Selecione a especialidade</option>

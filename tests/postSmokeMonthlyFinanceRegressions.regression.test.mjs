@@ -36,7 +36,7 @@ assert.equal(planPersistCalls.length, 4, 'only the established patient mutation 
 const calendarRoutesAt = server.indexOf("app.get('/api/calendar");
 assert.ok(calendarRoutesAt > 0, 'calendar route boundary missing');
 assert.doesNotMatch(server.slice(calendarRoutesAt), /await persistPatientFinancialPlans\(/, 'Agenda must not administer patient_financial_plans lifecycle');
-assert.doesNotMatch(server.slice(calendarRoutesAt), /rpc\('reconcile_patient_financial_plans_v2'/, 'Agenda must not reconcile patient_financial_plans');
+assert.doesNotMatch(server.slice(calendarRoutesAt), /rpc\('reconcile_patient_financial_plans_v[23]'/, 'Agenda must not reconcile patient_financial_plans');
 
 // MONTHLY/SESSION unit price is not treated as a fixed monthly projection.
 assert.match(coordinator, /isMonthlySessionVariable:[\s\S]{0,260}ELIGIBLE_COMPLETED_SESSIONS/);

@@ -7380,6 +7380,7 @@ const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'organization_id',
   'patient_id',
   'service_type',
+  'professional_user_id',
   'custom_service_name',
   'service_name_snapshot',
   'billing_mode',
@@ -20213,6 +20214,7 @@ function buildPatientFinancialPlanRows(params: {
       organization_id: params.clinicId,
       patient_id: params.patientId,
       service_type: sanitizeString(plan.serviceType, 60) || 'CUSTOM',
+      professional_user_id: isUuid(sanitizeString(plan.professionalUserId, 120)) ? sanitizeString(plan.professionalUserId, 120) : null,
       custom_service_name: sanitizeString(plan.customServiceName, 120) || null,
       service_name_snapshot: sanitizeString(plan.serviceNameSnapshot || plan.specialty, 120) || null,
       billing_mode: sanitizeString(plan.billingMode, 40) || 'PRIVATE',
@@ -20323,7 +20325,7 @@ if (!specialtyGate.ok) {
     }
   }
 
-  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v2', {
+  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v3', {
     p_organization_id: params.clinicId,
     p_patient_id: params.patientId,
     p_actor_id: isUuid(sanitizeString(params.actorId, 120)) ? sanitizeString(params.actorId, 120) : null,
@@ -20332,7 +20334,7 @@ if (!specialtyGate.ok) {
   });
   if (reconciliation.error) {
     const message = sanitizeString(reconciliation.error?.message || reconciliation.error, 500);
-    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v2')) {
+    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v3')) {
       return {
         success: false,
         error: 'A migração de persistência histórica dos planos financeiros ainda não foi aplicada.',

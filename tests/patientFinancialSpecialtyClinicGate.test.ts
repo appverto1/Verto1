@@ -19,9 +19,10 @@ assert.equal(patientFinancialPlanSelectionValue({serviceType:'CUSTOM',customServ
 
 const CLINIC = '11111111-1111-4111-8111-111111111111';
 const PATIENT = '22222222-2222-4222-8222-222222222222';
-const plan = (type: string, custom='', clientId='new') => ({
+const PROFESSIONAL = '33333333-3333-4333-8333-333333333333';
+const plan = (type: string, custom='', clientId='new', professional=PROFESSIONAL) => ({
   id: null, client_plan_key: clientId, service_type: type,
-  custom_service_name: custom, status: 'ACTIVE'
+  custom_service_name: custom, professional_user_id: professional, status: 'ACTIVE'
 });
 
 const mockClient = (members: any[], existing: any[] = [], fail = false) => ({
@@ -47,12 +48,14 @@ async function validate(rows: any[], memberships: any[], older: any[] = [], fail
     supabase:mockClient(memberships,older,fail),clinicId:CLINIC,patientId:PATIENT,rows
   });
 }
-const fonoActive = [{clinic_id:CLINIC,role:'therapist',status:'active',specialty:'Fonoaudiólogo'}];
-const fonoPending = [{clinic_id:CLINIC,role:'therapist',status:'pending',specialty:'Fonoaudiólogo'}];
-const fonoOtherClinic = [{clinic_id:'99999999-9999-4999-8999-999999999999',role:'therapist',status:'active',specialty:'Fonoaudiólogo'}];
-const fonoAdmin = [{clinic_id:CLINIC,role:'director',status:'active',specialty:'Fonoaudiólogo'}];
+const fonoActive = [{clinic_id:CLINIC,user_id:PROFESSIONAL,role:'therapist',status:'active',specialty:'Fonoaudiólogo'}];
+const fonoPending = [{clinic_id:CLINIC,user_id:PROFESSIONAL,role:'therapist',status:'pending',specialty:'Fonoaudiólogo'}];
+const fonoOtherClinic = [{clinic_id:'99999999-9999-4999-8999-999999999999',user_id:PROFESSIONAL,role:'therapist',status:'active',specialty:'Fonoaudiólogo'}];
+const fonoAdmin = [{clinic_id:CLINIC,user_id:PROFESSIONAL,role:'director',status:'active',specialty:'Fonoaudiólogo'}];
 
 assert.equal((await validate([plan('SPEECH_THERAPY')],fonoActive)).ok,true);
+assert.equal((await validate([plan('SPEECH_THERAPY','','new','')],fonoActive)).ok,false,'new plan requires an explicit therapist');
+assert.equal((await validate([plan('SPEECH_THERAPY','','new','88888888-8888-4888-8888-888888888888')],fonoActive)).ok,false,'forged foreign therapist cannot be linked');
 assert.equal((await validate([plan('SPEECH_THERAPY')],fonoPending)).ok,false);
 assert.equal((await validate([plan('SPEECH_THERAPY')],fonoOtherClinic)).ok,false);
 assert.equal((await validate([plan('SPEECH_THERAPY')],fonoAdmin)).ok,false);
@@ -66,7 +69,7 @@ assert.equal((await validate([plan('SPEECH_THERAPY')],[],[],true)).ok,false,'bac
 const previous = [{ id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', client_plan_key:'old-plan',
   service_type:'OCCUPATIONAL_THERAPY', custom_service_name:null, status:'ACTIVE',
   organization_id:CLINIC,patient_id:PATIENT }];
-assert.equal((await validate([plan('OCCUPATIONAL_THERAPY','','old-plan')],fonoActive,previous)).ok,true);
+assert.equal((await validate([plan('OCCUPATIONAL_THERAPY','','old-plan','')],fonoActive,previous)).ok,true);
 assert.equal((await validate([plan('OCCUPATIONAL_THERAPY','','new-plan')],fonoActive,previous)).ok,false);
-assert.equal((await validate([plan('CUSTOM','Musicoterapeuta','old-plan')],fonoActive,previous)).ok,false);
+assert.equal((await validate([plan('CUSTOM','Musicoterapeuta','old-plan','')],fonoActive,previous)).ok,false);
 console.log('patientFinancialSpecialtyClinicGate: PASS');
