@@ -342,34 +342,19 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
     reader.readAsDataURL(file);
   };
 
-  const parseJsonSafe = async (response: Response) => {
-    const text = await response.text();
-    try {
-      return text ? JSON.parse(text) : {};
-    } catch {
-      return { success: false, error: `Resposta inválida do servidor (HTTP ${response.status})` };
-    }
-  };
-
   const uploadImageIfNeeded = async (input: string | null, kind: 'profile' | 'logo' | 'signature') => {
     if (!input) return { url: null as string | null, path: null as string | null };
     if (!input.startsWith('data:image/')) return { url: input, path: null as string | null };
     const mime = input.match(/^data:([^;]+);base64,/)?.[1] || 'image/png';
     const extension = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg' : 'png';
     const label = kind === 'profile' ? 'perfil' : kind === 'logo' ? 'logo' : 'assinatura';
-    const response = await fetch('/api/storage/upload', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        bucket: 'patient-photos',
-        path: `onboarding/${user.id}/${label}-${Date.now()}.${extension}`,
-        contentType: mime,
-        fileBase64: input,
-      }),
+    const result = await dataService.uploadProfessionalOnboardingMedia({
+      bucket: 'patient-photos',
+      path: `onboarding/${user.id}/${label}-${Date.now()}.${extension}`,
+      contentType: mime,
+      fileBase64: input,
     });
-    const result = await parseJsonSafe(response);
-    if (!response.ok || !result?.success || !result?.url) {
+    if (!result?.success || !result?.url) {
       throw new Error(result?.error || `Não foi possível enviar a imagem (${label}).`);
     }
     return { url: result.url as string, path: result.path ? `patient-photos/${result.path}` : null };
@@ -428,14 +413,11 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         clinicLogoPath: clinicLogoUpload.path,
         clinicOperationType,
       };
-      const response = await fetch(`/api/profile/${user.id}/complete-onboarding`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isManagedMember ? memberPayload : ownerPayload),
-      });
-      const result = await parseJsonSafe(response);
-      if (!response.ok || !result?.success) {
+      const result = await dataService.completeProfessionalOnboarding(
+        String(user.id),
+        isManagedMember ? memberPayload : ownerPayload,
+      );
+      if (!result?.success) {
         throw new Error(result?.error || 'Falha ao concluir sua configuração.');
       }
       localStorage.removeItem(draftKey);
