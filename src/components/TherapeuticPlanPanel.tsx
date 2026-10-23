@@ -1372,7 +1372,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       currentSpecialtyPlanScope([scope], derivedSpecialty)
     );
     const startAsDraft = scopeDraft.mode === 'specialty' &&
-      (prepareScopeAsDraft || Boolean(activeSpecialtyScope));
+      (prepareScopeAsDraft || Boolean(activeSpecialtyScope) ||
+        Boolean(currentSpecialtyPlanScope(specialtyScopes, derivedSpecialty)));
     if (!scopeIdempotencyKeyRef.current) {
       scopeIdempotencyKeyRef.current = newIdempotencyKey(
         `therapeutic-plan-scope:${patientId}`,
