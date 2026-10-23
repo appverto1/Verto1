@@ -140,6 +140,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalFileState, setPortalFileState] = useState({ uploading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
+  // Only the reminder the family actually opened is eligible as a locator.
+  // The backend verifies the durable 24h delivery, schedule and recipient.
+  const [portalCancel24hNotificationId, setPortalCancel24hNotificationId] = useState('');
   const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
   const [portalActionForm, setPortalActionForm] = useState({ reason: '', note: '', requestedStart: '', accepted: false });
   const [portalRescheduleAvailability, setPortalRescheduleAvailability] = useState<any>({ loading: false, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
@@ -746,7 +749,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading, hasPendingPortalAnamnesisHint, isKidsProfile]);
 
-  const openPortalAppointmentDetail = async (appointment: any) => {
+  const openPortalAppointmentDetail = async (appointment: any, notificationId = '') => {
+    setPortalCancel24hNotificationId(notificationId);
     setSelectedPortalAppointment(appointment);
     setPortalAppointmentDetail(null);
     setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: '' }));
@@ -806,7 +810,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         user?.clinicSettings?.clinicLogoUrl
       ),
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
-    });
+    }, String(metadata.reminderKind || '').toLowerCase() === '24h' ? String(notification?.id || '') : '');
   };
 
   const updatePortalAppointmentInList = (appointment: any) => {
@@ -958,6 +962,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const payload = {
       reason: portalActionForm.reason,
       note: portalActionForm.note,
+      // Never grant cancellation authority from a client-supplied kind or ID.
+      // It only identifies the clicked reminder for server-side validation.
+      ...(portalModal === 'cancel' && portalCancel24hNotificationId
+        ? { notificationId: portalCancel24hNotificationId } : {}),
       rescheduleOptions: selectedRescheduleOptions,
       requestedStart: primaryRescheduleOption?.scheduledStart,
       requestedEnd: primaryRescheduleOption?.scheduledEnd,
@@ -3530,7 +3538,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </button>
           )}
           <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-semibold text-rose-600 disabled:opacity-50">
-            <Ban size={17} /> Solicitar cancelamento
+            <Ban size={17} /> {portalCancel24hNotificationId ? 'Cancelar a partir do lembrete de 24h' : 'Solicitar cancelamento'}
           </button>
           {portalAppointmentDetail?.session?.id && portalAppointmentDetail?.closure?.signaturePending && (
             <button type="button" onClick={() => setPortalModal('sign')} className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
@@ -3590,6 +3598,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           </div>
         ) : (
           <div className="space-y-3">
+            {portalModal === 'cancel' && portalCancel24hNotificationId && (
+              <p className="rounded-xl bg-purple-50 px-3 py-2 text-xs text-slate-600">
+                Se o lembrete de 24h ainda estiver válido, a sessão será cancelada automaticamente. Caso contrário, a clínica precisará aprovar a solicitação.
+              </p>
+            )}
             {portalModal === 'reschedule' && (
               <div className="space-y-3">
                 <div className="rounded-2xl border border-purple-100 bg-purple-50/70 px-4 py-3">

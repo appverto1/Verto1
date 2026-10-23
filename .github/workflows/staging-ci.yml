@@ -153,6 +153,11 @@ jobs:
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
 
+      - name: Appointment cancellation from verified 24h reminder (PostgreSQL)
+        run: |
+          node tests/p1Reminder24hAutoCancelPostgres.test.mjs
+          node tests/p1Reminder24hAutoCancelContract.regression.test.mjs
+
       - name: Group session PostgreSQL concurrency
         env:
           VERTO_GROUP_POSTGRES_TEST: "1"
