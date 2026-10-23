@@ -110,6 +110,8 @@ begin
   -- Publishing the cycle must make those programs eligible for sessions in
   -- the SAME transaction. Keep the existing version/audit RPC rather than
   -- touching aba_programs.status directly (audit, activated_by, history).
+  -- The status RPC acquires the per-program advisory lock BEFORE its row lock.
+  -- Do not prelock rows here in the opposite order (deadlock with editors).
   for v_program in
     select program.*
       from public.aba_programs program
@@ -119,7 +121,6 @@ begin
        and program.therapeutic_plan_id = v_target.id
        and program.status in ('draft','awaiting_approval')
      order by program.id
-     for update
   loop
     v_program_activation := public.update_therapeutic_program_status(
       v_target.organization_id, v_target.patient_id, v_program.id,
