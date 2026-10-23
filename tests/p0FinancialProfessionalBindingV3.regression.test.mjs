@@ -25,6 +25,12 @@ assert.match(sql,/create or replace function public\.reconcile_patient_financial
 assert.match(sql,/security invoker/);
 assert.match(sql,/from public\.clinic_memberships m[\s\S]*?for share/);
 assert.match(sql,/FINANCIAL_PLAN_PROFESSIONAL_REQUIRED/);
+const preflightLock = sql.indexOf('perform pg_advisory_xact_lock(');
+const firstPlanPreflight = sql.indexOf('for v_row in select value from jsonb_array_elements(p_plans) loop');
+assert.ok(preflightLock > 0 && preflightLock < firstPlanPreflight,
+  'serialize the legacy-plan eligibility preflight before a concurrent v2 save');
+assert.match(sql,/hashtextextended\(p_organization_id::text\s*\|\|\s*':'\s*\|\|\s*p_patient_id::text, 0\)/,
+  'use exactly the existing v2 clinic/patient advisory-lock key');
 assert.match(sql,/public\.reconcile_patient_financial_plans_v2\(/,'v2 retains canonical billing and history');
 assert.match(sql,/update public\.patient_financial_plans\s+set professional_user_id=v_user/);
 assert.match(sql,/current_plan\.supersedes_plan_id=prior_plan\.id/);
