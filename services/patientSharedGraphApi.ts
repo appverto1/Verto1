@@ -19,6 +19,12 @@ export const decodeSharedClinicalMetric = (key: unknown) => {
     return specialty.length > 0 && metric.length > 0 ? { specialty, metric } : null;
   } catch { return null; }
 };
+// Authorization is clinic- AND patient-scoped even when clinics share a
+// verified global patient identity. This helper is deliberately side-effect-free.
+export const sharedGraphBelongsToPortalPatient = (scope: Scope | null, publication: any) =>
+  Boolean(scope?.active && scope.globalId && publication?.global_patient_identity_id === scope.globalId
+    && publication?.clinic_id === scope.clinicId && publication?.patient_id === scope.id);
+
 export const sharedGraphOwnerIsLive = (owner: any, publication: any) =>
   Boolean(owner?.id && owner.id === publication?.patient_id &&
     owner.clinic_id === publication?.clinic_id &&
@@ -223,7 +229,7 @@ export function createPatientSharedGraphApi(deps: {
       const publication=await readPublication(scope.globalId);
       // A verified global identity is not consent for a *different* clinic's
       // clinical graph. This portal scope must own the publication itself.
-      if (publication?.clinic_id !== scope.clinicId || publication?.patient_id !== scope.id
+      if (!sharedGraphBelongsToPortalPatient(scope,publication)
           || !await ownerIsActive(publication)) return {publication:null,scope};
       return {publication,scope};
     };
