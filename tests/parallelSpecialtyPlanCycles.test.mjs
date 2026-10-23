@@ -19,6 +19,7 @@ try {
       id uuid primary key, organization_id text not null, clinic_id text not null,
       patient_id uuid not null, mode text not null, specialty text,
       status text not null, responsible_professional_id text not null,
+      participant_professional_ids text[] not null default '{}'::text[],
       edit_version integer not null default 1, common_objectives jsonb not null default '[]'::jsonb,
       specialty_objectives jsonb not null default '{}'::jsonb,
       pts_payload jsonb not null default '{}'::jsonb,
