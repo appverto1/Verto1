@@ -1473,12 +1473,20 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       item.id !== scope.id && String(item.status || '').toLowerCase() === 'active' &&
       currentSpecialtyPlanScope([item], scope.specialty)
     );
-    if (!oldActive) return true;
-    return window.confirm(
-      'Ativar este novo plano concluirá o plano de ' +
-      specialtyDisplayLabel(oldActive.specialty) +
-      ' que está em uso atualmente. As sessões e os programas antigos serão preservados no histórico. Deseja continuar?'
+    const preparedPrograms = programs.filter((program: any) =>
+      String(program.therapeutic_plan_id || program.therapeuticPlanId || '') === String(scope.id) &&
+      ['draft', 'awaiting_approval'].includes(String(program.status || '').toLowerCase())
     );
+    if (!oldActive && !preparedPrograms.length) return true;
+    const messages: string[] = [];
+    if (oldActive) messages.push(
+      'O plano de ' + specialtyDisplayLabel(oldActive.specialty) +
+      ' atualmente em uso será concluído. As sessões e os programas anteriores serão preservados no histórico.'
+    );
+    if (preparedPrograms.length) messages.push(
+      preparedPrograms.length + ' programa(s) preparados neste novo plano passarão de Rascunho para Em ensino, ficando disponíveis para novas sessões.'
+    );
+    return window.confirm(messages.join('\n\n') + '\n\nConfirma a ativação deste ciclo?');
   };
 
   const changePlanScopeStatus = async (scope: any, nextStatus: 'active' | 'paused') => {
@@ -1504,7 +1512,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setNotice(
       nextStatus === 'active'
         ? currentStatus === 'draft'
-          ? 'Plano publicado e ativado. Os programas configurados podem seguir o ciclo clínico salvo.'
+          ? 'Plano publicado e ativado. Os programas preparados foram disponibilizados para sessões, com histórico preservado.'
           : 'Plano retomado como ativo. A coleta clínica pode continuar nos programas elegíveis.'
         : 'Plano pausado. Programas e alvos permanecem preservados sem coleta clínica ativa.',
     );

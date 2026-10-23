@@ -29,6 +29,30 @@ try {
       on public.patient_therapeutic_plans (organization_id,patient_id,lower(specialty))
       where mode='specialty' and status in ('draft','active','paused');
     create table public.plan_versions_audit (id uuid, version int, status text);
+    -- Minimal audited program RPC fixture; production RPC owns full snapshots.
+    create table public.aba_programs (
+      id text primary key, organization_id text, clinic_id text, patient_id uuid,
+      therapeutic_plan_id uuid, status text, version int not null default 1
+    );
+    create table public.program_versions_audit (
+      id text, previous_status text, status text, new_version int, idempotency_key text
+    );
+    create function public.update_therapeutic_program_status(
+      p_organization_id text,p_patient_id uuid,p_program_id text,p_status text,
+      p_expected_version integer,p_reason text,p_idempotency_key text,p_actor_id text
+    ) returns jsonb language plpgsql as $program$
+    declare v public.aba_programs%rowtype;
+    begin
+      select * into v from public.aba_programs
+        where id=p_program_id and organization_id=p_organization_id and patient_id=p_patient_id
+        for update;
+      if not found or v.version<>p_expected_version then raise exception 'THERAPEUTIC_PROGRAM_VERSION_CONFLICT'; end if;
+      if p_program_id='intentional-test-failure' then raise exception 'PROGRAM_TEST_REJECTED'; end if;
+      update public.aba_programs set status=p_status,version=version+1 where id=v.id;
+      insert into public.program_versions_audit values(v.id,v.status,p_status,v.version+1,p_idempotency_key);
+      return jsonb_build_object('program',jsonb_build_object('id',v.id,'status',p_status,'version',v.version+1));
+    end;
+    $program$;
     create function public.clinical_specialty_scope_key_v1(p text)
       returns text language sql immutable as $key$
         select case when lower(btrim(p)) in ('fonoaudiologia','fonoaudiólogo') then 'speech_therapy'
@@ -95,7 +119,22 @@ try {
       [uuid(30),org,patient,fono]),
     /duplicate key value violates unique constraint/
   );
-  await db.exec(`
+  // Programs planned for the NEXT cycle are draft until it is published.
+  await sql(`insert into aba_programs(id,organization_id,clinic_id,patient_id,therapeutic_plan_id,status,version)
+    values ('old-teaching',$1,$1,$2,$3,'teaching',4),
+           ('future-speech',$1,$1,$2,$4,'draft',1),
+           ('future-language',$1,$1,$2,$4,'draft',3),
+           ('not-published-yet',$1,$1,$2,$5,'draft',1),
+           ('pts-draft',$1,$1,$2,$6,'draft',1)`,
+    [org,patient,old,future,anotherFuture,pts]);
+  const migrationPrograms=fs.readFileSync(
+    'supabase/migrations/20261023155000_specialty_cycle_prepared_programs_activation.sql','utf8'
+  );
+  assert.match(migrationPrograms,/update_therapeutic_program_status/);
+  assert.match(migrationPrograms,/status in \('draft','awaiting_approval'\)/);
+  assert.match(migrationPrograms,/SPECIALTY_PLAN_PROGRAM_ACTIVATION_FAILED/);
+  await db.exec(migrationPrograms);
+    await db.exec(`
     create table public.aba_sessions(
       id uuid primary key,organization_id text,clinic_id text,patient_id uuid,
       therapeutic_plan_id uuid,status text not null default 'completed',note text
@@ -120,6 +159,21 @@ try {
   assert.equal(activated.id,future);
   assert.equal(activated.status,'active');
   assert.equal(activated.edit_version,2);
+  assert.deepEqual((await sql(
+    "select id,status,version from aba_programs where therapeutic_plan_id=$1 order by id",[future]
+  )).rows,[
+    {id:'future-language',status:'teaching',version:4},
+    {id:'future-speech',status:'teaching',version:2},
+  ],'both prepared programs must become eligible for sessions with versioned audit');
+  assert.deepEqual((await sql(
+    "select id,status from aba_programs where id in ('old-teaching','not-published-yet','pts-draft') order by id"
+  )).rows,[
+    {id:'not-published-yet',status:'draft'},
+    {id:'old-teaching',status:'teaching'},
+    {id:'pts-draft',status:'draft'}
+  ],'programs in other plans must not be promoted');
+  assert.equal((await sql("select count(*)::int n from program_versions_audit")).rows[0].n,2,
+    'each prepared program must be audited exactly once');
   assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[old])).rows[0].status,'completed');
   assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[anotherFuture])).rows[0].status,'draft');
   assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[pts])).rows[0].status,'active');
@@ -127,8 +181,16 @@ try {
     'both old and new plan version histories must be preserved');
   await assert.rejects(sql(activate,[anotherFuture,org,patient,1,other,false]),/SPECIALTY_PLAN_SCOPE_DENIED/);
   await assert.rejects(sql(activate,[anotherFuture,org,patient,0,fono,false]),/THERAPEUTIC_PLAN_VERSION_CONFLICT/);
-  assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[future])).rows[0].status,'active',
+    assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[future])).rows[0].status,'active',
     'failed switch cannot partially close active plan');
+  await sql(`insert into aba_programs(id,organization_id,clinic_id,patient_id,therapeutic_plan_id,status,version)
+    values ('intentional-test-failure',$1,$1,$2,$3,'draft',1)`,[org,patient,anotherFuture]);
+  await assert.rejects(sql(activate,[anotherFuture,org,patient,1,fono,false]),
+    /PROGRAM_TEST_REJECTED/,
+    'failing one prepared program must roll back BOTH plan transitions and all program writes');
+  assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[future])).rows[0].status,'active');
+  assert.equal((await sql('select status from patient_therapeutic_plans where id=$1',[anotherFuture])).rows[0].status,'draft');
+  assert.equal((await sql("select count(*)::int n from program_versions_audit")).rows[0].n,2);
   await assert.rejects(
     sql('insert into aba_sessions(id,organization_id,clinic_id,patient_id,therapeutic_plan_id) values ($1,$2,$2,$3,$4)',
       [uuid(23),org,patient,old]),/ABA_SESSION_SPECIALTY_PLAN_NOT_ACTIVE/,
