@@ -61,7 +61,7 @@ begin
 
   if lower(coalesce(v_appointment.status,'')) in
      ('completed','concluido','concluida','no_show','no-show','deleted','archived')
-     or v_appointment.scheduled_at <= v_now then
+     or v_appointment.scheduled_at <= v_now + interval '12 hours' then
     return jsonb_build_object('autoCancelled',false,'reason','APPOINTMENT_NOT_CANCELABLE');
   end if;
 
@@ -81,12 +81,26 @@ begin
      and nullif(j.payload->>'scheduledAt','')::timestamptz=v_appointment.scheduled_at
     where n.id=p_notification_id and n.deployment_env=p_deployment_env
       and n.patient_id=p_patient_id and n.appointment_id=p_appointment_id
+      -- Bind the notification to the authenticated recipient, not only to
+      -- the patient shared with other authorized family members.
+      and n.recipient_user_id::text=p_actor_id
       and n.clinic_id=p_clinic_id
       and coalesce(n.organization_id,n.clinic_id)=p_organization_id
       and n.type='appointment_reminder'
       and n.metadata->>'reminderKind'='24h'
       and nullif(n.metadata->>'scheduledAt','')::timestamptz=v_appointment.scheduled_at
       and n.sent_at<=v_now
+      -- A 12h reminder already delivered for this exact schedule means
+      -- cancellation now requires the clinic, even if a 24h card is opened.
+      and not exists (
+        select 1 from public.notification_jobs j12
+        where j12.deployment_env=p_deployment_env
+          and j12.notification_kind='APPOINTMENT_REMINDER_12H'
+          and j12.source_type='APPOINTMENT' and j12.source_id=p_appointment_id
+          and j12.patient_id=p_patient_id and j12.clinic_id=p_clinic_id
+          and j12.status='SENT'
+          and nullif(j12.payload->>'scheduledAt','')::timestamptz=v_appointment.scheduled_at
+      )
     for share of n,j;
   if not found then
     return jsonb_build_object('autoCancelled',false,'reason','24H_REMINDER_NOT_PROVEN');
