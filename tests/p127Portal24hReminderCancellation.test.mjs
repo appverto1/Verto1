@@ -41,7 +41,7 @@ try {
     scheduled_for timestamptz not null,payload jsonb not null default '{}'::jsonb);
   create table public.portal_notifications(
     id uuid primary key,organization_id uuid,clinic_id uuid,patient_id uuid not null,
-    appointment_id uuid,type text not null,deployment_env text,
+    appointment_id uuid,type text not null,deployment_env text,recipient_user_id uuid,
     sent_at timestamptz not null,idempotency_key text not null,
     metadata jsonb not null default '{}'::jsonb);
   `);
@@ -53,26 +53,39 @@ try {
       now()-interval '1 hour',now()-interval '1 hour',jsonb_build_object('scheduledAt',a.scheduled_at)
     from appointments a where a.id=$4`,[job,clinic,patient,appointment,deployment]);
   await query(`insert into portal_notifications
-    (id,organization_id,clinic_id,patient_id,appointment_id,type,deployment_env,sent_at,idempotency_key,metadata)
-    select $1,$2,$2,$3,$4,'appointment_reminder',$5,now()-interval '1 hour',
+    (id,organization_id,clinic_id,patient_id,appointment_id,type,deployment_env,recipient_user_id,sent_at,idempotency_key,metadata)
+    select $1,$2,$2,$3,$4,'appointment_reminder',$5,$7,now()-interval '1 hour',
       $5||':notification-job:'||$6::text,jsonb_build_object('reminderKind','24h','scheduledAt',a.scheduled_at)
-    from appointments a where a.id=$4`,[notification,clinic,patient,appointment,deployment,job]);
-  await query("insert into notification_jobs select $1,organization_id,clinic_id,patient_id,source_id,source_type,'APPOINTMENT_REMINDER_12H',deployment_env,status,sent_at,scheduled_for,payload from notification_jobs where id=$2",[wrongKindJob,job]);
-  await query(`insert into portal_notifications select $1,organization_id,clinic_id,patient_id,appointment_id,type,deployment_env,sent_at,
+    from appointments a where a.id=$4`,[notification,clinic,patient,appointment,deployment,job,actor]);
+  await query("insert into notification_jobs select $1,organization_id,clinic_id,patient_id,source_id,source_type,'APPOINTMENT_REMINDER_12H',deployment_env,'SCHEDULED',null,scheduled_for,payload from notification_jobs where id=$2",[wrongKindJob,job]);
+  await query(`insert into portal_notifications select $1,organization_id,clinic_id,patient_id,appointment_id,type,deployment_env,recipient_user_id,sent_at,
      $2||':notification-job:'||$3::text,jsonb_set(metadata,'{reminderKind}','"12h"')
     from portal_notifications where id=$4`,[wrongKindNotification,deployment,wrongKindJob,notification]);
-  const call=async (notificationId,clinicId=clinic,environment=deployment,appointmentId=appointment)=>
+  const call=async (notificationId,clinicId=clinic,environment=deployment,appointmentId=appointment,actorId=actor)=>
     (await scalar('select public.cancel_appointment_from_24h_reminder_v1($1,$2,$3,$4,$5,$6,$7,null,null) as result',
-      [clinicId,clinicId,patient,appointmentId,notificationId,actor,environment])).result;
+      [clinicId,clinicId,patient,appointmentId,notificationId,actorId,environment])).result;
 
   assert.equal((await call(wrongKindNotification)).autoCancelled,false,'12h must not cancel');
+  assert.equal((await call(notification,clinic,deployment,appointment,id(987))).autoCancelled,false,'another family user cannot reuse the recipient reminder');
   assert.equal((await call(notification,clinic,'production')).autoCancelled,false,'environment isolation');
   assert.equal((await call(notification,otherClinic)).autoCancelled,false,'tenant isolation');
   assert.equal((await call(id(999))).autoCancelled,false,'forged notification');
   await query("update appointments set scheduled_at=scheduled_at+interval '30 minutes' where id=$1",[appointment]);
   assert.equal((await call(notification)).autoCancelled,false,'a reminder for the original clock time cannot cancel a rescheduled session');
   await query("update appointments set scheduled_at=scheduled_at-interval '30 minutes' where id=$1",[appointment]);
-  assert.equal((await scalar('select status from appointments where id=$1',[appointment])).status,'scheduled','negative probes must not modify appointment');
+  // 24h cards cease to authorize immediate cancellation inside the 12h window.
+  const originalSchedule=(await scalar('select scheduled_at from appointments where id=$1',[appointment])).scheduled_at;
+  await query("update appointments set scheduled_at=now()+interval '10 hours' where id=$1",[appointment]);
+  await query("update notification_jobs j set payload=jsonb_set(j.payload,'{scheduledAt}',to_jsonb(a.scheduled_at)) from appointments a where j.source_id=a.id and a.id=$1",[appointment]);
+  await query("update portal_notifications n set metadata=jsonb_set(n.metadata,'{scheduledAt}',to_jsonb(a.scheduled_at)) from appointments a where n.appointment_id=a.id and a.id=$1",[appointment]);
+  assert.equal((await call(notification)).autoCancelled,false,'24h reminder cannot bypass the 12h window');
+  await query('update appointments set scheduled_at=$2 where id=$1',[appointment,originalSchedule]);
+  await query("update notification_jobs j set payload=jsonb_set(j.payload,'{scheduledAt}',to_jsonb(a.scheduled_at)) from appointments a where j.source_id=a.id and a.id=$1",[appointment]);
+  await query("update portal_notifications n set metadata=jsonb_set(n.metadata,'{scheduledAt}',to_jsonb(a.scheduled_at)) from appointments a where n.appointment_id=a.id and a.id=$1",[appointment]);
+  await query("update notification_jobs set status='SENT',sent_at=now() where id=$1",[wrongKindJob]);
+  assert.equal((await call(notification)).autoCancelled,false,'sent 12h reminder takes precedence');
+  await query("update notification_jobs set status='SCHEDULED',sent_at=null where id=$1",[wrongKindJob]);
+    assert.equal((await scalar('select status from appointments where id=$1',[appointment])).status,'scheduled','negative probes must not modify appointment');
   assert.equal((await scalar('select count(*)::int as total from appointment_action_requests')).total,0,'negative probes create no pending requests');
 
   await query(`insert into appointment_action_requests(organization_id,appointment_id,patient_id,requested_by,request_type,status)
