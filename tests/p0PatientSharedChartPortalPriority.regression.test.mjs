@@ -41,6 +41,16 @@ assert.match(routes, /patient_file_actor_has_patient_access_v1/, 'server validat
 assert.match(routes, /requireAnyClinicCapability\('reports\.clinical\.indicators', 'aba\.analytics\.view'\)/);
 assert.match(routes, /requirePatientSharedChartPortalScope/, 'portal must use session-derived patient scope');
 assert.match(routes, /PORTAL_PATIENT_SCOPE_DENIED/, 'unknown patient scopes deny');
+const portalScopeGuard = routes.slice(
+  routes.indexOf('const requirePatientSharedChartPortalScope'),
+  routes.indexOf('const finiteClinicalOutcomeNumber'),
+);
+assert.match(portalScopeGuard, /is_active,deleted_at,archived_at,relationship_status/,'stale session patient id must be rechecked as live');
+assert.match(portalScopeGuard, /patient\.data\.is_active === true/,'inactive patient must not see graph');
+assert.match(portalScopeGuard, /!patient\.data\.deleted_at && !patient\.data\.archived_at/,'deleted/archived patient must not see graph');
+assert.match(portalScopeGuard, /'ended','inactive','terminated','revoked'/,'relationship revocation must invalidate chart permission');
+assert.ok(portalScopeGuard.indexOf('if (patient.error || !livePatient)') < portalScopeGuard.indexOf('req.portalContext ='), 'reject before authorizing chart read');
+
 assert.match(routes, /set_patient_shared_chart_selection_v2/, 'server-owned mutation');
 assert.match(routes, /clear_patient_shared_chart_selection_v2/, 'server-owned revoke');
 assert.match(routes, /get_aba_chart_series_bundle_v3/, 'ABA shared chart uses existing canonical read model');

@@ -59,8 +59,17 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
       permitted = checks.some(result => !result.error && Array.isArray(result.data) && result.data.some((row: any) => row.id === requestedId));
     }
     if (!permitted) return res.status(403).json({ success: false, error: 'PORTAL_PATIENT_SCOPE_DENIED' });
-    const patient = await supabase.from('patients').select('id,clinic_id').eq('id',requestedId).eq('clinic_id',clinicId).limit(1).maybeSingle();
-    if (patient.error || !patient.data) return res.status(403).json({ success: false, error: 'PORTAL_PATIENT_SCOPE_DENIED' });
+    // A session-bound patient id can outlive a clinical relationship. Recheck
+    // its live state in the SAME scoped DB read before projecting clinical data.
+    const patient = await supabase.from('patients')
+      .select('id,clinic_id,is_active,deleted_at,archived_at,relationship_status')
+      .eq('id',requestedId).eq('clinic_id',clinicId).limit(1).maybeSingle();
+    const livePatient = patient.data && patient.data.is_active === true
+      && !patient.data.deleted_at && !patient.data.archived_at
+      && !['ended','inactive','terminated','revoked'].includes(
+        String(patient.data.relationship_status || '').trim().toLowerCase()
+      );
+    if (patient.error || !livePatient) return res.status(403).json({ success: false, error: 'PORTAL_PATIENT_SCOPE_DENIED' });
     req.portalContext = { patientIds: [requestedId], resolvedPatientId: requestedId, clinicId };
     return next();
   };
