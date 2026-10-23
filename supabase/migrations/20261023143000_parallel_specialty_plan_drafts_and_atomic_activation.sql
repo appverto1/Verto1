@@ -89,6 +89,18 @@ begin
            and v_old.responsible_professional_id is distinct from p_actor_id) then
       raise exception 'SPECIALTY_PLAN_SCOPE_DENIED';
     end if;
+    -- Never replace an active cycle while someone is collecting a session.
+    -- The session trigger holds a FOR SHARE lock on the parent plan during
+    -- INSERT; this FOR UPDATE lock serializes the other side of that race.
+    if exists (
+      select 1 from public.aba_sessions session
+       where session.therapeutic_plan_id = v_old.id
+         and session.patient_id = p_patient_id
+         and session.organization_id = p_organization_id
+         and lower(session.status) in ('active','in_progress','started')
+    ) then
+      raise exception 'SPECIALTY_PLAN_NOT_ACTIVATABLE';
+    end if;
     -- Existing versioned RPC writes historical snapshot and increments version.
     select * into v_closed
       from public.update_patient_therapeutic_plan_v3(
@@ -147,7 +159,8 @@ begin
      and plan.clinic_id = new.clinic_id
      and plan.mode = 'specialty'
      and plan.status = 'active'
-   limit 1;
+   limit 1
+   for share;
   if not found then raise exception 'ABA_SESSION_SPECIALTY_PLAN_NOT_ACTIVE'; end if;
   if auth.uid() is not null
     and not public.therapeutic_plan_current_actor_can_access_v2(
