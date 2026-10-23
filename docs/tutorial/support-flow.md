@@ -28,9 +28,12 @@ contato indisponível sem interromper as aulas ou suas conclusões.
 O backend determina usuário/clínica/vínculo; o navegador envia apenas tópico,
 revisão, conclusão e uma chave de contexto para detectar mudanças. As duas
 RPCs conferem novamente vínculo ativo e papel. RLS e grants negam a tabela e
-as RPCs a `anon` e `authenticated`; só o backend recebe acesso. A chave única
-é usuário/clínica/tópico/revisão. Alterar papel não concede acesso a aulas de
-outro papel: a projeção e as permissões sempre são revalidadas.
+as RPCs a `anon` e `authenticated`; só o backend recebe acesso. A chave única versionada é usuário/clínica/vínculo/papel/tópico/revisão.
+Alterar de papel não reutiliza uma conclusão do papel anterior, mesmo quando
+os mesmos artigos possuem identificadores e revisões idênticos. A tabela
+legada permanece intacta; apenas históricos com um único vínculo ativo
+inequívoco foram copiados uma vez. A projeção e as permissões continuam
+revalidadas no backend e no banco.
 
 O POST usa a proteção central de origem/CSRF já existente na Verto, inclusive
 o domínio confiável configurado para o aplicativo quando houver proxy.
@@ -56,7 +59,8 @@ definiu uma exceção de contato para funcionalidades sem aula publicada.
 
 ## Validação e rollout
 
-- Aplicar `20261006191832_help_tutorial_progress.sql` somente em staging.
+- Migração legada `20261006191832_help_tutorial_progress.sql` já existente.
+- Aplicar a migração aditiva `20261023202000_help_tutorial_role_progress_v2.sql` somente em staging antes do deploy do backend v2; validar grants e persistência por vínculo/papel.
 - Rodar `node --import tsx tests/helpTutorialSupport.test.ts` e os três testes
   `helpCenterRoutes`, `helpCenterManifest`, `helpCenterIntegration`.
 - Rodar `tests/sql/helpTutorialSupport.rollback.sql` no banco de staging:
