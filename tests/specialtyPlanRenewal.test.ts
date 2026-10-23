@@ -16,9 +16,9 @@ assert.equal(currentSpecialtyPlanScope([{...fono,status:'completed'}],'Fonoaudi�
 assert.equal(currentSpecialtyPlanScope([{...fono,status:'archived'}],'Fonoaudiólogo'),null,
   'archived specialty plan is historical');
 assert.equal(currentSpecialtyPlanScope([{...fono,status:'draft'}],'Fonoaudiologia')?.id, fono.id,
-  'draft plan occupies the canonical unique slot');
+  'draft plans must be discoverable for edit or planning, but must not block creating another');
 assert.equal(currentSpecialtyPlanScope([{...fono,status:'paused'}],'Fonoaudiologia')?.id, fono.id,
-  'paused plan occupies the canonical unique slot');
+  'paused plan remains visible but does not block an independent draft');
 assert.equal(currentSpecialtyPlanScope([{...fono,canEdit:false}],'Fonoaudiologia')?.canEdit, false,
   'a plan that is not editable must never be silently replaced');
 assert.equal(currentSpecialtyPlanScope([{...fono,specialty:'ABA'}],'Fonoaudiologia'),null,
@@ -27,18 +27,24 @@ assert.equal(currentSpecialtyPlanScope(null,'Fonoaudiologia'),null);
 
 const panel=fs.readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
 const server=fs.readFileSync('server.ts','utf8');
-assert.match(panel,/currentSpecialtyPlanScope\(specialtyScopes, derivedSpecialty\)/,
-  'POST creation should check for a current same-specialty plan first');
-assert.match(panel,/if \(existingScope\.canEdit !== true\)[\s\S]*?return;/,
-  'no cross-professional plan takeover');
-assert.match(panel,/setWorkspaceScopeId\(String\(existingScope\.id\)\);[\s\S]*?startEditingScope\(existingScope\)/,
-  'own current plan opens versioned editor instead of duplicate POST');
+assert.match(panel,/const startAsDraft = scopeDraft\.mode === 'specialty'/,
+  'new independent plan may be prepared while the old active cycle continues');
+assert.match(panel,/planLabel: newScopeName\.trim\(\)/,
+  'named plan cycles are independent and traceable');
+assert.match(panel,/Criar novo plano/);
 assert.match(panel,/Nova versão/);
 assert.match(panel,/Salvar nova versão/);
+assert.match(panel,/startEditingScope\(response\.data\)/,
+  'creating a new plan opens its own editor, not the preceding plan');
+assert.doesNotMatch(panel,/setWorkspaceScopeId\(String\(existingScope\.id\)\)/,
+  'new plan must not silently convert into an edit of the old plan');
+assert.match(server,/startAsDraft = mode === 'specialty' && req\.body\?\.startAsDraft === true/);
+assert.match(server,/activate_patient_specialty_plan_v1/,
+  'plan activation must select the transactionally safe DB RPC');
+assert.match(server,/therapeuticPlanScope\?\.status !== 'active'/,
+  'no teaching status in a future draft plan');
 assert.match(server,/THERAPEUTIC_PLAN_SCOPE_EXISTS/,
-  'server retains canonical uniqueness and rejects duplicate posts');
-assert.match(server,/rpc\('update_patient_therapeutic_plan_v3'/,
-  'versioned save persists through existing DB transaction');
+  'simultaneous active cycles remain blocked server-side');
 assert.doesNotMatch(panel,/\.delete\(['"]patient_therapeutic_plans['"]\)/,
-  'do not delete clinical plans to bypass a uniqueness constraint');
-console.log('specialtyPlanRenewal: existing plan routes to safe versioned workflow PASS');
+  'never delete clinical records to bypass specialty uniqueness');
+console.log('specialtyPlanRenewal: independent future plans and versioned edits PASS');

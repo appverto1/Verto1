@@ -396,6 +396,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
   const [scopeFormOpen, setScopeFormOpen] = useState(false);
   const [scopeSaving, setScopeSaving] = useState(false);
   const [scopeDraft, setScopeDraft] = useState({ mode: 'specialty', specialty: '', responsibleProfessionalId: '', participantProfessionalIds: [] as string[] });
+  const [newScopeName, setNewScopeName] = useState('');
+  const [prepareScopeAsDraft, setPrepareScopeAsDraft] = useState(false);
   const [selectedPlanScopeId, setSelectedPlanScopeId] = useState('');
   const [editingScopeId, setEditingScopeId] = useState('');
   const [workspaceScopeId, setWorkspaceScopeId] = useState('');
@@ -1319,6 +1321,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         ? [responsibleProfessionalId]
         : [],
     });
+    setNewScopeName('');
+    setPrepareScopeAsDraft(false);
     setScopeFormOpen(true);
   };
 
@@ -1361,24 +1365,15 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       setError('O responsável já conta como participante. Selecione pelo menos mais um profissional para o Projeto Terapêutico Singular.');
       return;
     }
-    // The DB has one current plan per patient and canonical specialty.
-    // Never POST a duplicate or remove the existing clinical record to bypass it.
-    if (scopeDraft.mode === 'specialty') {
-      const existingScope = currentSpecialtyPlanScope(specialtyScopes, derivedSpecialty);
-      if (existingScope) {
-        if (existingScope.canEdit !== true) {
-          setError('Já existe um plano vigente desta especialidade, mas você não tem permissão para editá-lo. Solicite o vínculo ao responsável ou à coordenação da clínica.');
-          return;
-        }
-        setScopeFormOpen(false);
-        scopeIdempotencyKeyRef.current = '';
-        setWorkspaceScopeId(String(existingScope.id));
-        setShowPlanManager(false);
-        startEditingScope(existingScope);
-        setNotice('Este paciente já possui um plano vigente desta especialidade. Você pode criar uma nova versão do plano, preservando o histórico e os programas anteriores.');
-        return;
-      }
-    }
+    // Independent specialty drafts are allowed alongside the active clinical
+    // cycle. Editing the current plan is a separate, versioned operation.
+    const activeSpecialtyScope = specialtyScopes.find((scope: any) =>
+      String(scope.status || '').toLowerCase() === 'active' &&
+      currentSpecialtyPlanScope([scope], derivedSpecialty)
+    );
+    const startAsDraft = scopeDraft.mode === 'specialty' &&
+      (prepareScopeAsDraft || Boolean(activeSpecialtyScope) ||
+        Boolean(currentSpecialtyPlanScope(specialtyScopes, derivedSpecialty)));
     if (!scopeIdempotencyKeyRef.current) {
       scopeIdempotencyKeyRef.current = newIdempotencyKey(
         `therapeutic-plan-scope:${patientId}`,
@@ -1392,6 +1387,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       participantProfessionalIds: participantIds,
       commonObjectives: [],
       specialtyObjectives: {},
+      startAsDraft,
+      planLabel: newScopeName.trim(),
       idempotencyKey: scopeIdempotencyKeyRef.current,
     });
     setScopeSaving(false);
@@ -1402,14 +1399,22 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     setScopeFormOpen(false);
     setActivationWarning('');
     scopeIdempotencyKeyRef.current = '';
+    setNewScopeName('');
+    setPrepareScopeAsDraft(false);
     setScopeDraft({ mode: 'specialty', specialty: '', responsibleProfessionalId: '', participantProfessionalIds: [] });
     const createdScopeStatus = String(response?.data?.status || '').toLowerCase();
     setNotice(scopeDraft.mode === 'interdisciplinary'
       ? 'Projeto Terapêutico Singular criado. Alterações futuras serão versionadas.'
       : createdScopeStatus === 'active'
         ? `Plano de ${derivedSpecialty} criado e ativo para as sessões. Alterações futuras serão versionadas.`
-        : `Plano de ${derivedSpecialty} criado como rascunho. O especialista responsável pode ativá-lo para as sessões.`);
+        : `Novo plano independente de ${derivedSpecialty} criado como rascunho. Prepare seus programas sem alterar o plano atual.`);
     await loadPlan(true);
+    if (scopeDraft.mode === 'specialty' && response?.data?.id) {
+      // The new plan is its OWN scope, not a version of the preceding plan.
+      setWorkspaceScopeId(String(response.data.id));
+      setShowPlanManager(false);
+      startEditingScope(response.data);
+    }
   };
 
   const draftVersionForScope = (scope: any) => {
@@ -1462,11 +1467,26 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     });
   };
 
+  const confirmSpecialtyCycleSwitch = (scope: any, nextStatus: string) => {
+    if (scope?.mode !== 'specialty' || nextStatus !== 'active') return true;
+    const oldActive = specialtyScopes.find((item: any) =>
+      item.id !== scope.id && String(item.status || '').toLowerCase() === 'active' &&
+      currentSpecialtyPlanScope([item], scope.specialty)
+    );
+    if (!oldActive) return true;
+    return window.confirm(
+      'Ativar este novo plano concluirá o plano de ' +
+      specialtyDisplayLabel(oldActive.specialty) +
+      ' que está em uso atualmente. As sessões e os programas antigos serão preservados no histórico. Deseja continuar?'
+    );
+  };
+
   const changePlanScopeStatus = async (scope: any, nextStatus: 'active' | 'paused') => {
     const scopeId = String(scope?.id || '');
     if (!scopeId || scopeSaving) return;
     const currentStatus = String(scope?.status || 'draft').trim().toLowerCase();
     if (currentStatus === nextStatus) return;
+    if (!confirmSpecialtyCycleSwitch(scope, nextStatus)) return;
     setError('');
     setScopeSaving(true);
     const response = await dataService.updatePatientTherapeuticPlanScope(patientId, scopeId, {
@@ -1493,6 +1513,8 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
 
   const savePlanScope = async () => {
     if (!editingScopeId || scopeSaving) return;
+    const scopeForEdit = specialtyScopes.find((scope: any) => String(scope.id) === editingScopeId);
+    if (scopeForEdit && !confirmSpecialtyCycleSwitch(scopeForEdit, String(scopeEditDraft.status))) return;
     setError('');
     setScopeSaving(true);
     const commonObjectives = String(scopeEditDraft.commonObjectives || '').split('\n').map((value) => value.trim()).filter(Boolean);
@@ -2863,10 +2885,35 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <div className={`md:col-span-2 rounded-xl border px-4 py-3 text-sm ${isDark ? 'border-amber-400/30 bg-amber-400/10 text-amber-100' : 'border-amber-200 bg-amber-50 text-amber-900'}`} role="status" data-testid="specialty-plan-existing-guidance">
             <p className="font-medium">Já existe um plano vigente desta especialidade.</p>
             <p className="mt-1 text-xs leading-5">
-              {existingSpecialtyScopeInForm.canEdit === true
-                ? 'Para planejar um novo ciclo, continue em Nova versão. Você poderá substituir os objetivos e adicionar novos programas; o histórico clínico anterior não será apagado.'
-                : 'Você não tem permissão para alterar esse plano. Solicite acesso ao responsável ou à coordenação antes de continuar.'}
+              Você pode criar quantos planos futuros em rascunho precisar. O plano ativo continuará sendo usado nas sessões até a equipe ativar o novo. Para revisar o plano atual, use o botão separado "Nova versão".
             </p>
+          </div>
+        )}
+
+        {scopeDraft.mode === 'specialty' && (
+          <div className="md:col-span-2 space-y-3">
+            <label className={`block text-xs ${muted}`}>
+              Nome do novo plano ou ciclo (opcional)
+              <input
+                className={`${field} mt-1.5`}
+                value={newScopeName}
+                maxLength={120}
+                onChange={(event) => setNewScopeName(event.target.value)}
+                placeholder="Ex.: Plano Fono — novembro / Próximo ciclo"
+              />
+            </label>
+            {!existingSpecialtyScopeInForm && (
+              <label className={`flex items-center gap-2 text-sm ${text}`}>
+                <input type="checkbox" checked={prepareScopeAsDraft}
+                  onChange={(event) => setPrepareScopeAsDraft(event.target.checked)} />
+                Preparar como rascunho (não disponibilizar em sessões ainda)
+              </label>
+            )}
+            {existingSpecialtyScopeInForm && (
+              <p className={`text-xs ${muted}`}>
+                O novo plano será salvo como rascunho independente. O plano atual não será alterado.
+              </p>
+            )}
           </div>
         )}
 
@@ -2922,13 +2969,13 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>Cancelar</button>
           <button
             type="button"
-            disabled={scopeSaving || Boolean(existingSpecialtyScopeInForm && existingSpecialtyScopeInForm.canEdit !== true)}
+            disabled={scopeSaving}
             className="min-h-10 rounded-xl bg-violet-600 px-4 text-sm text-white disabled:opacity-50"
             onClick={() => void createPlanScope()}
           >
             {scopeSaving ? 'Salvando...' : scopeDraft.mode === 'interdisciplinary'
               ? 'Criar PTS'
-              : existingSpecialtyScopeInForm ? 'Criar nova versão' : 'Criar plano por especialidade'}
+              : 'Criar novo plano'}
           </button>
         </div>
       </div>
@@ -2954,6 +3001,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h4 className={`text-base font-medium ${text}`}>{specialtyLabel}</h4>
+                      <span className={`text-xs ${muted}`}>{scope?.scope_snapshot?.planLabel || (scope?.created_at ? `Criado em ${new Date(scope.created_at).toLocaleDateString('pt-BR')}` : '')}</span>
                       <span className={`rounded-full border px-2.5 py-1 text-[11px] ${lifecycleBadgeClass(scope)}`}>
                         {statusLabelForScope(scope)} · v{scopeVersionNumber(scope)}
                       </span>
@@ -3073,11 +3121,11 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h3 className={`text-sm font-medium ${text}`}>Planos por especialidade</h3>
-              <p className={`mt-1 text-xs leading-5 ${muted}`}>Apenas um plano vigente por especialidade. Para iniciar um novo ciclo, abra o plano atual e salve uma nova versão; o histórico fica preservado.</p>
+              <p className={`mt-1 text-xs leading-5 ${muted}`}>Você pode preparar vários planos independentes em rascunho. Somente um plano por especialidade fica ativo nas sessões. Para revisar o plano existente, escolha Nova versão.</p>
             </div>
             {canCreateSpecialty && !scopeFormOpen && (
               <button type="button" className={createPlanButton} onClick={() => openPlanScopeForm('specialty')}>
-                <Plus size={15} /> Novo plano ou nova versão
+                <Plus size={15} /> Criar novo plano
               </button>
             )}
           </div>
@@ -3148,6 +3196,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
                 </span>
               </div>
               <p className={`mt-1 text-sm ${muted}`}>Plano clínico específico da especialidade · Responsável: {responsibleNameForScope(scope)}</p>
+              {scope?.scope_snapshot?.planLabel && <p className={`mt-1 text-sm font-medium ${text}`}>Ciclo: {scope.scope_snapshot.planLabel}</p>}
               {primaryPtsScope && <p className={`mt-2 text-xs ${muted}`}>Integrado ao PTS compartilhado da equipe.</p>}
             </div>
             <div className="flex flex-wrap gap-2">

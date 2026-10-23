@@ -29,8 +29,8 @@ assert.match(panel,/status: 'teaching',[\s\S]*?expectedVersion: next\.version/);
 assert.match(panel,/idempotencyKey: `specialist-plan-activation:/);
 assert.match(panel,/if \(result\?\.success === false\)[\s\S]*?setError\(/);
 assert.match(panel,/await loadPlan\(true\)/);
-assert.match(server,/status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId \? 'active' : 'draft'/,
-  'new therapist-authored specialty scope is already active');
+assert.match(server,/status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft \? 'active' : 'draft'/,
+  'new therapist-authored specialty scope is active unless deliberately prepared as draft');
 assert.match(server,/const specialistCanActivate = !canApprove && therapeuticPlanScope\?\.status === 'active'/);
 assert.match(server,/specialistCanActivate \? 'teaching' : 'draft'/);
 assert.match(server,/if \(!isTherapeuticPlanManager\(role\) && status === 'teaching'\)[\s\S]*?canActivateSpecialtyPlanForCase\(/,
