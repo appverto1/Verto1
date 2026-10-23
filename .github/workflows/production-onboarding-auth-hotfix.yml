@@ -1,0 +1,32 @@
+name: Production onboarding authentication hotfix verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/components/ProfessionalOnboarding.tsx'
+      - 'src/services/dataService.ts'
+      - 'tests/professionalOnboardingAuth.regression.test.mjs'
+      - '.github/workflows/production-onboarding-auth-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Verify authentication guard remains enforced
+        run: node tests/professionalOnboardingAuth.regression.test.mjs
+      - name: TypeScript ratchet baseline
+        run: node tests/typecheckRatchet.regression.test.mjs
+      - name: Compile production UI
+        run: npm run build
