@@ -387,6 +387,7 @@ import {
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
 import { validateActiveClinicFinancialPlanSpecialties } from './services/patientFinancialSpecialtyGuard';
+import { tryAutomatic24hPortalCancellation } from './services/portalAuto24hCancellation';
 import {
   getPatientFinancialServiceLabel,
   isPatientFinancialPlanComplete,
@@ -56830,6 +56831,38 @@ async function startServer() {
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      // Only a durable SENT 24h job and matching portal delivery can
+      // authorize the automatic path. Unproven cases keep clinic approval.
+      const auto = await tryAutomatic24hPortalCancellation({
+        supabase, appointment,
+        actorId: sanitizeString(req.session.user?.id, 120),
+        deploymentEnv, reason: req.body?.reason
+      });
+      if (auto.automatic === true) {
+        let notificationIds: string[] = [];
+        try {
+          const acknowledged = await acknowledgePortalAppointmentNotifications({
+            appointment: auto.appointment, user: req.session.user,
+            action: 'cancelled_by_24h_reminder',
+            notificationId: req.body?.notificationId || req.body?.notification_id
+          });
+          if (acknowledged.ok) notificationIds = acknowledged.notificationIds;
+        } catch (secondaryError: any) {
+          console.warn('[PortalAppointments] committed auto cancellation; acknowledgement failed:', secondaryError?.message || String(secondaryError));
+        }
+        void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_cancel_24h_auto');
+        return res.json({
+          ...buildPortalAppointmentActionResult({
+            action: 'cancelled_by_24h_reminder',
+            appointment: await serializePortalAppointmentForFamilyView(auto.appointment),
+            message: 'Sessão cancelada automaticamente após o lembrete de 24 horas.',
+            user: req.session.user,
+            notificationIds,
+            actionRequest: auto.request || null
+          }),
+          automatic: true, idempotent: auto.idempotent === true
+        });
+      }
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
       const requestRow = await createOrUpdateAppointmentActionRequest({
         appointment,
