@@ -122,6 +122,9 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: P1-27 portal 24h cancellation guards
+        run: node tests/p1Portal24hAutoCancel.regression.test.mjs
+
       - name: Notification and scheduling regression tests
         run: |
           node tests/mobileClinicHeaderOnlyMenuBell.regression.test.mjs

@@ -40,9 +40,8 @@ assert.match(calendar, /pendingConfirmation = canonicalAppointmentStatus/);
 assert.match(calendar, /pendingConfirmation\s*\? 'scheduled_pre_session'/);
 assert.match(calendar, /cancelled \|\| pendingConfirmation \? \{\} : detail\?\.phaseSummary/);
 
-// P1-27 explicit blocker: the portal currently records request status rather
-// than an automatic, server-authorized cancellation by 24h reminder origin.
-// The corrected behavior requires a separately reviewed atomic backend route.
+// P1-27: the portal keeps manual clinic approval for absent/12h reminders,
+// while a transactionally verified SENT 24h reminder may cancel automatically.
 const start = server.indexOf("app.post('/api/portal/appointments/:appointmentId/request-cancel'");
 assert.ok(start > 0, 'keep authoritative portal cancellation route');
 const end = server.indexOf('\n  app.', start + 5);
@@ -50,4 +49,6 @@ const cancelRoute = server.slice(start, end > start ? end : undefined);
 assert.match(cancelRoute, /fetchPortalAppointmentForUser/);
 assert.match(cancelRoute, /createOrUpdateAppointmentActionRequest/);
 assert.match(cancelRoute, /patient_confirmation_status: 'CANCEL_REQUESTED'/);
-console.log('p1AgendaReceptionRoomStatus.regression.test.mjs: ok — P1-27 backend remains pending');
+assert.match(cancelRoute, /portal_cancel_from_sent_24h_reminder_v1/);
+assert.match(cancelRoute, /automaticCancel\?\.canceled === true/);
+console.log('p1AgendaReceptionRoomStatus.regression.test.mjs: ok — 24h automatic with safe manual fallback');

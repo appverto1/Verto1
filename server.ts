@@ -56830,6 +56830,73 @@ async function startServer() {
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      // P1-27: the notification identifier is only an untrusted hint. The
+      // service-role-only RPC validates a SENT 24h queue job and the current
+      // patient/clinic/environment/scheduled instant, then cancels atomically.
+      // A 12h, absent, forged, stale or unfinalized reminder continues through
+      // the existing clinic-approval request flow, never direct cancellation.
+      const sourceNotificationId = sanitizeString(
+        req.body?.notificationId || req.body?.notification_id, 120
+      );
+      const portalActorId = sanitizeString(req.session.user?.id, 120);
+      if (isUuid(sourceNotificationId) && isUuid(portalActorId)) {
+        const { data: automaticCancel, error: automaticCancelError } = await supabase.rpc(
+          'portal_cancel_from_sent_24h_reminder_v1',
+          {
+            p_organization_id: appointment.organization_id || appointment.clinic_id,
+            p_clinic_id: appointment.clinic_id,
+            p_patient_id: appointment.patient_id,
+            p_appointment_id: appointment.id,
+            p_actor_id: portalActorId,
+            p_actor_email: sanitizeEmail(req.session.user?.email) || null,
+            p_notification_id: sourceNotificationId,
+            p_deployment_env: deploymentEnv,
+            p_reason: sanitizeTextField(req.body?.reason, 600) || null,
+            p_note: sanitizeTextField(req.body?.note || req.body?.observation, 1000) || null
+          }
+        );
+        if (automaticCancelError) {
+          if (isMissingRelationError(automaticCancelError) || hasMissingFinancialSchema(automaticCancelError)
+            || String(automaticCancelError.message || '').includes('portal_cancel_from_sent_24h_reminder_v1')) {
+            return res.status(503).json({ success: false, error: 'Cancelamento indisponível. Tente novamente.' });
+          }
+          throw automaticCancelError;
+        }
+        if (automaticCancel?.canceled === true) {
+          const persisted = await readPersistedAppointmentRows(
+            [appointment.id], sanitizeString(appointment.clinic_id, 120)
+          );
+          const saved = persisted.find((row: any) => String(row.id) === String(appointment.id));
+          if (!saved || normalizeOperationalAppointmentStatus(saved.status) !== 'CANCELLED') {
+            return res.status(503).json({ success: false, error: 'Não foi possível verificar o cancelamento.' });
+          }
+          let notificationIds: string[] = [];
+          try {
+            const result = await acknowledgePortalAppointmentNotifications({
+              appointment: saved,
+              user: req.session.user,
+              action: 'cancelled_from_24h_reminder',
+              notificationId: sourceNotificationId
+            });
+            if (result.ok) notificationIds = result.notificationIds;
+          } catch (error: any) {
+            console.warn('[PortalAppointments] 24h cancellation notification acknowledgement failed:',
+              error?.message || String(error));
+          }
+          void regenerateClosureForAppointments(
+            [appointment.id], req.session.user, 'appointment_24h_reminder_cancelled'
+          );
+          const serializedAppointment = await serializePortalAppointmentForFamilyView(saved);
+          return res.json(buildPortalAppointmentActionResult({
+            action: 'cancelled_from_24h_reminder',
+            appointment: serializedAppointment,
+            message: 'Sessão cancelada a partir do lembrete de 24 horas.',
+            user: req.session.user,
+            notificationIds,
+            actionRequest: { id: automaticCancel.requestId || null, status: 'APPROVED', request_type: 'CANCEL' }
+          }));
+        }
+      }
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
       const requestRow = await createOrUpdateAppointmentActionRequest({
         appointment,
