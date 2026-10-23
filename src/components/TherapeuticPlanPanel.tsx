@@ -2974,7 +2974,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           >
             {scopeSaving ? 'Salvando...' : scopeDraft.mode === 'interdisciplinary'
               ? 'Criar PTS'
-              : 'Criar novo plano'
+              : 'Criar novo plano'}
           </button>
         </div>
       </div>
