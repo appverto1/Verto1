@@ -1,0 +1,32 @@
+name: P000 S1 One Time Bounded Server Patch
+on:
+  push:
+    branches:
+      - fix/staging-p000-s1-partial-patch-profile-20261023
+    paths:
+      - .github/workflows/one-shot-p000-s1-server-patch.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: "github.event.head_commit.message == 'chore(P000-S1): execute bounded server patch once'"
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Apply exact anchored patch, remove executor, and commit only server.ts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = 'fix/staging-p000-s1-partial-patch-profile-20261023'
+          python3 scripts/one-shot-p000-s1-patch.py
+          git diff --check
+          git rm -- scripts/one-shot-p000-s1-patch.py .github/workflows/one-shot-p000-s1-server-patch.yml
+          git add -- server.ts
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(P000-S1): preserve pediatric profile on partial patient PATCH'
+          git push origin 'HEAD:fix/staging-p000-s1-partial-patch-profile-20261023'
