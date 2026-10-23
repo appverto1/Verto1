@@ -221,7 +221,10 @@ export function createPatientSharedGraphApi(deps: {
       if(!scope?.active || !uuid(scope.globalId))
         return {publication:null,scope};
       const publication=await readPublication(scope.globalId);
-      if(!await ownerIsActive(publication))return {publication:null,scope};
+      // A verified global identity is not consent for a *different* clinic's
+      // clinical graph. This portal scope must own the publication itself.
+      if (publication?.clinic_id !== scope.clinicId || publication?.patient_id !== scope.id
+          || !await ownerIsActive(publication)) return {publication:null,scope};
       return {publication,scope};
     };
     app.get('/api/portal/patients/:patientId/shared-graph',...guard,async(req:any,res:any)=>{
