@@ -4,6 +4,7 @@ import type { HelpArticle } from '../help/helpManifest';
 import { HelpSupportChat } from './HelpSupportChat';
 import { HelpTutorialArticle } from './HelpTutorialArticle';
 import { pausedSupportQuery } from '../help/helpSupport';
+import { visibleHelpArticle, helpThemeIsExpanded } from '../help/helpNavigation';
 
 type Topic = HelpArticle;
 
@@ -128,7 +129,8 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
     }
     return Array.from(groups,([theme,items])=>({theme,items}));
   },[filtered]);
-  const article=topics.find(t=>t.articleId===selected) || filtered[0];
+  const searching=Boolean(query.trim());
+  const article=visibleHelpArticle<Topic>(topics,filtered,selected,searching);
   React.useEffect(()=>{
     if(article?.theme)setExpandedThemes(old=>({...old,[article.theme]:true}));
   },[article?.articleId,article?.theme]);
@@ -194,7 +196,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
       <div className="lg:grid lg:grid-cols-[280px_minmax(0,1fr)] lg:gap-6">
         <aside ref={drawerRef} className={`${drawer?'block':'hidden'} mb-4 max-h-[75dvh] overflow-y-auto overscroll-contain rounded-2xl border border-slate-200 bg-white p-2 lg:sticky lg:top-24 lg:block lg:max-h-[calc(100dvh-7rem)] lg:self-start`} aria-label="Temas de ajuda">
           {loading?<p className="p-3 text-sm text-slate-500" role="status">Carregando ajuda…</p>:error?<div className="p-3 text-sm text-rose-700" role="alert"><p>{error}</p><button type="button" onClick={()=>void loadCatalog()} className="mt-2 min-h-11 font-semibold underline">Tentar novamente</button></div>:groupedTopics.length?groupedTopics.map((group,i)=>{
-            const expanded=expandedThemes[group.theme]===true || (expandedThemes[group.theme]===undefined && article?.theme===group.theme);
+            const expanded=helpThemeIsExpanded(group.theme,expandedThemes,article?.theme,searching);
             const completed=group.items.filter(t=>Boolean(progress[`${t.articleId}:${t.contentRevision}`])).length;
             const groupId=`help-theme-${i}`;
             return <section key={group.theme} className="mb-1" aria-label={group.theme}>
@@ -242,7 +244,7 @@ export function HelpCenter({ clinicName, onClose }:{clinicName:string;onClose:()
 
             <section className="mt-6" aria-labelledby="help-related">
               <h3 id="help-related" className="font-semibold">Artigos relacionados</h3>
-              {related.length?<div className="mt-2 flex flex-wrap gap-2">{related.map(item=><button key={item.articleId} type="button" onClick={()=>setSelected(item.articleId)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50">{item.title}</button>)}</div>:<p className="mt-2 text-sm text-slate-500">Nenhum artigo relacionado publicado nesta coorte.</p>}
+              {related.length?<div className="mt-2 flex flex-wrap gap-2">{related.map(item=><button key={item.articleId} type="button" onClick={()=>selectTopic(item.articleId)} className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-violet-700 hover:bg-violet-50">{item.title}</button>)}</div>:<p className="mt-2 text-sm text-slate-500">Nenhum artigo relacionado publicado nesta coorte.</p>}
             </section>
             </>}
 
