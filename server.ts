@@ -19382,16 +19382,21 @@ function sanitizeIsoDateOnly(value: unknown): string | null {
   return null;
 }
 
-function buildPatientProfileTypeFields(body: any) {
-  const canonicalProfileType = normalizePatientProfileType(
-    body?.patientProfileType ||
-      body?.patient_profile_type ||
-      body?.panelType ||
-      body?.panel_type ||
-      body?.profileType ||
-      body?.profile_type ||
-      body?.type,
-  );
+function buildPatientProfileTypeFields(body: any, partial = false) {
+  const requestedProfile = body?.patientProfileType ||
+    body?.patient_profile_type ||
+    body?.panelType ||
+    body?.panel_type ||
+    body?.profileType ||
+    body?.profile_type ||
+    body?.type;
+  const category = sanitizeString(body?.group || body?.patient_group || body?.grupo, 80)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const pediatricCategory = ['infantil','crianca','adolescente'].includes(category);
+  // PATCH of an unrelated field must not overwrite KIDS/ABA with default ADULT.
+  // A pediatric category, even beside a stale ADULT alias, remains KIDS.
+  if (partial && !requestedProfile && !pediatricCategory) return {};
+  const canonicalProfileType = pediatricCategory ? 'KIDS' : normalizePatientProfileType(requestedProfile);
   return {
     patient_profile_type: canonicalProfileType,
     panel_type: canonicalProfileType,
@@ -20001,10 +20006,10 @@ async function resolvePatientInsurancePayerSelection(params: {
   return { ok: true as const, payerId: null, payerName: payerName || null, insuranceType };
 }
 
-function buildPatientIdentityPersistenceFields(body: any) {
+function buildPatientIdentityPersistenceFields(body: any, options: { partial?: boolean } = {}) {
   const address = body?.address && typeof body.address === 'object' ? body.address : {};
   const guardian = body?.guardian && typeof body.guardian === 'object' ? body.guardian : {};
-  const profileFields = buildPatientProfileTypeFields(body);
+  const profileFields = buildPatientProfileTypeFields(body, options.partial === true);
   const hasOwn = (...keys: string[]) => keys.some((key) =>
     Object.prototype.hasOwnProperty.call(body || {}, key)
   );
@@ -44262,7 +44267,7 @@ async function startServer() {
         cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
-        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(patientIdentityPayload) : {}),
+        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(patientIdentityPayload, { partial: true }) : {}),
         profile_picture: safeProfilePicture !== undefined ? safeProfilePicture : undefined,
         profile_picture_path: safeProfilePicturePath !== undefined ? safeProfilePicturePath : undefined,
         therapist_id:
