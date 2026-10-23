@@ -1,0 +1,31 @@
+name: Apply parallel specialty plans backend patch (temporary)
+on:
+  push:
+    branches:
+      - feat/staging-parallel-draft-specialty-plans-20261023
+    paths:
+      - .github/workflows/parallel-specialty-plan-onetime-patch.yml
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Patch exact anchors only
+        run: |
+          node scripts/apply-parallel-specialty-plan-patch.mjs
+          git diff --check
+          test "$(git diff --name-only)" = "server.ts"
+          git config user.name "verto-staging-ci"
+          git config user.email "verto-staging-ci@users.noreply.github.com"
+          git add server.ts
+          git commit -m "feat(clinical): create independent specialty drafts and switch cycles safely"
+          git push origin HEAD:refs/heads/feat/staging-parallel-draft-specialty-plans-20261023
