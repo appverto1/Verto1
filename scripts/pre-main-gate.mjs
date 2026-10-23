@@ -181,6 +181,7 @@ const criticalTests = [
   'tests/factoryBlockerCatalog.regression.test.mjs',
   'tests/security.regression.test.mjs',
   'tests/patientFileActorJwtBinding.regression.test.mjs',
+  'tests/patientSharedChartGovernanceP0.regression.test.mjs',
   'tests/goLiveHardening.test.mjs',
   'tests/distributedSessionSafety.regression.test.mjs',
   'tests/productionSessionPersistence.regression.test.mjs',
