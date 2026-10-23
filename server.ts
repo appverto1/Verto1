@@ -60,6 +60,7 @@ import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/st
 import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';
 import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';
 import { registerHelpCenterRoutes } from './services/helpCenterRoutes';
+import { createInternalSchemaStatusHandler } from './services/internalSchemaStatusRouteHandler';
 import { createHealthRouteHandler } from './services/healthRouteHandler';
 import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';
 import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';
@@ -28745,27 +28746,7 @@ async function startServer() {
     return res.json(status);
   });
 
-  app.get('/api/internal/schema-status', checkAuth, checkPlatformAdmin, async (req: any, res) => {
-    const state = await refreshAppointmentActionResolutionSchema(Boolean(req.query?.refresh));
-    return res.json({
-      success: true,
-      data: {
-        reschedule: {
-          ready: state.approvalReady,
-          availabilityReady: state.availabilityReady,
-          approvalReady: state.approvalReady,
-          expectedVersion: APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,
-          actualVersion: state.schemaVersion,
-          reason: state.reason,
-          approvalReason: state.approvalReason,
-          stage: state.stage,
-          retryable: state.retryable,
-          checkedAt: state.checkedAt ? new Date(state.checkedAt).toISOString() : null,
-          nextCheckAt: state.checkedAt ? new Date(state.checkedAt + state.ttlMs).toISOString() : null,
-        }
-      }
-    });
-  });
+  app.get('/api/internal/schema-status', checkAuth, checkPlatformAdmin, createInternalSchemaStatusHandler({ refreshAppointmentActionResolutionSchema, APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION }));
 
   // --- API ROUTES ---
   
