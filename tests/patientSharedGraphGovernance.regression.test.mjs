@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {encodeSharedClinicalMetric,decodeSharedClinicalMetric,sharedGraphOwnerIsLive} from '../services/patientSharedGraphApi.ts';
+import {encodeSharedClinicalMetric,decodeSharedClinicalMetric,sharedGraphOwnerIsLive,sharedGraphBelongsToPortalPatient} from '../services/patientSharedGraphApi.ts';
 
 const read=(path)=>readFileSync(path,'utf8');
 const schema=read('supabase/migrations/20261018194000_patient_shared_graph_singleton_v1.sql');
@@ -32,6 +32,12 @@ assert.equal(sharedGraphOwnerIsLive(owner,publication),true);
 assert.equal(sharedGraphOwnerIsLive({...owner,archived_at:'2026-10-18'},publication),false);
 assert.equal(sharedGraphOwnerIsLive({...owner,clinic_id:'other'},publication),false);
 assert.equal(sharedGraphOwnerIsLive({...owner,relationship_status:'ended'},publication),false);
+const childScope = {id:'p',clinicId:'c',globalId:'g',active:true};
+assert.equal(sharedGraphBelongsToPortalPatient(childScope,publication),true,'own clinic may display its published graph');
+assert.equal(sharedGraphBelongsToPortalPatient({...childScope,clinicId:'another-clinic'},publication),false,'shared identity is NOT cross-clinic consent');
+assert.equal(sharedGraphBelongsToPortalPatient({...childScope,id:'different-record'},publication),false,'different patient record cannot reuse publication');
+assert.equal(sharedGraphBelongsToPortalPatient({...childScope,active:false},publication),false,'inactive portal relationship denies graph');
+assert.equal(sharedGraphBelongsToPortalPatient({...childScope,globalId:'different-global-id'},publication),false,'global identity must match');
 
 assert.match(api,/requireClinicCapability\('aba.analytics.view'\)/,'clinic capability required');
 assert.match(api,/checkPatientAccess/,'reuses canonical per-case ReBAC');
@@ -42,6 +48,7 @@ assert.match(api,/identityReady:uuid\(context.scope.globalId\)/,'not safe to sha
 assert.match(api,/ownedByOtherClinic/);
 assert.match(api,/.eq\('organization_id',item.clinic_id\)\.eq\('patient_id',item.patient_id\)/,'portal query stays in graph owner tenant');
 assert.match(api,/requireRoles\('patient'\)/);
+assert.match(api,/sharedGraphBelongsToPortalPatient\(scope,publication\)/,'portal must enforce publication clinic and patient matching');
 assert.match(api,/no-store/);
 assert.match(server,/patientGraphSharing.registerClinicRoutes/);
 assert.match(server,/patientGraphSharing.registerPortalRoutes/);
