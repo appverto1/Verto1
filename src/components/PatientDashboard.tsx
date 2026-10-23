@@ -140,6 +140,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalFileState, setPortalFileState] = useState({ uploading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
+  const [portalActionOrigin, setPortalActionOrigin] = useState({ appointmentId: '', notificationId: '', reminderKind: '' });
   const [portalModal, setPortalModal] = useState<'reschedule' | 'cancel' | 'sign' | ''>('');
   const [portalActionForm, setPortalActionForm] = useState({ reason: '', note: '', requestedStart: '', accepted: false });
   const [portalRescheduleAvailability, setPortalRescheduleAvailability] = useState<any>({ loading: false, error: '', days: [], totalSlots: 0, maxSelectable: 3, message: '' });
@@ -746,7 +747,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [portalSection, isMenuOpen, portalPatientId, portalAnamnesisChecked, portalAnamnesisState.loading, hasPendingPortalAnamnesisHint, isKidsProfile]);
 
-  const openPortalAppointmentDetail = async (appointment: any) => {
+  const openPortalAppointmentDetail = async (appointment: any, originNotification?: any) => {
+    const selectedId = String(appointment?.id || '').trim();
+    const notificationId = String(originNotification?.appointment_id || originNotification?.appointmentId || '').trim();
+    const isSameAppointment = Boolean(selectedId && selectedId === notificationId);
+    setPortalActionOrigin({
+      appointmentId: isSameAppointment ? selectedId : '',
+      notificationId: isSameAppointment ? String(originNotification?.id || '').trim() : '',
+      reminderKind: isSameAppointment ? String(parsePortalMetadata(originNotification?.metadata)?.reminderKind || '') : '',
+    });
     setSelectedPortalAppointment(appointment);
     setPortalAppointmentDetail(null);
     setPortalAppointmentsState((prev) => ({ ...prev, error: '', message: '' }));
@@ -806,7 +815,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         user?.clinicSettings?.clinicLogoUrl
       ),
       scheduledAt: metadata.scheduledAt || notification?.scheduled_for || notification?.scheduledFor || notification?.created_at
-    });
+    }, notification);
   };
 
   const updatePortalAppointmentInList = (appointment: any) => {
@@ -962,7 +971,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       requestedStart: primaryRescheduleOption?.scheduledStart,
       requestedEnd: primaryRescheduleOption?.scheduledEnd,
       accepted: portalActionForm.accepted,
-      signedByName: displayName
+      signedByName: displayName,
+      ...(portalModal === 'cancel' && portalActionOrigin.appointmentId === appointmentId &&
+        portalActionOrigin.notificationId
+        ? { notificationId: portalActionOrigin.notificationId } : {})
     };
     const result =
       portalModal === 'reschedule'
@@ -3530,7 +3542,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
             </button>
           )}
           <button type="button" disabled={portalActionBlocked} onClick={() => setPortalModal('cancel')} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-100 bg-white px-4 py-3 text-sm font-semibold text-rose-600 disabled:opacity-50">
-            <Ban size={17} /> Solicitar cancelamento
+            <Ban size={17} /> {portalActionOrigin.appointmentId === String(activePortalAppointment?.id || '') &&
+              portalActionOrigin.reminderKind === '24h' ? 'Cancelar sessão' : 'Solicitar cancelamento'}
           </button>
           {portalAppointmentDetail?.session?.id && portalAppointmentDetail?.closure?.signaturePending && (
             <button type="button" onClick={() => setPortalModal('sign')} className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-700">
@@ -3569,7 +3582,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
               {portalModal === 'sign' ? 'Assinatura' : portalModal === 'cancel' ? 'Cancelamento' : 'Remarcação'}
             </p>
             <h3 className="mt-1 text-xl font-black text-slate-900">
-              {portalModal === 'sign' ? 'Confirmar sessão' : portalModal === 'cancel' ? 'Solicitar cancelamento' : 'Solicitar remarcação'}
+              {portalModal === 'sign' ? 'Confirmar sessão' : portalModal === 'cancel' &&
+                portalActionOrigin.appointmentId === String(activePortalAppointment?.id || '') &&
+                portalActionOrigin.reminderKind === '24h'
+                ? 'Cancelar sessão' : portalModal === 'cancel' ? 'Solicitar cancelamento' : 'Solicitar remarcação'}
             </h3>
           </div>
           <button type="button" onClick={() => closePortalActionModal()} className="rounded-2xl border border-slate-100 p-2 text-slate-500">

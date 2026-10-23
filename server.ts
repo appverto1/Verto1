@@ -387,6 +387,7 @@ import {
   normalizePatientPortabilityScope
 } from './src/utils/patientPortability';
 import { validateActiveClinicFinancialPlanSpecialties } from './services/patientFinancialSpecialtyGuard';
+import { tryCancelFromVerified24hReminder } from './services/portalVerified24hCancellation';
 import {
   getPatientFinancialServiceLabel,
   isPatientFinancialPlanComplete,
@@ -56830,6 +56831,39 @@ async function startServer() {
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      // Attempt automatic cancellation only when the *persisted* 24h reminder,
+      // sent job, session cycle, authenticated recipient and tenant all match.
+      // The SQL RPC is atomic and re-checks status under the appointment lock.
+      const verifiedCancellation = await tryCancelFromVerified24hReminder({
+        supabase, deploymentEnv,
+        appointment, actor: req.session.user,
+        notificationId: req.body?.notificationId || req.body?.notification_id,
+        reason: req.body?.reason,
+        note: req.body?.note || req.body?.observation
+      });
+      if (verifiedCancellation.applied) {
+        const notificationUpdate = await acknowledgePortalAppointmentNotifications({
+          appointment: verifiedCancellation.appointment,
+          user: req.session.user,
+          action: 'cancelled_by_verified_24h_reminder',
+          notificationId: req.body?.notificationId || req.body?.notification_id
+        }).catch(() => ({ ok: false, notificationIds: [] as string[] }));
+        // A notification acknowledgement is not part of the cancellation
+        // transaction; it must not turn a committed cancellation into a 500.
+        void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_cancelled_verified_24h');
+        const serializedAppointment = await serializePortalAppointmentForFamilyView(verifiedCancellation.appointment);
+        return res.json(buildPortalAppointmentActionResult({
+          action: 'cancel_approved_from_24h_reminder',
+          appointment: serializedAppointment,
+          message: 'Sessão cancelada. A clínica foi informada.',
+          user: req.session.user,
+          notificationIds: notificationUpdate.notificationIds,
+          actionRequest: verifiedCancellation.request,
+          alreadyAnswered: verifiedCancellation.idempotent === true
+        }));
+      }
+      // All other origins, including 12h reminders or expired 24h windows,
+      // remain ordinary requests awaiting clinic calendar authorization.
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
       const requestRow = await createOrUpdateAppointmentActionRequest({
         appointment,

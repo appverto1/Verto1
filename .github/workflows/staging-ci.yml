@@ -163,6 +163,11 @@ jobs:
           PGDATABASE: verto_group_regression
         run: node tests/postgresGroupSessionConcurrency.test.mjs
 
+      - name: P1 27 verified 24-hour reminder cancellation
+        run: |
+          node tests/p1AgendaReceptionRoomStatus.regression.test.mjs
+          node tests/p1Verified24hReminderCancellationSql.test.mjs
+
       - name: Expired server session and safe re-entry regression
         run: node tests/sessionExpiredCleanLogout.regression.test.mjs
 
