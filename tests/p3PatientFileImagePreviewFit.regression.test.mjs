@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const source = readFileSync('src/components/PatientDetailView.tsx', 'utf8');
+const start = source.indexOf('{previewFile && (');
+const end = source.indexOf('\n      )}', start);
+assert.ok(start > 0 && end > start, 'preview de arquivo do paciente deve existir');
+const modal = source.slice(start, end);
+const imageBranch = modal.slice(modal.indexOf('previewFile.type?.includes("image")'), modal.indexOf('previewFile.type?.includes("pdf")'));
+assert.match(modal, /fixed inset-0 z-\[125\].*items-center justify-center/, 'modal centralizado no viewport');
+assert.match(modal, /max-h-\[85vh\] overflow-auto/, 'modal limita altura e mantém rolagem');
+assert.match(imageBranch, /<SecureImage[\s\S]*?src=\{resolveFileViewUrl\(previewFile\)\}/, 'imagem usa fonte protegida');
+assert.match(imageBranch, /max-h-\[calc\(85dvh-10rem\)\]/, 'imagem cabe abaixo do cabeçalho do modal');
+assert.match(imageBranch, /\bobject-contain\b/, 'proporção da imagem preservada sem zoom/corte');
+assert.match(imageBranch, /\bh-auto\b/, 'altura mantém proporção natural');
+assert.doesNotMatch(imageBranch, /\bobject-cover\b/, 'imagem não deve ser recortada');
+assert.match(modal, /onClick=\{\(\) => setPreviewFile\(null\)\}/, 'fechamento preservado');
+assert.match(modal, /previewFile.type\?\.includes\("pdf"\)[\s\S]*?<SecureIframe/, 'PDF continua usando iframe');
+assert.match(modal, /previewFile.type\?\.includes\("html"\)[\s\S]*?<SecureIframe/, 'HTML continua usando iframe');
+console.log('p3PatientFileImagePreviewFit.regression.test.mjs: PASS');
