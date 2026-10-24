@@ -5109,16 +5109,6 @@ export const ClinicalAgendaBoard = ({
                 Ver gráficos
               </button>
               </>)}
-              <button type="button" onClick={() => openAppointmentEditor(detailEvent)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
-                <RefreshCcw size={16} />
-                Remarcar
-              </button>
-              {!detailCancellationState.isCancelled && (
-                <button type="button" onClick={() => onCancelAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-600 hover:bg-rose-50">
-                  <Ban size={16} />
-                  Cancelar
-                </button>
-              )}
               <button type="button" onClick={() => onDeleteAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-700 hover:bg-rose-50">
                 <Trash2 size={16} />
                 Excluir
