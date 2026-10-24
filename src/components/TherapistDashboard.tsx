@@ -900,7 +900,7 @@ export const TherapistDashboard = ({
     <div className="flex min-h-screen bg-[#F4F7FE] font-sans overflow-hidden">
       {/* Desktop Sidebar */}
       <aside
-        className={`hidden lg:flex flex-col ${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto shrink-0 transition-all duration-300 ease-in-out z-50`}
+        className={`hidden lg:flex flex-col ${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto overflow-x-hidden shrink-0 transition-all duration-300 ease-in-out z-50`}
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
         onFocusCapture={() => setIsSidebarExpanded(true)}
@@ -912,7 +912,7 @@ export const TherapistDashboard = ({
           <LogoVerto size={40} showText={isSidebarExpanded} preserveProfessionalSidebarBrand />
         </div>
 
-        <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2">
+        <nav className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden no-scrollbar pr-2">
           <button
             onClick={() => handleSetView("home")}
             className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm ${view === "home" ? "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"}`}
