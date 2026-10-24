@@ -309,6 +309,7 @@ const criticalTests = [
   'tests/clinicalReadExtractionParity.test.mjs',
   'tests/clinicalReadHandlersEquivalence.test.mjs',
   'tests/p2AdultSessionNoTechnicalCards.regression.test.mjs',
+  'tests/p2PendingCancellationAgendaHighlight.regression.test.mjs',
   'tests/protocolImportExtractionParity.test.mjs',
   'tests/protocolImportHandlersEquivalence.test.mjs',
   'tests/patientPlanReadParity.test.mjs',
