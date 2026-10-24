@@ -45,6 +45,26 @@ assert.deepEqual(slots.days.map((day) => day.date), ['2026-11-02'],
   'slot suggestions must never offer omitted weekdays');
 assert.ok(slots.totalSlots > 0, 'configured Monday must retain valid slots');
 
+// Explicitly empty periods must not silently reopen a configured day.
+// Keep the legacy fallback for a day that has no periods field at all.
+const emptyMonday = { active: true, days: { monday: { enabled: true, periods: [] } } };
+assert.equal(evaluate(monday, emptyMonday).available, false,
+  'a configured weekday with zero periods must be closed');
+assert.equal(evaluate(monday, emptyMonday).reasonCode, 'OUTSIDE_WORKING_HOURS');
+const emptyMondaySlots = buildAvailableRescheduleSlots({
+  dateFrom: '2026-11-02',
+  maxDays: 1,
+  now,
+  minLeadMinutes: 0,
+  durationMinutes: 50,
+  workingSchedule: emptyMonday,
+});
+assert.equal(emptyMondaySlots.totalSlots, 0,
+  'the suggestions API must not reopen an explicitly empty weekday');
+const legacyNoPeriodsField = { active: true, days: { monday: { enabled: true } } };
+assert.equal(evaluate(monday, legacyNoPeriodsField).available, true,
+  'legacy days without any periods field retain the existing fallback');
+
 const explicitTuesdayClosed = {
   ...configuredMondayOnly,
   days: {
