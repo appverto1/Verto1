@@ -739,6 +739,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       <CalendarClock className="text-violet-500" size={22} />
                       <p className="text-sm font-semibold text-slate-800">Disponibilidade semanal</p>
                     </div>
+                    <p className="mt-3 text-xs leading-relaxed text-slate-600">Aqui você define um horário geral para os dias selecionados. Depois, em Configurações &gt; Disponibilidade nesta clínica, poderá personalizar os horários de cada dia.</p>
                     <div className="mt-4 flex flex-wrap gap-2">
                       {WEEKDAYS.map(([key, label]) => {
                         const selected = selectedDays.includes(key);
