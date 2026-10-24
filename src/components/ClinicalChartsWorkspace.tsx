@@ -43,7 +43,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
         </div>
       )}
       {(view === 'plans' || (view === 'aba-v3' && showAbaV3Details)) && (
-        <ProfessionalSharedChartControl patientId={patientId} descriptor={descriptor} isDark={isPanelDark} />
+        <ProfessionalSharedChartControl key={patientId} patientId={patientId} descriptor={descriptor} isDark={isPanelDark} />
       )}
       {view === 'aba' && showAbaDetails
         ? <LegacyAssessmentChartsPanel patientId={patientId} protocols={legacyAssessmentProtocols} isPanelDark={isPanelDark} />
