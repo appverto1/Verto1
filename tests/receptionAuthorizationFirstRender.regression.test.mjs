@@ -29,4 +29,27 @@ const tabGuard = dashboard.slice(tabGuardStart, tabGuardEnd);
 assert.match(tabGuard, /if \(!authorizationHydrated\)/);
 assert.match(tabGuard, /return tabId === "dashboard" \|\| tabId === "professionalProfile"/);
 
+// P1-30: no unauthorized team or clinical-template requests during reception bootstrap.
+const memberStart = dashboard.indexOf('const canReadTeam = hasCapability("team.view")');
+const memberEnd = dashboard.indexOf('const therapistFilterOptions = useMemo(', memberStart);
+assert.ok(memberStart > 0 && memberEnd > memberStart);
+const memberLoader = dashboard.slice(memberStart, memberEnd);
+assert.match(memberLoader, /if \(!workspaceId \|\| !authorizationHydrated \|\| !canReadCalendar\)/);
+assert.match(memberLoader, /canReadTeam \? dataService\.getClinicMembers\(\) : Promise\.resolve/);
+assert.match(memberLoader, /const schedulingMembers = canReadTeam \? result\.data :/);
+assert.match(memberLoader, /clinicSpecialtiesResult\.data\.map/);
+assert.doesNotMatch(memberLoader, /^\s*dataService\.getClinicMembers\(\),/m);
+
+assert.match(dashboard, /const canLoadAnamnesisTemplate = canEditAnamnesisTemplate \|\| hasCapability\("clinical\.anamnesis\.view"\)/);
+assert.match(dashboard, /if \(authorizationHydrated && canLoadAnamnesisTemplate\) loadClinicAnamnesisTemplate\(\)/);
+assert.match(dashboard, /authorizationHydrated && canLoadAnamnesisTemplate && isAnamnesisTemplateModalOpen/);
+
+const bootstrapStart = dataService.indexOf('async hydrateWorkspaceState(');
+const bootstrapEnd = dataService.indexOf('const patientList = normalizePatientListResponse(', bootstrapStart);
+assert.ok(bootstrapStart > 0 && bootstrapEnd > bootstrapStart);
+const bootstrap = dataService.slice(bootstrapStart, bootstrapEnd);
+assert.match(bootstrap, /const \[clinicStateResponse, patientsResponse\] = await Promise\.all/);
+assert.doesNotMatch(bootstrap, /fetch\('\/api\/clinic\/anamnesis-template'/);
+assert.match(dataService, /clinicAnamnesisTemplate: \{\}/);
+
 console.log('receptionAuthorizationFirstRender.regression.test.mjs: ok');
