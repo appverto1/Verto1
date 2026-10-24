@@ -5,8 +5,10 @@ const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 
 const settings = fs.readFileSync('src/components/ClinicGlobalSettingsPanel.tsx', 'utf8');
 
 // The guidance must appear only in the invited professional's availability step.
-const availabilityStep = onboarding.slice(onboarding.indexOf('{step === 3 && isManagedMember && ('), onboarding.indexOf('Concluir configuração'));
-assert.ok(availabilityStep.length > 0, 'managed member step should exist');
+const availabilityStart = onboarding.indexOf('{step === 3 && isManagedMember && (');
+const availabilityEnd = onboarding.indexOf('Concluir configuração', availabilityStart);
+assert.ok(availabilityStart >= 0 && availabilityEnd > availabilityStart, 'managed member step should exist');
+const availabilityStep = onboarding.slice(availabilityStart, availabilityEnd);
 assert.match(availabilityStep, /Disponibilidade semanal/);
 assert.match(availabilityStep, /horário geral para os dias selecionados/);
 assert.match(availabilityStep, /Configurações &gt; Disponibilidade nesta clínica/);
