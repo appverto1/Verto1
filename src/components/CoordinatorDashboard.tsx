@@ -13175,14 +13175,6 @@ export function CoordinatorDashboard({
                 )}
 
                 <div className="flex flex-wrap gap-2">
-                  {canAccessClinicFinance && isProfessionalTransfersSection && (
-                    <button
-                      onClick={() => setIsProfessionalPaymentModalOpen(true)}
-                      className="flex items-center gap-2 rounded-2xl bg-[#7a32fc] px-5 py-3 text-sm font-semibold text-white shadow-sm shadow-purple-500/10 transition hover:bg-[#6d28e8]"
-                    >
-                      <CreditCard size={18} /> Registrar repasse
-                    </button>
-                  )}
                   {isFinancialPayerLotsSection && (
                     <button
                       type="button"
