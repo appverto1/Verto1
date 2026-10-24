@@ -16,7 +16,7 @@ assert.match(eventCard, /\{event\.patientName\}/, 'nome do paciente continua no 
 assert.match(eventCard, /getAppointmentPatientConfirmationVisualState\(event\)/,
   'estilo deriva do estado canônico do servidor, não de flag enviada pelo cliente');
 
-const month = calendar.slice(calendar.indexOf('const renderMonth ='), calendar.indexOf('const detail = eventDetail'));
+const month = calendar.slice(calendar.indexOf('const dayCells = Array.from({ length: daysInMonth'), calendar.indexOf('const detail = eventDetail'));
 assert.match(month, /const isPendingCancellation = statusColor\.canonical === 'CANCEL_REQUESTED'/,
   'visão mensal identifica pedidos de cancelamento pendentes');
 assert.match(month, /isPendingCancellation \? 'text-red-700'/, 'nome vermelho também aparece no mês');
