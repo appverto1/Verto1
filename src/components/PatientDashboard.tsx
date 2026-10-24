@@ -3274,7 +3274,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           onClick={() => setIsSettingsOpen(true)}
           className="rounded-xl border border-purple-100 px-3 py-2 text-xs font-black text-[#7a32fc]"
         >
-          Editar dados permitidos
+          Editar perfil e notificações
         </button>
       </div>
       <dl className="grid gap-3 text-sm sm:grid-cols-2">
@@ -3805,12 +3805,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                               </button>
                             )}
                             <button
-                              onClick={() => { setIsSettingsOpen(true); setIsMenuOpen(false); }}
-                              className="w-full flex items-center gap-3 p-3 text-sm font-medium text-[#7a32fc] hover:bg-purple-50 rounded-xl transition-colors"
-                            >
-                              <Settings size={18} /> Configurações
-                            </button>
-                            <button
                               onClick={() => { onLogout(); setIsMenuOpen(false); }}
                               className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
                             >
@@ -4240,12 +4234,6 @@ ${interventionImages.join('\n')}` : ''
                     )}
                   </button>
                 )}
-                <button
-                  onClick={() => { setIsSettingsOpen(true); setIsMenuOpen(false); }}
-                  className="w-full flex items-center gap-3 p-3 text-sm font-medium text-[#7a32fc] hover:bg-purple-50 rounded-xl transition-colors"
-                >
-                  <Settings size={18} /> Configurações
-                </button>
                 <button
                   onClick={() => { onLogout(); setIsMenuOpen(false); }}
                   className="w-full flex items-center gap-3 p-3 text-sm font-medium text-red-500 hover:bg-red-50 rounded-xl transition-colors"
