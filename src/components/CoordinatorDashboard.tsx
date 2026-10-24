@@ -1439,6 +1439,17 @@ export function CoordinatorDashboard({
     return uniqueEntries;
   }, [therapistMembersById]);
 
+  // Financial transfers accept only active therapist memberships in the selected
+  // clinic, matching the server-side professional-payments/batch authorization.
+  // Keep this separate from broader care/agenda options (which may include
+  // clinical managers) so the selector never offers a professional the API denies.
+  const professionalPaymentOptions = useMemo(
+    () => therapistFilterOptions.filter((member) =>
+      member.role === "therapist" && member.status === "active" && Boolean(member.clinicSpecialty)
+    ),
+    [therapistFilterOptions],
+  );
+
   const appointmentProfessionalOptions = useMemo(
     () => therapistFilterOptions.filter((member) => Boolean(activeClinicAppointmentSpecialty(member))),
     [therapistFilterOptions],
@@ -3990,7 +4001,7 @@ export function CoordinatorDashboard({
 
   const handleAddProfessionalPayment = async () => {
     if (professionalPaymentSaveInFlightRef.current) return;
-    const member = therapistFilterOptions.find((item) => item.id === selectedProfessionalPaymentId);
+    const member = professionalPaymentOptions.find((item) => item.id === selectedProfessionalPaymentId);
     const amount = parseMoneyInput(professionalPaymentAmount);
     const additionalAmount = parseMoneyInput(professionalPaymentAdditionalAmount);
     if (!member || !Number.isFinite(amount) || amount <= 0) {
@@ -12543,7 +12554,7 @@ export function CoordinatorDashboard({
                       className="w-full rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700 outline-none"
                     >
                       <option value="">Selecione...</option>
-                      {therapistFilterOptions.map((member) => (
+                      {professionalPaymentOptions.map((member) => (
                         <option key={`professional-payment-${member.id}`} value={member.id}>
                           {member.label}
                         </option>
