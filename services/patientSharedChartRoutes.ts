@@ -824,7 +824,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
       try {
         const clinicId = sanitizeString(req.resolvedPatientClinicId, 120);
         const patientId = sanitizeString(req.resolvedPatientId, 120);
-        const actorId = sanitizeString(req.session.user?.id, 120);
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
         const authority = await supabase.rpc('patient_shared_chart_case_authority_v1', {
           p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
         });
@@ -873,7 +873,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     async (req: any, res) => {
       try {
         if (!enforcePayloadLimit(req, res, 2048, 'Autorização de gráfico por caso')) return;
-        const actorId = sanitizeString(req.session.user?.id, 120);
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
         const clinicId = sanitizeString(req.resolvedPatientClinicId, 120);
         const patientId = sanitizeString(req.resolvedPatientId, 120);
         const professionalId = sanitizeString(req.body?.professionalId, 120);
