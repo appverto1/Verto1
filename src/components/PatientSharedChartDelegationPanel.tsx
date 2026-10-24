@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
 type ProfessionalPermission = { id: string; name: string; delegated: boolean };
 
 /** Loaded only by case leadership on explicit interaction, not on every chart render. */
-export function PatientSharedChartDelegationPanel({ patientId }: { patientId: string }) {
+export function PatientSharedChartDelegationPanel({ patientId }: { key?: React.Key; patientId: string }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [people, setPeople] = useState<ProfessionalPermission[]>([]);
@@ -13,16 +13,21 @@ export function PatientSharedChartDelegationPanel({ patientId }: { patientId: st
   const [saving, setSaving] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const currentPatientRef = useRef(patientId);
+  currentPatientRef.current = patientId;
 
   useEffect(() => {
     if (!open) return;
     let active = true;
     setLoading(true);
+    setPeople([]);
+    setDraft({});
     setError('');
     setNotice('');
+    const requestedPatientId = patientId;
     void (async () => {
-      const response: any = await dataService.getPatientSharedChartDelegations(patientId);
-      if (!active) return;
+      const response: any = await dataService.getPatientSharedChartDelegations(requestedPatientId);
+      if (!active || currentPatientRef.current !== requestedPatientId) return;
       if (response?.success !== true || !Array.isArray(response.data)) {
         setError('Não foi possível carregar as autorizações deste caso.');
       } else {
@@ -37,11 +42,13 @@ export function PatientSharedChartDelegationPanel({ patientId }: { patientId: st
 
   const save = async (professional: ProfessionalPermission) => {
     if (saving || loading || draft[professional.id] === professional.delegated) return;
+    const requestedPatientId = patientId;
     setSaving(professional.id);
     setError('');
     setNotice('');
     const allow = draft[professional.id] === true;
-    const result: any = await dataService.savePatientSharedChartDelegation(patientId, professional.id, allow);
+    const result: any = await dataService.savePatientSharedChartDelegation(requestedPatientId, professional.id, allow);
+    if (currentPatientRef.current !== requestedPatientId) return;
     if (result?.success === true) {
       setPeople((previous) => previous.map((p) =>
         p.id === professional.id ? { ...p, delegated: allow } : p
