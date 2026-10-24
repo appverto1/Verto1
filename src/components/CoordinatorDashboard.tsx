@@ -1315,12 +1315,16 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
+    // Server-issued capabilities gate reads; a denied team.view must never trigger /clinic/members.
+    const canReadTeam = hasCapability("team.view");
+    const canReadCalendar = ["calendar.own.view", "calendar.team.view", "calendar.clinic.view", "patient.demographics.edit"]
+      .some((capability) => hasCapability(capability));
     const requestSeq = therapistMembersRequestSeqRef.current + 1;
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
     setClinicSpecialtiesError("");
-    if (!workspaceId) {
+    if (!workspaceId || !authorizationHydrated || !canReadCalendar) {
       setTherapistMembersLoading(false);
       return;
     }
@@ -1328,7 +1332,7 @@ export function CoordinatorDashboard({
     const loadTherapistMembers = async () => {
       try {
         const [result, clinicSpecialtiesResult] = await Promise.all([
-          dataService.getClinicMembers(),
+          canReadTeam ? dataService.getClinicMembers() : Promise.resolve({ success: true, data: [] }),
           dataService.getClinicSchedulingSpecialties(workspaceId),
         ]);
         if (
@@ -1350,7 +1354,15 @@ export function CoordinatorDashboard({
           setClinicSpecialtiesError(clinicSpecialtiesResult?.error || "Especialidades indisponíveis.");
         }
         const byId: Record<string, any> = {};
-        result.data.forEach((member: any) => {
+        // The scheduling endpoint is tenant-scoped and returns active therapists only.
+        // When team.view is denied, retain the agenda's active professional options
+        // without requesting the protected team directory or exposing private profiles.
+        const schedulingMembers = canReadTeam ? result.data : (Array.isArray(clinicSpecialtiesResult?.data)
+          ? clinicSpecialtiesResult.data.map((row: any) => ({
+              id: row.user_id, user_id: row.user_id, role: "therapist", status: "active",
+              specialty: row.specialty, name: "Profissional",
+            })) : []);
+        schedulingMembers.forEach((member: any) => {
           const ids = collectProfessionalIdentifierCandidates(member);
           const id = ids[0] || "";
           if (isPatientCareProfessionalMember(member) && id) {
@@ -1380,7 +1392,7 @@ export function CoordinatorDashboard({
       }
     };
     void loadTherapistMembers();
-  }, [user?.activeWorkspaceId, user?.clinicId]);
+  }, [user?.activeWorkspaceId, user?.clinicId, authorizationHydrated, hasCapability]);
 
   const therapistFilterOptions = useMemo(() => {
     const entries = Object.entries(therapistMembersById as Record<string, any>)
@@ -2475,6 +2487,7 @@ export function CoordinatorDashboard({
   const canManageClinicSettings = ["director", "coordinator"].includes(normalizedRole) && hasCapability("clinic.settings.edit");
   const canManageBilling = !isDemoAccount && hasCapability("billing.sessions.view");
   const canEditAnamnesisTemplate = canManageClinicSettings || isDirectTherapist;
+  const canLoadAnamnesisTemplate = hasCapability("clinical.anamnesis.view") || isDirectTherapist;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
   const DAY_GRID_END_HOUR = 20;
@@ -2714,16 +2727,16 @@ export function CoordinatorDashboard({
   }>({ services: [], codes: [], mappings: [], prices: [] });
 
   useEffect(() => {
-    if (isAnamnesisTemplateModalOpen) {
+    if (authorizationHydrated && canLoadAnamnesisTemplate && isAnamnesisTemplateModalOpen) {
       loadClinicAnamnesisTemplate();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAnamnesisTemplateModalOpen]);
 
   useEffect(() => {
-    loadClinicAnamnesisTemplate();
+    if (authorizationHydrated && canLoadAnamnesisTemplate) loadClinicAnamnesisTemplate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [authorizationHydrated, canLoadAnamnesisTemplate]);
 
   const normalizeLookupText = (value: any) =>
     normalizeUtf8Text(String(value || "")).trim().toLowerCase();

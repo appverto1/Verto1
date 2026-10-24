@@ -31,7 +31,10 @@ assert.equal(clinicalSpecialtyScopeKey('Terapia Ocupacional'), 'occupational_the
 const dashboard = fs.readFileSync('src/components/CoordinatorDashboard.tsx','utf8');
 const ds = fs.readFileSync('src/services/dataService.ts','utf8');
 const migration = fs.readFileSync('supabase/migrations/20261009234000_clinic_schedulable_specialties_v1.sql','utf8');
-assert.match(dashboard,/Promise\.all\(\[\s*dataService\.getClinicMembers\(\),\s*dataService\.getClinicSchedulingSpecialties\(workspaceId\)/);
+assert.match(dashboard,/canReadTeam = hasCapability\("team.view"\)/);
+assert.match(dashboard,/canReadTeam \? dataService\.getClinicMembers\(\) : Promise\.resolve/);
+assert.match(dashboard,/dataService\.getClinicSchedulingSpecialties\(workspaceId\)/);
+assert.match(dashboard,/const schedulingMembers = canReadTeam \? result\.data :/);
 assert.match(dashboard,/clinicSpecialty: activeSpecialtiesById\.get/);
 assert.match(dashboard,/const clinicSessionSpecialtyOptions = useMemo\([\s\S]*?activeClinicAppointmentSpecialty\(member\)/);
 assert.match(dashboard,/const appointmentProfessionalOptions = useMemo\([\s\S]*?activeClinicAppointmentSpecialty\(member\)/);
