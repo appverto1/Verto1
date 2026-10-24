@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { BarChart3, BrainCircuit } from 'lucide-react';
 import { LegacyAssessmentChartsPanel } from './LegacyAssessmentChartsPanel';
 import { AbaV3ClinicalChartPanel } from './AbaV3ClinicalChartPanel';
@@ -25,6 +25,11 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
   const [view, setView] = useState<'plans' | 'aba' | 'aba-v3' | 'clinical-v3'>('plans');
   const [planDescriptor, setPlanDescriptor] = useState<ClinicalPlanShareDescriptor | null>(null);
   const [abaDescriptor, setAbaDescriptor] = useState<AbaV3ShareDescriptor | null>(null);
+  useEffect(() => {
+    setPlanDescriptor(null);
+    setAbaDescriptor(null);
+    setView('plans');
+  }, [patientId]);
   const onPlanDescriptorChange = useCallback((next: ClinicalPlanShareDescriptor | null) => {
     setPlanDescriptor((previous) => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
   }, []);
