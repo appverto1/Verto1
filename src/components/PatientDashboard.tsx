@@ -2928,7 +2928,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         <div className="space-y-3">
           {visiblePatientTasks.map((task: any) => {
             const scheduledAt = parseScheduledTaskDate(task?.scheduledAt || task?.scheduled_at);
-            const overdue = Boolean(scheduledAt && scheduledAt.getTime() < currentTime.getTime() - 60_000);
             const taskData = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
             const clinicalPath = [
               taskData?.planName || taskData?.therapeuticPlanName,
@@ -2950,7 +2949,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     {clinicalPath.length > 0 && <p className="mt-1 line-clamp-2 text-[10px] font-bold text-violet-600">{clinicalPath.join(' → ')}</p>}
                     <p className="mt-1 text-xs font-medium text-slate-500">{scheduledAt ? scheduledAt.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : 'Disponível agora'}</p>
                   </div>
-                  {overdue && <span className="shrink-0 rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black uppercase text-amber-700">Atrasada</span>}
                 </div>
               </button>
             );
