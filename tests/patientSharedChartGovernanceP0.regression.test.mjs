@@ -20,6 +20,8 @@ assert.match(authority, /\('canPublish',v_leader or v_delegate/);
 assert.match(authority, /SHARED_CHART_CASE_PUBLISH_DENIED/g);
 assert.match(authority, /revoke execute on function public\.set_patient_shared_chart_case_delegation_v2[\s\S]*from public,anon,authenticated/);
 assert.match(authority, /on conflict \(patient_id,clinic_id,professional_user_id\)/);
+assert.match(authority, /patient_shared_chart_delegation_audit/);
+assert.match(authority, /enable row level security/g);
 assert.match(authority, /create or replace function public\.set_patient_shared_chart_selection_v2/);
 assert.match(authority, /create or replace function public\.clear_patient_shared_chart_selection_v2/);
 assert.doesNotMatch(authority, /delete from public\.patients|update public\.patients/, 'never change patient records for a chart grant');
@@ -30,6 +32,8 @@ assert.match(singleton, /SHARED_CHART_GLOBAL_OWNER_CONFLICT/);
 assert.match(singleton, /for update/);
 assert.match(singleton, /on conflict\(global_patient_identity_id\) do nothing/);
 assert.match(singleton, /trg_sync_canonical_shared_chart_v1/);
+assert.match(singleton, /trg_invalidate_patient_shared_graph_on_unlink_v1/);
+assert.match(singleton, /AUTO_DISABLE/);
 assert.match(singleton, /after insert or update or delete on public\.patient_shared_chart_selections/);
 assert.match(singleton, /if v_previous\.status='ACTIVE'[\s\S]*return new;/,
   're-saving the same chart must avoid duplicate audit/version');
