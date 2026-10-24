@@ -329,7 +329,9 @@ const resolveDaySource = (days: Record<string, any>, dateKey: string) => {
   for (const key of possibleKeys) {
     if (Object.prototype.hasOwnProperty.call(days, key)) return days[key];
   }
-  return undefined;
+  // A configured weekly schedule is an allowlist: an omitted weekday is closed.
+  // Never silently open it using the default 08:00–18:00 fallback.
+  return false;
 };
 
 const normalizeDayPeriods = (daySource: unknown, fallbackStart: string, fallbackEnd: string) => {

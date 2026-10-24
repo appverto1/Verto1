@@ -273,6 +273,7 @@ const criticalTests = [
   'tests/patientTimeReportRoute.test.ts',
   'tests/abaV3DrainStatusHandler.test.ts',
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
+  'tests/p1PortalRescheduleConfiguredWeekdays.regression.test.ts',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/p000PatientCategoryPersistence.regression.test.mjs',
   'tests/p000PediatricTargetCollection.regression.test.mjs',
