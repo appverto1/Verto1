@@ -2487,7 +2487,7 @@ export function CoordinatorDashboard({
   const canManageClinicSettings = ["director", "coordinator"].includes(normalizedRole) && hasCapability("clinic.settings.edit");
   const canManageBilling = !isDemoAccount && hasCapability("billing.sessions.view");
   const canEditAnamnesisTemplate = canManageClinicSettings || isDirectTherapist;
-  const canLoadAnamnesisTemplate = canEditAnamnesisTemplate || hasCapability("clinical.anamnesis.view");
+  const canLoadAnamnesisTemplate = hasCapability("clinical.anamnesis.view") || isDirectTherapist;
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
   const DAY_GRID_END_HOUR = 20;
