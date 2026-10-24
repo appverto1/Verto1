@@ -21,7 +21,9 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
   const isMissingRelationError = (error: any) => /42P01|PGRST205|relation .* does not exist/i.test(String(error?.code || '') + ' ' + String(error?.message || ''));
   const hasMissingFinancialSchema = (error: any) => /PGRST202|42P01|42703|schema cache/i.test(String(error?.code || '') + ' ' + String(error?.message || ''));
   const sendRouteDbError = (res: any, _route: string, error: any, _details?: any) => {
-    const status = /42501|denied/i.test(String(error?.code || '') + ' ' + String(error?.message || '')) ? 403 : 503;
+    const raw = String(error?.code || '') + ' ' + String(error?.message || '');
+    if (/SHARED_CHART_GLOBAL_OWNER_CONFLICT/.test(raw)) return res.status(409).json({ success: false, error: 'SHARED_CHART_GLOBAL_OWNER_CONFLICT' });
+    const status = /42501|denied|SHARED_CHART_CASE_/.test(raw) ? 403 : 503;
     return res.status(status).json({ success: false, error: status === 403 ? 'SHARED_CHART_ACCESS_DENIED' : 'SHARED_CHART_UNAVAILABLE' });
   };
   const requestIdForLogs = (_req: any) => '';
@@ -62,7 +64,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     // A session-bound patient id can outlive a clinical relationship. Recheck
     // its live state in the SAME scoped DB read before projecting clinical data.
     const patient = await supabase.from('patients')
-      .select('id,clinic_id,is_active,deleted_at,archived_at,relationship_status')
+      .select('id,clinic_id,is_active,deleted_at,archived_at,relationship_status,global_patient_identity_id')
       .eq('id',requestedId).eq('clinic_id',clinicId).limit(1).maybeSingle();
     const livePatient = patient.data && patient.data.is_active === true
       && !patient.data.deleted_at && !patient.data.archived_at
@@ -70,7 +72,8 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         String(patient.data.relationship_status || '').trim().toLowerCase()
       );
     if (patient.error || !livePatient) return res.status(403).json({ success: false, error: 'PORTAL_PATIENT_SCOPE_DENIED' });
-    req.portalContext = { patientIds: [requestedId], resolvedPatientId: requestedId, clinicId };
+    req.portalContext = { patientIds: [requestedId], resolvedPatientId: requestedId, clinicId,
+      globalPatientIdentityId: patient.data.global_patient_identity_id || null };
     return next();
   };
 
@@ -691,10 +694,21 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         if (!isUuid(patientId) || !isUuid(clinicId)) {
           return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
         }
-        const row = await readSharedChartSelection(clinicId, patientId);
+        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
+        const [row, authority] = await Promise.all([
+          readSharedChartSelection(clinicId, patientId),
+          supabase.rpc('patient_shared_chart_case_authority_v1', {
+            p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
+          }),
+        ]);
+        if (authority.error) throw authority.error;
         const descriptor = normalizeSharedChartDescriptor(row?.chart_reference);
         return res.json({
           success: true,
+          governance: {
+            canPublish: authority.data?.canPublish === true,
+            canDelegate: authority.data?.canDelegate === true,
+          },
           data: row && descriptor ? {
             chartKey: sanitizeString(row.chart_key, 256),
             referenceVersion: Number(row.reference_version || 1),
@@ -799,6 +813,86 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     }
   );
 
+  // Readonly case delegation list; fetched only on explicit management action.
+  app.get(
+    '/api/patients/:patientId/shared-chart/delegations',
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'),
+    checkSharedChartProfessionalPatientScope,
+    async (req: any, res) => {
+      try {
+        const clinicId = sanitizeString(req.resolvedPatientClinicId, 120);
+        const patientId = sanitizeString(req.resolvedPatientId, 120);
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const authority = await supabase.rpc('patient_shared_chart_case_authority_v1', {
+          p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
+        });
+        if (authority.error) throw authority.error;
+        if (authority.data?.canDelegate !== true) {
+          return res.status(403).json({ success: false, error: 'SHARED_CHART_CASE_LEAD_REQUIRED' });
+        }
+        const links = await supabase.from('patient_professional_links')
+          .select('professional_id').eq('organization_id', clinicId)
+          .eq('patient_id', patientId).eq('status', 'active').limit(100);
+        if (links.error) throw links.error;
+        const ids = Array.from(new Set((links.data || [])
+          .map((row: any) => sanitizeString(row.professional_id, 120)).filter(isUuid))) as string[];
+        if (!ids.length) return res.json({ success: true, data: [] });
+        const [members, profiles, grants] = await Promise.all([
+          supabase.from('clinic_memberships').select('user_id,role')
+            .eq('clinic_id',clinicId).eq('status','active').in('user_id',ids).limit(100),
+          supabase.from('professional_profiles').select('user_id,full_name').in('user_id',ids).limit(100),
+          supabase.from('patient_shared_graph_delegations').select('professional_user_id,revoked_at')
+            .eq('clinic_id',clinicId).eq('patient_id',patientId)
+            .in('professional_user_id',ids).limit(100),
+        ]);
+        if (members.error || profiles.error || grants.error) throw members.error || profiles.error || grants.error;
+        const names = new Map((profiles.data || []).map((p: any) => [p.user_id, sanitizeTextField(p.full_name, 120)]));
+        const activeGrants = new Set((grants.data || []).filter((g: any) => !g.revoked_at).map((g: any) => g.professional_user_id));
+        const people = (members.data || [])
+          .filter((m: any) => ['therapist','supervisor'].includes(String(m.role || '').toLowerCase()))
+          .map((m: any) => ({
+            id: m.user_id, name: names.get(m.user_id) || 'Profissional',
+            delegated: activeGrants.has(m.user_id),
+          }));
+        return res.json({ success: true, data: people });
+      } catch (error: any) {
+        return sendRouteDbError(res, '/api/patients/:patientId/shared-chart/delegations [GET]', error);
+      }
+    }
+  );
+
+  app.post(
+    '/api/patients/:patientId/shared-chart/delegations',
+    portalActionLimiter,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'),
+    checkSharedChartProfessionalPatientScope,
+    async (req: any, res) => {
+      try {
+        if (!enforcePayloadLimit(req, res, 2048, 'Autorização de gráfico por caso')) return;
+        const actorId = sanitizeString(req.session.user?.id, 120);
+        const clinicId = sanitizeString(req.resolvedPatientClinicId, 120);
+        const patientId = sanitizeString(req.resolvedPatientId, 120);
+        const professionalId = sanitizeString(req.body?.professionalId, 120);
+        const allow = req.body?.allow;
+        if (!isUuid(professionalId) || typeof allow !== 'boolean') {
+          return res.status(400).json({ success: false, error: 'SHARED_CHART_DELEGATION_INVALID' });
+        }
+        const result = await supabase.rpc('set_patient_shared_chart_case_delegation_v2', {
+          p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
+          p_professional_id: professionalId, p_allow: allow,
+        });
+        if (result.error) throw result.error;
+        return res.json({ success: result.data === true });
+      } catch (error: any) {
+        return sendRouteDbError(res, '/api/patients/:patientId/shared-chart/delegations [POST]', error);
+      }
+    }
+  );
+
   app.get(
     '/api/portal/patients/:patientId/shared-chart',
     noStoreDynamicResponse,
@@ -823,6 +917,21 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
 
         const row = await readSharedChartSelection(clinicId, patientId);
         if (!row) return res.json({ success: true, data: null });
+        // A shared identity is not authorization to view another clinic's chart.
+        // The canonical verified-ID registry is checked only when available.
+        const globalId = sanitizeString(context?.globalPatientIdentityId, 120);
+        if (isUuid(globalId)) {
+          const global = await supabase.from('patient_shared_graph_publications')
+            .select('clinic_id,patient_id,graph_type,graph_key,status')
+            .eq('global_patient_identity_id',globalId).limit(1).maybeSingle();
+          if (global.error) throw global.error;
+          const item = global.data;
+          if (!item || item.status !== 'ACTIVE' || item.clinic_id !== clinicId
+              || item.patient_id !== patientId || item.graph_type !== row.chart_family
+              || item.graph_key !== row.chart_key) {
+            return res.json({ success: true, data: null });
+          }
+        }
         const descriptor = normalizeSharedChartDescriptor(row.chart_reference);
         if (!descriptor || descriptor.family !== sanitizeString(row.chart_family, 32).toUpperCase()) {
           return res.json({ success: true, data: null });
