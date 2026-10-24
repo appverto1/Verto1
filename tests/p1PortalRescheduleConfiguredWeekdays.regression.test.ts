@@ -64,6 +64,21 @@ assert.equal(evaluate(monday, abbreviatedMonday).available, true,
 assert.equal(evaluate(tuesday, abbreviatedMonday).available, false,
   'weekday aliases must not reopen absent days');
 
+// A disabled professional schedule must not suggest slots that the server will reject.
+const inactiveSchedule = { ...configuredMondayOnly, active: false };
+assert.equal(evaluate(monday, inactiveSchedule).available, false);
+assert.equal(evaluate(monday, inactiveSchedule).reasonCode, 'WORK_SCHEDULE_INACTIVE');
+const inactiveSuggestions = buildAvailableRescheduleSlots({
+  dateFrom: '2026-11-02',
+  maxDays: 2,
+  now,
+  minLeadMinutes: 0,
+  durationMinutes: 50,
+  workingSchedule: inactiveSchedule,
+});
+assert.equal(inactiveSuggestions.totalSlots, 0, 'inactive professional must have zero suggestions');
+assert.deepEqual(inactiveSuggestions.days, [], 'inactive professional must have no suggested days');
+
 // Preserve legacy behavior only when there is no configured weekly schedule.
 assert.equal(evaluate(tuesday).available, true,
   'the preexisting fallback for an entirely unconfigured schedule is unchanged');
