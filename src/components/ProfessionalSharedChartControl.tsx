@@ -12,6 +12,7 @@ export function ProfessionalSharedChartControl({
   descriptor,
   isDark = false,
 }: {
+  key?: React.Key;
   patientId: string;
   descriptor: ProfessionalChartDescriptor | null;
   isDark?: boolean;
