@@ -64,6 +64,14 @@ assert.match(delegation, /result\?\.success === true/);
 assert.match(service, /getPatientSharedChartDelegations/);
 assert.match(service, /savePatientSharedChartDelegation/);
 assert.doesNotMatch(delegation, /\.rpc\(/, 'browser must not call privileged RPC');
+const server = read('server.ts');
+const legacyStart = server.indexOf("app.get('/api/portal/patients/:patientId/mastery-growth'");
+const legacyEnd = server.indexOf("app.get('/api/portal/context'", legacyStart);
+assert.ok(legacyStart > 0 && legacyEnd > legacyStart, 'legacy patient portal route exists once');
+const legacyPortalRoute = server.slice(legacyStart, legacyEnd);
+assert.match(legacyPortalRoute, /GRAPH_NOT_SHARED/,'legacy endpoint cannot bypass canonical graph publication');
+assert.doesNotMatch(legacyPortalRoute, /await readPatientMasteryGrowthEvents/,
+  'portal may not read legacy mastery graph without publication');
 const patient = read('src/components/PatientDashboard.tsx');
 assert.match(patient, /<AdultWellbeingTrendChart/);
 assert.match(patient, /<PortalSharedClinicalChart patientId=/);
