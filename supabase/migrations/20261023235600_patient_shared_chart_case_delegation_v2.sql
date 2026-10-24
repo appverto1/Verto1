@@ -79,7 +79,8 @@ create or replace function public.set_patient_shared_chart_case_delegation_v2(
   p_actor_id uuid,p_clinic_id uuid,p_patient_id uuid,p_professional_id uuid,p_allow boolean
 ) returns boolean language plpgsql security invoker
 set search_path = pg_catalog, public
-as $$
+as $
+declare v_changes integer:=0;
 begin
   if p_actor_id is null or p_clinic_id is null or p_patient_id is null
      or p_professional_id is null or p_actor_id=p_professional_id or p_allow is null then
@@ -108,10 +109,14 @@ begin
   )
   on conflict (patient_id,clinic_id,professional_user_id)
   do update set granted_by=excluded.granted_by,granted_at=excluded.granted_at,
-    revoked_at=excluded.revoked_at,revoked_by=excluded.revoked_by;
-  insert into public.patient_shared_chart_delegation_audit(
-    clinic_id,patient_id,professional_user_id,actor_id,allowed
-  ) values (p_clinic_id,p_patient_id,p_professional_id,p_actor_id,p_allow);
+    revoked_at=excluded.revoked_at,revoked_by=excluded.revoked_by
+  where (patient_shared_graph_delegations.revoked_at is null) is distinct from p_allow;
+  get diagnostics v_changes=row_count;
+  if v_changes>0 then
+    insert into public.patient_shared_chart_delegation_audit(
+      clinic_id,patient_id,professional_user_id,actor_id,allowed
+    ) values (p_clinic_id,p_patient_id,p_professional_id,p_actor_id,p_allow);
+  end if;
   return true;
 end
 $$;
