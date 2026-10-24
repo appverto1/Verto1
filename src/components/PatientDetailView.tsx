@@ -13481,7 +13481,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               <SecureImage
                 src={resolveFileViewUrl(previewFile)}
                 alt={previewFile.name}
-                className="w-full rounded-xl border border-slate-200"
+                className="block w-full h-auto max-h-[calc(85dvh-10rem)] object-contain rounded-xl border border-slate-200"
                 fallback={<p className="text-sm text-red-500">Pré-visualização bloqueada por segurança de mídia.</p>}
               />
             ) : previewFile.type?.includes("pdf") && resolveFileViewUrl(previewFile) ? (
