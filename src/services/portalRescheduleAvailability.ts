@@ -367,6 +367,14 @@ const normalizeWorkingDays = (schedule: PortalProfessionalWorkingSchedule | null
   return days;
 };
 
+// An explicitly configured empty week is closed. Only an absent weekly map
+// may use the legacy 08:00–18:00 fallback.
+const hasConfiguredWorkingDays = (schedule: PortalProfessionalWorkingSchedule | null | undefined) => {
+  const source = asRecord(schedule);
+  const days = source.days ?? source.weekly ?? source.weeklySchedule ?? source.weekly_schedule;
+  return days !== null && typeof days === 'object' && !Array.isArray(days);
+};
+
 const normalizeScheduleExceptions = (
   schedule: PortalProfessionalWorkingSchedule | null | undefined,
   extraExceptions: PortalScheduleException[] | undefined,
@@ -480,7 +488,7 @@ export function evaluateRequestedRescheduleSlot(params: {
   const fallbackWorkdayStart = readString(params.workdayStart) || DEFAULT_WORKDAY_START;
   const fallbackWorkdayEnd = readString(params.workdayEnd) || DEFAULT_WORKDAY_END;
   const workingDays = normalizeWorkingDays(schedule);
-  const scheduleConfigured = Boolean(schedule && Object.keys(workingDays).length > 0);
+  const scheduleConfigured = Boolean(schedule && hasConfiguredWorkingDays(schedule));
   const daySource = scheduleConfigured
     ? resolveDaySource(workingDays, dateKey)
     : [{ start: fallbackWorkdayStart, end: fallbackWorkdayEnd }];
@@ -552,7 +560,7 @@ export function buildAvailableRescheduleSlots(params: {
   const durationMinutes = clampNumber(params.durationMinutes, 50, 15, 360);
   const windowDays = clampNumber(params.maxDays, PORTAL_RESCHEDULE_DEFAULT_WINDOW_DAYS, 1, 30);
   const schedule = params.workingSchedule && typeof params.workingSchedule === 'object' ? params.workingSchedule : null;
-  const scheduleConfigured = Boolean(schedule && Object.keys(normalizeWorkingDays(schedule)).length > 0 && schedule.active !== false);
+  const scheduleConfigured = Boolean(schedule && hasConfiguredWorkingDays(schedule) && schedule.active !== false);
   const stepMinutes = clampNumber(
     params.stepMinutes ?? schedule?.stepMinutes ?? schedule?.step_minutes,
     scheduleConfigured ? durationMinutes : DEFAULT_STEP_MINUTES,
