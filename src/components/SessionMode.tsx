@@ -8096,27 +8096,6 @@ export const SessionMode = ({
               <span className="mt-1.5 block text-right text-[11px] text-gray-400">{sessionNote.length}/4000</span>
             </label>
 
-            <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="rounded-2xl bg-[#F8FAFF] p-3">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Tentativas</p>
-                <p className="mt-1 text-xl font-semibold text-gray-900">{sessionSummary.trialTotal}</p>
-              </div>
-              <div className="rounded-2xl bg-[#F8FAFF] p-3">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Comportamentos</p>
-                <p className="mt-1 text-xl font-semibold text-gray-900">{sessionSummary.behaviorTotal}</p>
-              </div>
-              <div className="rounded-2xl bg-[#F8FAFF] p-3">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Sincronização</p>
-                <p className={`mt-1 text-sm font-semibold ${sessionSummary.errorTotal > 0 || sessionSummary.localTotal > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                  {sessionSummary.errorTotal > 0 ? 'Com erro' : sessionSummary.localTotal > 0 ? 'Pendente' : 'Atualizada'}
-                </p>
-              </div>
-              <div className="rounded-2xl bg-[#F8FAFF] p-3">
-                <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400">Prontuário</p>
-                <p className="mt-1 text-sm font-semibold text-gray-700">Salvamento local ativo</p>
-              </div>
-            </div>
-
             <div className="mt-6 flex flex-col gap-3 sm:flex-row">
               <button onClick={onClose} className="flex-1 rounded-2xl border border-blue-100 bg-white py-3 text-sm font-semibold text-gray-600 transition hover:bg-gray-50">
                 Voltar ao prontuário
