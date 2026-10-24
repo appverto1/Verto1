@@ -5,7 +5,7 @@ import { dataService } from '../services/dataService';
 type ProfessionalPermission = { id: string; name: string; delegated: boolean };
 
 /** Loaded only by case leadership on explicit interaction, not on every chart render. */
-export function PatientSharedChartDelegationPanel({ patientId }: { patientId: string }) {
+export function PatientSharedChartDelegationPanel({ patientId }: { key?: React.Key; patientId: string }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [people, setPeople] = useState<ProfessionalPermission[]>([]);
