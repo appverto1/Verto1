@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Share2, Trash2 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { PatientSharedChartDelegationPanel } from './PatientSharedChartDelegationPanel';
@@ -23,12 +23,17 @@ export function ProfessionalSharedChartControl({
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
   const [governance, setGovernance] = useState({ canPublish: false, canDelegate: false });
+  const lastRequest = useRef(0);
 
   const reload = useCallback(async () => {
+    const requestId = ++lastRequest.current;
     setLoading(true);
     setReady(false);
+    setConfirmed(null);
+    setGovernance({ canPublish: false, canDelegate: false });
     setError('');
     const response: any = await dataService.getPatientSharedChartSelection(patientId);
+    if (lastRequest.current !== requestId) return;
     if (response?.success !== true) {
       setError('Não foi possível carregar o estado do compartilhamento.');
       setLoading(false);
@@ -114,7 +119,7 @@ export function ProfessionalSharedChartControl({
       {ready && !governance.canPublish && <p className="mt-2 text-xs opacity-75">A publicação depende da liderança do caso ou de autorização profissional ativa.</p>}
       {error && <p role="alert" className="mt-2 text-xs text-rose-600">{error}</p>}
       {message && <p role="status" className="mt-2 text-xs text-emerald-600">{message}</p>}
-      {ready && governance.canDelegate && <PatientSharedChartDelegationPanel patientId={patientId} />}
+      {ready && governance.canDelegate && <PatientSharedChartDelegationPanel key={patientId} patientId={patientId} />}
     </section>
   );
 }
