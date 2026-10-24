@@ -11697,7 +11697,7 @@ export function CoordinatorDashboard({
             {patientSidebarExpanded && <span className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-400">Gestão</span>}
           </div>
 
-          <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
+          <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden pr-1">
             {renderNavigationGroups({
               expanded: patientSidebarExpanded,
               iconSize: 20,
@@ -11841,7 +11841,7 @@ export function CoordinatorDashboard({
                   >
                     Voltar ao painel
                   </button>
-                  <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+                  <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">
                     {renderNavigationGroups({
                       expanded: true,
                       iconSize: 18,
@@ -12010,7 +12010,7 @@ export function CoordinatorDashboard({
           {isSidebarExpanded && <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">Gestão</span>}
         </div>
 
-        <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar pr-1">
+        <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden pr-1">
           {renderNavigationGroups({
             expanded: isSidebarExpanded,
             iconSize: 20,
@@ -12164,7 +12164,7 @@ export function CoordinatorDashboard({
                   onClose={() => setIsMobileMenuOpen(false)}
                 />
 
-                <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+                <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">
                   {renderNavigationGroups({
                     expanded: true,
                     iconSize: 18,

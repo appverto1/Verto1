@@ -870,7 +870,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900 flex">
-      <aside className="w-72 bg-white/80 backdrop-blur border-r border-slate-100 h-screen sticky top-0 flex flex-col">
+      <aside className="w-72 bg-white/80 backdrop-blur border-r border-slate-100 h-screen sticky top-0 flex flex-col overflow-x-hidden">
         <div className="p-8 flex items-center gap-3">
           <LogoVerto size={42} />
           <div>
@@ -879,7 +879,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         </div>
 
-        <nav className="px-4 space-y-2">
+        <nav className="px-4 space-y-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />

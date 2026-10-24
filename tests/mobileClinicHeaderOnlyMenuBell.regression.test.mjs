@@ -50,7 +50,7 @@ assert.match(source, /!isMobileHeader && hasCapability\("communication\.billing_
 assert.match(source, /setIsMobileMenuOpen\(false\);/);
 // The hamburger contains a single navigation list: account and settings
 // actions must be its final section, rather than a gear opening a second menu.
-const drawers = [...source.matchAll(/<nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar">([\s\S]*?)<\/nav>/g)];
+const drawers = [...source.matchAll(/<nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">([\s\S]*?)<\/nav>/g)];
 assert.equal(drawers.length, 2, 'both mobile drawers must share unified navigation and settings');
 for (const [index, match] of drawers.entries()) {
   const drawer = match[1];

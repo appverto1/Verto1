@@ -261,7 +261,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
     <div className="min-h-screen bg-[#F4F7FE] flex font-sans text-gray-900">
       {/* Sidebar */}
       <aside
-        className={`${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-gray-100 flex flex-col sticky top-0 h-screen transition-all duration-300 ease-in-out z-50`}
+        className={`${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-gray-100 flex flex-col sticky top-0 h-screen transition-all duration-300 ease-in-out z-50 overflow-x-hidden`}
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
         onFocusCapture={() => setIsSidebarExpanded(true)}
@@ -274,7 +274,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
           {isSidebarExpanded && <span className="text-sm font-medium tracking-wide text-slate-500">Admin</span>}
         </div>
 
-        <nav className="flex-1 px-4 py-4 space-y-2">
+        <nav className="flex-1 px-4 py-4 space-y-2 min-h-0 overflow-y-auto overflow-x-hidden">
           <SidebarItem 
             icon={<LayoutDashboard size={20} />} 
             label={isSidebarExpanded ? "Dashboard" : ""} 

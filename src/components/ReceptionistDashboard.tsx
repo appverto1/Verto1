@@ -903,7 +903,7 @@ export const ReceptionistDashboard = ({
     <div className="flex min-h-screen bg-[#F4F7FE] font-sans overflow-hidden">
       {/* Desktop Sidebar */}
       <aside
-        className={`hidden lg:flex flex-col ${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto shrink-0 transition-all duration-300 ease-in-out z-50`}
+        className={`hidden lg:flex flex-col ${isSidebarExpanded ? 'w-72 -mr-48 shadow-xl shadow-slate-900/5' : 'w-24'} bg-white border-r border-slate-100 p-6 sticky top-0 h-screen overflow-y-auto shrink-0 transition-all duration-300 ease-in-out z-50 overflow-x-hidden`}
         onMouseEnter={() => setIsSidebarExpanded(true)}
         onMouseLeave={() => setIsSidebarExpanded(false)}
         onFocusCapture={() => setIsSidebarExpanded(true)}
@@ -915,7 +915,7 @@ export const ReceptionistDashboard = ({
           <LogoVerto size={40} showText={isSidebarExpanded} />
         </div>
 
-        <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2">
+        <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar pr-2 min-h-0 overflow-x-hidden">
           {receptionistSidebarItems.map((item) => {
             const isActive = view === item.id;
             const Icon = item.icon;
