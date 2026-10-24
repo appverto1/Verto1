@@ -79,7 +79,7 @@ create or replace function public.set_patient_shared_chart_case_delegation_v2(
   p_actor_id uuid,p_clinic_id uuid,p_patient_id uuid,p_professional_id uuid,p_allow boolean
 ) returns boolean language plpgsql security invoker
 set search_path = pg_catalog, public
-as $
+as $$
 declare v_changes integer:=0;
 begin
   if p_actor_id is null or p_clinic_id is null or p_patient_id is null
