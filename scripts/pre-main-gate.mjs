@@ -297,6 +297,7 @@ const criticalTests = [
   'tests/p1AnamnesisEditorDocumentsCharts.regression.test.mjs',
   'tests/clinicalProgramChangeOverview.regression.test.mjs',
   'tests/sidebarHoverExpansion.regression.test.mjs',
+  'tests/p3SidebarNoHorizontalScroll.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',
   'tests/salesSuperAdminCommercialModel20260830.regression.test.mjs',
   'tests/salesExactPerPatientBillingP0000.test.ts',
