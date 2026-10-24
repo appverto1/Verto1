@@ -58,6 +58,22 @@ $$;
 revoke execute on function public.patient_shared_chart_case_authority_v1(uuid,uuid,uuid) from public,anon,authenticated;
 grant execute on function public.patient_shared_chart_case_authority_v1(uuid,uuid,uuid) to service_role;
 
+-- Minimal append-only audit; no clinical series, service role only.
+create table if not exists public.patient_shared_chart_delegation_audit (
+  id bigint generated always as identity primary key,
+  clinic_id uuid not null,
+  patient_id uuid not null,
+  professional_user_id uuid not null,
+  actor_id uuid not null,
+  allowed boolean not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists patient_shared_chart_delegation_audit_scope_idx
+  on public.patient_shared_chart_delegation_audit(clinic_id,patient_id,created_at desc);
+alter table public.patient_shared_chart_delegation_audit enable row level security;
+revoke all on public.patient_shared_chart_delegation_audit from public,anon,authenticated;
+grant insert,select on public.patient_shared_chart_delegation_audit to service_role;
+
 -- Atomic per-case grant/revocation; no global-ID prerequisite.
 create or replace function public.set_patient_shared_chart_case_delegation_v2(
   p_actor_id uuid,p_clinic_id uuid,p_patient_id uuid,p_professional_id uuid,p_allow boolean
@@ -93,6 +109,9 @@ begin
   on conflict (patient_id,clinic_id,professional_user_id)
   do update set granted_by=excluded.granted_by,granted_at=excluded.granted_at,
     revoked_at=excluded.revoked_at,revoked_by=excluded.revoked_by;
+  insert into public.patient_shared_chart_delegation_audit(
+    clinic_id,patient_id,professional_user_id,actor_id,allowed
+  ) values (p_clinic_id,p_patient_id,p_professional_id,p_actor_id,p_allow);
   return true;
 end
 $$;
