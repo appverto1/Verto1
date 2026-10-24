@@ -272,6 +272,7 @@ const criticalTests = [
   'tests/helpTutorialSupport.test.ts',
   'tests/patientTimeReportRoute.test.ts',
   'tests/abaV3DrainStatusHandler.test.ts',
+  'tests/p3PtsBackNavigationHeader.regression.test.mjs',
   'tests/p3SingleProfessionalTransferAction.regression.test.mjs',
   'tests/p3PatientTaskOverdueBadge.regression.test.mjs',
   'tests/p3OnboardingAvailabilityGuidance.regression.test.mjs',
