@@ -54374,8 +54374,9 @@ async function startServer() {
       if (!isUuid(resolvedPatientId) || !allowedPatientIds.has(resolvedPatientId)) {
         return res.status(403).json({ success: false, error: 'Acesso negado.' });
       }
-      const data = await readPatientMasteryGrowthEvents({ patientId: resolvedPatientId, clinicId: context?.clinicId });
-      return res.json({ success: true, data });
+      // No direct clinical chart projection may bypass the selected publication.
+      // The canonical PLAN_PTS/ABA_V3 portal endpoint is /shared-chart.
+      return res.status(403).json({ success: false, error: 'GRAPH_NOT_SHARED' });
     } catch (error: any) {
       return sendRouteDbError(res, '/api/portal/patients/:patientId/mastery-growth [GET]', error, {
         requestId: requestIdForLogs(req),
