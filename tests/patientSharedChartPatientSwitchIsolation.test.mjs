@@ -5,6 +5,8 @@ const control = readFileSync('src/components/ProfessionalSharedChartControl.tsx'
 const panel = readFileSync('src/components/PatientSharedChartDelegationPanel.tsx', 'utf8');
 const routes = readFileSync('services/patientSharedChartRoutes.ts', 'utf8');
 
+assert.match(workspace, /setPlanDescriptor\(null\);[\s\S]*setAbaDescriptor\(null\);[\s\S]*setView\('plans'\);/,
+  'switching patients must reset the source descriptor before a new graph can be published');
 assert.match(workspace, /<ProfessionalSharedChartControl key=\{patientId\} patientId=\{patientId\}/,
   'changing patients must unmount previous chart/share state');
 assert.match(control, /const requestId = \+\+lastRequest\.current/);
