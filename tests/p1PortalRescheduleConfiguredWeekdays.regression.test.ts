@@ -45,6 +45,20 @@ assert.deepEqual(slots.days.map((day) => day.date), ['2026-11-02'],
   'slot suggestions must never offer omitted weekdays');
 assert.ok(slots.totalSlots > 0, 'configured Monday must retain valid slots');
 
+// An explicit empty list must not be replaced by the legacy 08:00–18:00 window.
+const emptyMonday = { active: true, days: { monday: { enabled: true, periods: [] } } };
+assert.equal(evaluate(monday, emptyMonday).available, false);
+assert.equal(evaluate(monday, emptyMonday).reasonCode, 'OUTSIDE_WORKING_HOURS');
+const emptyMondaySlots = buildAvailableRescheduleSlots({
+  dateFrom: '2026-11-02', maxDays: 1, now, minLeadMinutes: 0,
+  durationMinutes: 50, workingSchedule: emptyMonday,
+});
+assert.equal(emptyMondaySlots.totalSlots, 0, 'empty configured day must not produce suggestions');
+const emptyRanges = { active: true, days: { monday: { enabled: true, ranges: [] } } };
+assert.equal(evaluate(monday, emptyRanges).available, false, 'empty ranges also close the day');
+const legacyDay = { active: true, days: { monday: { enabled: true } } };
+assert.equal(evaluate(monday, legacyDay).available, true, 'missing periods retains legacy fallback');
+
 const explicitTuesdayClosed = {
   ...configuredMondayOnly,
   days: {
