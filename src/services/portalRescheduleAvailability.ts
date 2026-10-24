@@ -345,7 +345,9 @@ const normalizeDayPeriods = (daySource: unknown, fallbackStart: string, fallback
   const day = asRecord(daySource);
   if (day.enabled === false || day.active === false) return { periods: [], blockedPeriods: [] };
   const rawPeriods = toArray(day.periods ?? day.ranges ?? day.shifts);
-  const periods = (rawPeriods.length > 0 ? rawPeriods : [{ start: fallbackStart, end: fallbackEnd }])
+  // Explicitly empty periods close the day; only missing fields retain the legacy fallback.
+  const hasExplicitPeriods = Array.isArray(day.periods) || Array.isArray(day.ranges) || Array.isArray(day.shifts);
+  const periods = (rawPeriods.length > 0 ? rawPeriods : hasExplicitPeriods ? [] : [{ start: fallbackStart, end: fallbackEnd }])
     .map((period) => normalizePeriod(period, fallbackStart, fallbackEnd))
     .filter(Boolean) as ReturnType<typeof normalizePeriod>[];
   const rawBlocks = [
