@@ -271,6 +271,7 @@ export const AnamnesisModal = ({
   const [questionEditors, setQuestionEditors] = useState<Record<string, QuestionEditorDraft>>({});
   const [questionErrors, setQuestionErrors] = useState<Record<string, string>>({});
   const [templateDirty, setTemplateDirty] = useState(false);
+  const [draftRestoreCandidate, setDraftRestoreCandidate] = useState<{ storageKey: string; payload: any } | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
   const [templateName, setTemplateName] = useState('Ficha personalizada');
   const [templateDescription, setTemplateDescription] = useState('');
@@ -319,6 +320,7 @@ export const AnamnesisModal = ({
   useEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
+      setDraftRestoreCandidate(null);
       return;
     }
 
@@ -367,42 +369,56 @@ export const AnamnesisModal = ({
 
   useEffect(() => {
     if (!isOpen || !canEditTemplate || view !== 'template' || templateDirtyRef.current) return;
+    if (draftRestoreCandidate?.storageKey === templateDraftStorageKey) return;
     try {
       const raw = localStorage.getItem(templateDraftStorageKey);
       if (!raw) return;
       const parsed = JSON.parse(raw);
-      const draftTemplate = parsed?.template;
-      if (!draftTemplate || typeof draftTemplate !== 'object') return;
-      const shouldRestore = confirm('Existe um rascunho não salvo desta ficha de anamnese. Deseja restaurar?');
-      if (shouldRestore) {
-        setTemplateState(draftTemplate as AnamnesisTemplate);
-        setTemplateName(String(parsed?.templateName || 'Ficha personalizada').slice(0, 80));
-        setTemplateDescription(String(parsed?.templateDescription || '').slice(0, 240));
-        setTemplateAgeMinYears(String(parsed?.templateAgeMinYears || ''));
-        setTemplateAgeMaxYears(String(parsed?.templateAgeMaxYears || ''));
-        setTemplatePatientProfileType(String(parsed?.templatePatientProfileType || ''));
-        if (parsed?.questionEditors && typeof parsed.questionEditors === 'object') {
-          setQuestionEditors(parsed.questionEditors as Record<string, QuestionEditorDraft>);
-        } else if (parsed?.draftQuestion && typeof parsed.draftQuestion === 'object') {
-          // Compatibilidade com rascunhos criados antes do editor por seção.
-          const legacySectionId = String(parsed?.editorSectionId || '').trim();
-          if (legacySectionId) {
-            setQuestionEditors({
-              [legacySectionId]: {
-                editingQuestionId: String(parsed?.editingQuestionId || parsed.draftQuestion.id || 'new'),
-                draftQuestion: parsed.draftQuestion as QuestionDraft
-              }
-            });
-          }
-        }
-        markTemplateDirty(true);
-      } else {
-        localStorage.removeItem(templateDraftStorageKey);
-      }
+      if (!parsed?.template || typeof parsed.template !== 'object') return;
+      setDraftRestoreCandidate({ storageKey: templateDraftStorageKey, payload: parsed });
     } catch {
-      // noop
+      // Rascunhos locais inválidos não devem bloquear a ficha.
     }
-  }, [isOpen, canEditTemplate, view, templateDraftStorageKey]);
+  }, [isOpen, canEditTemplate, view, templateDraftStorageKey, draftRestoreCandidate]);
+
+  const resolveDraftRestore = (restore: boolean) => {
+    if (!draftRestoreCandidate) return;
+    const { storageKey, payload: parsed } = draftRestoreCandidate;
+    setDraftRestoreCandidate(null);
+    if (storageKey !== templateDraftStorageKey) return;
+
+    if (!restore) {
+      try {
+        localStorage.removeItem(storageKey);
+      } catch {
+        // O editor continua disponível mesmo sem acesso ao armazenamento local.
+      }
+      return;
+    }
+
+    setTemplateState(parsed.template as AnamnesisTemplate);
+    setTemplateName(String(parsed?.templateName || 'Ficha personalizada').slice(0, 80));
+    setTemplateDescription(String(parsed?.templateDescription || '').slice(0, 240));
+    setTemplateAgeMinYears(String(parsed?.templateAgeMinYears || ''));
+    setTemplateAgeMaxYears(String(parsed?.templateAgeMaxYears || ''));
+    setTemplatePatientProfileType(String(parsed?.templatePatientProfileType || ''));
+    if (parsed?.questionEditors && typeof parsed.questionEditors === 'object') {
+      setQuestionEditors(parsed.questionEditors as Record<string, QuestionEditorDraft>);
+    } else if (parsed?.draftQuestion && typeof parsed.draftQuestion === 'object') {
+      // Compatibilidade com rascunhos anteriores ao editor por seção.
+      const legacySectionId = String(parsed?.editorSectionId || '').trim();
+      if (legacySectionId) {
+        setQuestionEditors({
+          [legacySectionId]: {
+            editingQuestionId: String(parsed?.editingQuestionId || parsed.draftQuestion.id || 'new'),
+            draftQuestion: parsed.draftQuestion as QuestionDraft
+          }
+        });
+      }
+    }
+    // Restaurar somente no editor; persistência clínica continua exclusiva do botão Salvar.
+    markTemplateDirty(true);
+  };
 
   useEffect(() => {
     if (!isOpen || !canEditTemplate || view !== 'template' || (!templateDirty && Object.keys(questionEditors).length === 0)) return;
@@ -1377,6 +1393,48 @@ export const AnamnesisModal = ({
           )}
         </div>
       </div>
+      {draftRestoreCandidate && (
+        <div className="fixed inset-0 z-[190] flex items-center justify-center bg-slate-950/65 px-4 py-6">
+          <div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="anamnesis-draft-restore-title"
+            aria-describedby="anamnesis-draft-restore-description"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') event.preventDefault();
+              if (event.key !== 'Tab') return;
+              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
+              const first = buttons[0];
+              const last = buttons[buttons.length - 1];
+              if (!first || !last) return;
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault();
+                last.focus();
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault();
+                first.focus();
+              }
+            }}
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+          >
+            <h3 id="anamnesis-draft-restore-title" className="text-lg font-bold text-slate-900">
+              Restaurar rascunho da anamnese?
+            </h3>
+            <p id="anamnesis-draft-restore-description" className="mt-2 text-sm leading-6 text-slate-600">
+              Encontramos alterações ainda não salvas desta ficha. Restaurar recupera a edição local,
+              mas não grava dados clínicos: use Salvar mudanças quando terminar.
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button type="button" onClick={() => resolveDraftRestore(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Descartar rascunho
+              </button>
+              <button type="button" autoFocus onClick={() => resolveDraftRestore(true)} className="rounded-xl bg-[#7a32fc] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90">
+                Restaurar rascunho
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
