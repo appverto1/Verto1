@@ -586,7 +586,10 @@ export function buildAvailableRescheduleSlots(params: {
   for (let dayIndex = 0; dayIndex < windowDays; dayIndex += 1) {
     const dateKey = addDaysToDateKey(firstDateKey, dayIndex);
     const group: PortalRescheduleSlotGroup = { date: dateKey, label: formatDateLabel(dateKey), slots: [] };
-    const daySource = scheduleConfigured ? resolveDaySource(workingDays, dateKey) : [{ start: fallbackWorkdayStart, end: fallbackWorkdayEnd }];
+    // An explicitly inactive professional schedule is closed, never the legacy 08:00–18:00 fallback.
+    const daySource = schedule?.active === false
+      ? false
+      : scheduleConfigured ? resolveDaySource(workingDays, dateKey) : [{ start: fallbackWorkdayStart, end: fallbackWorkdayEnd }];
     const { periods, blockedPeriods } = normalizeDayPeriods(daySource, fallbackWorkdayStart, fallbackWorkdayEnd);
     const dateBlockedPeriods = [
       ...blockedPeriods,
