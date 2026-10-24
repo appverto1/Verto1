@@ -275,6 +275,7 @@ const criticalTests = [
   'tests/p3PtsBackNavigationHeader.regression.test.mjs',
   'tests/p3SingleProfessionalTransferAction.regression.test.mjs',
   'tests/p3PatientTaskOverdueBadge.regression.test.mjs',
+  'tests/p3PatientTaskModalViewport.regression.test.mjs',
   'tests/p3OnboardingAvailabilityGuidance.regression.test.mjs',
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
   'tests/p1PortalRescheduleConfiguredWeekdays.regression.test.ts',

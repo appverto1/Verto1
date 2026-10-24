@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { countCanonicalFamilyStars } from '../utils/familyDiaryStars';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, LogOut, BookOpen, X, BatteryCharging, BatteryFull, Zap, Check, RefreshCcw, Smile, ChevronDown, ChevronLeft, ChevronRight, CheckCircle, Camera, Trash2, Pencil, Menu, MessageCircle, Settings, User, MapPin, Bell, CalendarDays, Clock, Ban, FileSignature, FileText } from 'lucide-react';
@@ -4424,8 +4425,8 @@ ${interventionImages.join('\n')}` : ''
           </div>
         </div>
       )}
-      {selectedTask && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
+      {selectedTask && typeof document !== 'undefined' && createPortal(
+        <div role="dialog" aria-modal="true" aria-label="Concluir tarefa" className="fixed inset-0 z-[1000] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in">
           <div className="bg-white w-full max-w-sm max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain rounded-[32px] p-6 shadow-2xl animate-pop relative">
             <button type="button" aria-label="Fechar tarefa" onClick={(event) => { event.preventDefault(); event.stopPropagation(); closeTaskModal(); }} className="absolute top-4 right-4 z-30 inline-flex h-11 w-11 touch-manipulation items-center justify-center rounded-xl text-gray-400 hover:bg-gray-50 hover:text-gray-600" > <X size={24} /> </button>
             <div className="text-center mb-6">
@@ -4668,7 +4669,7 @@ ${interventionImages.join('\n')}` : ''
             )}
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 };
