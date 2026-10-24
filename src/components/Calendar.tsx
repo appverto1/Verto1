@@ -194,8 +194,8 @@ export const getAppointmentStatusColor = (status: any) => {
       dot: 'bg-rose-500',
       badge: 'border-rose-200 bg-rose-50 text-rose-700',
       soft: 'border-rose-100 bg-rose-50/70 text-rose-950',
-      card: 'border-red-700 bg-red-700 text-white shadow-[0_10px_26px_rgba(185,28,28,0.34)] hover:bg-red-600',
-      text: 'text-rose-700',
+      card: 'border-red-400 bg-red-50 text-red-900 shadow-[0_8px_20px_rgba(185,28,28,0.14)] hover:bg-red-100',
+      text: 'text-red-700',
       icon: Ban
     },
     CANCELLED: {
@@ -3164,7 +3164,7 @@ export const ClinicalAgendaBoard = ({
     const style = getSessionTypeStyle(event.type);
     const statusColor = getAppointmentPatientConfirmationVisualState(event);
     const StatusIcon = statusColor.icon;
-    const eventTextClass = statusColor.canonical === 'RESCHEDULE_REQUESTED' ? 'text-amber-950' : 'text-white';
+    const eventTextClass = statusColor.canonical === 'RESCHEDULE_REQUESTED' ? 'text-amber-950' : statusColor.canonical === 'CANCEL_REQUESTED' ? 'text-red-700' : 'text-white';
     const eventFinance = event?.patientFinance || null;
     const eventFinanceStatus = resolvePatientFinancialStatus(eventFinance);
     const eventFinanceAmounts = getPatientFinanceAmounts(eventFinance);
@@ -3386,7 +3386,8 @@ export const ClinicalAgendaBoard = ({
                     const statusColor = getAppointmentPatientConfirmationVisualState(event);
                     const StatusIcon = statusColor.icon;
                     const isPendingReschedule = statusColor.canonical === 'RESCHEDULE_REQUESTED';
-                    const eventTextClass = isPendingReschedule ? 'text-amber-950' : 'text-white';
+                    const isPendingCancellation = statusColor.canonical === 'CANCEL_REQUESTED';
+                    const eventTextClass = isPendingReschedule ? 'text-amber-950' : isPendingCancellation ? 'text-red-700' : 'text-white';
                     const accessibleLabel = `${event.time}, ${event.patientName}. ${statusColor.label}.`;
                     return (
                       <button
@@ -3400,7 +3401,7 @@ export const ClinicalAgendaBoard = ({
                         }}
                         className={`flex min-h-[20px] w-full items-center gap-1 rounded-md border px-1.5 py-0 text-left text-[10px] font-medium leading-4 transition-colors ${statusColor.card}`}
                       >
-                        {isPendingReschedule && <StatusIcon size={10} className="shrink-0" aria-hidden="true" />}
+                        {(isPendingReschedule || isPendingCancellation) && <StatusIcon size={10} className="shrink-0" aria-hidden="true" />}
                         <span className={`shrink-0 tabular-nums ${eventTextClass}`}>{event.time}</span>
                         <span className={`min-w-0 truncate ${eventTextClass}`}>{event.patientName}</span>
                       </button>
@@ -4476,7 +4477,7 @@ export const ClinicalAgendaBoard = ({
                     </span>
                   )}
                 </div>
-                <h3 className="text-xl font-bold">{detailEvent.patientName}</h3>
+                <h3 className={`text-xl font-bold ${detailStatusColor.canonical === 'CANCEL_REQUESTED' ? 'text-red-700' : ''}`}>{detailEvent.patientName}</h3>
                 <p className={`mt-1 text-sm ${isDark ? 'text-slate-300' : 'text-slate-500'}`}>
                   {formatLongDate(detailEvent.start)} · {detailEvent.time} - {detailEvent.endTime}
                 </p>
