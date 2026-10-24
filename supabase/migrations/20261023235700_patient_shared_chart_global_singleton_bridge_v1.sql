@@ -103,3 +103,41 @@ create trigger trg_sync_canonical_shared_chart_v1
 after insert or update or delete on public.patient_shared_chart_selections
 for each row execute function verto_internal_graph.sync_canonical_shared_chart_v1();
 revoke execute on function verto_internal_graph.sync_canonical_shared_chart_v1() from public,anon,authenticated;
+
+-- Reconcile the trigger already installed by the Draft migration in Staging.
+-- Losing a live clinic relationship releases its verified-global ownership;
+-- no chart series or patient record is deleted.
+create or replace function verto_internal_graph.invalidate_patient_shared_graph_on_unlink_v1()
+returns trigger language plpgsql security definer
+set search_path = pg_catalog, public
+as $$
+declare v_previous public.patient_shared_graph_publications%rowtype;
+begin
+  if new.is_active is not true or new.deleted_at is not null
+     or new.archived_at is not null or new.clinic_id is distinct from old.clinic_id
+     or new.global_patient_identity_id is distinct from old.global_patient_identity_id
+     or lower(coalesce(new.relationship_status,'active')) in ('ended','inactive','terminated','revoked') then
+    select * into v_previous from public.patient_shared_graph_publications
+    where clinic_id=old.clinic_id and patient_id=old.id and status='ACTIVE'
+    for update;
+    if found then
+      update public.patient_shared_graph_publications
+      set status='INACTIVE',version=version+1,updated_at=now()
+      where global_patient_identity_id=v_previous.global_patient_identity_id;
+      insert into public.patient_shared_graph_audit(
+        global_patient_identity_id,clinic_id,patient_id,action,old_graph_type,old_graph_key
+      ) values (
+        v_previous.global_patient_identity_id,v_previous.clinic_id,v_previous.patient_id,
+        'AUTO_DISABLE',v_previous.graph_type,v_previous.graph_key
+      );
+    end if;
+  end if;
+  return new;
+end
+$$;
+drop trigger if exists trg_invalidate_patient_shared_graph_on_unlink_v1 on public.patients;
+create trigger trg_invalidate_patient_shared_graph_on_unlink_v1
+after update of is_active,deleted_at,archived_at,clinic_id,global_patient_identity_id,relationship_status
+on public.patients for each row
+execute function verto_internal_graph.invalidate_patient_shared_graph_on_unlink_v1();
+revoke execute on function verto_internal_graph.invalidate_patient_shared_graph_on_unlink_v1() from public,anon,authenticated;
