@@ -203,6 +203,7 @@ const criticalTests = [
   'tests/calendarPatientIdentitySharedRoom.regression.test.ts',
   'tests/abaMeasurementV3CollectionUi.test.mjs',
   'tests/patientCaseTeamCoordinatorAuthority.regression.test.mjs',
+  'tests/p0CaseTeamModalViewport.regression.test.mjs',
   'tests/patientCaseTeamManagerRemoval.regression.test.mjs',
   'tests/patientCaseTeamPrimaryPointerNullable.regression.test.mjs',
   'tests/patientCaseTeamSchemaDriftRecovery.test.mjs',
