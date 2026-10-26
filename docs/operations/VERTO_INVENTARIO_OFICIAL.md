@@ -1,5 +1,7 @@
 # Inventário oficial da Verto — staging
 
+> **Diretriz permanente (26/10/2026):** nenhuma alteração confirmada de cadastro, papel, configuração, clínica ou equipe pode exigir **F5** para surtir efeito. Revalidar informações no momento de uso e/ou invalidar cache por evento, com autorização/tenant do servidor, sem polling constante. Rastreio transversal: [Issue #506](https://github.com/appverto1/Verto1/issues/506). Primeiro caso P0: lista de profissionais elegíveis ao adicionar à equipe do caso, atualmente desatualizada após mudança de papel. Correção em staging proposta; teste autenticado sem F5 e CI completo ainda pendentes.
+
 > **Documento oficial de acompanhamento do inventário.** Histórico consolidado em **09/10/2026**; painel corrente conferido em **24/10/2026** com base no inventário mestre de 08–09/10/2026 e na conferência dos PRs GitHub #333–#340. **Rastreio da governança:** [Issue #341](https://github.com/appverto1/Verto1/issues/341). **Ambiente:** staging; produção não foi alterada nesta conciliação.
 >
 > **Hierarquia de autoridade:** a **Issue GitHub** continua sendo fonte de verdade para requisitos, proprietário, `FACTORY_STATE`, claims, locks, gates e aceite, conforme `docs/factory/GUARDRAILS.md`. **Este arquivo é a fonte oficial única do INVENTÁRIO/visão de prioridades, progresso e links**. Em conflito, revalidar a Issue e a evidência real antes de editar este inventário. O histórico abaixo não reverte o registro atualizado do presente sumário.
