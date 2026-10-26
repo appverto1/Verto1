@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronRight, Plus, UserRoundCheck, UserRoundX, UsersRound, X } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
-import { dataService } from '../services/dataService';
 import {
   PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS,
   isEligiblePatientProfessionalLinkCandidate,
@@ -316,7 +315,7 @@ export const PatientProfessionalLinksPanel = ({
     setCandidateLoadError('');
     setRefreshingCandidates(true);
     try {
-      const result = await dataService.getClinicMembers();
+      const result = await api('/api/clinic/members', { cache: 'no-store' });
       if (!result?.success || !Array.isArray(result?.data)) {
         throw new Error('Não foi possível consultar os membros atuais da clínica.');
       }
