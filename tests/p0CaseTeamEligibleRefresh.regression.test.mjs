@@ -7,9 +7,9 @@ const gate = readFileSync('scripts/pre-main-gate.mjs', 'utf8');
 // Regression: moving a receptionist into a clinical membership makes them eligible
 // without refreshing the browser. The newly opened manager must read current
 // tenant-scoped membership data rather than a stale preloaded parent prop.
-assert.match(panel, /import \{ dataService \} from '\.\.\/services\/dataService'/);
+assert.match(panel, /import \{ getSupabase \} from '\.\.\/lib\/supabase'/);
 assert.match(panel, /const refreshAvailableProfessionals = async \(\) =>/);
-assert.match(panel, /await dataService\.getClinicMembers\(\)/);
+assert.match(panel, /await api\('\/api\/clinic\/members', \{ cache: 'no-store' \}\)/);
 assert.match(panel, /if \(!result\?\.success \|\| !Array\.isArray\(result\?\.data\)\)/);
 assert.match(panel, /isPatientCaseTeamMembershipRole\(member\?\.role\)/);
 assert.match(panel, /String\(member\?\.status \|\| ''\)\.toLowerCase\(\) === 'active'/);
