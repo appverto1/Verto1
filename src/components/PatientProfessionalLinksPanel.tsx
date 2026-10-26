@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronRight, Plus, UserRoundCheck, UserRoundX, UsersRound, X } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
+import { dataService } from '../services/dataService';
 import {
   PATIENT_PROFESSIONAL_CASE_ROLE_OPTIONS,
   isEligiblePatientProfessionalLinkCandidate,
+  isPatientCaseTeamMembershipRole,
   resolveProfessionalProfileSpecialty
 } from '../utils/patientProfessionalLinks';
 import { formatDateInAppointmentTimezone } from '../utils/scheduling';
@@ -110,6 +112,12 @@ export const PatientProfessionalLinksPanel = ({
   const [serverCanManage, setServerCanManage] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [showManager, setShowManager] = useState(false);
+  // The parent directory may predate a membership role change. Never use it as
+  // the authority for assigning a *new* case-team member.
+  const [verifiedProfessionals, setVerifiedProfessionals] = useState<any[] | null>(null);
+  const [refreshingCandidates, setRefreshingCandidates] = useState(false);
+  const [candidateLoadError, setCandidateLoadError] = useState('');
+  const candidatesRequestSeqRef = React.useRef(0);
   const [pendingEndLink, setPendingEndLink] = useState<ProfessionalLink | null>(null);
   const [draft, setDraft] = useState({
     professionalId: '',
@@ -145,6 +153,10 @@ export const PatientProfessionalLinksPanel = ({
     setShowForm(false);
     setShowManager(false);
     setPendingEndLink(null);
+    candidatesRequestSeqRef.current += 1;
+    setVerifiedProfessionals(null);
+    setCandidateLoadError('');
+    setRefreshingCandidates(false);
     setLinks([]);
     void load();
   }, [patientId, refreshKey]);
@@ -162,13 +174,13 @@ export const PatientProfessionalLinksPanel = ({
     [active]
   );
   const available = useMemo(
-    () => professionals.filter((professional) =>
+    () => (verifiedProfessionals || []).filter((professional) =>
       isEligiblePatientProfessionalLinkCandidate(
         professional,
         activeProfessionalIds
       )
     ),
-    [activeProfessionalIds, professionals]
+    [activeProfessionalIds, verifiedProfessionals]
   );
   const selectedProfessional = useMemo(
     () => available.find(
@@ -197,6 +209,7 @@ export const PatientProfessionalLinksPanel = ({
     formatDateInAppointmentTimezone(new Date());
 
   const add = async () => {
+    if (refreshingCandidates || verifiedProfessionals === null || candidateLoadError) return;
     if (!draft.professionalId || !selectedSpecialty || !selectedProfessionalIsEligible) return;
     if (draft.caseRole === 'supervisor' && !selectedProfessionalCanSupervise) {
       setError('Habilite este profissional para supervisão antes de atribuir a função no caso.');
@@ -295,9 +308,41 @@ export const PatientProfessionalLinksPanel = ({
       || professionalRecord?.email
       || 'Profissional';
   };
+  const refreshAvailableProfessionals = async () => {
+    // Revalidate only when entering the case-team manager or after a retry.
+    // No polling, no F5, no trust in a prior in-memory role.
+    const requestSeq = ++candidatesRequestSeqRef.current;
+    setVerifiedProfessionals(null);
+    setCandidateLoadError('');
+    setRefreshingCandidates(true);
+    try {
+      const result = await dataService.getClinicMembers();
+      if (!result?.success || !Array.isArray(result?.data)) {
+        throw new Error('Não foi possível consultar os membros atuais da clínica.');
+      }
+      if (candidatesRequestSeqRef.current !== requestSeq) return;
+      const currentMembers = result.data.filter((member: any) =>
+        isPatientCaseTeamMembershipRole(member?.role) &&
+        String(member?.status || '').toLowerCase() === 'active' &&
+        resolveProfessionalProfileSpecialty(member).length >= 2
+      );
+      setVerifiedProfessionals(currentMembers);
+      setDraft((current) => currentMembers.some((member: any) =>
+        String(member?.id || '') === current.professionalId
+      ) ? current : { ...current, professionalId: '' });
+    } catch (refreshError: any) {
+      if (candidatesRequestSeqRef.current !== requestSeq) return;
+      setCandidateLoadError('Não foi possível atualizar a lista de profissionais. Tente novamente.');
+    } finally {
+      if (candidatesRequestSeqRef.current === requestSeq) {
+        setRefreshingCandidates(false);
+      }
+    }
+  };
   const openManager = (openAddForm = false) => {
     setShowManager(true);
     setShowForm(openAddForm);
+    if (effectiveCanManage) void refreshAvailableProfessionals();
   };
 
   return (
@@ -426,6 +471,12 @@ export const PatientProfessionalLinksPanel = ({
               {error ? (
                 <p role="alert" className={`mb-3 rounded-xl border px-3 py-2 text-xs leading-5 ${dark ? 'border-rose-500/30 bg-rose-500/10 text-rose-200' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>{error}</p>
               ) : null}
+              {candidateLoadError && effectiveCanManage ? (
+                <div role="alert" className={`mb-3 rounded-xl border px-3 py-2 text-xs leading-5 ${dark ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+                  {candidateLoadError}
+                  <button type="button" onClick={() => void refreshAvailableProfessionals()} className="ml-2 underline">Tentar novamente</button>
+                </div>
+              ) : null}
 
               {active.length >= 5 ? (
                 <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 p-2.5 text-xs leading-5 text-amber-900">
@@ -439,6 +490,7 @@ export const PatientProfessionalLinksPanel = ({
                     Profissional
                     <select
                       value={draft.professionalId}
+                      disabled={refreshingCandidates || verifiedProfessionals === null || Boolean(candidateLoadError)}
                       onChange={(event) => {
                         const professionalId = event.target.value;
                         const nextProfessional = available.find(
@@ -463,7 +515,7 @@ export const PatientProfessionalLinksPanel = ({
                       }}
                       className="mt-1 min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 font-normal text-slate-800"
                     >
-                      <option value="">Selecione</option>
+                      <option value="">{refreshingCandidates ? 'Atualizando profissionais…' : candidateLoadError ? 'Lista indisponível' : 'Selecione'}</option>
                       {available.map((professional) => (
                         <option key={professional.id} value={professional.id}>
                           {professional.name || professional.email}
