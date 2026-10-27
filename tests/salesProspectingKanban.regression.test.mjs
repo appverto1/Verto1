@@ -39,6 +39,7 @@ test('no channel exceeds five, and the tenth failed attempt marks only untouched
   assert.match(sql, /set status='lost', lost_at=v_at/);
   assert.match(sql, /'ten_unsuccessful_attempts'/);
   assert.match(sql, /CONVERTED_LEAD_CANNOT_BE_LOST/);
+  assert.match(sql, /DECISOR_ALREADY_CONTACTED/);
 });
 
 test('clicking a prospecting button persists before updating UI and supports manual lost', () => {
