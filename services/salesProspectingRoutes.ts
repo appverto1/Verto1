@@ -20,7 +20,7 @@ export function registerSalesProspectingRoutes(
     try {
       const [attempts, leads] = await Promise.all([
         supabase.from('sales_prospecting_attempts')
-          .select('lead_id,channel,outcome,occurred_at')
+          .select('id,lead_id,channel,outcome,occurred_at')
           .in('lead_id', leadIds)
           .order('occurred_at', { ascending: false })
           .limit(1000),
