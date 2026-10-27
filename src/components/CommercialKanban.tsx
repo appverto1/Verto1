@@ -451,6 +451,27 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         </div>
       </div>
 
+      {creatingOpen&&<div className="fixed inset-0 z-[155] flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Cadastrar oportunidades">
+        <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+          <div className="flex items-center justify-between"><h3 className="text-lg font-black">Nova oportunidade</h3>
+            <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} aria-label="Fechar cadastro"><X size={20}/></button></div>
+          <p className="mt-2 text-sm text-slate-600">Informe um ou vários números com DDD. Cada número cria um card em Prospecção, para você editar depois.</p>
+          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
+          <label className="mt-4 block text-xs font-bold text-slate-700">Telefones (até 100 por cadastro)
+            <textarea autoFocus rows={7} maxLength={5000} disabled={creatingBusy} value={phonesDraft}
+              onChange={e=>{setPhonesDraft(e.target.value);delete keysRef.current.create;}}
+              placeholder={'11 99999-9999\\n21 98888-8888'}
+              className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500" />
+          </label>
+          <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} className="rounded-lg border px-4 py-2 text-sm">Cancelar</button>
+            <button type="button" disabled={creatingBusy||!phonesDraft.trim()} onClick={()=>void createOpportunities()}
+              className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Check size={15}/> {creatingBusy?'Salvando...':'Salvar oportunidades'}</button>
+          </div>
+        </div>
+      </div>}
+
       {editingId&&<div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-label="Configurar coluna">
         <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
           <div className="flex items-center justify-between"><h3 className="text-lg font-black">{editingId==='new'?'Criar coluna':'Personalizar coluna'}</h3><button onClick={()=>setEditingId(null)} aria-label="Fechar"><X size={20}/></button></div>
@@ -481,6 +502,32 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           <div className="space-y-5 p-5">
             {error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
             {info&&<p className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{info}</p>}
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={savingLead||deletingLead||Boolean(busyLead)}
+                onClick={()=>{setEditingLead(v=>!v);setError(null);}}
+                className="flex items-center gap-1.5 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 disabled:opacity-40"><Pencil size={14}/> {editingLead?'Cancelar edição':'Editar oportunidade'}</button>
+              <button type="button" disabled={savingLead||deletingLead||Boolean(busyLead)}
+                onClick={()=>void deleteLead(selected)}
+                className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-40"><Trash2 size={14}/> {deletingLead?'Excluindo...':'Excluir oportunidade'}</button>
+            </div>
+            {editingLead&&<div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+              {([
+                ['name','Nome / identificação',180],['phone','Telefone com DDD',40],
+                ['clinicName','Nome da clínica',180],['email','E-mail (opcional)',254],
+              ] as const).map(([field,title,limit])=><label key={field} className="block text-xs font-bold text-slate-700">{title}
+                <input value={leadDraft[field]} maxLength={limit} disabled={savingLead}
+                  onChange={e=>{setLeadDraft(d=>({...d,[field]:e.target.value}));delete keysRef.current['edit:'+selected.id];}}
+                  className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"/>
+              </label>)}
+              <label className="block text-xs font-bold text-slate-700">Observações
+                <textarea rows={3} maxLength={1500} value={leadDraft.notes} disabled={savingLead}
+                  onChange={e=>{setLeadDraft(d=>({...d,notes:e.target.value}));delete keysRef.current['edit:'+selected.id];}}
+                  className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"/>
+              </label>
+              <button type="button" disabled={savingLead||!leadDraft.name.trim()||!leadDraft.phone.trim()}
+                onClick={()=>void saveLeadDetails()}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 p-3 text-sm font-black text-white disabled:opacity-40"><Check size={16}/> {savingLead?'Salvando...':'Salvar alterações'}</button>
+            </div>}
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">Telefone</span><strong>{selected.phone||'Não cadastrado'}</strong></div>
               <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">E-mail</span><strong className="break-all">{selected.email||'Não cadastrado'}</strong></div>
