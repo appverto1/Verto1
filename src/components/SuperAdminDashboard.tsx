@@ -907,18 +907,18 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900 flex">
-      <aside className={activeTab === 'leads' && commercialView === 'kanban'
+      <aside className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true'
         ? "w-[66px] shrink-0 bg-white/95 border-r border-slate-200 h-screen sticky top-0 flex flex-col overflow-x-hidden"
         : "w-72 shrink-0 bg-white/80 backdrop-blur border-r border-slate-100 h-screen sticky top-0 flex flex-col overflow-x-hidden"}>
-        <div className={activeTab === 'leads' && commercialView === 'kanban' ? 'flex justify-center py-5' : 'p-8 flex items-center gap-3'}>
-          <LogoVerto size={activeTab === 'leads' && commercialView === 'kanban' ? 34 : 42} />
-          {!(activeTab === 'leads' && commercialView === 'kanban') && <div>
+        <div className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'flex justify-center py-5' : 'p-8 flex items-center gap-3'}>
+          <LogoVerto size={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 34 : 42} />
+          {!(activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true') && <div>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400 font-bold">Painel</p>
             <h2 className="text-xl font-black text-slate-900">SUPER ADMIN</h2>
           </div>}
         </div>
 
-        {activeTab === 'leads' && commercialView === 'kanban' ? (
+        {activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? (
           <nav className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-3">
             {[
               {id:'overview',label:'Resumo',icon:<LayoutDashboard size={19}/>},
@@ -945,17 +945,17 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => setActiveTab('aba-v3-rollout')} />
         </nav>}
 
-        <div className={activeTab === 'leads' && commercialView === 'kanban' ? 'mt-auto p-2 border-t border-slate-100' : 'mt-auto p-6 border-t border-slate-100'}>
+        <div className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'mt-auto p-2 border-t border-slate-100' : 'mt-auto p-6 border-t border-slate-100'}>
           <button
             onClick={onLogout}
-            className={'w-full flex items-center gap-3 rounded-2xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-500 transition-all '+(activeTab === 'leads' && commercialView === 'kanban' ? 'justify-center p-3' : 'px-4 py-3')}
+            className={'w-full flex items-center gap-3 rounded-2xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-500 transition-all '+(activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'justify-center p-3' : 'px-4 py-3')}
           >
-            <LogOut size={18} /> {!(activeTab === 'leads' && commercialView === 'kanban') && 'Sair'}
+            <LogOut size={18} /> {!(activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true') && 'Sair'}
           </button>
         </div>
       </aside>
 
-      <main className={activeTab === 'leads' && commercialView === 'kanban'
+      <main className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true'
           ? 'min-w-0 h-screen min-h-0 flex-1 overflow-hidden p-3 flex flex-col'
           : 'min-w-0 flex-1 p-8 overflow-y-auto'}>
         <div className={'flex flex-wrap justify-between items-center gap-4 '+(activeTab==='leads'&&commercialView==='kanban'?'mb-3':'mb-8')}>
@@ -969,7 +969,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   : activeTab === 'customers'
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
-                      ? (commercialView === 'kanban' ? 'Kanban comercial' : 'Leads e propostas')
+                      ? (commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'Kanban comercial' : 'Leads e propostas')
                       : activeTab === 'simulation-settings'
                         ? 'Configurações financeiras'
                       : activeTab === 'demos'
@@ -1537,7 +1537,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
-        {activeTab === 'leads' && commercialView === 'kanban' && (
+        {activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' && (
           <CommercialKanban
             leads={leadRecoveryItems}
             onLeadPatch={(leadId, patch)=>setLeadRecoveryItems(current=>
@@ -1550,10 +1550,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             loadingMore={loadingMoreLeads}
           />
         )}
-        {activeTab === "leads" && commercialView === 'list' && (
+        {activeTab === "leads" && (commercialView === 'list' || import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' !== true) && (
           <div className="space-y-6">
-            <button type="button" onClick={()=>{setLeadSearch('');setLeadStatusFilter('all');setCommercialView('kanban');}}
-              className="rounded-xl bg-[#10192D] px-5 py-3 text-sm font-bold text-white">← Voltar ao Kanban de tela inteira</button>
+            {import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' && <button type="button" onClick={()=>{setLeadSearch('');setLeadStatusFilter('all');setCommercialView('kanban');}}
+              className="rounded-xl bg-[#10192D] px-5 py-3 text-sm font-bold text-white">← Voltar ao Kanban de tela inteira</button>}
             <div className="rounded-[24px] border border-slate-100 bg-white p-5">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
