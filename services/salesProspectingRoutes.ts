@@ -55,8 +55,8 @@ export function registerSalesProspectingRoutes(
         if (error) {
           const message = String(error.message || '');
           if (message.includes('LEAD_NOT_FOUND')) return res.status(404).json({ success: false, error: 'Lead não encontrado.' });
-          if (/IDEMPOTENCY_CONFLICT|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED/.test(message)) {
-            return res.status(409).json({ success: false, error: 'Tentativa indisponível ou limite atingido.' });
+          if (/IDEMPOTENCY_CONFLICT|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED/.test(message)) {
+            return res.status(409).json({ success: false, error: 'Limite atingido, lead indisponível ou decisor já contatado.' });
           }
           throw error;
         }
