@@ -87,6 +87,12 @@ export function registerSalesProspectingRoutes(
         if (error) {
           const message = String(error.message || '');
           if (message.includes('LEAD_NOT_FOUND')) return res.status(404).json({ success: false, error: 'Lead não encontrado.' });
+          if (message.includes('PROSPECTING_OUTSIDE_BUSINESS_HOURS')) {
+            return res.status(409).json({success:false,error:'As tentativas devem ocorrer de segunda a sexta, entre 9h e 17h30 (Brasília).'});
+          }
+          if (message.includes('PROSPECTING_ALREADY_TODAY')) {
+            return res.status(409).json({success:false,error:'Já existe uma tentativa registrada hoje para esta oportunidade. Siga a próxima sugestão em outro dia útil.'});
+          }
           if (/IDEMPOTENCY_CONFLICT|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED/.test(message)) {
             return res.status(409).json({ success: false, error: 'Limite atingido, lead indisponível ou decisor já contatado.' });
           }
