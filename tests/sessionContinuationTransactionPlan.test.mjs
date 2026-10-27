@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {planSessionContinuationTransaction as plan} from '../src/utils/sessionContinuationTransactionPlan.mjs';
 const id=n=>String(n).padStart(8,'0')+'-1111-4111-8111-111111111111';
-const next={appointmentId:id(9),patientId:id(8),clinicId:id(2),mustNeverAutoCancel:false};
+const next={appointmentId:id(9),patientId:id(8),clinicId:id(2),mustNeverAutoCancel:false,cancellationNoChargeVerified:true,hasCapturedPayment:false};
 const q={choice:'full',additionalMinutes:50,baselineEndAt:'2026-10-27T17:50:00Z',nextEndAt:'2026-10-27T18:40:00Z',additionalChargeCents:18000,twoUnitTotalCents:36000,additionalBillableUnits:1};
 const data={actorId:id(3),organizationId:id(2),clinicId:id(2),patientId:id(4),appointmentId:id(5),sessionId:'session-A',idempotencyKey:'session:unique-12345',isSessionActive:true,hasIncompleteClinicalWrites:false,hasOpenSessionTimers:false,choice:'full',quote:q,conflicts:{safe:true,conflicting:[next]},permissions:['session.finish','calendar.appointment.create','finance.entries.manage','calendar.appointment.cancel'],financialEngine:'AT_SESSION'};
 assert.equal(plan(data).approved,true);assert.equal(plan(data).additionalChargeCents,18000);assert.deepEqual(plan(data).cancelAppointmentIds,[id(9)]);
@@ -15,6 +15,8 @@ for(const [patch,reason] of [
 [{conflicts:{safe:true,conflicting:[{...next,mustNeverAutoCancel:true}]}},'UNSAFE_CANCELLATION'],
 [{conflicts:{safe:true,conflicting:[next,next]}},'DUPLICATE_CANCELLATION'],
 [{financialEngine:'NONE'},'UNVERIFIED_FINANCIAL_ENGINE'],
+[{conflicts:{safe:true,conflicting:[{...next,cancellationNoChargeVerified:false}]}},'UNSAFE_CANCELLATION'],
+[{conflicts:{safe:true,conflicting:[{...next,hasCapturedPayment:true}]}},'UNSAFE_CANCELLATION'],
 [{quote:{...q,twoUnitTotalCents:54000}},'UNVERIFIED_PRICE']
 ])assert.equal(plan({...data,...patch}).reason,reason);
 const small={...q,choice:'10',additionalMinutes:10,nextEndAt:'2026-10-27T18:00:00Z',additionalBillableUnits:0,additionalChargeCents:0};
