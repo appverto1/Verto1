@@ -204,12 +204,12 @@ begin
 end $$;
 
 revoke all on function public.move_sales_kanban_lead_v1(uuid,uuid,uuid,text),
-  function public.order_sales_kanban_columns_v1(uuid[]),
-  function public.sales_prospecting_analytics_v1(integer)
+  public.order_sales_kanban_columns_v1(uuid[]),
+  public.sales_prospecting_analytics_v1(integer)
   from public,anon,authenticated;
 grant execute on function public.move_sales_kanban_lead_v1(uuid,uuid,uuid,text),
-  function public.order_sales_kanban_columns_v1(uuid[]),
-  function public.sales_prospecting_analytics_v1(integer)
+  public.order_sales_kanban_columns_v1(uuid[]),
+  public.sales_prospecting_analytics_v1(integer)
   to service_role;
 notify pgrst,'reload schema';
 commit;
