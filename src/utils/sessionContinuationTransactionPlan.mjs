@@ -20,7 +20,8 @@ export function planSessionContinuationTransaction(p){
  const other=p.conflicts.conflicting.filter(c=>c?.patientId!==p.patientId);
  if(other.length&&!full)return reject('NEXT_PATIENT_REQUIRES_FULL_SESSION_DECISION');
  if(other.length&&!p.permissions.includes('calendar.appointment.cancel'))return reject('CANCELLATION_CAPABILITY_REQUIRED');
- if(other.some(c=>c.mustNeverAutoCancel!==false||c.clinicId!==p.clinicId||!UUID.test(s(c.appointmentId))||!UUID.test(s(c.patientId))))return reject('UNSAFE_CANCELLATION');
+ if(other.some(c=>c.mustNeverAutoCancel!==false||c.cancellationNoChargeVerified!==true||
+ c.hasCapturedPayment!==false||c.clinicId!==p.clinicId||!UUID.test(s(c.appointmentId))||!UUID.test(s(c.patientId))))return reject('UNSAFE_CANCELLATION');
  if(new Set(other.map(c=>c.appointmentId)).size!==other.length)return reject('DUPLICATE_CANCELLATION');
  if(full){
    if(!['AT_SESSION','MONTHLY_SESSION'].includes(p.financialEngine))return reject('UNVERIFIED_FINANCIAL_ENGINE');
