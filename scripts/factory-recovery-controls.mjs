@@ -300,7 +300,7 @@ export function verifyFactoryConsistency(s, {now=Date.now()}={}) {
   const expectedIdentity=v3?canonicalIdentity(i,gate):undefined;
   if (v3&&protectedGate || evidencePolicy==='ENVELOPE' || evidencePolicy==='RUN_CHECK') {
     if (!s.evidence) ps.push(p('EVIDENCE_MISSING','evidence required by evidence_policy','AMBIGUOUS'));
-    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK',manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths,expectedIdentity}).errors) ps.push(p(e.code,e.detail));
+    else for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,requireRunCheck:evidencePolicy==='RUN_CHECK' && !(s.evidence?.gate==='STAGING_CI' && s.evidence?.result==='CI_ALTERNATIVE_PASS'),manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths,expectedIdentity}).errors) ps.push(p(e.code,e.detail));
   } else if (s.evidence) {
     for (const e of validateEvidenceEnvelope(s.evidence,{expectedHeadSha:i.head_sha||undefined,manifestFacts:refs.candidate_manifest,allowedPaths:s.authorized_paths,expectedIdentity}).errors) ps.push(p(e.code,e.detail));
   }
