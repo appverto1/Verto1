@@ -37,6 +37,7 @@ import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
 import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
+import { CommercialKanban } from './CommercialKanban';
 import { AbaV3RolloutControlCenter } from './AbaV3RolloutControlCenter';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
@@ -1522,6 +1523,14 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               </div>
             </div>
 
+            <CommercialKanban
+              leads={visibleSalesLeads}
+              onStatusChange={updateSalesLeadStatus}
+              onLeadPatch={(leadId, patch) => setLeadRecoveryItems((current) =>
+                current.map((item) => item.id === leadId ? { ...item, ...patch } : item)
+              )}
+            />
+
             <div className="rounded-[28px] border border-slate-100 bg-white p-6 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <h3 className="text-lg font-semibold">Leads e propostas</h3>
@@ -1557,6 +1566,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     );
                     return (
                       <article
+                        id={`sales-offer-${lead.id}`}
                         key={lead.id || lead.userId}
                         className="rounded-2xl border border-slate-100 bg-slate-50 p-4"
                       >
