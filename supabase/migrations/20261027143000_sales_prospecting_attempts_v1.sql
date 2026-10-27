@@ -9,6 +9,11 @@ alter table public.sales_leads add column if not exists lost_at timestamptz;
 create or replace function public.set_sales_lead_lost_at_v1()
 returns trigger language plpgsql set search_path = pg_catalog, public as $
 begin
+  if new.status = 'lost' and (
+    old.status = 'converted' or old.converted_user_id is not null or old.converted_clinic_id is not null
+  ) then
+    raise exception 'CONVERTED_LEAD_CANNOT_BE_LOST';
+  end if;
   if new.status = 'lost' and old.status is distinct from 'lost' then
     new.lost_at := clock_timestamp();
   elsif new.status <> 'lost' then
@@ -131,10 +136,10 @@ begin
     into v_phone,v_whatsapp,v_total,v_reached
   from public.sales_prospecting_attempts where lead_id = p_lead_id;
   -- Existing higher funnel statuses must never be demoted by stale attempts.
-  if v_total = 10 and not v_reached and v_lead.status = 'new' then
+  if v_total = 10 and not v_reached and v_lead.status in ('new', 'contact_started') then
     update public.sales_leads
     set status='lost', lost_at=v_at, updated_at=v_at
-    where id=p_lead_id and status='new' returning * into v_lead;
+    where id=p_lead_id and status in ('new', 'contact_started') returning * into v_lead;
     if found then
       insert into public.sales_lead_events(lead_id,event_type,actor_user_id,metadata,idempotency_key)
       values(p_lead_id,'lead_lost',p_actor_user_id,jsonb_build_object('reason','ten_unsuccessful_attempts','attempt_count',10),
