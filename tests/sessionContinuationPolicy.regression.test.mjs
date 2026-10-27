@@ -58,4 +58,7 @@ assert.equal(automaticClosureEligibility({...closing,hasPendingSync:true}).eligi
 assert.equal(automaticClosureEligibility({...closing,syncAttestedAt:'2026-10-27T17:53:00.000Z'}).eligible,false);
 assert.equal(automaticClosureEligibility({...closing,serverVerifiedSyncComplete:false}).eligible,false);
 assert.equal(automaticClosureEligibility({...closing,collectionStateKnown:false}).eligible,false);
+assert.equal(automaticClosureEligibility({...closing,lastConfirmedClinicalActivityAt:null}).eligible,false);
+assert.equal(automaticClosureEligibility({...closing,syncAttestedAt:null}).eligible,false);
+assert.throws(()=>previewContinuationConflicts({...query,appointments:[{...other,scheduled_end_at:null}]}));
 console.log('sessionContinuationPolicy.regression.test.mjs: ok');
