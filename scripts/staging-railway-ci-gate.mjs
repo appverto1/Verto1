@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 const tests = [
+  'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/sessionCompletionNoShow.regression.test.mjs',
   'tests/sessionAutoFinalization.regression.test.mjs',
   'tests/conventionalSessionLifecycle.regression.test.mjs',
@@ -12,6 +13,7 @@ const tests = [
   'tests/appointmentCancellationReasons.test.ts',
   'tests/groupSessionFinanceAtomicSql.test.ts',
   'tests/groupSessionAtomicReservation.test.mjs',
+  'tests/salesProspectingKanban.regression.test.mjs',
 ];
 for (const file of tests) {
   if (!existsSync(file)) {
