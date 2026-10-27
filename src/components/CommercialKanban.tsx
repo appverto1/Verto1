@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
+import { canRecordSalesAttemptNow, nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
 type Lead = {
@@ -143,6 +144,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     return map;
   }, [attempts]);
   const leadCounts = (id: string) => countByLead.get(id) || {phone:0,whatsapp:0,spoken:false};
+  const attemptsByLead=useMemo(()=>{
+    const map=new Map<string,CommercialAttempt[]>();
+    for(const attempt of attempts){
+      const items=map.get(attempt.lead_id)||[];
+      items.push(attempt);map.set(attempt.lead_id,items);
+    }
+    return map;
+  },[attempts]);
+  const leadAttemptDates=(id:string)=>attemptsByLead.get(id)||[];
+  const nextWindow=(id:string)=>nextSalesCadenceSlots(leadAttemptDates(id))[0];
+  const slotLabel=(date:Date)=>date.toLocaleString('pt-BR',{
+    timeZone:'America/Sao_Paulo',weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',
+  });
 
   const columnFor = (lead: Lead) => {
     // Terminal status is authoritative; a stale custom placement cannot hide it.
@@ -329,6 +343,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const callEnabled=(lead:Lead,ch:'phone'|'whatsapp_call')=>{
     const n=leadCounts(lead.id);
     return !busyLead && !n.spoken && !['converted','lost','archived'].includes(lead.status)
+      && canRecordSalesAttemptNow(leadAttemptDates(lead.id))
       && (ch==='phone'?n.phone<5:n.whatsapp<5);
   };
   return (
@@ -432,6 +447,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       </div>
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{width:(total*10)+'%',backgroundColor:col.color}}/></div>
                       <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone}/5 · WhatsApp {a.whatsapp}/5</p>
+                      {total<10&&!a.spoken&&<p className="mt-1 text-[10px] font-semibold text-violet-700">Próxima janela: {nextWindow(lead.id)?slotLabel(nextWindow(lead.id)):'—'}</p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
@@ -553,7 +569,17 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}/5</b></div>
                 <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}/5</b></div>
               </div>
-              <p className="mt-3 text-[11px] text-slate-500">Abrir telefone ou WhatsApp não registra tentativa automaticamente. Registre o resultado após ligar.</p>
+              <p className="mt-3 text-[11px] text-slate-500">Os botões contabilizam tentativas, sem abrir aplicativos. Limite: uma por dia, de segunda a sexta, das 9h às 17h30 (Brasília).</p>
+              {!selectedCounts.spoken&&selectedCounts.phone+selectedCounts.whatsapp<10&&
+                <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3 text-xs">
+                  <h5 className="font-bold text-violet-800">Cadência sugerida — dias e horários alternados</h5>
+                  <ol className="mt-2 grid grid-cols-2 gap-1.5 text-violet-800">
+                    {nextSalesCadenceSlots(leadAttemptDates(selected.id)).map((date,i)=>(
+                      <li key={date.toISOString()}>{selectedCounts.phone+selectedCounts.whatsapp+i+1}ª · {slotLabel(date)}</li>
+                    ))}
+                  </ol>
+                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. A contabilização registra a hora real do clique; domingos, sábados, fora do expediente ou segunda tentativa no mesmo dia são bloqueados no servidor.</p>
+                </div>}
               {!selectedCounts.spoken&&!['converted','lost','archived'].includes(selected.status)&&<div className="mt-3 space-y-2">
                 <button disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
                   className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação operadora sem falar com decisor</button>
