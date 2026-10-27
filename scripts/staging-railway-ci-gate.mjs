@@ -13,6 +13,7 @@ const tests = [
   'tests/appointmentCancellationReasons.test.ts',
   'tests/groupSessionFinanceAtomicSql.test.ts',
   'tests/groupSessionAtomicReservation.test.mjs',
+  'tests/salesProspectingKanban.regression.test.mjs',
 ];
 for (const file of tests) {
   if (!existsSync(file)) {

@@ -1,5 +1,6 @@
 import type { Express } from 'express';
 import { buildHelpContext } from './helpContext';
+import { registerSalesProspectingRoutes } from './salesProspectingRoutes';
 import { fileURLToPath } from 'node:url';
 import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 import { publishedTutorialHelpProjection } from './helpTutorialCatalog';
@@ -21,6 +22,10 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   const projectArticles = deps.projectArticles || publishedTutorialHelpProjection;
   const resolveMedia = deps.resolveMedia || resolveHelpMedia;
   const helpContext = (req:any) => buildHelpContext(req, currentClinicId);
+
+  // Compatibility mount: keep CRM routes isolated while avoiding a 4MB server.ts rewrite.
+  // registerSalesProspectingRoutes independently verifies active platform_admins + TOTP MFA.
+  registerSalesProspectingRoutes(app, { supabase, checkAuth });
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
     const { clinicId, clinicName, audience, capabilities, modules, userId, membershipId, contextKey } = helpContext(req);

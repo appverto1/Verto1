@@ -15,6 +15,8 @@ COPY . .
 # flag scoped to the build stage so the browser bundle matches the server rollout.
 ARG VITE_FEATURE_ABA_V3_UI=false
 ENV VITE_FEATURE_ABA_V3_UI=${VITE_FEATURE_ABA_V3_UI}
+ARG VITE_FEATURE_COMMERCIAL_PROSPECTING=false
+ENV VITE_FEATURE_COMMERCIAL_PROSPECTING=${VITE_FEATURE_COMMERCIAL_PROSPECTING}
 
 RUN npm run build
 # Independent Node 20 + local Postgres emulator regression gate (no GitHub Actions minutes).
