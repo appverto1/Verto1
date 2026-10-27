@@ -22,6 +22,9 @@ type Props = {
   onOpenLead: (lead: Lead) => void;
   onRefresh: () => Promise<void>;
   onMetrics: () => void;
+  onLoadMore: () => Promise<void>;
+  remaining: number;
+  loadingMore: boolean;
 };
 const DEFAULT_COLORS = ['#943B75','#1D65C1','#0F8478','#BD404D','#7650B5','#D97706','#0891B2','#4F46E5'];
 const dateText = (value?: string | null) => {
@@ -40,7 +43,7 @@ const stageFromStatus = (status: string) => {
   return 'proposals';
 };
 
-export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, onMetrics }: Props) => {
+export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, onMetrics, onLoadMore, remaining, loadingMore }: Props) => {
   const [columns, setColumns] = useState<Column[]>([]);
   const [placements, setPlacements] = useState<Record<string,string>>({});
   const [attempts, setAttempts] = useState<CommercialAttempt[]>([]);
@@ -300,6 +303,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
           <Plus size={15}/> Adicionar coluna
         </button>}
         <span className="text-xs text-slate-500">{filtered.length} resultados</span>
+        {remaining>0&&<button onClick={()=>void onLoadMore()} disabled={loadingMore} className="h-10 rounded-lg border border-violet-300 px-3 text-xs font-bold text-violet-700 disabled:opacity-50">{loadingMore?"Carregando...":"Carregar mais "+Math.min(remaining,100)+" leads ("+remaining+" restantes)"}</button>}
       </div>
 
       {(error||info)&&<div role={error?'alert':'status'} className={'rounded-lg border px-3 py-2 text-xs '+(error?'border-red-200 bg-red-50 text-red-700':'border-green-200 bg-green-50 text-green-800')}>
