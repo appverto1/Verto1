@@ -8,7 +8,7 @@ import type { CommercialAttempt } from './CommercialDashboard';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
 type Lead = {
-  id: string; name?: string; email?: string; phone?: string; clinicName?: string;
+  id: string; name?: string; email?: string; phone?: string; clinicName?: string; notes?: string;
   status: SalesLeadStatus; lostAt?: string | null; updatedAt?: string; createdAt?: string;
   legacyReadOnly?: boolean;
 };
@@ -19,6 +19,8 @@ type Column = {
 type Props = {
   leads: Lead[];
   onLeadPatch: (id: string, patch: Record<string, unknown>) => void;
+  onLeadsCreated: (leads: Lead[]) => void;
+  onLeadDeleted: (id: string) => void;
   onOpenLead: (lead: Lead) => void;
   onRefresh: () => Promise<void>;
   onMetrics: () => void;
@@ -43,7 +45,7 @@ const stageFromStatus = (status: string) => {
   return 'proposals';
 };
 
-export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, onMetrics, onLoadMore, remaining, loadingMore }: Props) => {
+export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDeleted, onOpenLead, onRefresh, onMetrics, onLoadMore, remaining, loadingMore }: Props) => {
   const [columns, setColumns] = useState<Column[]>([]);
   const [placements, setPlacements] = useState<Record<string,string>>({});
   const [attempts, setAttempts] = useState<CommercialAttempt[]>([]);
@@ -61,6 +63,13 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [spokenChannel, setSpokenChannel] = useState<'phone'|'whatsapp_call'>('phone');
+  const [creatingOpen,setCreatingOpen] = useState(false);
+  const [phonesDraft,setPhonesDraft] = useState('');
+  const [creatingBusy,setCreatingBusy] = useState(false);
+  const [editingLead,setEditingLead] = useState(false);
+  const [savingLead,setSavingLead] = useState(false);
+  const [deletingLead,setDeletingLead] = useState(false);
+  const [leadDraft,setLeadDraft] = useState({name:'',phone:'',clinicName:'',email:'',notes:''});
   const keysRef = useRef<Record<string,string>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [scroll, setScroll] = useState({ left:0, max:0 });
@@ -148,6 +157,60 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
   }, [leads,search]);
   const selected = leads.find(x=>x.id === selectedId) || null;
   const selectedCounts = selected ? leadCounts(selected.id) : {phone:0,whatsapp:0,spoken:false};
+  useEffect(()=>{
+    const lead=leads.find(x=>x.id===selectedId);
+    setLeadDraft({name:lead?.name||'',phone:lead?.phone||'',clinicName:lead?.clinicName||'',email:lead?.email||'',notes:lead?.notes||''});
+    setEditingLead(false);
+  },[selectedId]);
+  const createOpportunities = async () => {
+    const phones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+    if(!phones.length||phones.length>100){setError('Informe de 1 a 100 números, separados por linha, vírgula ou ponto e vírgula.');return;}
+    setCreatingBusy(true);setError(null);
+    const key=keysRef.current.create||crypto.randomUUID();keysRef.current.create=key;
+    try {
+      const json=await request('/api/owner/sales/kanban/opportunities',{
+        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones}),
+      });
+      delete keysRef.current.create;
+      onLeadsCreated(json.leads||[]);
+      setPhonesDraft('');setCreatingOpen(false);setSearch('');setShowStage('all');
+      setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s). Abra os cards para editar.');
+    }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
+    finally{setCreatingBusy(false);}
+  };
+  const saveLeadDetails = async () => {
+    if(!selected||savingLead)return;
+    const patch=Object.fromEntries(Object.entries(leadDraft).filter(([k,v])=>
+      String(v||'')!==String((selected as unknown as Record<string,unknown>)[k]||'')));
+    if(!Object.keys(patch).length){setEditingLead(false);return;}
+    const keyName='edit:'+selected.id;
+    const key=keysRef.current[keyName]||crypto.randomUUID();keysRef.current[keyName]=key;
+    setSavingLead(true);setError(null);
+    try {
+      const json=await request('/api/owner/sales/kanban/opportunities/'+selected.id,{
+        method:'PATCH',headers:{'X-Idempotency-Key':key},body:JSON.stringify(patch),
+      });
+      delete keysRef.current[keyName];
+      onLeadPatch(selected.id,json.lead);
+      setEditingLead(false);setInfo('Oportunidade salva.');
+    }catch(e:any){setError(e.message||'Erro ao salvar oportunidade.');}
+    finally{setSavingLead(false);}
+  };
+  const deleteLead = async (lead:Lead) => {
+    if(!window.confirm('Excluir '+(lead.name||lead.phone||'a oportunidade')+'? O histórico será preservado.'))return;
+    const keyName='delete:'+lead.id;
+    const key=keysRef.current[keyName]||crypto.randomUUID();keysRef.current[keyName]=key;
+    setDeletingLead(true);setError(null);
+    try {
+      await request('/api/owner/sales/kanban/opportunities/'+lead.id,{
+        method:'DELETE',headers:{'X-Idempotency-Key':key},
+      });
+      delete keysRef.current[keyName];
+      setSelectedId(null);onLeadDeleted(lead.id);setInfo('Oportunidade excluída; histórico preservado.');
+    }catch(e:any){setError(e.message||'Erro ao excluir oportunidade.');}
+    finally{setDeletingLead(false);}
+  };
+
 
   const updateScroll = () => {
     const e = scrollRef.current;
@@ -238,12 +301,16 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
           ? [...old,{id:json.data.attemptId,lead_id:lead.id,channel,outcome,occurred_at:json.data.occurredAt}]:old);
         onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
         setInfo(outcome==='decisor_spoken'?'Conversa com decisor registrada.':'Tentativa registrada com data e hora.');
+        if(json.data.needsLossDecision && outcome==='no_decisor' &&
+          window.confirm('Foram registradas 10 tentativas sem conversar com o decisor. Marcar a oportunidade como perdida?')) {
+          manualLost(lead,true);
+        }
       }catch(e:any){setError(e.message || 'Não foi possível registrar ligação.');}
       finally{setBusyLead(null);}
     })();
   };
-  const manualLost = (lead:Lead) => {
-    if (!window.confirm('Marcar '+(lead.name || 'este lead')+' como perdido? A data e hora serão registradas.')) return;
+  const manualLost = (lead:Lead, confirmed=false) => {
+    if (!confirmed && !window.confirm('Marcar '+(lead.name || 'este lead')+' como perdido? A data e hora serão registradas.')) return;
     const keyName='lost:'+lead.id;const key=keysRef.current[keyName]||crypto.randomUUID();keysRef.current[keyName]=key;
     setBusyLead(lead.id);setError(null);
     void (async()=>{try{
@@ -272,6 +339,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
           <p className="text-xs text-slate-300">{leads.length} leads carregados · {columns.length} colunas personalizáveis · salvamento automático no servidor</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={()=>{setCreatingOpen(true);setError(null);}} className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-black text-white hover:bg-emerald-600"><Plus size={15}/> Nova oportunidade</button>
           <button type="button" onClick={onMetrics} className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10"><BarChart3 size={15}/> Gráficos</button>
           <button type="button" onClick={()=>setEditing(v=>!v)} className={'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold '+(editing?'bg-violet-500':'border border-white/20 hover:bg-white/10')}><Settings2 size={15}/> {editing?'Concluir edição':'Editar colunas'}</button>
           <button type="button" onClick={()=>{void onRefresh().then(()=>setRevision(x=>x+1));}} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-900"><RefreshCw size={15}/> Atualizar</button>
@@ -367,10 +435,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
-                      {lead.phone&&<a href={'tel:'+lead.phone.replace(/[^+\d]/g,'')} onClick={e=>e.stopPropagation()} aria-label={'Ligar para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700"><Phone size={12}/> Ligar</a>}
-                      {lead.phone&&<a href={'https://wa.me/'+lead.phone.replace(/\D/g,'')} target="_blank" rel="noreferrer"
-                        aria-label={'WhatsApp de '+lead.name} className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700"><MessageCircle size={12}/> WhatsApp</a>}
+                      <button type="button" disabled={!callEnabled(lead,'phone')}
+                        onClick={()=>recordAttempt(lead,'phone','no_decisor')} aria-label={'Contabilizar ligação pela operadora para '+lead.name}
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}/5</button>
+                      <button type="button" disabled={!callEnabled(lead,'whatsapp_call')}
+                        onClick={()=>recordAttempt(lead,'whatsapp_call','no_decisor')} aria-label={'Contabilizar ligação pelo WhatsApp para '+lead.name}
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}/5</button>
                       <button onClick={()=>setSelectedId(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
                     </div>
                   </article>;
@@ -415,8 +485,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onOpenLead, onRefresh, on
               <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">Telefone</span><strong>{selected.phone||'Não cadastrado'}</strong></div>
               <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">E-mail</span><strong className="break-all">{selected.email||'Não cadastrado'}</strong></div>
             </div>
-            <div className="flex gap-2">{selected.phone&&<><a href={'tel:'+selected.phone.replace(/[^+\d]/g,'')} className="flex flex-1 items-center justify-center gap-1 rounded-lg border px-3 py-3 text-sm font-bold"><Phone size={16}/> Ligar</a>
-              <a href={'https://wa.me/'+selected.phone.replace(/\D/g,'')} target="_blank" rel="noreferrer" className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-green-200 bg-green-50 px-3 py-3 text-sm font-bold text-green-700"><MessageCircle size={16}/> WhatsApp</a></>}</div>
+            <div className="flex gap-2">
+              <button type="button" disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-3 text-xs font-bold disabled:opacity-40"><Phone size={16}/> Contabilizar operadora</button>
+              <button type="button" disabled={!callEnabled(selected,'whatsapp_call')} onClick={()=>recordAttempt(selected,'whatsapp_call','no_decisor')}
+                className="flex flex-1 items-center justify-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-3 text-xs font-bold text-green-700 disabled:opacity-40"><MessageCircle size={16}/> Contabilizar WhatsApp</button>
+            </div>
             <div><label className="block text-xs font-bold text-slate-700">Mover para a coluna</label>
               <select aria-label="Mudar etapa do lead" value={columnFor(selected)||''} disabled={Boolean(busyLead)||selected.status==='converted'}
                 onChange={e=>{const col=columns.find(x=>x.id===e.target.value);if(col)moveLead(selected,col);}}
