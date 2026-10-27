@@ -17,6 +17,9 @@ ARG VITE_FEATURE_ABA_V3_UI=false
 ENV VITE_FEATURE_ABA_V3_UI=${VITE_FEATURE_ABA_V3_UI}
 
 RUN npm run build
+# Independent Node 20 + local Postgres emulator regression gate (no GitHub Actions minutes).
+# No production credentials: read-only code contracts + isolated PGlite tests.
+RUN node scripts/staging-railway-ci-gate.mjs
 RUN npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
