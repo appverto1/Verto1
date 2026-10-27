@@ -268,6 +268,26 @@ export function registerSalesProspectingRoutes(
     }
   });
 
+  // Read one editable record only when the owner explicitly opens its editor;
+  // avoids loading sensitive notes for every Kanban card.
+  app.get('/api/owner/sales/kanban/opportunities/:leadId', ...salesGuard, async (req: any, res: any) => {
+    const leadId = sanitizeString(req.params?.leadId,120);
+    if(!isUuid(leadId)) return res.status(400).json({success:false,error:'Oportunidade inválida.'});
+    try {
+      const result=await supabase.from('sales_leads')
+        .select('id,name,phone,email,clinic_name,notes,status')
+        .eq('id',leadId).is('deleted_at',null).limit(1).maybeSingle();
+      if(result.error)throw result.error;
+      if(!result.data)return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,lead:{
+        id:result.data.id,name:result.data.name,phone:result.data.phone,
+        email:result.data.email,clinicName:result.data.clinic_name,
+        notes:result.data.notes,status:result.data.status,
+      }});
+    }catch{return boardError(res,'Não foi possível abrir os dados da oportunidade.');}
+  });
+
   app.patch('/api/owner/sales/kanban/opportunities/:leadId', ...salesGuard, async (req: any, res: any) => {
     const leadId = sanitizeString(req.params?.leadId,120);
     const actorId = sanitizeString(req.session?.user?.id,120);
