@@ -69,6 +69,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [creatingBusy,setCreatingBusy] = useState(false);
   const [editingLead,setEditingLead] = useState(false);
   const [savingLead,setSavingLead] = useState(false);
+  const [loadingLeadDetails,setLoadingLeadDetails] = useState(false);
   const [deletingLead,setDeletingLead] = useState(false);
   const [leadDraft,setLeadDraft] = useState({name:'',phone:'',clinicName:'',email:'',notes:''});
   const keysRef = useRef<Record<string,string>>({});
@@ -191,6 +192,20 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s). Abra os cards para editar.');
     }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
     finally{setCreatingBusy(false);}
+  };
+  const openLeadEditor = async (lead:Lead) => {
+    if (editingLead) { setEditingLead(false); return; }
+    setLoadingLeadDetails(true);setError(null);
+    try {
+      const json=await request('/api/owner/sales/kanban/opportunities/'+lead.id);
+      setLeadDraft({
+        name:json.lead.name||'',phone:json.lead.phone||'',
+        clinicName:json.lead.clinicName||'',email:json.lead.email||'',notes:json.lead.notes||'',
+      });
+      onLeadPatch(lead.id,json.lead);
+      setEditingLead(true);
+    }catch(e:any){setError(e.message||'Não foi possível abrir o cadastro.');}
+    finally{setLoadingLeadDetails(false);}
   };
   const saveLeadDetails = async () => {
     if(!selected||savingLead)return;
@@ -519,9 +534,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             {error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
             {info&&<p className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{info}</p>}
             <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={savingLead||deletingLead||Boolean(busyLead)}
-                onClick={()=>{setEditingLead(v=>!v);setError(null);}}
-                className="flex items-center gap-1.5 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 disabled:opacity-40"><Pencil size={14}/> {editingLead?'Cancelar edição':'Editar oportunidade'}</button>
+              <button type="button" disabled={savingLead||loadingLeadDetails||deletingLead||Boolean(busyLead)}
+                onClick={()=>void openLeadEditor(selected)}
+                className="flex items-center gap-1.5 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 disabled:opacity-40"><Pencil size={14}/> {loadingLeadDetails?'Abrindo...':editingLead?'Cancelar edição':'Editar oportunidade'}</button>
               <button type="button" disabled={savingLead||deletingLead||Boolean(busyLead)}
                 onClick={()=>void deleteLead(selected)}
                 className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-40"><Trash2 size={14}/> {deletingLead?'Excluindo...':'Excluir oportunidade'}</button>
