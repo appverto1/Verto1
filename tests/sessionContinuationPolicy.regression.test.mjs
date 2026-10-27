@@ -26,12 +26,22 @@ const other={id:'66666666-6666-4666-8666-666666666666',organization_id:org,clini
  therapist_id:professional,patient_id:b,status:'scheduled',
  scheduled_start_at:'2026-10-27T17:50:00.000Z',scheduled_end_at:'2026-10-27T18:40:00.000Z'};
 const query={organizationId:org,clinicId:clinic,professionalId:professional,patientId:a,
- startAt:'2026-10-27T17:50:00.000Z',endAt:'2026-10-27T18:40:00.000Z',appointments:[other]};
+ startAt:'2026-10-27T17:50:00.000Z',endAt:'2026-10-27T18:40:00.000Z',appointments:[other],
+ workingPeriods:[{startAt:'2026-10-27T16:00:00.000Z',endAt:'2026-10-27T19:00:00.000Z'}],blockedPeriods:[]};
 assert.equal(previewContinuationConflicts(query).conflicting.length,1);
 assert.equal(previewContinuationConflicts({...query,appointments:[{...other,clinic_id:'77777777-7777-4777-8777-777777777777'}]}).safe,false);
 assert.equal(previewContinuationConflicts({...query,appointments:null}).safe,false);
 assert.equal(previewContinuationConflicts({...query,appointments:[{...other,status:'cancelled'}]}).conflicting.length,0);
 assert.equal(previewContinuationConflicts({...query,appointments:[{...other,active_aba_session_id:'in_progress'}]}).safe,false);
+
+
+assert.equal(previewContinuationConflicts({...query, workingPeriods:undefined}).safe,false);
+assert.equal(previewContinuationConflicts({...query, sessionBufferMinutes:121}).reason,'UNVERIFIED_SESSION_BUFFER');
+assert.equal(previewContinuationConflicts({...query, workingPeriods:[{startAt:'2026-10-27T16:00:00.000Z',endAt:'2026-10-27T18:39:00.000Z'}]}).reason,'OUTSIDE_WORK_SCHEDULE_OR_BUFFER');
+assert.equal(previewContinuationConflicts({...query, blockedPeriods:[{startAt:'2026-10-27T18:00:00.000Z',endAt:'2026-10-27T18:10:00.000Z'}]}).reason,'BREAK_OR_PAUSE_CONFLICT');
+assert.equal(previewContinuationConflicts({...query, appointments:[{...other, therapist_id:'99999999-9999-4999-8999-999999999999',patient_id:a}]}).safe,false);
+assert.equal(previewContinuationConflicts({...query, roomId:'room-5', appointments:[{...other, therapist_id:'99999999-9999-4999-8999-999999999999',room_id:'room-5'}]}).safe,false);
+assert.equal(previewContinuationConflicts({...query,appointments:[{...other,actual_start_at:'2026-10-27T17:52:00.000Z'}]}).safe,false);
 
 const closing={...base,status:'active',organizationId:org,clinicId:clinic,patientId:a,professionalId:professional,
  appointmentId:'88888888-8888-4888-8888-888888888888',
