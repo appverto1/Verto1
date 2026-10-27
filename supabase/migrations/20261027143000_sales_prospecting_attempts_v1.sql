@@ -106,6 +106,12 @@ begin
        or v_lead.do_not_contact then
       raise exception 'PROSPECTING_NOT_ALLOWED';
     end if;
+    if exists (
+      select 1 from public.sales_prospecting_attempts
+      where lead_id = p_lead_id and outcome = 'decisor_spoken'
+    ) then
+      raise exception 'DECISOR_ALREADY_CONTACTED';
+    end if;
     select count(*) filter(where channel='phone')::integer,
            count(*) filter(where channel='whatsapp_call')::integer
       into v_phone,v_whatsapp
