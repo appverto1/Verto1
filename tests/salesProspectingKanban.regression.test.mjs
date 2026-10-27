@@ -76,15 +76,15 @@ test('isolated bridge does not bypass Super Admin MFA and database authority', (
 const layoutSql = readFileSync('supabase/migrations/20261027185000_sales_kanban_custom_columns_analytics_v1.sql','utf8');
 
 test('configurable columns and audited movements are durable, private and atomic',()=>{
-  assert.equal((layoutSql.match(/\\$\\$/g)||[]).length, 6);
+  assert.equal((layoutSql.match(/\$\$/g)||[]).length, 6);
   assert.match(layoutSql,/sales_kanban_columns/);
   assert.match(layoutSql,/sales_kanban_placements/);
   assert.match(layoutSql,/sales_kanban_movements/);
   assert.match(layoutSql,/move_sales_kanban_lead_v1/);
   assert.match(layoutSql,/for update;/);
   assert.match(layoutSql,/PAYMENT_REQUIRED_FOR_CONVERSION/);
-  assert.match(layoutSql,/revoke all on public\\.sales_kanban_columns/);
-  assert.match(layoutSql,/grant execute on function public\\.move_sales_kanban_lead_v1[\\s\\S]*to service_role;/);
+  assert.match(layoutSql,/revoke all on public\.sales_kanban_columns/);
+  assert.match(layoutSql,/grant execute on function public\.move_sales_kanban_lead_v1[\s\S]*to service_role;/);
   assert.doesNotMatch(layoutSql,/to authenticated;/i);
 });
 
