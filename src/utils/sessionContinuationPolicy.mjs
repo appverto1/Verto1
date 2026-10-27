@@ -120,7 +120,9 @@ export function previewContinuationConflicts({
     const hardBlock = patientOverlap || roomOverlap && !professionalOverlap ||
       appOrg !== str(organizationId) || appClinic !== str(clinicId) ||
       Boolean(item.active_aba_session_id) || Boolean(item.session_group_id) ||
-      Boolean(item.checked_in_at) || Boolean(item.actual_start_at);
+      Boolean(item.checked_in_at) || Boolean(item.actual_start_at) ||
+      item.cancellation_without_charge_verified !== true ||
+      item.has_captured_payment !== false;
     conflicting.push(Object.freeze({
       appointmentId: str(item.id),
       patientId: appPatient,
