@@ -17,6 +17,9 @@ ARG VITE_FEATURE_ABA_V3_UI=false
 ENV VITE_FEATURE_ABA_V3_UI=${VITE_FEATURE_ABA_V3_UI}
 
 RUN npm run build
+# Alternative staging gate: fail the image build on clinical, financial or tenant regressions.
+# It runs in the Node 20 build stage, before dev dependencies are pruned.
+RUN node scripts/p0-504-railway-gate.mjs
 RUN npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
