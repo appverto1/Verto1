@@ -11,6 +11,8 @@ function positiveMinutes(value, label) {
   return n;
 }
 function instant(value, label) {
+  if (value == null || (typeof value !== 'string' && !(value instanceof Date)) ||
+      (typeof value === 'string' && !value.trim())) throw new RangeError(label + ' missing');
   const n = new Date(value).getTime();
   if (!Number.isFinite(n)) throw new RangeError(label + ' invalid');
   return n;
