@@ -64,7 +64,10 @@ export function previewSessionContinuation(params) {
  * Returns explicit blockers (not authorization). Only the backend may approve
  * cancellation of other patients, after clinic/role checks and row locks.
  */
-export function previewContinuationConflicts({ organizationId, clinicId, professionalId, patientId, startAt, endAt, appointments }) {
+export function previewContinuationConflicts({
+  organizationId, clinicId, professionalId, patientId, roomId,
+  startAt, endAt, appointments, workingPeriods, blockedPeriods, sessionBufferMinutes = 0,
+}) {
   if (!UUID_RE.test(str(organizationId)) || !UUID_RE.test(str(clinicId)) ||
       !UUID_RE.test(str(professionalId)) || !UUID_RE.test(str(patientId))) {
     return Object.freeze({ safe: false, reason: 'MISSING_TRUSTED_SCOPE', conflicting: [] });
@@ -73,6 +76,29 @@ export function previewContinuationConflicts({ organizationId, clinicId, profess
   const end = instant(endAt, 'Extension end');
   if (end <= start) throw new RangeError('Extension end must follow start');
   if (!Array.isArray(appointments)) return Object.freeze({ safe: false, reason: 'UNKNOWN_SCHEDULE', conflicting: [] });
+  const buffer = Number(sessionBufferMinutes);
+  if (!Number.isInteger(buffer) || buffer < 0 || buffer > 120) {
+    return Object.freeze({ safe: false, reason: 'UNVERIFIED_SESSION_BUFFER', conflicting: [] });
+  }
+  const blocked = Array.isArray(blockedPeriods) ? blockedPeriods : null;
+  const working = Array.isArray(workingPeriods) ? workingPeriods : null;
+  if (blocked === null || working === null || working.length === 0) {
+    // Missing schedule data must not be interpreted as 24h availability.
+    return Object.freeze({ safe: false, reason: 'UNVERIFIED_WORK_SCHEDULE', conflicting: [] });
+  }
+  const extendsInsideWorkingPeriod = working.some(x =>
+    x && instant(x.startAt, 'Working start') <= start &&
+    instant(x.endAt, 'Working end') >= end + buffer * MINUTE
+  );
+  if (!extendsInsideWorkingPeriod) {
+    return Object.freeze({ safe: false, reason: 'OUTSIDE_WORK_SCHEDULE_OR_BUFFER', conflicting: [] });
+  }
+  const intersectsBreak = blocked.some(x => x &&
+    Math.max(start, instant(x.startAt, 'Break start')) <
+    Math.min(end + buffer * MINUTE, instant(x.endAt, 'Break end'))
+  );
+  if (intersectsBreak) return Object.freeze({ safe: false, reason: 'BREAK_OR_PAUSE_CONFLICT', conflicting: [] });
+
   const conflicting = [];
   for (const item of appointments) {
     if (!item || !OCCUPIED.has(str(item.status).toLowerCase())) continue;
@@ -83,19 +109,28 @@ export function previewContinuationConflicts({ organizationId, clinicId, profess
     if (!UUID_RE.test(appClinic) || !UUID_RE.test(appOrg) || !UUID_RE.test(appProfessional) || !UUID_RE.test(appPatient)) {
       return Object.freeze({ safe: false, reason: 'UNVERIFIED_APPOINTMENT_SCOPE', conflicting: [] });
     }
-    if (appProfessional !== str(professionalId) || appPatient === str(patientId)) continue;
+    const professionalOverlap = appProfessional === str(professionalId);
+    const patientOverlap = appPatient === str(patientId);
+    const roomOverlap = Boolean(str(roomId) &&
+      str(item.roomId ?? item.room_id) === str(roomId) && appClinic === str(clinicId));
+    if (!professionalOverlap && !patientOverlap && !roomOverlap) continue;
     const otherStart = instant(item.scheduledStartAt ?? item.scheduled_start_at ?? item.scheduled_at, 'Other start');
     const otherEnd = instant(item.scheduledEndAt ?? item.scheduled_end_at, 'Other end');
-    if (Math.max(start, otherStart) >= Math.min(end, otherEnd)) continue;
+    if (Math.max(start, otherStart) >= Math.min(end + buffer * MINUTE, otherEnd)) continue;
+    const hardBlock = patientOverlap || roomOverlap && !professionalOverlap ||
+      appOrg !== str(organizationId) || appClinic !== str(clinicId) ||
+      Boolean(item.active_aba_session_id) || Boolean(item.session_group_id) ||
+      Boolean(item.checked_in_at) || Boolean(item.actual_start_at);
     conflicting.push(Object.freeze({
       appointmentId: str(item.id),
       patientId: appPatient,
       clinicId: appClinic,
+      professionalOverlap,
+      patientOverlap,
+      roomOverlap,
       startAt: new Date(otherStart).toISOString(),
       endAt: new Date(otherEnd).toISOString(),
-      mustNeverAutoCancel: appOrg !== str(organizationId) || appClinic !== str(clinicId) ||
-        Boolean(item.active_aba_session_id) || Boolean(item.session_group_id) ||
-        Boolean(item.checked_in_at),
+      mustNeverAutoCancel: hardBlock,
     }));
   }
   return Object.freeze({
