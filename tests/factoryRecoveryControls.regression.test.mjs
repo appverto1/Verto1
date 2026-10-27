@@ -82,6 +82,27 @@ assert.equal(validateEvidenceEnvelope(env(),{expectedHeadSha:H,requireRunCheck:t
  const e=env();e.gate='STAGING_CI';delete e.run_id;const r=validateEvidenceEnvelope(e,{expectedHeadSha:H});assert(!r.valid);assert(r.errors.some(x=>x.code==='RUN_ID_MISSING'));
 }
 {
+ const e={...env(),gate:'STAGING_CI',result:'CI_ALTERNATIVE_PASS',suites_required:['governance-contract'],suites_executed:['governance-contract'],suites_skipped:[]};
+ delete e.run_id;delete e.check_id;delete e.run_head_sha;delete e.check_conclusion;
+ e.alternative_proof={executor_kind:'LOCAL_ISOLATED',executor_id:'runner-01',reviewer_id:'reviewer-03',
+   base_checkout_sha:B,head_checkout_sha:H,log_sha256:'a'.repeat(64),
+   evidence_url:'https://github.com/appverto1/Verto1/issues/511',completed_at:'2026-10-27T16:00:00Z',
+   test_commands:['node tests/factoryRecoveryControls.regression.test.mjs'],result:'PASS',new_regressions:0};
+ assert.equal(validateEvidenceEnvelope(e,{expectedHeadSha:H}).valid,true);
+ for(const mutation of [
+   x=>{x.alternative_proof.reviewer_id=x.alternative_proof.executor_id;},
+   x=>{x.alternative_proof.head_checkout_sha=O;},
+   x=>{x.alternative_proof.log_sha256='not-hash';},
+   x=>{x.alternative_proof.new_regressions=1;},
+   x=>{x.suites_skipped=['governance-contract'];},
+   x=>{x.suites_executed=[];},
+   x=>{delete x.alternative_proof;}
+ ]){const v=structuredClone(e);mutation(v);assert.equal(validateEvidenceEnvelope(v,{expectedHeadSha:H}).valid,false);}
+ const noCi={...env(),gate:'STAGING_CI',result:'CI_PASS'};
+ delete noCi.run_id;delete noCi.check_id;delete noCi.run_head_sha;delete noCi.check_conclusion;
+ assert.equal(validateEvidenceEnvelope(noCi,{expectedHeadSha:H}).valid,false);
+}
+{
  const s=snap();delete s.evidence_policy;const r=verifyFactoryConsistency(s,{now:NOW});assert.equal(r.status,'AMBIGUOUS');assert(r.problems.some(x=>x.code==='EVIDENCE_POLICY_MISSING'));
 }
 {
