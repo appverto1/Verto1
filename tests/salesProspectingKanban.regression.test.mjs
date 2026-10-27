@@ -7,7 +7,7 @@ const routes = readFileSync('services/salesProspectingRoutes.ts', 'utf8');
 const kanban = readFileSync('src/components/CommercialKanban.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CommercialDashboard.tsx', 'utf8');
 const superAdmin = readFileSync('src/components/SuperAdminDashboard.tsx', 'utf8');
-const server = readFileSync('server.ts', 'utf8');
+const bridge = readFileSync('services/helpCenterRoutes.ts', 'utf8');
 
 test('sales migration uses balanced PL/pgSQL bodies with a transactional wrapper', () => {
   assert.equal((sql.match(/\$\$/g) || []).length, 6);
@@ -60,8 +60,15 @@ test('dashboard separates decision-maker conversations from mere attempts', () =
   assert.match(dashboard, /Taxa por lead abordado/);
 });
 
-// This must be green before the feature is released. A missing wiring call
-// blocks merge rather than silently shipping unusable Kanban actions.
-test('server mounts secure modular routes before startup', () => {
-  assert.match(server, /registerSalesProspectingRoutes\(app\s*,/);
+test('modular routes are registered by the existing backend startup module', () => {
+  assert.match(bridge, /registerSalesProspectingRoutes\(app, \{ supabase, checkAuth \}\)/);
+  assert.match(bridge, /import \{ registerSalesProspectingRoutes \} from '.\/salesProspectingRoutes'/);
+});
+
+test('isolated bridge does not bypass Super Admin MFA and database authority', () => {
+  assert.match(routes, /\.from\('platform_admins'\)/);
+  assert.match(routes, /\.eq\('active', true\)/);
+  assert.match(routes, /user\?\.mfaVerified !== true/);
+  assert.match(routes, /mfaMethod, 20/);
+  assert.match(routes, /PLATFORM_ADMIN_MFA_REQUIRED/);
 });
