@@ -8,7 +8,7 @@ const AUTHORIZED_TARGET_AUTHORITIES = new Set(['FOUNDER_EXPLICIT']);
 const POST_MERGE_PROOF_SCHEMA = 'FACTORY_POST_MERGE_PROOF_V1';
 const POST_MERGE_EVIDENCE = Object.freeze({
   writer_validation:{gate:'WRITER_VALIDATION',results:new Set(['WRITER_VALIDATION_PASS']),requireRunCheck:true},
-  staging_ci:{gate:'STAGING_CI',results:new Set(['CI_PASS']),requireRunCheck:true},
+  staging_ci:{gate:'STAGING_CI',results:new Set(['CI_PASS','CI_ALTERNATIVE_PASS']),requireRunCheck:false},
   review:{gate:'REVIEW',results:new Set(['REVIEW_PASS']),requireRunCheck:false},
   audit:{gate:'AUDIT',results:new Set(['AUDIT_PASS','AUDIT_PASS_POS']),requireRunCheck:false},
 });
@@ -31,7 +31,7 @@ const statusOf = (ps) => ps.some(x=>x.severity==='AMBIGUOUS') ? 'AMBIGUOUS'
   : ps.some(x=>x.severity==='STALE_CLAIM_SUSPECTED') ? 'STALE_CLAIM_SUSPECTED'
   : ps.length ? 'DRIFT' : 'CONSISTENT';
 const FACTUAL_GATES = new Set(['WRITER_VALIDATION','STAGING_CI','REVIEW','AUDIT','MERGE','STAGING_VERIFY']);
-const GATE_RESULTS = {WRITER_VALIDATION:['WRITER_VALIDATION_PASS','WRITER_VALIDATION_FAIL'],STAGING_CI:['CI_PASS','CI_FAIL','CI_UNAVAILABLE'],REVIEW:['REVIEW_PASS','REVIEW_FAIL'],AUDIT:['AUDIT_PASS','AUDIT_PASS_POS','AUDIT_FAIL'],MERGE:['MERGE_PASS','MERGE_FAIL'],STAGING_VERIFY:['STAGING_VERIFIED','STAGING_VERIFY_PASS','STAGING_VERIFY_FAIL']};
+const GATE_RESULTS = {WRITER_VALIDATION:['WRITER_VALIDATION_PASS','WRITER_VALIDATION_FAIL'],STAGING_CI:['CI_PASS','CI_ALTERNATIVE_PASS','CI_FAIL','CI_UNAVAILABLE'],REVIEW:['REVIEW_PASS','REVIEW_FAIL'],AUDIT:['AUDIT_PASS','AUDIT_PASS_POS','AUDIT_FAIL'],MERGE:['MERGE_PASS','MERGE_FAIL'],STAGING_VERIFY:['STAGING_VERIFIED','STAGING_VERIFY_PASS','STAGING_VERIFY_FAIL']};
 const gateForAgent = agent => ({'10':'STAGING_CI','03':'REVIEW','01':'AUDIT','12':'MERGE','13':'STAGING_VERIFY'})[agent];
 const canonicalIdentity = (i,gate) => ({issue:i.number,contract_version:i.contract_version,branch:i.branch,base_sha:i.base_sha,head_sha:i.head_sha,...(gate?{gate}:{})});
 const identityMatches = (actual,expected) => ['issue','contract_version','branch','base_sha','head_sha',...(expected.gate?['gate']:[])].every(key=>
@@ -56,7 +56,24 @@ export function validateEvidenceEnvelope(e, {expectedHeadSha, requireRunCheck=fa
     else if (!ran.has(s)) errors.push({code:'REQUIRED_SUITE_MISSING',detail:`required suite not executed: ${s}`});
   }
   if (Number.isNaN(new Date(e.timestamp).getTime())) errors.push({code:'EVIDENCE_TIMESTAMP_INVALID',detail:'invalid timestamp'});
-  const automatedGate = ['WRITER_VALIDATION','STAGING_CI'].includes(String(e.gate));
+  const alternative = e.gate==='STAGING_CI' && e.result==='CI_ALTERNATIVE_PASS';
+  const automatedGate = e.gate==='WRITER_VALIDATION' || (e.gate==='STAGING_CI' && !alternative);
+  if (alternative) {
+    const proof=e.alternative_proof;
+    const validProof=proof && typeof proof==='object' && !Array.isArray(proof) &&
+      ['LOCAL_ISOLATED','CLOUD_ISOLATED'].includes(proof.executor_kind) &&
+      nonempty(proof.executor_id) && nonempty(proof.reviewer_id) &&
+      proof.executor_id!==proof.reviewer_id &&
+      proof.base_checkout_sha===e.base_sha && proof.head_checkout_sha===e.head_sha &&
+      /^[0-9a-f]{64}$/i.test(String(proof.log_sha256??'')) &&
+      /^https:\/\//.test(String(proof.evidence_url??'')) &&
+      Number.isFinite(Date.parse(String(proof.completed_at??''))) &&
+      nonemptyStringArray(proof.test_commands) &&
+      proof.result==='PASS' && proof.new_regressions===0 &&
+      nonemptyStringArray(e.suites_required) &&
+      e.suites_skipped?.length===0;
+    if (!validProof) errors.push({code:'ALTERNATIVE_CI_PROOF_INVALID',detail:'independent runner, exact base/head, verified logs and reviewer are mandatory'});
+  }
   if (requireRunCheck || automatedGate) {
     if (!e.run_id) errors.push({code:'RUN_ID_MISSING',detail:'run_id required'});
     if (!e.check_id) errors.push({code:'CHECK_ID_MISSING',detail:'check_id required'});
