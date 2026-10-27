@@ -19,15 +19,22 @@
 - `tests/salesProspectingKanban.regression.test.mjs`: verificações de invariantes e bloqueio de rollout sem registro das rotas.
 - `src/components/SuperAdminDashboard.tsx`: componente acessível na aba Comercial somente com `VITE_FEATURE_COMMERCIAL_PROSPECTING=true`.
 
-## Impedimentos para merge seguro
+## Integração (sem editar `server.ts`)
 
-1. As novas rotas **ainda não foram registradas** em `server.ts`. O arquivo existente tem ~4,35 MB e excedeu o limite de escrita do conector do GitHub. O utilitário `node scripts/integrate-sales-prospecting-routes.mjs` faz só o import e o registro, localmente, sob revisão de diff. Este script não é executado pelo aplicativo nem pelo Railway.
-2. Não há resultados dos testes de build/TypeScript nem testes de RPC no banco do staging; não afirmar que passou.
-3. A migração ainda precisa ser aplicada ao banco **Verto-Staging**, nunca em produção sem rollout próprio.
-4. Testar autenticação+MFA, tentativas concorrentes, idempotência, 5+5, décima falha, conversa com decisor, mudança manual para perdido e atualização sem F5.
-5. Habilitar a flag somente no Railway staging depois de servidor e banco estarem prontos, confirmar deployment SUCCESS + SHA e teste autenticado.
+As rotas foram montadas na inicialização do módulo já registrado
+`services/helpCenterRoutes.ts`, com import explícito de
+`services/salesProspectingRoutes.ts`. Esse encaixe é temporário, mas mantém a
+lógica do CRM isolada; não há middleware de autorização fraco ou endpoint público.
+A rota revalida `platform_admins.active=true` no banco e MFA TOTP na sessão.
+Não é necessária a execução de um script no `server.ts` gigante.
 
-**Não promover produção ou criar PR de entrega enquanto estes passos não estiverem concluídos.**
+## Gates para staging
+
+1. Revisar migration e executar **somente** no Supabase `Verto-Staging`, conferindo `sales_prospecting_attempts`, RLS e RPCs.
+2. Executar o teste `node --test tests/salesProspectingKanban.regression.test.mjs`, build, TypeScript e regressões pertinentes sem ativar GitHub Actions pago.
+3. Confirmar que o backend recebe `/api/owner/sales/prospecting/attempts` e nega acesso a não administradores, sessões sem MFA, além de bloquear tentativas fora da cota.
+4. Merge em `staging`, Railway deploy SUCCESS com SHA correto; se a API estiver íntegra, habilitar `VITE_FEATURE_COMMERCIAL_PROSPECTING=true` no staging e executar smoke autenticado.
+5. Produção não é parte deste rollout.
 
 ## Escopo não implementado nesta etapa
 
