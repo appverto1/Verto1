@@ -163,21 +163,21 @@ begin
     'convertedLeads',(select count(*) from public.sales_leads where deleted_at is null and status='converted'),
     'lostLeads',(select count(*) from public.sales_leads where deleted_at is null and status='lost')
   ) into v_overview;
-  select coalesce(jsonb_agg(jsonb_build_object('day',day,'calls',calls,'conversations',conversations) order by day),'[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('day',day_bucket,'calls',calls,'conversations',conversations) order by day_bucket),'[]'::jsonb)
     into v_daily from (
-      select to_char(occurred_at at time zone 'America/Sao_Paulo','YYYY-MM-DD') day,
+      select to_char(occurred_at at time zone 'America/Sao_Paulo','YYYY-MM-DD') as day_bucket,
         count(*) calls,count(*) filter(where outcome='decisor_spoken') conversations
       from public.sales_prospecting_attempts where occurred_at >= v_since group by 1
     ) x;
-  select coalesce(jsonb_agg(jsonb_build_object('hour',hour,'calls',calls,'conversations',conversations) order by hour),'[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('hour',hour_bucket,'calls',calls,'conversations',conversations) order by hour_bucket),'[]'::jsonb)
     into v_hours from (
-      select extract(hour from occurred_at at time zone 'America/Sao_Paulo')::int hour,
+      select extract(hour from occurred_at at time zone 'America/Sao_Paulo')::int as hour_bucket,
         count(*) calls,count(*) filter(where outcome='decisor_spoken') conversations
       from public.sales_prospecting_attempts where occurred_at >= v_since group by 1
     ) x;
-  select coalesce(jsonb_agg(jsonb_build_object('weekday',weekday,'calls',calls,'conversations',conversations) order by weekday),'[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('weekday',weekday_bucket,'calls',calls,'conversations',conversations) order by weekday_bucket),'[]'::jsonb)
     into v_weekdays from (
-      select extract(isodow from occurred_at at time zone 'America/Sao_Paulo')::int weekday,
+      select extract(isodow from occurred_at at time zone 'America/Sao_Paulo')::int as weekday_bucket,
         count(*) calls,count(*) filter(where outcome='decisor_spoken') conversations
       from public.sales_prospecting_attempts where occurred_at >= v_since group by 1
     ) x;
@@ -186,17 +186,17 @@ begin
       select channel,count(*) calls,count(*) filter(where outcome='decisor_spoken') conversations
       from public.sales_prospecting_attempts where occurred_at >= v_since group by channel
     ) x;
-  select coalesce(jsonb_agg(jsonb_build_object('attempt',attempt,'calls',calls,'conversations',conversations) order by attempt),'[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('attempt',attempt_no,'calls',calls,'conversations',conversations) order by attempt_no),'[]'::jsonb)
     into v_attempts from (
-      select attempt,count(*) calls,count(*) filter(where outcome='decisor_spoken') conversations
+      select attempt_no,count(*) calls,count(*) filter(where outcome='decisor_spoken') conversations
       from (
-        select row_number() over(partition by lead_id order by occurred_at,id)::int attempt,outcome
+        select row_number() over(partition by lead_id order by occurred_at,id)::int as attempt_no,outcome
         from public.sales_prospecting_attempts where occurred_at >= v_since
-      ) y group by attempt
+      ) y group by attempt_no
     ) x;
-  select coalesce(jsonb_agg(jsonb_build_object('status',status,'leads',leads) order by status),'[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('status',status_key,'leads',leads) order by status_key),'[]'::jsonb)
     into v_stages from (
-      select status::text status,count(*) leads
+      select status::text as status_key,count(*) leads
       from public.sales_leads where deleted_at is null group by status
     ) x;
   return jsonb_build_object('days',p_days,'overview',v_overview,'daily',v_daily,
