@@ -4,6 +4,23 @@ set local lock_timeout = '5s';
 set local statement_timeout = '60s';
 
 alter table public.sales_leads add column if not exists lost_at timestamptz;
+-- Existing PATCH routes already change status. Preserve exact loss time in DB,
+-- including manual changes that do not yet call the new prospecting RPC.
+create or replace function public.set_sales_lead_lost_at_v1()
+returns trigger language plpgsql set search_path = pg_catalog, public as $
+begin
+  if new.status = 'lost' and old.status is distinct from 'lost' then
+    new.lost_at := clock_timestamp();
+  elsif new.status <> 'lost' then
+    new.lost_at := null;
+  end if;
+  return new;
+end $;
+drop trigger if exists set_sales_lead_lost_at_v1 on public.sales_leads;
+create trigger set_sales_lead_lost_at_v1
+before update of status on public.sales_leads
+for each row execute function public.set_sales_lead_lost_at_v1();
+
 
 create table if not exists public.sales_prospecting_attempts (
   id uuid primary key default gen_random_uuid(),
