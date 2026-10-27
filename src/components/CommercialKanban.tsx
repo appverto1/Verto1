@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getSupabase } from '../lib/supabase';
-import { CommercialDashboard } from './CommercialDashboard';
+import { CommercialDashboard, type CommercialAttempt } from './CommercialDashboard';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
-type Attempt = { lead_id: string; channel: 'phone' | 'whatsapp_call'; outcome: 'no_decisor' | 'decisor_spoken'; occurred_at: string };
+type Attempt = CommercialAttempt;
 type Lead = { id: string; name?: string; phone?: string; clinicName?: string; status: SalesLeadStatus; lostAt?: string | null; legacyReadOnly?: boolean };
 type Props = {
   leads: Lead[];
@@ -88,7 +88,7 @@ export const CommercialKanban = ({ leads, onStatusChange, onLeadPatch }: Props) 
       delete keysRef.current[actionName];
       // Re-read the count on the server response; no optimistic persistence and no F5.
       setAttempts((old) => json.data?.attemptId && !old.some((x: any) => x.id === json.data.attemptId)
-        ? [...old, { id: json.data.attemptId, lead_id: lead.id, channel, outcome, occurred_at: json.data.occurredAt } as Attempt]
+        ? [...old, { id: json.data.attemptId, lead_id: lead.id, channel, outcome, occurred_at: json.data.occurredAt }]
         : old);
       onLeadPatch(lead.id, { status: json.data.status, lostAt: json.data.lostAt, updatedAt: json.data.updatedAt });
     } catch (cause: any) {
@@ -119,6 +119,7 @@ export const CommercialKanban = ({ leads, onStatusChange, onLeadPatch }: Props) 
 
   const changeStatus = async (lead: Lead, status: SalesLeadStatus) => {
     if (status === lead.status || busyId) return;
+    if (lead.status === 'converted') { setError('Clientes convertidos não podem retornar ao funil de prospecção.'); return; }
     if (status === 'converted') { setError('A venda deve ser confirmada pelo pagamento, não pelo arrastar do card.'); return; }
     if (status === 'lost') await markLost(lead);
     else await onStatusChange(lead, status);
@@ -146,7 +147,7 @@ export const CommercialKanban = ({ leads, onStatusChange, onLeadPatch }: Props) 
             className={'w-[290px] shrink-0 snap-start rounded-2xl border p-3 ' + column.color}>
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-800">{column.title}</h3>
-              <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold">{leads.filter((x) => column.statuses.includes(x.status)).length}</span>
+              <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold">{leads.filter((x) => !x.legacyReadOnly && column.statuses.includes(x.status)).length}</span>
             </div>
             <div className="space-y-3">
               {leads.filter((x) => !x.legacyReadOnly && column.statuses.includes(x.status)).map((lead) => {
