@@ -151,7 +151,11 @@ assert.match(financeUi, /!isMonthlySessionBillingPlan\(plan\)/);
 assert.match(financeUi, /Faturamento mensal automático por sessões realizadas/);
 assert.match(ledgerUtil, /monthlyAdjustmentRequired/);
 assert.match(ledgerUtil, /monthlySessionCount/);
-assert.match(server, /monthlySessionChargeIds[\s\S]{0,420}item\?\.active === true/);
+// The once-inline server projection was retired. The database owns inclusion in
+// monthly SESSION aggregates, and the ledger must exclude inactive items.
+const currentMonthlyEngineSql = fs.readFileSync('supabase/migrations/20261009211000_appointment_financial_specialty_plan_matching.sql', 'utf8');
+assert.match(currentMonthlyEngineSql, /item\.billing_item_type='MONTHLY_SESSION'[\s\S]{0,110}item\.active=true/);
+assert.match(ledgerUtil, /items\.filter\(\(item: any\) => item\?\.active !== false\)/);
 
 // Utility behavior: fixed monthly and legacy private keep their semantics; monthly-session is opt-in.
 const utilContext = { console, exports: {}, require: () => ({ clinicalSpecialtiesMatch: () => false }) };

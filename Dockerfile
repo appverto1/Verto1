@@ -17,8 +17,10 @@ ARG VITE_FEATURE_ABA_V3_UI=false
 ENV VITE_FEATURE_ABA_V3_UI=${VITE_FEATURE_ABA_V3_UI}
 
 RUN npm run build
-# Alternative staging gate: fail the image build on clinical, financial or tenant regressions.
-# It runs in the Node 20 build stage, before dev dependencies are pruned.
+# Independent Node 20 + local Postgres emulator regression gate (no GitHub Actions minutes).
+# No production credentials: read-only code contracts + isolated PGlite tests.
+RUN node scripts/staging-railway-ci-gate.mjs
+# Specific P0-504 suite must also pass before this clinical feature is shipped.
 RUN node scripts/p0-504-railway-gate.mjs
 RUN npm prune --omit=dev
 
