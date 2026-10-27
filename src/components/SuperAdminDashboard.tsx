@@ -1070,6 +1070,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         )}
 
         {activeTab === 'financial' && (
+          <div className="mb-5 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2">
+            <button onClick={()=>setFinancialView('dre')} className={'rounded-lg px-4 py-2 text-sm font-bold '+(financialView==='dre'?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}>DRE e EBITDA</button>
+            <button onClick={()=>setFinancialView('sales')} className={'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold '+(financialView==='sales'?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}><BarChart3 size={15}/> Inteligência comercial · Gráficos</button>
+          </div>
+        )}
+        {activeTab === 'financial' && financialView === 'sales' && <CommercialDashboard />}
+        {activeTab === 'financial' && financialView === 'dre' && (
           <div className="space-y-7">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
@@ -1530,8 +1537,23 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
-        {activeTab === "leads" && (
+        {activeTab === 'leads' && commercialView === 'kanban' && (
+          <CommercialKanban
+            leads={leadRecoveryItems}
+            onLeadPatch={(leadId, patch)=>setLeadRecoveryItems(current=>
+              current.map(item=>item.id===leadId?{...item,...patch}:item))}
+            onOpenLead={lead=>{setLeadSearch(lead.name||'');setLeadStatusFilter('all');setCommercialView('list');}}
+            onRefresh={refreshAll}
+            onMetrics={()=>{setFinancialView('sales');setActiveTab('financial');}}
+            onLoadMore={loadMoreLeads}
+            remaining={Math.max(0,leadTotal-leadRecoveryItems.filter(item=>!item.legacyReadOnly).length)}
+            loadingMore={loadingMoreLeads}
+          />
+        )}
+        {activeTab === "leads" && commercialView === 'list' && (
           <div className="space-y-6">
+            <button type="button" onClick={()=>{setLeadSearch('');setLeadStatusFilter('all');setCommercialView('kanban');}}
+              className="rounded-xl bg-[#10192D] px-5 py-3 text-sm font-bold text-white">← Voltar ao Kanban de tela inteira</button>
             <div className="rounded-[24px] border border-slate-100 bg-white p-5">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
@@ -1579,15 +1601,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               </div>
             </div>
 
-            {import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' && (
-              <CommercialKanban
-                leads={visibleSalesLeads}
-                onStatusChange={updateSalesLeadStatus}
-                onLeadPatch={(leadId, patch) => setLeadRecoveryItems((current) =>
-                  current.map((item) => item.id === leadId ? { ...item, ...patch } : item)
-                )}
-              />
-            )}
 
             <div className="rounded-[28px] border border-slate-100 bg-white p-6 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-3">
