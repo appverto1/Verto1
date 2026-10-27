@@ -2,8 +2,8 @@
 
 Prevalece sobre FACTORY_PROTOCOL.md, VERTO_ENGINEERING_OS.md, .github/agents/*.md e os prompts das lanes em caso de conflito. O formato dos campos de estado continua definido no FACTORY_PROTOCOL.md. Este arquivo só muda por Issue explícita do fundador.
 
-CI_REAL_ATIVO: SIM
-(o workflow `Verto Staging CI` em `.github/workflows/staging-ci.yml` é CI real da fábrica. O check `staging-gate` verde no `head_sha` exato é obrigatório para o Merge Gate 12. Enquanto branch protection/ruleset não puder impor tecnicamente o required check, a própria fábrica o trata como gate inegociável.)
+CI_REAL_ATIVO: SIM — VALIDAÇÃO INDEPENDENTE DE FORNECEDOR
+(O workflow `Verto Staging CI` continua disponível quando houver minutos gratuitos, mas não é o único executor permitido. O Merge Gate 12 exige evidência verificável no `head_sha` exato: `CI_PASS` do `staging-gate` OU `CI_ALTERNATIVE_PASS` com execução independente efetiva, revisão e prova auditável conforme §11. Ausência de executor/testes não autoriza merge. Esta alteração de governança foi solicitada pelo fundador na Issue #511; GitHub Actions permanece com orçamento US$ 0.)
 
 CONSELHO_WORK_ATIVO: SIM
 (00 + 01 PRÉ + 02 rodam no Work. Enquanto trigger GitHub event-driven nativo equivalente não estiver comprovadamente disponível, o `Verto Concilier` faz polling horário no minuto 00 como fallback explícito da Issue #238.)
@@ -143,13 +143,16 @@ O 11 prepara PR; o 12 é o único Merge Gatekeeper. RED sem AUDIT_PASS_POS não 
 ## 10. Migrations
 Toda migration existe como arquivo versionado no repo. Só aditiva ou reversível quando possível, com rollback registrado como REVERSIBLE, FORWARD_FIX_ONLY ou DATA_RECOVERY_REQUIRED. Aplicada apenas no Supabase staging antes do código que depende dela entrar em execução. Nunca presuma que revert de código desfaz migration, efeito externo ou dado.
 
-## 11. CI
-Estados: CI_PASS | CI_FAIL | CI_UNAVAILABLE. Ler código com IA não é CI.
-- O CI real canônico é o workflow `Verto Staging CI`, job/check `staging-gate`, executado para PRs destinados a `staging`.
-- CI_PASS só existe quando `staging-gate` conclui verde no `head_sha` exato do PR. Check vermelho = CI_FAIL. Check ausente, pendente, cancelado ou impossível de observar = CI_UNAVAILABLE.
-- `CI_REAL_ATIVO = SIM`: CI_UNAVAILABLE não libera merge, RED ou não-RED.
-- O papel 12 deve tratar `staging-gate` verde no `head_sha` exato como required gate da fábrica. Na ausência de branch protection/ruleset que o imponha tecnicamente, esta regra continua obrigatória por governança; nunca mergeie por disponibilidade do botão do GitHub.
-- Distinga baseline antigo de regressão nova. O ratchet pode aceitar apenas falhas preexistentes conforme o workflow, mas qualquer regressão nova reprova o CI.
+## 11. Validação de CI sem dependência exclusiva do GitHub Actions — Issue #511
+Estados: `CI_PASS | CI_ALTERNATIVE_PASS | CI_FAIL | CI_UNAVAILABLE`. Ler código com IA, simular asserts sem dependências ou prometer smoke posterior **não** equivale a CI.
+- **Caminho A (quando disponível, custo gratuito):** workflow `Verto Staging CI` / `staging-gate` no `head_sha` exato do PR; apenas check `success` permite `CI_PASS`.
+- **Caminho B (alternativo):** testes realmente executados por executor isolado/autorizado e independente do autor, com Node 20 e PostgreSQL isolado quando aplicável; produzir `CI_ALTERNATIVE_PASS` **somente** após evidências verificáveis associadas à Issue, `base_sha`, `head_sha`, SHA do checkout, lista de comandos e suítes, logs higienizados e SHA-256 dos logs, resultado `PASS` e assinatura de revisor distinto do executor. O 10 confere esses fatos; o 03 revisa o diff; RED ainda exige 01 PÓS e testes materiais de segurança.
+- **Matriz proporcional:** documentação isolada: inspeção estática/diff e testes do contrato alterado; UI sem dado sensível: build, checks direcionados de persistência/UX/acessibilidade; clínica, financeiro, banco/RLS, permissões, exclusão ou infraestrutura: testes focais de autorização/tenant, concorrência, atomicidade/rollback, regressões de persistência e contratos pertinentes. Omitir suíte exige justificativa `NOT_APPLICABLE` verificável, nunca pular teste crítico aplicável.
+- A evidência alternativa usa `alternative_proof` validado pelo verificador canônico (§22): `executor_kind`, `executor_id`, `reviewer_id` diferente, `base_checkout_sha`, `head_checkout_sha`, `log_sha256`, `evidence_url`, `completed_at`, `test_commands`, `result: PASS`, `new_regressions: 0`; `suites_required` e `suites_executed` não vazias e `suites_skipped` vazia. Resultado não é `CI_PASS` do GitHub.
+- **Sem executor ou prova auditável:** `CI_UNAVAILABLE` não libera merge. Teste falho, inconclusivo, PGlite onde PostgreSQL real é obrigatório, falta de cobertura crítica ou drift de SHA também impedem merge. Nenhum `CI_PASS` histórico é herdado por outro commit.
+- O build Docker existente no Railway Staging continua como segunda barreira **pós-merge**: oito regressões + `check:critical-schema` antes de ficar online. Isso não substitui evidência pré-merge para alteração RED; falha preserva o deploy anterior, mas não desfaz o commit no GitHub. Não criar serviços, preview environments, réplicas ou custos recorrentes para essa validação; verificar consumo de runtime/egress.
+- O Merge Gatekeeper 12 aceita `CI_PASS` **ou** `CI_ALTERNATIVE_PASS` verificável do mesmo SHA, mais `REVIEW_PASS`, `AUDIT_PASS_POS` em RED, locks/preflight/manifesto válidos e as proteções técnicas do GitHub. Se branch protection exigir check indisponível, não burlar nem alterar proteção sem autorização própria.
+- Distinga baseline antigo de regressão nova: compare base/candidato com os mesmos comandos e assinaturas estáveis; só falhas comprovadamente anteriores podem ser tratadas como baseline, nunca segredo exposto. GitHub Actions mantém orçamento US$ 0, sem cobrança habilitada.
 
 ## 12. Dados pessoais (LGPD)
 Dado de saúde e de criança são sensíveis. Nunca copie nome, CPF, contato, laudo ou texto clínico para Issue, PR, comentário ou log; use IDs e contagens. Não grave dado pessoal em logs. Quando contrato tocar dado de paciente, a auditoria confere consentimento, trilha de acesso, minimização e retenção/exclusão.

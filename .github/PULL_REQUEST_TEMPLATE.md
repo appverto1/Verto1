@@ -79,11 +79,15 @@ Reviewer compares the actual diff against `SPEC_APPROVED`.
 - Performance verdict:
 - Commercial/Super Admin verdict:
 
-## CI — 10
-- Workflow/run:
-- Validated head SHA:
-- `lock_base_sha` vs current staging HEAD when applicable:
-- CI result: `CI_PASS` / blocking state
+## CI / validação alternativa — 10 (Guardrails §11)
+- Modo: `CI_PASS` (GitHub) / `CI_ALTERNATIVE_PASS` (executor independente) / bloqueado
+- Workflow/run ou executor externo e endereço da evidência:
+- Validated base SHA / head SHA / checkout SHA:
+- Comandos, suíte obrigatória, resultado, logs higienizados e SHA-256 dos logs:
+- Executor e revisor independentes; revisão do diff:
+- Testes não aplicáveis, com justificativa específica:
+- `lock_base_sha` vs current staging HEAD quando aplicável:
+- Resultado: `CI_PASS` / `CI_ALTERNATIVE_PASS` / blocking state
 
 ## PR Engineer — 11
 - [ ] PR metadata matches the Issue contract.
@@ -97,7 +101,7 @@ Immediately before merge:
 - [ ] Base drift checked.
 - [ ] If `GLOBAL_WRITE_LOCK=ACTIVE`, this PR belongs to `lock_owner_issue`.
 - [ ] If `GLOBAL_WRITE_LOCK=ACTIVE`, current staging HEAD still matches the expected lock/base contract or drift was formally refreshed and revalidated.
-- [ ] Required CI is passing.
+- [ ] Validação no SHA exato: `CI_PASS` ou `CI_ALTERNATIVE_PASS` com prova aprovada; sem bypass de proteções GitHub.
 - [ ] `REVIEW_PASS` is recorded.
 - [ ] Issue is in a merge-eligible state.
 
