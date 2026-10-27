@@ -32,15 +32,13 @@ test('a database row lock serializes each attempt and a request key deduplicates
   assert.match(sql, /IDEMPOTENCY_CONFLICT/);
 });
 
-test('no channel exceeds five, and the tenth failed attempt marks only untouched leads lost', () => {
+test('each channel remains capped at five; manual loss stays protected', () => {
   assert.match(sql, /v_phone >= 5/);
   assert.match(sql, /v_whatsapp >= 5/);
-  assert.match(sql, /if v_total = 10 and not v_reached and v_lead.status = 'new' and v_lead.last_contact_at is null/);
-  assert.match(sql, /set status='lost', lost_at=v_at/);
-  assert.match(sql, /'ten_unsuccessful_attempts'/);
   assert.match(sql, /CONVERTED_LEAD_CANNOT_BE_LOST/);
   assert.match(sql, /DECISOR_ALREADY_CONTACTED/);
 });
+
 
 test('clicking a prospecting button persists before updating UI and supports manual lost', () => {
   assert.match(kanban, /\/prospecting-attempts/);
@@ -73,7 +71,10 @@ test('isolated bridge does not bypass Super Admin MFA and database authority', (
   assert.match(routes, /PLATFORM_ADMIN_MFA_REQUIRED/);
 });
 
+const crudSql = readFileSync('supabase/migrations/20261027193000_sales_kanban_opportunity_crud_v1.sql','utf8');
 const layoutSql = readFileSync('supabase/migrations/20261027185000_sales_kanban_custom_columns_analytics_v1.sql','utf8');
+const guardSql=readFileSync('supabase/migrations/20261027194500_sales_prospecting_business_day_guard_v1.sql','utf8');
+
 
 test('configurable columns and audited movements are durable, private and atomic',()=>{
   assert.equal((layoutSql.match(/\$\$/g)||[]).length, 6);
@@ -118,4 +119,56 @@ test('DRE contains a separate, rich analytical dashboard with database aggregate
   assert.match(dashboard,/Distribuição da base por etapa/);
   assert.match(layoutSql,/sales_prospecting_analytics_v1/);
   assert.match(layoutSql,/America\/Sao_Paulo/);
+});
+
+test('owner-only opportunity batch/CRUD uses server authority and atomic DB functions',()=>{
+  assert.match(routes,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities', \.\.\.salesGuard/);
+  assert.match(routes,/app\.patch\('\/api\/owner\/sales\/kanban\/opportunities\/:leadId', \.\.\.salesGuard/);
+  assert.match(routes,/app\.delete\('\/api\/owner\/sales\/kanban\/opportunities\/:leadId', \.\.\.salesGuard/);
+  assert.match(crudSql,/public\.create_sales_kanban_opportunities_v1/);
+  assert.match(crudSql,/public\.update_sales_kanban_opportunity_v1/);
+  assert.match(crudSql,/public\.delete_sales_kanban_opportunity_v1/);
+  assert.match(crudSql,/PHONE_ALREADY_EXISTS/);
+  assert.match(crudSql,/DUPLICATE_IN_BATCH/);
+  assert.match(crudSql,/idempotency_key text primary key/);
+  assert.match(crudSql,/for update;/i);
+  assert.match(crudSql,/sales_kanban_creation_batches enable row level security/);
+  assert.match(crudSql,/revoke all on function public\.create_sales_kanban_opportunities_v1/);
+  assert.match(crudSql,/contact_consent_at drop not null/);
+  assert.match(crudSql,/owner_manual_no_consent/);
+  assert.match(crudSql,/deleted_at=clock_timestamp\(\)/);
+  assert.match(crudSql,/status not in \('cancelled','expired'\)/);
+});
+
+test('Kanban supports batch entry, edit/save, confirmed soft delete and immediate updates',()=>{
+  assert.match(kanban,/Nova oportunidade/);
+  assert.match(kanban,/Salvar oportunidades/);
+  assert.match(kanban,/Salvar alterações/);
+  assert.match(kanban,/Excluir oportunidade/);
+  assert.match(kanban,/onLeadsCreated\(json\.leads/);
+  assert.match(kanban,/onLeadDeleted\(lead\.id\)/);
+  assert.match(superAdmin,/onLeadsCreated=/);
+  assert.match(superAdmin,/onLeadDeleted=/);
+});
+
+test('phone and WhatsApp cards are counters only, and loss needs explicit owner confirmation',()=>{
+  assert.doesNotMatch(kanban,/wa\.me|href=\{'tel:'/);
+  assert.match(kanban,/Contabilizar operadora/);
+  assert.match(kanban,/Contabilizar WhatsApp/);
+  assert.match(kanban,/recordAttempt\(lead,'phone','no_decisor'\)/);
+  assert.match(kanban,/recordAttempt\(lead,'whatsapp_call','no_decisor'\)/);
+  assert.match(kanban,/window\.confirm\('Foram registradas 10 tentativas/);
+  assert.match(crudSql,/needsLossDecision/);
+  assert.doesNotMatch(crudSql,/prospecting-auto-lost/);
+});
+
+test('business day guard enforces local weekday/office hours and one attempt per date',()=>{
+  assert.match(guardSql,/extract\(isodow from v_at at time zone 'America\/Sao_Paulo'\) not between 1 and 5/);
+  assert.match(guardSql,/time '09:00'/);
+  assert.match(guardSql,/time '17:30'/);
+  assert.match(guardSql,/PROSPECTING_ALREADY_TODAY/);
+  assert.match(guardSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.match(routes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
+  assert.match(kanban,/nextSalesCadenceSlots/);
+  assert.match(kanban,/canRecordSalesAttemptNow/);
 });

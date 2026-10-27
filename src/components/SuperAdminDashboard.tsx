@@ -1542,6 +1542,17 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             leads={leadRecoveryItems}
             onLeadPatch={(leadId, patch)=>setLeadRecoveryItems(current=>
               current.map(item=>item.id===leadId?{...item,...patch}:item))}
+            onLeadsCreated={items=>{
+              setLeadRecoveryItems(current=>{
+                const known=new Set(current.map(item=>item.id));
+                return [...items.filter(item=>!known.has(item.id)),...current];
+              });
+              setLeadTotal(total=>total+items.length);
+            }}
+            onLeadDeleted={id=>{
+              setLeadRecoveryItems(current=>current.filter(item=>item.id!==id));
+              setLeadTotal(total=>Math.max(0,total-1));
+            }}
             onOpenLead={lead=>{setLeadSearch(lead.name||'');setLeadStatusFilter('all');setCommercialView('list');}}
             onRefresh={refreshAll}
             onMetrics={()=>{setFinancialView('sales');setActiveTab('financial');}}
