@@ -1,17 +1,49 @@
-// Verto CRM prospecting endpoints.
-// Keep the authority in server-injected checkAuth + checkPlatformAdmin (MFA required).
+// Verto CRM prospecting endpoints. Backend permission checks are mandatory.
+// The optional provided platform guard is server.ts's canonical MFA guard. In the
+// small-module bridge, use the same DB-backed active-platform-admin + TOTP checks.
 type Dependencies = {
   supabase: any;
   checkAuth: any;
-  checkPlatformAdmin: any;
-  isUuid: (value: string) => boolean;
-  sanitizeString: (value: unknown, limit: number) => string;
+  checkPlatformAdmin?: any;
+  isUuid?: (value: string) => boolean;
+  sanitizeString?: (value: unknown, limit: number) => string;
 };
 
 export function registerSalesProspectingRoutes(
   app: any,
-  { supabase, checkAuth, checkPlatformAdmin, isUuid, sanitizeString }: Dependencies,
+  deps: Dependencies,
 ) {
+  const { supabase, checkAuth } = deps;
+  const sanitizeString = deps.sanitizeString ||
+    ((value: unknown, limit: number) => String(value ?? '').trim().slice(0, limit));
+  const isUuid = deps.isUuid ||
+    ((value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value));
+  const checkPlatformAdmin = deps.checkPlatformAdmin ||
+    (async (req: any, res: any, next: any) => {
+      const user = req.session?.user;
+      const userId = sanitizeString(user?.id, 120);
+      if (!isUuid(userId)) {
+        return res.status(403).json({ success: false, error: 'PLATFORM_ADMIN_REQUIRED' });
+      }
+      let authorized = false;
+      try {
+        const { data, error } = await supabase.from('platform_admins')
+          .select('user_id,active').eq('user_id', userId).eq('active', true).limit(1).maybeSingle();
+        if (error) throw error;
+        authorized = data?.user_id === userId && data?.active === true;
+      } catch {
+        return res.status(503).json({ success: false, error: 'PLATFORM_ADMIN_AUTHORITY_UNAVAILABLE' });
+      }
+      if (!authorized) return res.status(403).json({ success: false, error: 'PLATFORM_ADMIN_REQUIRED' });
+      const verifiedAt = Date.parse(sanitizeString(user?.mfaVerifiedAt, 80));
+      if (user?.mfaVerified !== true || sanitizeString(user?.mfaMethod, 20).toLowerCase() !== 'totp'
+          || !Number.isFinite(verifiedAt)) {
+        return res.status(401).json({ success: false, error: 'PLATFORM_ADMIN_MFA_REQUIRED' });
+      }
+      user.isPlatformAdmin = true;
+      return next();
+    });
+
   app.get('/api/owner/sales/prospecting/attempts', checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
     const leadIds = [...new Set(String(req.query?.leadIds || '').split(',').filter(Boolean))];
     if (leadIds.length === 0 || leadIds.length > 100 || leadIds.some((id) => !isUuid(id))) {
