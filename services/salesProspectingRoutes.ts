@@ -234,6 +234,83 @@ export function registerSalesProspectingRoutes(
     } catch { return boardError(res,'Não foi possível mover o lead.'); }
   });
 
+  // Owner-only manually created opportunities. Reuse the SQL authority for
+  // atomic batches, idempotency and audit; never let browser-controlled roles authorize writes.
+  app.post('/api/owner/sales/kanban/opportunities', ...salesGuard, async (req: any, res: any) => {
+    const phones = req.body?.phones;
+    const actorId = sanitizeString(req.session?.user?.id, 120);
+    const key = sanitizeString(req.headers?.['x-idempotency-key'], 120);
+    if (!isUuid(actorId) || key.length < 12 || key.length > 120 ||
+        !Array.isArray(phones) || phones.length < 1 || phones.length > 100 ||
+        phones.some((v: unknown) => typeof v !== 'string' || v.length > 40)) {
+      return res.status(400).json({ success:false,error:'Informe entre 1 e 100 telefones válidos.' });
+    }
+    try {
+      const result = await supabase.rpc('create_sales_kanban_opportunities_v1',{
+        p_phones:phones,p_actor_id:actorId,p_action_key:key,
+      });
+      if (result.error) {
+        if (/PHONE_ALREADY_EXISTS|DUPLICATE_IN_BATCH|IDEMPOTENCY_CONFLICT|23505/.test(String(result.error.message)+' '+result.error.code))
+          return res.status(409).json({success:false,error:'Número já cadastrado ou repetido. Nenhuma oportunidade foi criada.'});
+        if (/INVALID_PHONE|INVALID_CREATION_KEY/.test(String(result.error.message)))
+          return res.status(400).json({success:false,error:'Confira o formato dos números (DDD obrigatório).'});
+        throw result.error;
+      }
+      return res.status(201).json({success:true,leads:result.data});
+    } catch {
+      return boardError(res,'Não foi possível cadastrar as oportunidades.');
+    }
+  });
+
+  app.patch('/api/owner/sales/kanban/opportunities/:leadId', ...salesGuard, async (req: any, res: any) => {
+    const leadId = sanitizeString(req.params?.leadId,120);
+    const actorId = sanitizeString(req.session?.user?.id,120);
+    const key = sanitizeString(req.headers?.['x-idempotency-key'],120);
+    const patch = req.body;
+    if (!isUuid(leadId) || !isUuid(actorId) || key.length < 12 || key.length > 120 ||
+        !patch || typeof patch !== 'object' || Array.isArray(patch) ||
+        Object.keys(patch).length < 1 ||
+        Object.keys(patch).some(k=>!['name','phone','email','clinicName','notes'].includes(k)) ||
+        Object.values(patch).some(v=>typeof v !== 'string' && v !== null)) {
+      return res.status(400).json({success:false,error:'Dados de edição inválidos.'});
+    }
+    try {
+      const result = await supabase.rpc('update_sales_kanban_opportunity_v1',{
+        p_lead_id:leadId,p_actor_id:actorId,p_patch:patch,p_action_key:key,
+      });
+      if (result.error) {
+        const message=String(result.error.message||'');
+        if (message.includes('LEAD_NOT_FOUND')) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
+        if (/LEAD_LOCKED|IDEMPOTENCY_CONFLICT|23505/.test(message+' '+result.error.code))
+          return res.status(409).json({success:false,error:'Oportunidade protegida ou telefone/e-mail já cadastrado.'});
+        if (/INVALID_EDIT/.test(message)) return res.status(400).json({success:false,error:'Verifique nome, telefone e demais campos.'});
+        throw result.error;
+      }
+      return res.json({success:true,lead:result.data});
+    } catch { return boardError(res,'Não foi possível salvar a oportunidade.'); }
+  });
+
+  app.delete('/api/owner/sales/kanban/opportunities/:leadId', ...salesGuard, async (req: any, res: any) => {
+    const leadId = sanitizeString(req.params?.leadId,120);
+    const actorId = sanitizeString(req.session?.user?.id,120);
+    const key = sanitizeString(req.headers?.['x-idempotency-key'],120);
+    if (!isUuid(leadId) || !isUuid(actorId) || key.length < 12 || key.length > 120)
+      return res.status(400).json({success:false,error:'Exclusão inválida.'});
+    try {
+      const result = await supabase.rpc('delete_sales_kanban_opportunity_v1',{
+        p_lead_id:leadId,p_actor_id:actorId,p_action_key:key,
+      });
+      if (result.error) {
+        const m=String(result.error.message||'');
+        if (m.includes('LEAD_NOT_FOUND')) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
+        if (/LEAD_LOCKED|IDEMPOTENCY_CONFLICT/.test(m))
+          return res.status(409).json({success:false,error:'Oportunidade com conversão ou proposta ativa não pode ser excluída.'});
+        throw result.error;
+      }
+      return res.json({success:true,data:result.data});
+    } catch { return boardError(res,'Não foi possível excluir a oportunidade.'); }
+  });
+
   app.get('/api/owner/sales/prospecting/analytics', ...salesGuard, async (req: any, res: any) => {
     const days = Number(req.query?.days || 90);
     if (![7,30,90,365].includes(days))
