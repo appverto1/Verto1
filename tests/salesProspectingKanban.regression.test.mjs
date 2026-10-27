@@ -46,7 +46,7 @@ test('clicking a prospecting button persists before updating UI and supports man
   assert.match(kanban, /\/prospecting-attempts/);
   assert.match(kanban, /\/mark-lost/);
   assert.match(kanban, /crypto\.randomUUID\(\)/);
-  assert.match(kanban, /onLeadPatch\(lead\.id, \{ status: json\.data\.status/);
+  assert.match(kanban, /onLeadPatch\(lead\.id,\{status:json\.data\.status/);
   assert.match(kanban, /overflow-x-auto/);
   assert.match(kanban, /draggable/);
   assert.match(superAdmin, /<CommercialKanban/);
@@ -54,10 +54,10 @@ test('clicking a prospecting button persists before updating UI and supports man
 });
 
 test('dashboard separates decision-maker conversations from mere attempts', () => {
-  assert.match(dashboard, /outcome === 'decisor_spoken'/);
-  assert.match(dashboard, /America\/Sao_Paulo/);
+  assert.match(dashboard, /sales\/prospecting\/analytics/);
+  assert.match(dashboard, /Horários em Brasília/);
   assert.match(dashboard, /Ligação WhatsApp/);
-  assert.match(dashboard, /Taxa por lead abordado/);
+  assert.match(dashboard, /Taxa de contato/);
 });
 
 test('modular routes are registered by the existing backend startup module', () => {
@@ -71,4 +71,51 @@ test('isolated bridge does not bypass Super Admin MFA and database authority', (
   assert.match(routes, /user\?\.mfaVerified !== true/);
   assert.match(routes, /mfaMethod, 20/);
   assert.match(routes, /PLATFORM_ADMIN_MFA_REQUIRED/);
+});
+
+const layoutSql = readFileSync('supabase/migrations/20261027185000_sales_kanban_custom_columns_analytics_v1.sql','utf8');
+
+test('configurable columns and audited movements are durable, private and atomic',()=>{
+  assert.equal((layoutSql.match(/\$\$/g)||[]).length, 6);
+  assert.match(layoutSql,/sales_kanban_columns/);
+  assert.match(layoutSql,/sales_kanban_placements/);
+  assert.match(layoutSql,/sales_kanban_movements/);
+  assert.match(layoutSql,/move_sales_kanban_lead_v1/);
+  assert.match(layoutSql,/for update;/);
+  assert.match(layoutSql,/PAYMENT_REQUIRED_FOR_CONVERSION/);
+  assert.match(layoutSql,/revoke all on public\.sales_kanban_columns/);
+  assert.match(layoutSql,/grant execute on function public\.move_sales_kanban_lead_v1[\s\S]*to service_role;/);
+  assert.doesNotMatch(layoutSql,/to authenticated;/i);
+});
+
+test('full-width Kanban supports custom titles, colors, ordering, deletion, drawer and batch fetching',()=>{
+  assert.match(kanban,/min-h-0 min-w-0 flex-1 flex flex-col/);
+  assert.match(kanban,/Navegar horizontalmente no Kanban/);
+  assert.match(kanban,/Editar colunas/);
+  assert.match(kanban,/type="color"/);
+  assert.match(kanban,/Adicionar coluna/);
+  assert.match(kanban,/Excluir etapa personalizada/);
+  assert.match(kanban,/onDragStart/);
+  assert.match(kanban,/onDrop/);
+  assert.match(kanban,/onOpenLead/);
+  assert.match(kanban,/Carregar mais /);
+  assert.match(kanban,/\/kanban\/leads\//);
+  assert.match(routes,/salesGuard = \[checkAuth, checkPlatformAdmin\]/);
+  assert.match(routes,/sales_kanban_columns/);
+  assert.match(routes,/order_sales_kanban_columns_v1/);
+});
+
+test('DRE contains a separate, rich analytical dashboard with database aggregates',()=>{
+  assert.match(superAdmin,/financialView === 'sales'/);
+  assert.match(superAdmin,/<CommercialDashboard/);
+  assert.match(superAdmin,/activeTab === 'leads' && commercialView === 'kanban'/);
+  assert.match(dashboard,/Atividade comercial diária/);
+  assert.match(dashboard,/Distribuição por hora do dia/);
+  assert.match(dashboard,/Eficiência por faixa horária/);
+  assert.match(dashboard,/Volume por dia da semana/);
+  assert.match(dashboard,/Comparativo de canais/);
+  assert.match(dashboard,/Em qual tentativa houve contato/);
+  assert.match(dashboard,/Distribuição da base por etapa/);
+  assert.match(layoutSql,/sales_prospecting_analytics_v1/);
+  assert.match(layoutSql,/America\/Sao_Paulo/);
 });

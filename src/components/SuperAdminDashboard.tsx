@@ -38,6 +38,7 @@ import { LogoVerto } from './Common';
 import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
 import { CommercialKanban } from './CommercialKanban';
+import { CommercialDashboard } from './CommercialDashboard';
 import { AbaV3RolloutControlCenter } from './AbaV3RolloutControlCenter';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
@@ -140,6 +141,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
   const [leadSearch, setLeadSearch] = useState('');
+  const [commercialView, setCommercialView] = useState<'kanban'|'list'>('kanban');
+  const [financialView, setFinancialView] = useState<'dre'|'sales'>('dre');
+  const [leadNextPage, setLeadNextPage] = useState(2);
+  const [leadTotal, setLeadTotal] = useState(0);
+  const [loadingMoreLeads, setLoadingMoreLeads] = useState(false);
   const [leadStatusFilter, setLeadStatusFilter] = useState<'all' | SalesLeadStatus>('all');
   const [leadAction, setLeadAction] = useState<string | null>(null);
   const leadStatusRequestKeysRef = useRef<Record<string, string>>({});
@@ -496,7 +502,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         if (financialData?.success) setFinancial(financialData.data);
         if (customersData?.success) setAllCustomers(customersData.data || []);
         if (surveysData?.success) setFinancialFeatureSurveys(surveysData.data || []);
-        if (leadsData?.success) setLeadRecoveryItems(leadsData.data || []);
+        if (leadsData?.success) {
+          setLeadRecoveryItems(leadsData.data || []);
+          setLeadTotal(Number(leadsData.pagination?.total || 0));
+          setLeadNextPage(2);
+        }
         await Promise.all([
           fetchProtocolRequests(headers),
           fetchDemoSandboxes(headers)
@@ -530,11 +540,37 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     if (financialData?.success) setFinancial(financialData.data);
     if (customersData?.success) setAllCustomers(customersData.data || []);
     if (surveysData?.success) setFinancialFeatureSurveys(surveysData.data || []);
-    if (leadsData?.success) setLeadRecoveryItems(leadsData.data || []);
+    if (leadsData?.success) {
+          setLeadRecoveryItems(leadsData.data || []);
+          setLeadTotal(Number(leadsData.pagination?.total || 0));
+          setLeadNextPage(2);
+        }
     await Promise.all([
       fetchProtocolRequests(headers),
       fetchDemoSandboxes(headers)
     ]);
+  };
+
+  const loadMoreLeads = async () => {
+    if (loadingMoreLeads) return;
+    setLoadingMoreLeads(true);
+    try {
+      const supabase = await getSupabase();
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch('/api/owner/sales/leads?page='+leadNextPage+'&pageSize=100',{
+        credentials:'include',headers:{Authorization:session?.access_token?'Bearer '+session.access_token:''},
+      });
+      const json = await response.json().catch(()=>({}));
+      if (!response.ok || !json.success) throw Error(json.error || 'Falha ao carregar mais leads.');
+      const next = json.data || [];
+      setLeadRecoveryItems(current=>{
+        const existing = new Set(current.map(x=>x.id));
+        return [...current,...next.filter((x:any)=>!existing.has(x.id))];
+      });
+      setLeadTotal(Number(json.pagination?.total || 0));
+      setLeadNextPage(p=>p+1);
+    } catch(error:any) { setDashboardWarning(error?.message || 'Falha ao carregar próxima página.'); }
+    finally {setLoadingMoreLeads(false);}
   };
 
   const handleGrantComplimentaryPlan = async () => {
@@ -871,16 +907,34 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900 flex">
-      <aside className="w-72 bg-white/80 backdrop-blur border-r border-slate-100 h-screen sticky top-0 flex flex-col overflow-x-hidden">
-        <div className="p-8 flex items-center gap-3">
-          <LogoVerto size={42} />
-          <div>
+      <aside className={activeTab === 'leads' && commercialView === 'kanban'
+        ? "w-[66px] shrink-0 bg-white/95 border-r border-slate-200 h-screen sticky top-0 flex flex-col overflow-x-hidden"
+        : "w-72 shrink-0 bg-white/80 backdrop-blur border-r border-slate-100 h-screen sticky top-0 flex flex-col overflow-x-hidden"}>
+        <div className={activeTab === 'leads' && commercialView === 'kanban' ? 'flex justify-center py-5' : 'p-8 flex items-center gap-3'}>
+          <LogoVerto size={activeTab === 'leads' && commercialView === 'kanban' ? 34 : 42} />
+          {!(activeTab === 'leads' && commercialView === 'kanban') && <div>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400 font-bold">Painel</p>
             <h2 className="text-xl font-black text-slate-900">SUPER ADMIN</h2>
-          </div>
+          </div>}
         </div>
 
-        <nav className="px-4 space-y-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
+        {activeTab === 'leads' && commercialView === 'kanban' ? (
+          <nav className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-3">
+            {[
+              {id:'overview',label:'Resumo',icon:<LayoutDashboard size={19}/>},
+              {id:'financial',label:'DRE e gráficos',icon:<BarChart3 size={19}/>},
+              {id:'customers',label:'Clientes',icon:<Users size={19}/>},
+              {id:'leads',label:'Comercial',icon:<MessageCircle size={19}/>},
+              {id:'simulation-settings',label:'Configurações',icon:<Settings2 size={19}/>},
+              {id:'demos',label:'Ambientes Demo',icon:<FlaskConical size={19}/>},
+              {id:'protocols',label:'Protocolos',icon:<ClipboardCheck size={19}/>},
+              {id:'aba-v3-rollout',label:'Rollout ABA V3',icon:<Shield size={19}/>},
+            ].map(nav=><button key={nav.id} type="button" aria-label={nav.label} title={nav.label}
+              onClick={()=>setActiveTab(nav.id as typeof activeTab)}
+              className={'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition '+(activeTab===nav.id?'bg-[#10192D] text-white shadow':'text-slate-500 hover:bg-slate-100')}>
+              {nav.icon}</button>)}
+          </nav>
+        ) : <nav className="px-4 space-y-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
           <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
@@ -889,22 +943,24 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
           <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
           <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => setActiveTab('aba-v3-rollout')} />
-        </nav>
+        </nav>}
 
-        <div className="mt-auto p-6 border-t border-slate-100">
+        <div className={activeTab === 'leads' && commercialView === 'kanban' ? 'mt-auto p-2 border-t border-slate-100' : 'mt-auto p-6 border-t border-slate-100'}>
           <button
             onClick={onLogout}
-            className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 font-bold text-slate-500 hover:bg-red-50 hover:text-red-500 transition-all"
+            className={'w-full flex items-center gap-3 rounded-2xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-500 transition-all '+(activeTab === 'leads' && commercialView === 'kanban' ? 'justify-center p-3' : 'px-4 py-3')}
           >
-            <LogOut size={18} /> Sair
+            <LogOut size={18} /> {!(activeTab === 'leads' && commercialView === 'kanban') && 'Sair'}
           </button>
         </div>
       </aside>
 
-      <main className="flex-1 p-8 overflow-y-auto">
-        <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
+      <main className={activeTab === 'leads' && commercialView === 'kanban'
+          ? 'min-w-0 h-screen min-h-0 flex-1 overflow-hidden p-3 flex flex-col'
+          : 'min-w-0 flex-1 p-8 overflow-y-auto'}>
+        <div className={'flex flex-wrap justify-between items-center gap-4 '+(activeTab==='leads'&&commercialView==='kanban'?'mb-3':'mb-8')}>
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">{activeTab === 'aba-v3-rollout' ? 'Governança Clínica' : 'Governanca Financeira'}</p>
+            <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">{activeTab === 'aba-v3-rollout' ? 'Governança Clínica' : activeTab === 'leads' ? 'Operação comercial' : 'Governança e inteligência'}</p>
             <h1 className="text-3xl font-black text-slate-900">
               {activeTab === 'overview'
                 ? 'Visao Geral da Rentabilidade'
@@ -913,7 +969,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   : activeTab === 'customers'
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
-                      ? 'Leads e propostas'
+                      ? (commercialView === 'kanban' ? 'Kanban comercial' : 'Leads e propostas')
                       : activeTab === 'simulation-settings'
                         ? 'Configurações financeiras'
                       : activeTab === 'demos'
@@ -923,14 +979,14 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                           : 'Rollout ABA V3'}
             </h1>
           </div>
-          {activeTab !== 'aba-v3-rollout' && (
+          {activeTab !== 'aba-v3-rollout' && activeTab !== 'leads' && (
             <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
               Fonte: {hasRealFinancialLedger ? 'Stripe + contratos reais' : 'sem dados fictícios'}
             </div>
           )}
         </div>
 
-        {activeTab !== 'aba-v3-rollout' && !hasRealFinancialLedger && (
+        {activeTab !== 'aba-v3-rollout' && activeTab !== 'leads' && !hasRealFinancialLedger && (
           <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
             <p className="text-sm font-bold text-amber-800">
               O ledger financeiro da Verto ainda não está disponível neste ambiente. Nenhum paciente ou dado fictício é usado como receita.
@@ -938,7 +994,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
-        {activeTab !== 'aba-v3-rollout' && hasRealFinancialLedger && Number(summary.revenueNet || 0) === 0 && trialingCustomers.length > 0 && (
+        {activeTab !== 'aba-v3-rollout' && activeTab !== 'leads' && hasRealFinancialLedger && Number(summary.revenueNet || 0) === 0 && trialingCustomers.length > 0 && (
           <div className="mb-6 rounded-2xl border border-violet-200 bg-violet-50 px-4 py-3">
             <p className="text-sm font-bold text-violet-800">
               Sem receita realizada neste período. {trialingCustomers.length} cliente(s) está(ão) em teste; o valor previsto só entra no DRE depois que a Stripe confirmar o primeiro pagamento.
@@ -1014,6 +1070,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         )}
 
         {activeTab === 'financial' && (
+          <div className="mb-5 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2">
+            <button onClick={()=>setFinancialView('dre')} className={'rounded-lg px-4 py-2 text-sm font-bold '+(financialView==='dre'?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}>DRE e EBITDA</button>
+            <button onClick={()=>setFinancialView('sales')} className={'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold '+(financialView==='sales'?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}><BarChart3 size={15}/> Inteligência comercial · Gráficos</button>
+          </div>
+        )}
+        {activeTab === 'financial' && financialView === 'sales' && <CommercialDashboard />}
+        {activeTab === 'financial' && financialView === 'dre' && (
           <div className="space-y-7">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
@@ -1474,8 +1537,23 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
-        {activeTab === "leads" && (
+        {activeTab === 'leads' && commercialView === 'kanban' && (
+          <CommercialKanban
+            leads={leadRecoveryItems}
+            onLeadPatch={(leadId, patch)=>setLeadRecoveryItems(current=>
+              current.map(item=>item.id===leadId?{...item,...patch}:item))}
+            onOpenLead={lead=>{setLeadSearch(lead.name||'');setLeadStatusFilter('all');setCommercialView('list');}}
+            onRefresh={refreshAll}
+            onMetrics={()=>{setFinancialView('sales');setActiveTab('financial');}}
+            onLoadMore={loadMoreLeads}
+            remaining={Math.max(0,leadTotal-leadRecoveryItems.filter(item=>!item.legacyReadOnly).length)}
+            loadingMore={loadingMoreLeads}
+          />
+        )}
+        {activeTab === "leads" && commercialView === 'list' && (
           <div className="space-y-6">
+            <button type="button" onClick={()=>{setLeadSearch('');setLeadStatusFilter('all');setCommercialView('kanban');}}
+              className="rounded-xl bg-[#10192D] px-5 py-3 text-sm font-bold text-white">← Voltar ao Kanban de tela inteira</button>
             <div className="rounded-[24px] border border-slate-100 bg-white p-5">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
@@ -1523,15 +1601,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               </div>
             </div>
 
-            {import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' && (
-              <CommercialKanban
-                leads={visibleSalesLeads}
-                onStatusChange={updateSalesLeadStatus}
-                onLeadPatch={(leadId, patch) => setLeadRecoveryItems((current) =>
-                  current.map((item) => item.id === leadId ? { ...item, ...patch } : item)
-                )}
-              />
-            )}
 
             <div className="rounded-[28px] border border-slate-100 bg-white p-6 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-3">
