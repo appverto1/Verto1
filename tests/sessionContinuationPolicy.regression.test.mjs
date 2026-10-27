@@ -23,7 +23,7 @@ assert.throws(()=>previewSessionContinuation({...base,choice:'full',trustedUnitP
 assert.throws(()=>previewSessionContinuation({...base,choice:'30'}));
 
 const other={id:'66666666-6666-4666-8666-666666666666',organization_id:org,clinic_id:clinic,
- therapist_id:professional,patient_id:b,status:'scheduled',
+ therapist_id:professional,patient_id:b,status:'scheduled',cancellation_without_charge_verified:true,has_captured_payment:false,
  scheduled_start_at:'2026-10-27T17:50:00.000Z',scheduled_end_at:'2026-10-27T18:40:00.000Z'};
 const query={organizationId:org,clinicId:clinic,professionalId:professional,patientId:a,
  startAt:'2026-10-27T17:50:00.000Z',endAt:'2026-10-27T18:40:00.000Z',appointments:[other],
@@ -42,6 +42,8 @@ assert.equal(previewContinuationConflicts({...query, blockedPeriods:[{startAt:'2
 assert.equal(previewContinuationConflicts({...query, appointments:[{...other, therapist_id:'99999999-9999-4999-8999-999999999999',patient_id:a}]}).safe,false);
 assert.equal(previewContinuationConflicts({...query, roomId:'room-5', appointments:[{...other, therapist_id:'99999999-9999-4999-8999-999999999999',room_id:'room-5'}]}).safe,false);
 assert.equal(previewContinuationConflicts({...query,appointments:[{...other,actual_start_at:'2026-10-27T17:52:00.000Z'}]}).safe,false);
+assert.equal(previewContinuationConflicts({...query,appointments:[{...other,cancellation_without_charge_verified:false}]}).safe,false);
+assert.equal(previewContinuationConflicts({...query,appointments:[{...other,has_captured_payment:true}]}).safe,false);
 
 const closing={...base,status:'active',organizationId:org,clinicId:clinic,patientId:a,professionalId:professional,
  appointmentId:'88888888-8888-4888-8888-888888888888',
