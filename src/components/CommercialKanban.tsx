@@ -78,7 +78,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [attempts, setAttempts] = useState<CommercialAttempt[]>([]);
   const [scriptLabels,setScriptLabels]=useState<Array<{id:string;name:string;version_label:string;is_active:boolean}>>([]);
   const [scriptsOpen,setScriptsOpen]=useState(false);
+  const [scriptCatalogUnavailable,setScriptCatalogUnavailable]=useState(false);
   const [acquisitionOpen,setAcquisitionOpen]=useState(false);
+  const [acquisitionCatalogUnavailable,setAcquisitionCatalogUnavailable]=useState(false);
   const [acquisitionRefreshKey,setAcquisitionRefreshKey]=useState(0);
   const [acquisitionChannels,setAcquisitionChannels]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
   const [acquisitionByLead,setAcquisitionByLead]=useState<Record<string,string[]>>({});
@@ -184,13 +186,16 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     return ids.map(id=>acquisitionChannels.find(x=>x.id===id)?.name||'Origem histórica');
   };
   const openAcquisitionEditor=(leadId:string)=>{
-    if(savingAcquisition)return;
+    if(savingAcquisition||acquisitionCatalogUnavailable){
+      if(acquisitionCatalogUnavailable)setError('Canais indisponíveis. Atualize o quadro antes de editar as origens.');
+      return;
+    }
     setAcquisitionDialog({leadId,channelIds:[...(acquisitionByLead[leadId]||[])]});
     setError(null);
   };
   const saveAcquisition=async()=>{
     const dialog=acquisitionDialog;
-    if(!dialog||savingAcquisition)return;
+    if(!dialog||savingAcquisition||acquisitionCatalogUnavailable)return;
     const keyName='acquisition:'+dialog.leadId;
     try{
       const key=keysRef.current[keyName]||crypto.randomUUID();
@@ -231,20 +236,27 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       try {
         const ids = idsKey ? idsKey.split(',') : [];
         const chunks = ids.length ? Array.from({length:Math.ceil(ids.length/80)},(_,i)=>ids.slice(i*80,i*80+80)) : [[]];
-        const scriptsPromise=request('/api/owner/sales/scripts/active');
+        // Optional catalogs must never prevent the canonical board/history from loading.
+        const scriptsPromise=request('/api/owner/sales/scripts/active')
+          .then(data=>({data,failed:false}))
+          .catch(()=>({data:{versions:[]},failed:true}));
         // In batches, support large lead volumes without a hard 100-ID request failure.
         const pages = await Promise.all(chunks.map(async chunk => {
           const q = encodeURIComponent(chunk.join(','));
-          const [board,history,acquisition] = await Promise.all([
+          const [board,history,acquisitionResult] = await Promise.all([
             request('/api/owner/sales/kanban/board?leadIds='+q),
             chunk.length ? request('/api/owner/sales/prospecting/attempts?leadIds='+q) : Promise.resolve({data:[],leads:[]}),
-            request('/api/owner/sales/acquisition/board?leadIds='+q),
+            request('/api/owner/sales/acquisition/board?leadIds='+q)
+              .then(data=>({data,failed:false}))
+              .catch(()=>({data:{channels:[],links:[]},failed:true})),
           ]);
-          return { board,history,acquisition };
+          return {board,history,acquisition:acquisitionResult.data,acquisitionFailed:acquisitionResult.failed};
         }));
-        const scriptData=await scriptsPromise;
+        const scriptResult=await scriptsPromise;
         if (!live) return;
-        const versions=scriptData.versions||[];
+        setScriptCatalogUnavailable(scriptResult.failed);
+        setAcquisitionCatalogUnavailable(pages.some(page=>page.acquisitionFailed));
+        const versions=scriptResult.data.versions||[];
         setScriptLabels(versions);
         setSelectedScriptId(current=>{
           if(current&&versions.some((v:any)=>v.id===current&&v.is_active))return current;
@@ -520,10 +532,14 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const keyName='attempt-time:'+draft.leadId+':'+(draft.attemptId||'new');
     try{
       const occurredAt=brazilInputToIso(draft.localAt);
+      if(!draft.attemptId&&scriptCatalogUnavailable)
+        throw Error('Fluxos indisponíveis. Atualize o quadro antes de registrar novos contatos.');
       if(!draft.attemptId&&activeScripts.length>0&&!draft.scriptVersionId)
         throw Error('Selecione o fluxo usado na tentativa.');
       const original=draft.attemptId?attempts.find(a=>a.id===draft.attemptId):null;
-      const scriptVersionId=original?.script_version_id||draft.scriptVersionId||null;
+      const scriptVersionId=original
+        ? original.script_version_id??null
+        : draft.scriptVersionId||null;
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setBusyLead(draft.leadId);setError(null);
@@ -554,12 +570,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const keyName='decisor:'+lead.id+':'+(attempt?.id||'new');
     try{
       const occurredAt=brazilInputToIso(input);
+      if(!attempt&&scriptCatalogUnavailable)
+        throw Error('Fluxos indisponíveis. Atualize o quadro antes de registrar novos contatos.');
       if(!attempt&&activeScripts.length>0&&!selectedScriptId)
         throw Error('Selecione o fluxo usado na conversa.');
       if(!attempt&&!contactResult)
         throw Error('Informe se houve interesse ou desinteresse do decisor.');
-      const scriptVersionId=attempt?.script_version_id||selectedScriptId||null;
-      const resolvedResult=attempt?.contact_result||contactResult||null;
+      // Historical corrections must not inherit a newly selected script/result.
+      const scriptVersionId=attempt?attempt.script_version_id??null:selectedScriptId||null;
+      const resolvedResult=attempt?attempt.contact_result??null:contactResult||null;
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setBusyLead(lead.id);setError(null);
@@ -819,6 +838,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       {(error||info)&&<div role={error?'alert':'status'} className={'rounded-lg border px-3 py-2 text-xs '+(error?'border-red-200 bg-red-50 text-red-700':'border-green-200 bg-green-50 text-green-800')}>
         {error||info} <button type="button" className="ml-2 underline" onClick={()=>{setError(null);setInfo(null);}}>Fechar</button>
       </div>}
+      {(scriptCatalogUnavailable||acquisitionCatalogUnavailable)&&
+        <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {scriptCatalogUnavailable?'Scripts indisponíveis: os cards permanecem acessíveis, mas novos contatos exigem recarregar os fluxos. ':''}
+          {acquisitionCatalogUnavailable?'Canais de aquisição indisponíveis: a seleção foi temporariamente bloqueada para preservar as origens já salvas. ':''}
+          Use “Atualizar” para tentar novamente.
+        </p>}
       {loading&&<p role="status" className="text-xs text-slate-500">Sincronizando quadro e histórico de ligações...</p>}
       <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2 py-1.5">
         <button type="button" onClick={()=>scrollBy(-1)} aria-label="Rolar colunas à esquerda" disabled={scroll.left<=0}
