@@ -1032,7 +1032,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           }} className="mt-2 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700">
             Usar horário atual
           </button>
-          <p className="mt-2 text-xs text-slate-500">As ligações exigem data passada, de segunda a sexta, entre 9h e 17h30. É permitida uma ligação por dia.</p>
+          <p className="mt-2 text-xs text-slate-500">Registre a data e hora reais da tentativa, inclusive se houve outra ligação no mesmo dia ou fora do expediente. A cadência é apenas sugestão.</p>
           {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={Boolean(busyLead)}
@@ -1165,7 +1165,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}</b></div>
                 <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}</b></div>
               </div>
-              <p className="mt-3 text-[11px] text-slate-500">Os botões funcionam em todas as etapas, inclusive após contato e conversão. O servidor valida horário comercial, uma ligação por dia e a preferência de não contato.</p>
+              <p className="mt-3 text-[11px] text-slate-500">Os botões funcionam em todas as etapas, inclusive após contato e conversão. Horários sugeridos não bloqueiam registros reais. A preferência explícita de não contato e a exclusão do lead continuam protegidas.</p>
               {selectedCounts.phone+selectedCounts.whatsapp<10&&
                 <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3 text-xs">
                   <h5 className="font-bold text-violet-800">Cadência sugerida — dias e horários alternados</h5>
@@ -1174,7 +1174,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <li key={date.toISOString()}>{selectedCounts.phone+selectedCounts.whatsapp+i+1}ª · {slotLabel(date)}</li>
                     ))}
                   </ol>
-                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. O servidor valida dia útil, expediente e uma ligação por dia.</p>
+                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. As sugestões não impedem registrar contatos em outros horários ou no mesmo dia.</p>
                 </div>}
               {<div className="mt-3 space-y-2">
                 <button disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
