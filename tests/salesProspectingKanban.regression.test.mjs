@@ -648,3 +648,29 @@ test('commercial UI states only Kanban-visible leads count, and hidden clients r
   assert.match(kanban,/hidden:Boolean\(item\.hidden_at\)/);
   assert.match(kanban,/\.filter\(lead => !overrides\[lead\.id\]\?\.hidden\)/);
 });
+
+
+test('isolated main release preserves canonical production finance while mounting only CRM',()=>{
+  const help=readFileSync('services/helpCenterRoutes.ts','utf8');
+  assert.match(help,/registerSalesProspectingRoutes\(app, \{ supabase, checkAuth \}\)/);
+  assert.match(superAdmin,/const \[financialView,setFinancialView\]=useState<'dre'\|'sales'>\('dre'\)/);
+  assert.match(superAdmin,/Inteligência comercial · Gráficos/);
+  assert.match(superAdmin,/DRE e EBITDA/);
+  assert.match(superAdmin,/<CommercialKanban/);
+  assert.match(superAdmin,/onRefresh=\{refreshAll\}/);
+  assert.match(superAdmin,/onOpenLead=/);
+  assert.match(superAdmin,/const \[leadNextPage,setLeadNextPage\]=useState\(2\)/);
+});
+
+test('production import compatibility preserves exact missing-consent truth only for owner manual leads',()=>{
+  const migration=readFileSync('supabase/migrations/20261028235900_sales_owner_manual_consent_import_compat_v1.sql','utf8');
+  assert.match(migration,/contact_consent_at drop not null/);
+  assert.match(migration,/contact_consent_at is not null/);
+  assert.match(migration,/acquisition_channel='manual_kanban'/);
+  assert.match(migration,/contact_consent_origin='owner_manual_no_consent'/);
+  assert.match(migration,/contact_consent_version='not_collected'/);
+  assert.match(migration,/sales_crm_import_lead_map/);
+  assert.match(migration,/enable row level security/);
+  assert.match(migration,/revoke all on public\.sales_crm_import_lead_map from public,anon,authenticated/);
+  assert.doesNotMatch(migration,/alter table public\.sales_offers|alter table public\.sales_checkout_links|payment_confirmed_at/);
+});
