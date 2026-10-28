@@ -173,38 +173,28 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(kanban,/setAttemptDialog/);
 });
 
-test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile hamburger',()=>{
-  assert.match(superAdmin,/const \[mobileMenuOpen, setMobileMenuOpen\] = useState\(false\)/);
-  assert.match(superAdmin,/aria-label="Abrir menu de navegação"/);
-  assert.match(superAdmin,/aria-expanded=\{mobileMenuOpen\}/);
-  assert.match(superAdmin,/aria-controls="super-admin-navigation"/);
+test('production Super Admin retains the old leads list and provides a mobile Kanban menu',()=>{
+  assert.match(superAdmin,/const \[mobileMenuOpen,setMobileMenuOpen\]=useState\(false\)/);
+  assert.match(superAdmin,/aria-label="Abrir navegação do Super Admin"/);
   assert.match(superAdmin,/id="super-admin-navigation"/);
-  assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
-  assert.match(superAdmin,/compactDesktopMenu \? ' md:w-\[66px\]' : ' md:w-72'/);
-  assert.match(superAdmin,/md:ml-\[66px\]/);
-  assert.match(superAdmin,/md:ml-72 md:p-8/);
-  assert.match(superAdmin,/className="sticky top-0 z-30[^"]*md:hidden"/);
-  assert.match(superAdmin,/compactDesktopMenu \? 'md:hidden' : ''/);
-  assert.match(superAdmin,/onClick=\{\(\) => selectAdminTab\('leads'\)\}/);
-  assert.match(superAdmin,/onClick=\{closeMobileMenu\}/);
-  assert.match(superAdmin,/if \(mobileMenuOpen\) closeMobileMenu\(\)/);
-  assert.match(superAdmin,/mobileMenuCloseRef.current\?\.focus\(\)/);
-  assert.match(superAdmin,/event.key === 'Escape'/);
-  assert.match(superAdmin,/mobileMenuTriggerRef.current\?\.focus\(\)/);
-  assert.doesNotMatch(superAdmin,/h-screen sticky top-0 flex flex-col overflow-x-hidden/);
+  assert.match(superAdmin,/fixed inset-y-0 left-0 z-40/);
+  assert.match(superAdmin,/md:sticky md:top-0 md:h-screen/);
+  assert.match(superAdmin,/onClickCapture=\{\(\)=>setMobileMenuOpen\(false\)\}/);
+  assert.match(superAdmin,/commercialView === 'kanban'/);
+  assert.match(superAdmin,/commercialView === 'list'/);
+  assert.match(superAdmin,/Voltar ao Kanban/);
+  assert.match(superAdmin,/<CommercialDashboard/);
+  assert.match(superAdmin,/onLoadMore=\{loadMoreLeads\}/);
+  assert.match(superAdmin,/onLeadPatch=/);
+  assert.match(superAdmin,/onLeadDeleted=/);
 });
 
-test('Kanban page scrolls vertically without clipping cards while keeping horizontal column navigation',()=>{
-  const mainClass = superAdmin.match(/<main className=\{compactDesktopMenu\s*\? '([^']+)'/)?.[1];
-  assert.ok(mainClass, 'Super Admin Kanban main class exists');
-  assert.match(mainClass,/min-h-\[calc\(100dvh-3\.5rem\)\]/);
-  assert.match(mainClass,/md:min-h-screen/);
-  assert.doesNotMatch(mainClass,/(?:^|\s)(?:h-screen|md:h-screen|overflow-hidden)(?:\s|$)/);
+test('Kanban page scrolls vertically and retains horizontal column navigation in production',()=>{
+  assert.match(superAdmin,/min-w-0 flex-1 overflow-x-hidden p-3 pt-16 md:p-8/);
   assert.match(kanban,/ref=\{scrollRef\} className="min-w-0 overflow-x-auto pb-2"/);
   assert.match(kanban,/className="flex min-h-\[380px\] w-max min-w-full gap-2\.5"/);
   assert.match(kanban,/className="flex-1 space-y-2 p-2"/);
   assert.doesNotMatch(kanban,/ref=\{scrollRef\} className="[^"]*overflow-y-hidden/);
-  assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
   assert.match(kanban,/Navegar horizontalmente no Kanban/);
 });
 
