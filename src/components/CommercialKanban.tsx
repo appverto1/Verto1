@@ -6,6 +6,7 @@ import {
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
 import { CommercialScriptsPanel } from './CommercialScriptsPanel';
+import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
@@ -72,6 +73,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [attempts, setAttempts] = useState<CommercialAttempt[]>([]);
   const [scriptLabels,setScriptLabels]=useState<Array<{id:string;name:string;version_label:string;is_active:boolean}>>([]);
   const [scriptsOpen,setScriptsOpen]=useState(false);
+  const [acquisitionOpen,setAcquisitionOpen]=useState(false);
+  const [acquisitionRefreshKey,setAcquisitionRefreshKey]=useState(0);
+  const [acquisitionChannels,setAcquisitionChannels]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
+  const [acquisitionByLead,setAcquisitionByLead]=useState<Record<string,string[]>>({});
+  const [acquisitionDialog,setAcquisitionDialog]=useState<{leadId:string;channelIds:string[]}|null>(null);
+  const [savingAcquisition,setSavingAcquisition]=useState(false);
   const [selectedScriptId,setSelectedScriptId]=useState('');
   const [contactResult,setContactResult]=useState<'interested'|'not_interested'|''>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -137,6 +144,39 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       </select>
     </label>
   );
+  const refreshAcquisitionCatalog=async()=>{
+    const result=await request('/api/owner/sales/acquisition/board');
+    setAcquisitionChannels(result.channels||[]);
+  };
+  const acquisitionNames=(leadId:string)=>{
+    const ids=acquisitionByLead[leadId]||[];
+    return ids.map(id=>acquisitionChannels.find(x=>x.id===id)?.name||'Origem histórica');
+  };
+  const openAcquisitionEditor=(leadId:string)=>{
+    if(savingAcquisition)return;
+    setAcquisitionDialog({leadId,channelIds:[...(acquisitionByLead[leadId]||[])]});
+    setError(null);
+  };
+  const saveAcquisition=async()=>{
+    const dialog=acquisitionDialog;
+    if(!dialog||savingAcquisition)return;
+    const keyName='acquisition:'+dialog.leadId;
+    try{
+      const key=keysRef.current[keyName]||crypto.randomUUID();
+      keysRef.current[keyName]=key;
+      setSavingAcquisition(true);setError(null);
+      const result=await request('/api/owner/sales/acquisition/leads/'+dialog.leadId,{
+        method:'PUT',headers:{'X-Idempotency-Key':key},
+        body:JSON.stringify({channelIds:dialog.channelIds}),
+      });
+      delete keysRef.current[keyName];
+      setAcquisitionByLead(old=>({...old,[dialog.leadId]:result.selection.channelIds||[]}));
+      setAcquisitionRefreshKey(k=>k+1);
+      setAcquisitionDialog(null);
+      setInfo('Canais de aquisição salvos sem atualizar a página.');
+    }catch(e:any){setError(e.message||'Não foi possível salvar os canais.');}
+    finally{setSavingAcquisition(false);}
+  };
   const request = async (url: string, init: RequestInit = {}) => {
     const supabase = await getSupabase();
     const { data: { session } } = await supabase.auth.getSession();
@@ -164,11 +204,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         // In batches, support large lead volumes without a hard 100-ID request failure.
         const pages = await Promise.all(chunks.map(async chunk => {
           const q = encodeURIComponent(chunk.join(','));
-          const [board,history] = await Promise.all([
+          const [board,history,acquisition] = await Promise.all([
             request('/api/owner/sales/kanban/board?leadIds='+q),
             chunk.length ? request('/api/owner/sales/prospecting/attempts?leadIds='+q) : Promise.resolve({data:[],leads:[]}),
+            request('/api/owner/sales/acquisition/board?leadIds='+q),
           ]);
-          return { board,history };
+          return { board,history,acquisition };
         }));
         const scriptData=await scriptsPromise;
         if (!live) return;
@@ -184,6 +225,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         const nextOverrides: Record<string,{details:Partial<Lead>;hidden:boolean}> = {};
         const dedup = new Map<string,CommercialAttempt>();
         const loadedFollowups:Record<string,SalesFollowup>={};
+        const acquired:Record<string,string[]>={};
         for (const page of pages) {
           for (const item of page.board.placements || []) nextPlacements[item.lead_id] = item.column_id;
           for (const item of page.board.overrides || []) {
@@ -191,6 +233,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           }
           for (const item of page.history.data || []) dedup.set(item.id,item);
           for (const followup of page.history.followups || []) loadedFollowups[followup.lead_id]=followup;
+          for(const link of page.acquisition.links||[]){
+            const arr=acquired[link.lead_id]||[];
+            arr.push(link.channel_id);acquired[link.lead_id]=arr;
+          }
           for (const item of page.history.leads || []) {
             // Only changed server facts cause an in-place patch; no F5 necessary.
             const local = leads.find(x => x.id === item.id);
@@ -198,6 +244,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               onLeadPatch(item.id,{status:item.status,lostAt:item.lost_at});
           }
         }
+        setAcquisitionChannels(pages[0]?.acquisition.channels||[]);
+        setAcquisitionByLead(acquired);
         setAttempts([...dedup.values()]);
         setFollowups(loadedFollowups);
         setPlacements(nextPlacements);
@@ -553,6 +601,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
             Scripts / Testes A-B
           </button>
+          <button type="button" onClick={()=>setAcquisitionOpen(v=>!v)}
+            className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
+            Canais + Resultados
+          </button>
           <button type="button" onClick={onMetrics} className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10"><BarChart3 size={15}/> Gráficos</button>
           <button type="button" onClick={()=>setEditing(v=>!v)} className={'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold '+(editing?'bg-violet-500':'border border-white/20 hover:bg-white/10')}><Settings2 size={15}/> {editing?'Concluir edição':'Editar colunas'}</button>
           <button type="button" onClick={()=>{void onRefresh().then(()=>setRevision(x=>x+1));}} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-900"><RefreshCw size={15}/> Atualizar</button>
@@ -560,6 +612,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       </div>
 
       {scriptsOpen&&<CommercialScriptsPanel onClose={()=>setScriptsOpen(false)} onChanged={refreshScripts}/>}
+      {acquisitionOpen&&<CommercialAcquisitionPanel refreshKey={acquisitionRefreshKey} onClose={()=>setAcquisitionOpen(false)} onChanged={refreshAcquisitionCatalog}/>}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {columns.filter(c=>c.is_system).map(c=>(
           <button key={c.id} type="button" onClick={()=>setShowStage(x=>x===c.id?'all':c.id)}
@@ -649,6 +702,14 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       {total<10&&!a.spoken&&<p className="mt-1 text-[10px] font-semibold text-violet-700">Próxima janela: {nextWindow(lead.id)?slotLabel(nextWindow(lead.id)):'—'}</p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
+                    <button type="button" onClick={()=>openAcquisitionEditor(lead.id)}
+                      className="mt-2 w-full rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-2 text-left text-[11px] font-bold text-indigo-700"
+                      aria-label={'Selecionar canais de aquisição para '+(lead.name||'oportunidade')}>
+                      <span className="block">Canais de aquisição · selecionar <span aria-hidden="true">▾</span></span>
+                      <span className="mt-0.5 block truncate text-[10px] font-normal text-slate-600">
+                        {acquisitionNames(lead.id).join(' · ')||'Nenhum canal marcado'}
+                      </span>
+                    </button>
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
                       <button type="button" disabled={!callEnabled(lead,'phone')}
                         onClick={()=>recordAttempt(lead,'phone','no_decisor')} aria-label={'Contabilizar ligação pela operadora para '+lead.name}
@@ -665,6 +726,44 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           })}
         </div>
       </div>
+
+      {acquisitionDialog&&<div role="dialog" aria-modal="true"
+        aria-label="Selecionar canais de aquisição"
+        className="fixed inset-0 z-[190] flex items-center justify-center bg-slate-950/60 p-4"
+        onMouseDown={e=>{if(e.target===e.currentTarget&&!savingAcquisition)setAcquisitionDialog(null);}}>
+        <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+          <h3 className="text-lg font-black">De onde veio esta oportunidade?</h3>
+          <p className="mt-1 text-xs text-slate-600">
+            Marque uma ou várias origens. As alterações só serão salvas ao confirmar.
+          </p>
+          <fieldset className="mt-3 max-h-[50vh] space-y-2 overflow-y-auto rounded-lg border p-3">
+            <legend className="px-1 text-xs font-bold text-slate-700">Canais de aquisição</legend>
+            {acquisitionChannels.map(channel=>{
+              const checked=acquisitionDialog.channelIds.includes(channel.id);
+              return <label key={channel.id} className={'flex items-center gap-3 rounded-lg px-2 py-2 text-sm '+(!channel.is_active?'bg-slate-50 text-slate-500':'hover:bg-indigo-50')}>
+                <input type="checkbox" checked={checked} disabled={savingAcquisition||(!channel.is_active&&!checked)}
+                  onChange={e=>{
+                    setAcquisitionDialog(prev=>prev?{...prev,channelIds:e.target.checked?
+                      [...prev.channelIds,channel.id]:prev.channelIds.filter(id=>id!==channel.id)}:prev);
+                    delete keysRef.current['acquisition:'+acquisitionDialog.leadId];
+                  }} className="h-4 w-4 accent-indigo-700"/>
+                <span>{channel.name}{!channel.is_active&&<span className="ml-1 text-[11px]">(histórico)</span>}</span>
+              </label>;
+            })}
+            {acquisitionChannels.length===0&&<p className="text-xs text-slate-500">Nenhum canal cadastrado. Use “Canais + Resultados”.</p>}
+          </fieldset>
+          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" disabled={savingAcquisition} onClick={()=>{setAcquisitionDialog(null);setError(null);}}
+              className="rounded-lg border px-4 py-2 text-xs font-semibold">Cancelar</button>
+            <button type="button" disabled={savingAcquisition||acquisitionDialog.channelIds.length>20}
+              onClick={()=>void saveAcquisition()}
+              className="rounded-lg bg-indigo-700 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">
+              {savingAcquisition?'Salvando...':'Salvar canais'}
+            </button>
+          </div>
+        </div>
+      </div>}
 
       {attemptDialog&&<div className="fixed inset-0 z-[180] flex items-center justify-center bg-slate-950/60 p-4"
         role="dialog" aria-modal="true" aria-label={attemptDialog.attemptId?'Editar data e hora da tentativa':'Registrar data e hora da tentativa'}
@@ -793,6 +892,14 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">Telefone</span><strong>{selected.phone||'Não cadastrado'}</strong></div>
               <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">E-mail</span><strong className="break-all">{selected.email||'Não cadastrado'}</strong></div>
+            </div>
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
+              <h4 className="text-xs font-black text-indigo-900">Canais de aquisição</h4>
+              <p className="mt-1 text-xs text-slate-600">{acquisitionNames(selected.id).join(' · ')||'Nenhuma origem selecionada'}</p>
+              <button type="button" onClick={()=>openAcquisitionEditor(selected.id)}
+                className="mt-2 rounded-lg bg-indigo-700 px-3 py-2 text-xs font-bold text-white">
+                Marcar origens (múltipla escolha)
+              </button>
             </div>
             <div className="flex gap-2">
               <button type="button" disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
