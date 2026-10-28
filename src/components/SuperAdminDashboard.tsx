@@ -943,7 +943,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           className="absolute right-3 top-4 rounded-lg p-2 text-slate-600 hover:bg-slate-100 md:hidden">
           <X size={22} />
         </button>
-        <div className={compactDesktopMenu ? 'flex items-center gap-3 p-8 md:justify-center md:px-0 md:py-5' : 'flex items-center gap-3 p-8'}>
+        <div className={compactDesktopMenu ? 'flex items-center gap-3 p-6 pt-16 md:justify-center md:px-0 md:py-5' : 'flex items-center gap-3 p-6 pt-16 md:p-8'}>
           <LogoVerto size={compactDesktopMenu ? 34 : 42} />
           <div className={compactDesktopMenu ? 'md:hidden' : ''}>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400 font-bold">Painel</p>
