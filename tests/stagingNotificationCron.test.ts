@@ -5,6 +5,7 @@ import { runStagingNotificationQueuesOnce } from '../services/cronService';
 const workerSource = fs.readFileSync(new URL('../scripts/staging-notification-drain-once.ts', import.meta.url), 'utf8');
 assert.match(workerSource, /STAGING_NOTIFICATION_CRON_ENVIRONMENT_GUARD/);
 assert.match(workerSource, /SUPABASE_SERVICE_ROLE_KEY/);
+assert.match(workerSource, /global:\s*\{\s*headers:\s*\{\s*'x-verto-deployment-env':\s*'staging'\s*\}\s*\}/);
 assert.match(workerSource, /STAGING_NOTIFICATION_CRON_CREDENTIALS_REQUIRED/);
 assert.doesNotMatch(workerSource, /server\.listen\(/);
 assert.doesNotMatch(workerSource, /startAppointmentReminderCron\(/);
