@@ -949,10 +949,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
                       <button type="button" disabled={!callEnabled(lead,'phone')}
                         onClick={()=>recordAttempt(lead,'phone','no_decisor')} aria-label={'Contabilizar ligação pela operadora para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}/5</button>
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}</button>
                       <button type="button" disabled={!callEnabled(lead,'whatsapp_call')}
                         onClick={()=>recordAttempt(lead,'whatsapp_call','no_decisor')} aria-label={'Contabilizar ligação pelo WhatsApp para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}/5</button>
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}</button>
                       <button onClick={()=>setSelectedId(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
                     </div>
                   </article>;
@@ -1215,8 +1215,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         </label>)}
                     </div>
                   </fieldset>
-                  <button disabled={Boolean(busyLead)||!spokenAtDraft||
-                      false}
+                  <button disabled={Boolean(busyLead)||!spokenAtDraft}
                     onClick={()=>void saveSpokenContact(selected)}
                     className="w-full rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">
                     Salvar contato com decisor
