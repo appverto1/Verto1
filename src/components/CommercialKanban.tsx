@@ -170,7 +170,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const countByLead = useMemo(() => {
     const map = new Map<string,{phone:number;whatsapp:number;spoken:boolean;spokenVia?:CommercialAttempt['channel']}>();
     for (const attempt of attempts) {
-      const r = map.get(attempt.lead_id) || {phone:0,whatsapp:0,spoken:false};
+      const r = map.get(attempt.lead_id) || {phone:0,whatsapp:0,spoken:false,
+        spokenVia:undefined as CommercialAttempt['channel']|undefined};
       // Text messages are contact outcomes, not phone attempts.
       if (attempt.channel === 'phone') r.phone++;
       else if (attempt.channel === 'whatsapp_call') r.whatsapp++;
