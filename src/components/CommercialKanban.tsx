@@ -685,6 +685,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               }}
               className="mt-2 block w-full rounded-lg border border-slate-200 bg-white p-3 text-sm"/>
           </label>
+          {attemptDialog.attemptId?
+            <p className="mt-3 text-xs text-slate-600">Fluxo histórico: {scriptLabel(attempts.find(a=>a.id===attemptDialog.attemptId)?.script_version_id)}</p>:
+            <div className="mt-3">{scriptSelect(attemptDialog.scriptVersionId,id=>{
+              setAttemptDialog(d=>d?{...d,scriptVersionId:id}:d);
+              delete keysRef.current['attempt-time:'+attemptDialog.leadId+':new'];
+            })}</div>}
           <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
             setAttemptDialog(d=>d?{...d,localAt:brazilLocalInput(new Date().toISOString())}:d);
             delete keysRef.current['attempt-time:'+attemptDialog.leadId+':'+(attemptDialog.attemptId||'new')];
@@ -845,6 +851,20 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         {item.label}
                       </button>)}
                   </div>
+                  {scriptSelect(selectedScriptId,id=>{setSelectedScriptId(id);delete keysRef.current['decisor:'+selected.id+':new'];})}
+                  <fieldset className="rounded-lg border border-emerald-200 bg-white p-2.5">
+                    <legend className="px-1 text-xs font-bold text-emerald-800">Resultado da conversa</legend>
+                    <div className="mt-1 flex flex-wrap gap-3">
+                      {([{value:'interested',label:'Demonstrou interesse'},
+                         {value:'not_interested',label:'Não demonstrou interesse'}] as const).map(item=>
+                        <label key={item.value} className="flex items-center gap-1.5 text-xs">
+                          <input type="radio" name="sales-decisor-interest" value={item.value}
+                            checked={contactResult===item.value}
+                            onChange={()=>{setContactResult(item.value);delete keysRef.current['decisor:'+selected.id+':new'];}}/>
+                          {item.label}
+                        </label>)}
+                    </div>
+                  </fieldset>
                   <button disabled={Boolean(busyLead)||!spokenAtDraft||
                       (spokenChannel==='phone'&&selectedCounts.phone>=5)||
                       (spokenChannel==='whatsapp_call'&&selectedCounts.whatsapp>=5)}
@@ -895,7 +915,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).map(a=>
                 <div key={a.id} className="border-b py-2 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>{a.channel==='phone'?'Ligação operadora':a.channel==='whatsapp_call'?'Ligação WhatsApp':'Mensagem WhatsApp'} · {a.outcome==='decisor_spoken'?'Decisor contatado':'Sem contato efetivo'}</span>
+                    <span>{a.channel==='phone'?'Ligação operadora':a.channel==='whatsapp_call'?'Ligação WhatsApp':'Mensagem WhatsApp'} · {a.contact_result==='interested'?'Interessado':a.contact_result==='not_interested'?'Sem interesse':a.outcome==='decisor_spoken'?'Decisor contatado':'Sem atendimento'}
+                      <span className="block text-[11px] text-slate-500">{scriptLabel(a.script_version_id)}</span>
+                    </span>
                     <div className="flex items-center gap-2">
                       <time className="text-slate-500">{dateText(a.occurred_at)}</time>
                       <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
@@ -903,7 +925,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                           setEditingSpokenId(a.id);setEditingSpokenAt(brazilLocalInput(a.occurred_at));
                         }else{
                           setAttemptDialog({leadId:selected.id,channel:a.channel as 'phone'|'whatsapp_call',
-                            attemptId:a.id,localAt:brazilLocalInput(a.occurred_at)});
+                            attemptId:a.id,localAt:brazilLocalInput(a.occurred_at),scriptVersionId:a.script_version_id||''});
                           setError(null);
                         }
                       }} className="text-xs font-semibold text-violet-700 underline disabled:opacity-40">
