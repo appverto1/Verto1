@@ -2,9 +2,9 @@
 -- Placeholder __STAGING_JSON_SQL_LITERAL__ is replaced IN MEMORY with a single
 -- escaped Postgres SQL string literal; NEVER commit prospect PII to GitHub.
 -- Execute in one transaction after schema migrations, with a rollback rehearsal.
--- Source reference safety: fail closed on phone/email/ID collisions between
--- environments; never join two distinct leads or their histories automatically.
--- Resolve source identities before importing, preserving all original records.
+-- Source reference safety: protect subscribers; safely archive noncustomer phone
+-- duplicates (soft delete) to preserve their historical row and linked simulations.
+-- Distinct staging cards retain their IDs, notes and call history.
 begin;
 set local lock_timeout='3s';
 set local statement_timeout='180s';
@@ -37,16 +37,58 @@ begin
 -- Mandatory identity gate before the first persistent mutation. The
 -- normalized_phone uniqueness rule must never be bypassed or an unrelated
 -- production card's history altered by an accidental match.
+-- Never coalesce two differently identified cards or alter subscribers.
+-- Preserve unmatched production historical records; archive only unconverted
+-- production duplicates in place, keeping simulations and audit events intact.
 if exists (
- select 1 from _crm_stage_leads s
- join public.sales_leads d
-   on d.id=s.id
-   or (d.deleted_at is null and s.deleted_at is null and (
-        d.normalized_phone=s.normalized_phone
-        or (s.normalized_email is not null and d.normalized_email=s.normalized_email)))
-) then
- raise exception 'CRM_STAGING_PRODUCTION_IDENTITY_CONFLICT_REQUIRES_REVIEW';
-end if;
+ select 1 from _crm_stage_leads src join public.sales_leads dest
+ on dest.id=src.id
+) then raise exception 'CRM_STAGING_PRODUCTION_UUID_COLLISION';end if;
+
+if exists (
+ select 1 from _crm_stage_leads src join public.sales_leads dest
+ on dest.deleted_at is null and src.deleted_at is null
+ and (dest.normalized_phone=src.normalized_phone
+   or (src.normalized_email is not null
+      and dest.normalized_email=src.normalized_email))
+ where dest.converted_user_id is not null
+    or dest.converted_clinic_id is not null
+    or exists(select 1 from public.sales_offers o where o.lead_id=dest.id)
+    or exists(select 1 from public.sales_checkout_links c where c.lead_id=dest.id)
+    or exists(select 1 from public.pending_activations pa where pa.sales_lead_id=dest.id)
+    or exists(select 1 from public.platform_subscription_financial_state fs where fs.sales_lead_id=dest.id)
+    or exists(select 1 from public.platform_billing_invoice_ledger il where il.sales_lead_id=dest.id)
+) then raise exception 'CRM_PROTECTED_CUSTOMER_DUPLICATE';end if;
+
+if exists (
+ select 1 from _crm_stage_leads src join public.sales_leads dest
+ on dest.deleted_at is null and src.deleted_at is null
+ and src.normalized_email is not null
+ and dest.normalized_email=src.normalized_email
+ where dest.normalized_phone is distinct from src.normalized_phone
+) then raise exception 'CRM_DUPLICATE_EMAIL_REQUIRES_REVIEW';end if;
+
+-- A soft delete retires the old Kanban card from the UI without deleting
+-- the actual row, commercial simulations or its historical audit trail.
+update public.sales_leads dest
+set deleted_at=clock_timestamp()
+where dest.deleted_at is null
+  and dest.converted_user_id is null and dest.converted_clinic_id is null
+  and exists (
+    select 1 from _crm_stage_leads src
+    where src.deleted_at is null
+      and src.normalized_phone=dest.normalized_phone)
+  and not exists(select 1 from public.sales_offers o where o.lead_id=dest.id)
+  and not exists(select 1 from public.sales_checkout_links c where c.lead_id=dest.id)
+  and not exists(select 1 from public.pending_activations pa where pa.sales_lead_id=dest.id)
+  and not exists(select 1 from public.platform_subscription_financial_state fs where fs.sales_lead_id=dest.id)
+  and not exists(select 1 from public.platform_billing_invoice_ledger il where il.sales_lead_id=dest.id);
+
+if exists (
+ select 1 from _crm_stage_leads src join public.sales_leads dest
+ on dest.deleted_at is null and src.deleted_at is null
+ and dest.normalized_phone=src.normalized_phone
+) then raise exception 'CRM_ACTIVE_PHONE_COLLISION_NOT_RESOLVED';end if;
 if exists (select 1 from _crm_stage_leads group by id having count(*)>1)
    or exists (select 1 from _crm_stage_events group by id having count(*)>1)
    or exists (select 1 from _crm_stage_attempts group by id having count(*)>1)
@@ -154,11 +196,11 @@ if (select count(*) from public.sales_leads)
  then raise exception 'LEAD_COUNT_MISMATCH';end if;
 if exists (
  select 1 from _crm_stage_leads s
- join public.sales_leads d on d.id=s.id
- where d.notes is distinct from s.notes
-    or d.phone is distinct from s.phone
-    or d.normalized_phone is distinct from s.normalized_phone
-    or d.name is distinct from s.name)
+ left join public.sales_leads d on d.id=s.id
+ where d.id is null
+    or (to_jsonb(d)-'converted_user_id'-'converted_clinic_id'-'assigned_owner_id')
+       is distinct from
+       (to_jsonb(s)-'converted_user_id'-'converted_clinic_id'-'assigned_owner_id'))
 then raise exception 'STAGING_LEAD_FIELDS_NOT_PRESERVED';end if;
 if (select count(*) from public.sales_prospecting_attempts)
  <> (select attempts from _crm_prod_before)+(select count(*) from _crm_stage_attempts)
