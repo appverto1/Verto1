@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
-import { canRecordSalesAttemptNow, nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
+import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
 type Lead = {
