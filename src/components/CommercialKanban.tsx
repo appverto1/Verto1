@@ -153,6 +153,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const data=await request('/api/owner/sales/scripts/active');
     const versions:Array<{id:string;name:string;version_label:string;is_active:boolean}>=data.versions||[];
     setScriptLabels(versions);
+    setScriptCatalogUnavailable(false);
     setSelectedScriptId(old=>{
       if(old&&versions.some(v=>v.id===old&&v.is_active))return old;
       const active=versions.filter(v=>v.is_active);
@@ -180,6 +181,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const refreshAcquisitionCatalog=async()=>{
     const result=await request('/api/owner/sales/acquisition/board');
     setAcquisitionChannels(result.channels||[]);
+    setAcquisitionCatalogUnavailable(false);
   };
   const acquisitionNames=(leadId:string)=>{
     const ids=acquisitionByLead[leadId]||[];
