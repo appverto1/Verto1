@@ -141,6 +141,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [bulkChannelsToApply,setBulkChannelsToApply]=useState<string[]>([]);
   const [bulkChannelsByRow,setBulkChannelsByRow]=useState<Record<number,string[]>>({});
   const [cardFeedback,setCardFeedback]=useState<{leadId:string;info?:string;error?:string}|null>(null);
+  const [bulkExistingMode,setBulkExistingMode]=useState(false);
+  const [bulkExistingIds,setBulkExistingIds]=useState<string[]>([]);
+  const [bulkExistingChannels,setBulkExistingChannels]=useState<string[]>([]);
+  const [bulkExistingReplace,setBulkExistingReplace]=useState(false);
+  const [bulkExistingBusy,setBulkExistingBusy]=useState(false);
   const [creatingBusy,setCreatingBusy] = useState(false);
   const [editingLead,setEditingLead] = useState(false);
   const [savingLead,setSavingLead] = useState(false);
@@ -359,6 +364,38 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const openCard=(leadId:string)=>{
     setError(null);setInfo(null);setCardFeedback(null);
     setSelectedId(leadId);
+  };
+  const saveExistingBulkChannels=async()=>{
+    if(bulkExistingBusy||!bulkExistingIds.length||!bulkExistingChannels.length||
+      acquisitionCatalogUnavailable)return;
+    const selections=bulkExistingIds.map(leadId=>{
+      const channels=bulkExistingReplace?bulkExistingChannels:
+        [...new Set([...(acquisitionByLead[leadId]||[]),...bulkExistingChannels])];
+      return {leadId,channelIds:channels};
+    });
+    if(selections.some(item=>item.channelIds.length>20)){
+      setError('Há um card que excederia 20 canais. Revise a seleção.');return;
+    }
+    const keyName='acquisition-bulk-existing';
+    const key=keysRef.current[keyName]||crypto.randomUUID();
+    keysRef.current[keyName]=key;
+    setBulkExistingBusy(true);setError(null);setInfo(null);
+    try{
+      const result=await request('/api/owner/sales/acquisition/leads/bulk',{
+        method:'PUT',headers:{'X-Idempotency-Key':key},
+        body:JSON.stringify({selections}),
+      });
+      delete keysRef.current[keyName];
+      setAcquisitionByLead(old=>{
+        const next={...old};
+        for(const item of result.selections||[])next[item.leadId]=item.channelIds||[];
+        return next;
+      });
+      setAcquisitionRefreshKey(x=>x+1);
+      setBulkExistingIds([]);
+      setInfo(selections.length+' card(s) classificados em lote, sem atualizar a página.');
+    }catch(e:any){setError(e.message||'Não foi possível classificar os cards selecionados.');}
+    finally{setBulkExistingBusy(false);}
   };
   const applyBulkChannels=()=>{
     setBulkChannelsByRow(old=>{
@@ -711,6 +748,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     return (showStage==='all'||id===showStage)&&
       matchReturnFilter(l,effectiveReturnFilter(id))&&agendaPass(l.id);
   }).length;
+  const currentlyShownLeadIds=filtered.filter(lead=>{
+    const id=columnFor(lead);
+    return Boolean(id)&&(showStage==='all'||showStage===id)&&
+      matchReturnFilter(lead,effectiveReturnFilter(id||''))&&agendaPass(lead.id);
+  }).map(lead=>lead.id);
   const chooseGlobalFollowupFilter=(filter:FollowupFilter)=>{
     setCalendarToday(brazilDateKey(new Date()));
     setGlobalFollowupFilter(filter);
@@ -733,6 +775,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
             Scripts / Testes A-B
           </button>
+          <button type="button" onClick={()=>{
+              setBulkExistingMode(v=>!v);setBulkExistingIds([]);setError(null);setInfo(null);
+            }} className={'flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold '+(
+              bulkExistingMode?'border-violet-300 bg-violet-600 text-white':'border-white/20 hover:bg-white/10')}>
+            {bulkExistingMode?'Concluir seleção':'Selecionar vários cards'}
+          </button>
           <button type="button" onClick={()=>setAcquisitionOpen(v=>!v)}
             className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
             Canais + Resultados
@@ -745,6 +793,43 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
 
       {scriptsOpen&&<CommercialScriptsPanel onClose={()=>setScriptsOpen(false)} onChanged={refreshScripts}/>}
       {acquisitionOpen&&<CommercialAcquisitionPanel refreshKey={acquisitionRefreshKey} onClose={()=>setAcquisitionOpen(false)} onChanged={refreshAcquisitionCatalog}/>}
+      {bulkExistingMode&&<div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4" aria-label="Classificação de cards em lote">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <strong className="text-sm text-indigo-950">Classificar cards em lote · {bulkExistingIds.length} selecionado(s)</strong>
+          <div className="flex gap-2">
+            <button type="button" disabled={bulkExistingBusy}
+              onClick={()=>setBulkExistingIds(currentlyShownLeadIds.slice(0,100))}
+              className="rounded-lg border bg-white px-3 py-2 text-xs font-bold">Selecionar até 100 visíveis</button>
+            <button type="button" disabled={bulkExistingBusy} onClick={()=>setBulkExistingIds([])}
+              className="rounded-lg border bg-white px-3 py-2 text-xs font-bold">Limpar seleção</button>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-600">Marque os cards no quadro ou selecione os visíveis após aplicar filtros. Os canais serão adicionados aos existentes por padrão.</p>
+        <fieldset className="mt-3 flex flex-wrap gap-3 rounded-lg border border-indigo-100 bg-white p-3">
+          <legend className="px-1 text-xs font-bold">Canais para os cards selecionados</legend>
+          {acquisitionChannels.filter(c=>c.is_active).map(channel=><label key={channel.id}
+            className="inline-flex items-center gap-2 text-xs">
+            <input type="checkbox" disabled={bulkExistingBusy} checked={bulkExistingChannels.includes(channel.id)}
+              onChange={e=>{
+                setBulkExistingChannels(old=>e.target.checked?[...old,channel.id]:old.filter(id=>id!==channel.id));
+                delete keysRef.current['acquisition-bulk-existing'];
+              }}
+              className="h-4 w-4 accent-indigo-700"/>{channel.name}
+          </label>)}
+        </fieldset>
+        <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-700">
+          <input type="checkbox" checked={bulkExistingReplace} disabled={bulkExistingBusy}
+            onChange={e=>{setBulkExistingReplace(e.target.checked);delete keysRef.current['acquisition-bulk-existing'];}}
+            className="h-4 w-4 accent-indigo-700"/>
+          Substituir os canais atuais (em vez de adicionar)
+        </label>
+        <button type="button" disabled={bulkExistingBusy||!bulkExistingIds.length||
+          !bulkExistingChannels.length||acquisitionCatalogUnavailable}
+          onClick={()=>void saveExistingBulkChannels()}
+          className="mt-3 rounded-lg bg-indigo-700 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">
+          {bulkExistingBusy?'Salvando...':'Salvar canais nos '+bulkExistingIds.length+' cards'}
+        </button>
+      </div>}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {columns.filter(c=>c.is_system).map(c=>(
           <button key={c.id} type="button" onClick={()=>setShowStage(x=>x===c.id?'all':c.id)}
@@ -931,6 +1016,18 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
                     style={{borderLeftColor:col.color}}>
+                    {bulkExistingMode&&<label className="mb-2 flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-50 px-2 py-1.5 text-xs font-bold text-indigo-900">
+                      <input type="checkbox" aria-label={'Selecionar card '+(lead.name||lead.phone)}
+                        disabled={bulkExistingBusy}
+                        checked={bulkExistingIds.includes(lead.id)}
+                        onChange={e=>{
+                          setBulkExistingIds(old=>e.target.checked?
+                            old.length>=100?old:[...old,lead.id]:old.filter(id=>id!==lead.id));
+                          delete keysRef.current['acquisition-bulk-existing'];
+                        }}
+                        className="h-4 w-4 accent-indigo-700"/>
+                      Incluir na classificação em lote
+                    </label>}
                     <button type="button" onClick={()=>openCard(lead.id)} className="w-full text-left" aria-label={'Abrir lead '+(lead.name||'sem nome')}>
                       <div className="flex items-start justify-between gap-2">
                         <strong className="line-clamp-2 text-xs font-black uppercase leading-5 text-slate-900">{lead.name||'Lead sem nome'}</strong>
