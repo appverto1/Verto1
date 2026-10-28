@@ -3,7 +3,7 @@ import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
   Pie, PieChart, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { BarChart3, Clock3, RefreshCw, TrendingUp, Users } from 'lucide-react';
+import { BarChart3, Clock3, RefreshCw, TrendingUp, Users, X, ChevronRight } from 'lucide-react';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { getSupabase } from '../lib/supabase';
 import { SALES_LEAD_STATUS_LABELS } from '../constants/salesCommercial';
@@ -14,6 +14,17 @@ export type CommercialAttempt = {
   script_version_id?: string | null;
   contact_result?: 'no_answer' | 'interested' | 'not_interested' | null;
 };
+type DrilldownSelection={
+  dimension:'stage'|'overview'|'daily'|'cumulative'|'hour'|'weekday'|'channel'|'attempt';
+  value:string;measure:'leads'|'calls'|'conversations'|'failures'|'messages'|'attempted';
+  label:string;expected?:number;
+};
+type ChartLead={
+  id:string;name:string|null;clinic_name:string|null;phone:string|null;email:string|null;
+  status:string;created_at:string|null;updated_at:string|null;matched_at?:string|null;
+  matching_events:number;converted_clinic_id?:string|null;converted_user_id?:string|null;
+};
+type DrilldownResults={totalLeads:number;matchingEvents:number;items:ChartLead[];offset:number;limit:number};
 type NumberPoint = { calls: number; conversations: number };
 type Analytics = {
   days: number;
@@ -60,6 +71,40 @@ export const CommercialDashboard = () => {
   const [data,setData] = useState<Analytics|null>(null);
   const [loading,setLoading] = useState(true);
   const [error,setError] = useState<string|null>(null);
+  const [drilldown,setDrilldown]=useState<DrilldownSelection|null>(null);
+  const [drilldownOffset,setDrilldownOffset]=useState(0);
+  const [drilldownData,setDrilldownData]=useState<DrilldownResults|null>(null);
+  const [drilldownLoading,setDrilldownLoading]=useState(false);
+  const [drilldownError,setDrilldownError]=useState<string|null>(null);
+  const showLeads=(dimension:DrilldownSelection['dimension'],value:string,
+    measure:DrilldownSelection['measure'],label:string,expected?:number)=>{
+    if(!value)return;
+    setDrilldown({dimension,value,measure,label,expected});
+    setDrilldownOffset(0);
+    setDrilldownData(null);
+    setDrilldownError(null);
+  };
+  useEffect(()=>{
+    if(!drilldown)return;
+    let live=true;
+    setDrilldownLoading(true);setDrilldownError(null);
+    void (async()=>{try{
+      const client=await getSupabase();
+      const {data:{session}}=await client.auth.getSession();
+      const query=new URLSearchParams({
+        days:String(days),dimension:drilldown.dimension,value:drilldown.value,
+        measure:drilldown.measure,offset:String(drilldownOffset),
+      });
+      const response=await fetch('/api/owner/sales/prospecting/analytics/drilldown?'+query,{
+        credentials:'include',headers:{Authorization:session?.access_token?'Bearer '+session.access_token:''},
+      });
+      const json=await response.json().catch(()=>({}));
+      if(!response.ok||!json.success)throw Error(json.error||'Não foi possível localizar os leads.');
+      if(live)setDrilldownData(json.data);
+    }catch(e:any){if(live)setDrilldownError(e.message||'Detalhamento indisponível.');}
+    finally{if(live)setDrilldownLoading(false);}})();
+    return()=>{live=false;};
+  },[drilldown,drilldownOffset,days,refresh]);
   useEffect(()=>{
     let active = true;
     setLoading(true);setError(null);
@@ -83,46 +128,47 @@ export const CommercialDashboard = () => {
     let calls=0,conversations=0;
     return (data?.daily||[]).map(point=>{
       calls+=point.calls;conversations+=point.conversations;
-      return {...point,day:point.day.slice(5),rate: Number((100*conversations/Math.max(calls,1)).toFixed(1))};
+      return {...point,date:point.day,day:point.day.slice(5),rate: Number((100*conversations/Math.max(calls,1)).toFixed(1))};
     });
   },[data]);
   const hours=useMemo(()=>Array.from({length:24},(_,i)=>{
     const row=data?.hours?.find(x=>Number(x.hour)===i);
-    return {hour:String(i).padStart(2,'0')+'h',calls:row?.calls||0,conversations:row?.conversations||0,
+    return {hour:String(i).padStart(2,'0')+'h',hourValue:String(i),calls:row?.calls||0,conversations:row?.conversations||0,
       rate:row?.calls ? Number((100*row.conversations/row.calls).toFixed(1)) : 0};
   }),[data]);
   const weekdays=useMemo(()=>WEEKDAYS.map((name,i)=>{
     const row=data?.weekdays?.find(x=>Number(x.weekday)===i+1);
-    return {weekday:name,calls:row?.calls||0,conversations:row?.conversations||0,
+    return {weekday:name,weekdayValue:String(i+1),calls:row?.calls||0,conversations:row?.conversations||0,
       rate:row?.calls ? Number((100*row.conversations/row.calls).toFixed(1)):0};
   }),[data]);
   const channels=useMemo(()=>['phone','whatsapp_call'].map(channel=>{
     const row=data?.channels?.find(x=>x.channel===channel);
-    return {channel:channelLabel(channel),calls:row?.calls||0,conversations:row?.conversations||0,
+    return {channel:channelLabel(channel),channelValue:channel,calls:row?.calls||0,conversations:row?.conversations||0,
       failures:(row?.calls||0)-(row?.conversations||0),
       rate:row?.calls ? Number((100*row.conversations/row.calls).toFixed(1)):0};
   }),[data]);
   const stages=useMemo(()=>(data?.stages||[]).map(x=>({
     stage:SALES_LEAD_STATUS_LABELS[x.status as keyof typeof SALES_LEAD_STATUS_LABELS]||x.status,
-    leads:x.leads,
+    status:x.status,leads:x.leads,
   })).sort((a,b)=>b.leads-a.leads),[data]);
   const attemptSequence=useMemo(()=>Array.from({length:10},(_,i)=>{
     const row=data?.attempts?.find(x=>Number(x.attempt)===i+1);
-    return {attempt:(i+1)+'ª',calls:row?.calls||0,conversations:row?.conversations||0,
+    return {attempt:(i+1)+'ª',attemptValue:String(i+1),calls:row?.calls||0,conversations:row?.conversations||0,
       rate:row?.calls ? Number((100*row.conversations/row.calls).toFixed(1)):0};
   }),[data]);
   const hasCalls=Boolean(data?.overview?.totalCalls);
   const overview=data?.overview;
   const bestHour=hours.filter(x=>x.calls>0).sort((a,b)=>b.rate-a.rate||b.calls-a.calls)[0];
   const bestDay=weekdays.filter(x=>x.calls>0).sort((a,b)=>b.rate-a.rate||b.calls-a.calls)[0];
-  const cards=[
-    ['Leads na base',n(overview?.totalLeads||0),'Todos os leads não excluídos'],
-    ['Leads abordados',n(overview?.attemptedLeads||0),'Pelo menos uma ligação no período'],
-    ['Ligações realizadas',n(overview?.totalCalls||0),'Operadora + chamada de WhatsApp'],
-    ['Decisores contatados',n(overview?.contactedLeads||0),'Ligações e mensagens efetivas'],
-    ['Por mensagem WhatsApp',n(overview?.messageContacts||0),'Conversas efetivas por texto, sem virar ligação'],
-    ['Taxa de contato por ligação',percent(overview?.callContactedLeads??overview?.contactedLeads??0,overview?.attemptedLeads||0),'Entre os leads abordados por ligação'],
-    ['Efetividade por ligação',percent(overview?.successfulCalls||0,overview?.totalCalls||0),'Conversas / ligações registradas'],
+  const cards:Array<{title:string;value:string;detail:string;dimension:DrilldownSelection['dimension'];
+    group:string;measure:DrilldownSelection['measure'];expected:number}>=[
+    {title:'Leads na base',value:n(overview?.totalLeads||0),detail:'Todos os leads não excluídos',dimension:'overview',group:'all',measure:'leads',expected:overview?.totalLeads||0},
+    {title:'Leads abordados',value:n(overview?.attemptedLeads||0),detail:'Pelo menos uma ligação no período',dimension:'overview',group:'attempted',measure:'attempted',expected:overview?.attemptedLeads||0},
+    {title:'Ligações realizadas',value:n(overview?.totalCalls||0),detail:'Operadora + chamada de WhatsApp',dimension:'overview',group:'calls',measure:'calls',expected:overview?.totalCalls||0},
+    {title:'Decisores contatados',value:n(overview?.contactedLeads||0),detail:'Ligações e mensagens efetivas',dimension:'overview',group:'contacted',measure:'conversations',expected:overview?.contactedLeads||0},
+    {title:'Por mensagem WhatsApp',value:n(overview?.messageContacts||0),detail:'Conversas efetivas por texto, sem virar ligação',dimension:'overview',group:'messages',measure:'messages',expected:overview?.messageContacts||0},
+    {title:'Taxa de contato por ligação',value:percent(overview?.callContactedLeads??overview?.contactedLeads??0,overview?.attemptedLeads||0),detail:'Leads contatados por ligação',dimension:'overview',group:'call_contacted',measure:'conversations',expected:overview?.callContactedLeads||0},
+    {title:'Efetividade por ligação',value:percent(overview?.successfulCalls||0,overview?.totalCalls||0),detail:'Conversas / ligações registradas',dimension:'overview',group:'call_contacted',measure:'conversations',expected:overview?.successfulCalls||0},
   ];
   return (
     <div className="space-y-6" aria-label="Inteligência e gráficos comerciais">
@@ -149,12 +195,16 @@ export const CommercialDashboard = () => {
       {error&&<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
       {data&&<div className="space-y-6">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
-          {cards.map(([title,value,detail],index)=><div key={title} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between"><span className="text-[11px] font-semibold text-slate-500">{title}</span>
+          {cards.map((item,index)=><button key={item.title} type="button"
+            aria-label={'Ver leads de '+item.title}
+            onClick={()=>showLeads(item.dimension,item.group,item.measure,item.title,item.expected)}
+            className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-violet-300 hover:bg-violet-50 focus-visible:outline-violet-500">
+            <div className="mb-3 flex items-center justify-between"><span className="text-[11px] font-semibold text-slate-500">{item.title}</span>
               {index<3?<BarChart3 size={16} className="text-violet-400"/>:index<5?<Users size={16} className="text-blue-500"/>:<TrendingUp size={16} className="text-emerald-500"/>}</div>
-            <strong className="block text-2xl font-black tabular-nums text-slate-900">{value}</strong>
-            <p className="mt-2 text-[10px] text-slate-500">{detail}</p>
-          </div>)}
+            <strong className="block text-2xl font-black tabular-nums text-slate-900">{item.value}</strong>
+            <p className="mt-2 text-[10px] text-slate-500">{item.detail}</p>
+            <p className="mt-2 text-[10px] font-bold text-violet-700">Ver leads <ChevronRight size={12} className="inline"/></p>
+          </button>)}
         </div>
         <div className="grid gap-4 lg:grid-cols-3">
           <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4"><Clock3 className="text-violet-500"/>
