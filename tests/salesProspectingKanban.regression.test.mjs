@@ -193,3 +193,35 @@ test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile h
   assert.match(superAdmin,/mobileMenuTriggerRef.current\?\.focus\(\)/);
   assert.doesNotMatch(superAdmin,/h-screen sticky top-0 flex flex-col overflow-x-hidden/);
 });
+
+
+const linkedCrudSql = readFileSync('supabase/migrations/20261028143000_sales_kanban_owner_linked_crud_v2.sql','utf8');
+const linkedEditFn = linkedCrudSql.split('create or replace function public.update_sales_kanban_opportunity_v1(')[1].split('create or replace function public.delete_sales_kanban_opportunity_v1(')[0];
+const linkedDeleteFn = linkedCrudSql.split('create or replace function public.delete_sales_kanban_opportunity_v1(')[1].split('revoke all on function public.update_sales_kanban_opportunity_v1')[0];
+
+test('Super Admin can edit converted opportunity CRM fields without mutating conversion linkage',()=>{
+  assert.match(linkedEditFn,/where id=p_lead_id for update/);
+  assert.match(linkedEditFn,/deleted_at is not null/);
+  assert.doesNotMatch(linkedEditFn,/LEAD_LOCKED|converted_user_id|converted_clinic_id/);
+  assert.match(linkedEditFn,/name=v_name,phone='\\+'\\|\\|v_phone/);
+  assert.match(linkedEditFn,/insert into public.sales_lead_events/);
+  assert.match(linkedEditFn,/IDEMPOTENCY_CONFLICT/);
+});
+
+test('Super Admin can remove card with proposal or conversion while retaining linked data',()=>{
+  assert.match(linkedDeleteFn,/where id=p_lead_id for update/);
+  assert.doesNotMatch(linkedDeleteFn,/LEAD_LOCKED|public.sales_offers|converted_user_id|converted_clinic_id/);
+  assert.match(linkedDeleteFn,/deleted_at=clock_timestamp\\(\\)/);
+  assert.match(linkedDeleteFn,/insert into public.sales_lead_events/);
+  assert.match(linkedDeleteFn,/idempotency_key=v_key/);
+  assert.doesNotMatch(linkedDeleteFn,/delete from public\\.sales_leads|delete from public\\.sales_offers|update public\\.sales_offers/);
+});
+
+test('linked-card override preserves service-role-only RPC authority and no-F5 response',()=>{
+  assert.match(linkedCrudSql,/revoke all on function public.update_sales_kanban_opportunity_v1\\(uuid,uuid,jsonb,text\\) from public,anon,authenticated/);
+  assert.match(linkedCrudSql,/grant execute on function public.delete_sales_kanban_opportunity_v1\\(uuid,uuid,text\\) to service_role/);
+  assert.match(routes,/salesGuard = \\[checkAuth, checkPlatformAdmin\\]/);
+  assert.match(kanban,/onLeadPatch\\(selected.id,json.lead\\)/);
+  assert.match(kanban,/onLeadDeleted\\(lead.id\\)/);
+  assert.doesNotMatch(routes,/Oportunidade com conversão ou proposta ativa não pode ser excluída/);
+});

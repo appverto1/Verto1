@@ -308,7 +308,7 @@ export function registerSalesProspectingRoutes(
         const message=String(result.error.message||'');
         if (message.includes('LEAD_NOT_FOUND')) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
         if (/LEAD_LOCKED|IDEMPOTENCY_CONFLICT|23505/.test(message+' '+result.error.code))
-          return res.status(409).json({success:false,error:'Oportunidade protegida ou telefone/e-mail já cadastrado.'});
+          return res.status(409).json({success:false,error:'Conflito de edição ou telefone/e-mail já cadastrado.'});
         if (/INVALID_EDIT/.test(message)) return res.status(400).json({success:false,error:'Verifique nome, telefone e demais campos.'});
         throw result.error;
       }
@@ -330,7 +330,7 @@ export function registerSalesProspectingRoutes(
         const m=String(result.error.message||'');
         if (m.includes('LEAD_NOT_FOUND')) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
         if (/LEAD_LOCKED|IDEMPOTENCY_CONFLICT/.test(m))
-          return res.status(409).json({success:false,error:'Oportunidade com conversão ou proposta ativa não pode ser excluída.'});
+          return res.status(409).json({success:false,error:'Conflito de exclusão. Atualize a lista e tente novamente.'});
         throw result.error;
       }
       return res.json({success:true,data:result.data});
