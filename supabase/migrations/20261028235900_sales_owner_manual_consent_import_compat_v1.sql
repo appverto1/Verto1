@@ -19,6 +19,8 @@ create table public.sales_crm_import_lead_map (
  source_lead_id uuid not null,
  target_lead_id uuid not null references public.sales_leads(id),
  source_phone_conflict boolean not null default false,
+ source_status text,
+ source_conflict_snapshot jsonb,
  source_hidden boolean not null default false,
  source_deleted boolean not null default false,
  source_converted_user_id uuid,
