@@ -41,7 +41,7 @@ test('each channel remains capped at five; manual loss stays protected', () => {
 
 
 test('clicking a prospecting button persists before updating UI and supports manual lost', () => {
-  assert.match(kanban, /\/prospecting-attempts/);
+  assert.match(kanban, /\/prospecting-attempt-time/);
   assert.match(kanban, /\/mark-lost/);
   assert.match(kanban, /crypto\.randomUUID\(\)/);
   assert.match(kanban, /onLeadPatch\(lead\.id,\{status:json\.data\.status/);
@@ -170,7 +170,7 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(guardSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
   assert.match(routes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
   assert.match(kanban,/nextSalesCadenceSlots/);
-  assert.match(kanban,/canRecordSalesAttemptNow/);
+  assert.match(kanban,/setAttemptDialog/);
 });
 
 test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile hamburger',()=>{
@@ -300,4 +300,44 @@ test('analytics keep calls and messages separate, including contacted-lead conve
   assert.match(dashboard,/Por mensagem WhatsApp/);
   assert.match(dashboard,/overview\?\.callContactedLeads\?\?overview\?\.contactedLeads/);
   assert.match(dashboard,/Mensagens não entram nos indicadores de quantidade e efetividade das ligações/);
+});
+
+
+const attemptTimeSql=readFileSync('supabase/migrations/20261028201000_sales_attempt_actual_time_v1.sql','utf8');
+test('all call attempt buttons open the editable timestamp dialog and only Save writes',()=>{
+  assert.match(kanban,/const recordAttempt =/);
+  assert.match(kanban,/setAttemptDialog\(\{leadId:lead\.id,channel,localAt/);
+  assert.match(kanban,/aria-label=\{attemptDialog\.attemptId\?'Editar data e hora da tentativa'/);
+  assert.match(kanban,/type="datetime-local" value=\{attemptDialog\.localAt\}/);
+  assert.match(kanban,/Usar horário atual/);
+  assert.match(kanban,/Salvar tentativa/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(lead,'phone','no_decisor'\)\}/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(lead,'whatsapp_call','no_decisor'\)\}/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(selected,'phone','no_decisor'\)\}/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(selected,'whatsapp_call','no_decisor'\)\}/);
+  assert.doesNotMatch(kanban,/body:JSON\.stringify\(\{channel,outcome\}\)/);
+});
+test('historical failed calls can be corrected, not re-counted or reclassified',()=>{
+  assert.match(kanban,/attemptId:a\.id,localAt:brazilLocalInput\(a\.occurred_at\)/);
+  assert.match(kanban,/setAttempts\(old=>draft\.attemptId/);
+  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
+  assert.match(routes,/save_sales_prospecting_attempt_time_v1/);
+  assert.match(attemptTimeSql,/outcome='no_decisor' for update/);
+  assert.match(attemptTimeSql,/update public\.sales_prospecting_attempts set occurred_at=p_occurred_at/);
+  assert.match(attemptTimeSql,/attempt_time_corrected/);
+});
+test('actual attempt time is checked under a lead lock with MFA and idempotency',()=>{
+  assert.equal((attemptTimeSql.match(/\$\$/g)||[]).length,2);
+  assert.match(attemptTimeSql,/platform_admins where user_id=p_actor_user_id and active=true/);
+  assert.match(attemptTimeSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(attemptTimeSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.match(attemptTimeSql,/PROSPECTING_ALREADY_TODAY/);
+  assert.match(attemptTimeSql,/v_phone>=5/);
+  assert.match(attemptTimeSql,/v_whatsapp>=5/);
+  assert.match(attemptTimeSql,/needsLossDecision/);
+  assert.match(attemptTimeSql,/idempotency_key=p_action_key/);
+  assert.match(attemptTimeSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(attemptTimeSql,/revoke all on function public\.save_sales_prospecting_attempt_time_v1/);
+  assert.match(attemptTimeSql,/to service_role/);
+  assert.doesNotMatch(attemptTimeSql,/notification_jobs|push_subscriptions|cron\.schedule/);
 });
