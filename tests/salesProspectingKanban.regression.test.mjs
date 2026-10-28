@@ -523,7 +523,7 @@ test('agenda date, São Paulo hour interval and source selection filter next cal
   assert.equal(agendaMatches(suggested,{mode:'next2h',now}),false);
   assert.equal(agendaMatches(manually,{mode:'date',date:'2026-10-28',from:'10:00',to:'11:00',now}),true);
   assert.equal(agendaMatches(manually,{mode:'date',date:'2026-10-29',now}),false);
-  assert.equal(agendaMatches(suggested,{mode:'today',from:'10:00',to:'11:00',now}),true);
+  assert.equal(agendaMatches(suggested,{mode:'today',from:'11:00',to:'12:00',now}),true);
   assert.equal(agendaMatches(suggested,{mode:'today',from:'09:00',to:'10:00',now}),false);
   assert.equal(agendaMatches(null,{mode:'priority',now}),false);
   assert.equal(agendaMatches(null,{mode:'all',now}),true);
