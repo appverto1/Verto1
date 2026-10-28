@@ -19,8 +19,8 @@ export function registerSalesScriptRoutes(app:any, deps:Dependencies){
   app.get('/api/owner/sales/scripts/active',...guards,async(_req:any,res:any)=>{
     try{
       const {data,error}=await supabase.from('sales_script_versions')
-        .select('id,name,version_label').eq('is_active',true)
-        .order('created_at',{ascending:false}).limit(100);
+        .select('id,name,version_label,is_active')
+        .order('created_at',{ascending:false}).limit(200);
       if(error)throw error;
       return res.json({success:true,versions:data||[]});
     }catch{return res.status(503).json({success:false,error:'Fluxos comerciais indisponíveis.'});}
