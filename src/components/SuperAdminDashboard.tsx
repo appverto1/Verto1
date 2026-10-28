@@ -144,10 +144,16 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [leadSearch, setLeadSearch] = useState('');
   const [commercialView, setCommercialView] = useState<'kanban'|'list'>('kanban');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuCloseRef = useRef<HTMLButtonElement | null>(null);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
   React.useEffect(() => {
     if (!mobileMenuOpen) return;
+    mobileMenuCloseRef.current?.focus();
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setMobileMenuOpen(false);
+      if (event.key === 'Escape') {
+        setMobileMenuOpen(false);
+        mobileMenuTriggerRef.current?.focus();
+      }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
@@ -155,6 +161,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const selectAdminTab = (tab: typeof activeTab) => {
     setActiveTab(tab);
     setMobileMenuOpen(false);
+    mobileMenuTriggerRef.current?.focus();
   };
   const [financialView, setFinancialView] = useState<'dre'|'sales'>('dre');
   const [leadNextPage, setLeadNextPage] = useState(2);
@@ -931,7 +938,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         className={(mobileMenuOpen ? 'flex' : 'hidden md:flex') +
           ' fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] flex-col overflow-x-hidden border-r border-slate-200 bg-white/95 backdrop-blur md:max-w-none' +
           (compactDesktopMenu ? ' md:w-[66px]' : ' md:w-72')}>
-        <button type="button" aria-label="Fechar menu" onClick={() => setMobileMenuOpen(false)}
+        <button ref={mobileMenuCloseRef} type="button" aria-label="Fechar menu"
+          onClick={() => { setMobileMenuOpen(false); mobileMenuTriggerRef.current?.focus(); }}
           className="absolute right-3 top-4 rounded-lg p-2 text-slate-600 hover:bg-slate-100 md:hidden">
           <X size={22} />
         </button>
@@ -940,7 +948,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <div className={compactDesktopMenu ? 'md:hidden' : ''}>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400 font-bold">Painel</p>
             <h2 className="text-xl font-black text-slate-900">SUPER ADMIN</h2>
-          </div>}
+          </div>
         </div>
 
         {compactDesktopMenu && (
@@ -983,7 +991,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       </aside>
 
       <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 shadow-sm md:hidden">
-        <button type="button" aria-label="Abrir menu de navegação" aria-controls="super-admin-navigation"
+        <button ref={mobileMenuTriggerRef} type="button" aria-label="Abrir menu de navegação" aria-controls="super-admin-navigation"
           aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}
           className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-800 hover:bg-slate-100">
           <Menu size={24} />
