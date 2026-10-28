@@ -600,3 +600,27 @@ test('commercial drilldown enforces owner MFA, window bounds, paging and SQL exe
   assert.match(drilldownSql,/to service_role/);
   assert.doesNotMatch(drilldownSql,/notification_jobs|patient_sessions|public\.stripe/i);
 });
+
+
+test('optional script/channel failures cannot blank the canonical Kanban or overwrite saved origins',()=>{
+  assert.match(kanban,/const scriptsPromise=request\('\/api\/owner\/sales\/scripts\/active'\)/);
+  assert.match(kanban,/\.catch\(\(\)=>\(\{data:\{versions:\[\]\},failed:true\}\)\)/);
+  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/board\?leadIds='\+q\)/);
+  assert.match(kanban,/\.catch\(\(\)=>\(\{data:\{channels:\[\],links:\[\]\},failed:true\}\)\)/);
+  assert.match(kanban,/const \[board,history,acquisitionResult\] = await Promise\.all/);
+  assert.match(kanban,/setAcquisitionCatalogUnavailable\(pages\.some\(page=>page\.acquisitionFailed\)\)/);
+  assert.match(kanban,/setScriptCatalogUnavailable\(scriptResult\.failed\)/);
+  assert.match(kanban,/if\(savingAcquisition\|\|acquisitionCatalogUnavailable\)/);
+  assert.match(kanban,/if\(!dialog\|\|savingAcquisition\|\|acquisitionCatalogUnavailable\)return/);
+  assert.match(kanban,/scripts? indisponíveis|Scripts indisponíveis/);
+});
+
+test('legacy success timestamp correction preserves null script and historical outcome',()=>{
+  assert.match(kanban,/const scriptVersionId=attempt\?attempt\.script_version_id\?\?null:selectedScriptId\|\|null/);
+  assert.match(kanban,/const resolvedResult=attempt\?attempt\.contact_result\?\?null:contactResult\|\|null/);
+  assert.match(kanban,/const scriptVersionId=original\s*\? original\.script_version_id\?\?null\s*: draft\.scriptVersionId\|\|null/);
+  assert.match(kanban,/if\(!attempt&&scriptCatalogUnavailable\)/);
+  assert.match(kanban,/if\(!draft\.attemptId&&scriptCatalogUnavailable\)/);
+  assert.match(kanban,/setScriptCatalogUnavailable\(false\)/);
+  assert.match(kanban,/setAcquisitionCatalogUnavailable\(false\)/);
+});
