@@ -124,6 +124,13 @@ export const CommercialDashboard = () => {
     return()=>{active=false;};
   },[days,refresh]);
 
+  const clickedPoint=(state:any,dimension:DrilldownSelection['dimension'],
+    key:string,measure:DrilldownSelection['measure'],label:string)=>{
+    const point=state?.activePayload?.[0]?.payload;
+    const value=point?.[key];
+    if(value!==undefined&&value!==null&&String(value))
+      showLeads(dimension,String(value),measure,label+' · '+String(point?.stage||point?.hour||point?.weekday||point?.channel||point?.attempt||point?.day||value));
+  };
   const daily=useMemo(()=>{
     let calls=0,conversations=0;
     return (data?.daily||[]).map(point=>{
@@ -207,24 +214,28 @@ export const CommercialDashboard = () => {
           </button>)}
         </div>
         <div className="grid gap-4 lg:grid-cols-3">
-          <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4"><Clock3 className="text-violet-500"/>
-            <div><span className="text-[11px] text-slate-500">Melhor horário registrado</span><p className="text-lg font-black">{bestHour?bestHour.hour:'Sem dados'}</p><p className="text-[11px] text-slate-500">{bestHour?percent(bestHour.conversations,bestHour.calls)+' de contatos':'Aguardando histórico'}</p></div></div>
-          <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4"><BarChart3 className="text-blue-500"/>
-            <div><span className="text-[11px] text-slate-500">Melhor dia da semana</span><p className="text-lg font-black">{bestDay?bestDay.weekday:'Sem dados'}</p><p className="text-[11px] text-slate-500">{bestDay?percent(bestDay.conversations,bestDay.calls)+' de contatos':'Aguardando histórico'}</p></div></div>
-          <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4"><TrendingUp className="text-emerald-500"/>
-            <div><span className="text-[11px] text-slate-500">Conversão da base em clientes</span><p className="text-lg font-black">{percent(overview.convertedLeads,overview.totalLeads)}</p><p className="text-[11px] text-slate-500">{n(overview.convertedLeads)} clientes · pagamento confirmado</p></div></div>
+          <button type="button" onClick={()=>bestHour&&showLeads('hour',bestHour.hourValue,'conversations','Melhor horário · '+bestHour.hour,bestHour.conversations)}
+            className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-violet-300"><Clock3 className="text-violet-500"/>
+            <div><span className="text-[11px] text-slate-500">Melhor horário registrado</span><p className="text-lg font-black">{bestHour?bestHour.hour:'Sem dados'}</p><p className="text-[11px] text-slate-500">{bestHour?percent(bestHour.conversations,bestHour.calls)+' de contatos':'Aguardando histórico'}</p></div></button>
+          <button type="button" onClick={()=>bestDay&&showLeads('weekday',bestDay.weekdayValue,'conversations','Melhor dia · '+bestDay.weekday,bestDay.conversations)}
+            className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-violet-300"><BarChart3 className="text-blue-500"/>
+            <div><span className="text-[11px] text-slate-500">Melhor dia da semana</span><p className="text-lg font-black">{bestDay?bestDay.weekday:'Sem dados'}</p><p className="text-[11px] text-slate-500">{bestDay?percent(bestDay.conversations,bestDay.calls)+' de contatos':'Aguardando histórico'}</p></div></button>
+          <button type="button" onClick={()=>showLeads('stage','converted','leads','Clientes convertidos',overview.convertedLeads)}
+            className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-4 text-left hover:border-violet-300"><TrendingUp className="text-emerald-500"/>
+            <div><span className="text-[11px] text-slate-500">Conversão da base em clientes</span><p className="text-lg font-black">{percent(overview.convertedLeads,overview.totalLeads)}</p><p className="text-[11px] text-slate-500">{n(overview.convertedLeads)} clientes · pagamento confirmado</p></div></button>
         </div>
 
+        <p className="text-xs font-semibold text-violet-700">Clique em qualquer ponto, barra, fatia ou indicador para identificar os leads correspondentes.</p>
         <div><h3 className="mb-3 text-base font-black text-slate-900">01 · Volume e evolução</h3>
           <div className="grid gap-4 xl:grid-cols-2">
             <Panel title="Atividade comercial diária" subtitle="Ligações realizadas e conversas efetivas por dia.">
-              {hasCalls?<Plot><AreaChart data={daily} margin={{top:5,right:10,bottom:5,left:-20}}><Axes/>
+              {hasCalls?<Plot><AreaChart data={daily} margin={{top:5,right:10,bottom:5,left:-20}} onClick={(state:any)=>clickedPoint(state,'daily','date','calls','Atividade diária')}><Axes/>
                 <XAxis dataKey="day" tick={{fontSize:10}}/><YAxis allowDecimals={false} tick={{fontSize:10}}/>
                 <Tooltip/><Legend/><Area type="monotone" dataKey="calls" name="Ligações" stroke="#7951e7" fill="#7951e7" fillOpacity={.17}/>
                 <Area type="monotone" dataKey="conversations" name="Conversas com decisor" stroke="#0FA896" fill="#0FA896" fillOpacity={.22}/></AreaChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Taxa de contato acumulada" subtitle="Evolução da eficiência ao longo dos dias registrados.">
-              {hasCalls?<Plot><LineChart data={daily} margin={{top:5,right:12,bottom:5,left:-25}}><Axes/>
+              {hasCalls?<Plot><LineChart data={daily} margin={{top:5,right:12,bottom:5,left:-25}} onClick={(state:any)=>clickedPoint(state,'cumulative','date','conversations','Conversas acumuladas')}><Axes/>
                 <XAxis dataKey="day" tick={{fontSize:10}}/><YAxis unit="%" domain={[0,100]} tick={{fontSize:10}}/>
                 <Tooltip/><Line dataKey="rate" name="Taxa acumulada %" stroke="#1f7be3" strokeWidth={3} dot={{r:3}}/></LineChart></Plot>:<Empty/>}
             </Panel>
@@ -234,24 +245,24 @@ export const CommercialDashboard = () => {
         <div><h3 className="mb-3 text-base font-black text-slate-900">02 · Quando ligar?</h3>
           <div className="grid gap-4 xl:grid-cols-2">
             <Panel title="Distribuição por hora do dia" subtitle="Picos de tentativas e atendimento · Brasília (00h a 23h).">
-              {hasCalls?<Plot><BarChart data={hours} margin={{top:5,right:12,bottom:5,left:-24}}><Axes/>
+              {hasCalls?<Plot><BarChart data={hours} margin={{top:5,right:12,bottom:5,left:-24}} onClick={(state:any)=>clickedPoint(state,'hour','hourValue','calls','Ligações por horário')}><Axes/>
                 <XAxis dataKey="hour" tick={{fontSize:9}} interval={2}/><YAxis allowDecimals={false} tick={{fontSize:10}}/>
                 <Tooltip/><Legend/><Bar name="Ligações" dataKey="calls" fill="#7951e7" radius={[4,4,0,0]}/>
                 <Bar name="Conversas" dataKey="conversations" fill="#0FA896" radius={[4,4,0,0]}/></BarChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Eficiência por faixa horária" subtitle="Porcentagem de ligações que chegaram ao decisor em cada horário.">
-              {hasCalls?<Plot><LineChart data={hours} margin={{top:5,right:12,bottom:5,left:-20}}><Axes/>
+              {hasCalls?<Plot><LineChart data={hours} margin={{top:5,right:12,bottom:5,left:-20}} onClick={(state:any)=>clickedPoint(state,'hour','hourValue','conversations','Contatos por horário')}><Axes/>
                 <XAxis dataKey="hour" tick={{fontSize:9}} interval={2}/><YAxis domain={[0,100]} unit="%" tick={{fontSize:10}}/>
                 <Tooltip/><Line name="Contato %" dataKey="rate" type="monotone" stroke="#0FA896" strokeWidth={3} dot={false}/></LineChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Volume por dia da semana" subtitle="Ligações e conversas conforme o dia de realização.">
-              {hasCalls?<Plot><BarChart data={weekdays} margin={{top:5,right:12,bottom:5,left:-20}}><Axes/>
+              {hasCalls?<Plot><BarChart data={weekdays} margin={{top:5,right:12,bottom:5,left:-20}} onClick={(state:any)=>clickedPoint(state,'weekday','weekdayValue','calls','Ligações por dia da semana')}><Axes/>
                 <XAxis dataKey="weekday" tick={{fontSize:10}}/><YAxis allowDecimals={false} tick={{fontSize:10}}/>
                 <Tooltip/><Legend/><Bar dataKey="calls" name="Ligações" fill="#1f7be3" radius={[4,4,0,0]}/>
                 <Bar dataKey="conversations" name="Conversas" fill="#12a590" radius={[4,4,0,0]}/></BarChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Taxa de contato por dia" subtitle="Taxa de conversas por ligações feitas no respectivo dia.">
-              {hasCalls?<Plot><BarChart data={weekdays} margin={{top:5,right:12,bottom:5,left:-20}}><Axes/>
+              {hasCalls?<Plot><BarChart data={weekdays} margin={{top:5,right:12,bottom:5,left:-20}} onClick={(state:any)=>clickedPoint(state,'weekday','weekdayValue','conversations','Contatos por dia da semana')}><Axes/>
                 <XAxis dataKey="weekday" tick={{fontSize:10}}/><YAxis domain={[0,100]} unit="%" tick={{fontSize:10}}/>
                 <Tooltip/><Bar name="Taxa de contato %" dataKey="rate" fill="#12a590" radius={[6,6,0,0]}/></BarChart></Plot>:<Empty/>}
             </Panel>
@@ -261,24 +272,25 @@ export const CommercialDashboard = () => {
         <div><h3 className="mb-3 text-base font-black text-slate-900">03 · Canais e cadência</h3>
           <div className="grid gap-4 xl:grid-cols-2">
             <Panel title="Comparativo de canais" subtitle="Conversas efetivas vs. ligações que não chegaram ao decisor.">
-              {hasCalls?<Plot><BarChart layout="vertical" data={channels} margin={{top:5,right:12,bottom:5,left:4}}><Axes/>
+              {hasCalls?<Plot><BarChart layout="vertical" data={channels} margin={{top:5,right:12,bottom:5,left:4}} onClick={(state:any)=>clickedPoint(state,'channel','channelValue','calls','Canais de ligação')}><Axes/>
                 <XAxis type="number" allowDecimals={false} tick={{fontSize:10}}/><YAxis type="category" dataKey="channel" width={116} tick={{fontSize:10}}/>
                 <Tooltip/><Legend/><Bar stackId="a" name="Conversas" dataKey="conversations" fill="#12a590"/>
                 <Bar stackId="a" name="Sem contato" dataKey="failures" fill="#d0d6e5" radius={[5,5,5,5]}/></BarChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Participação por canal" subtitle="Distribuição percentual das ligações registradas.">
               {hasCalls?<Plot><PieChart><Pie data={channels} dataKey="calls" nameKey="channel" innerRadius={62} outerRadius={105}
-                paddingAngle={3} label={({percent}:any)=>((percent||0)*100).toFixed(1)+'%'}>
+                paddingAngle={3} label={({percent}:any)=>((percent||0)*100).toFixed(1)+'%'}
+                onClick={(entry:any)=>showLeads('channel',String(entry?.channelValue||''),'calls','Ligações · '+String(entry?.channel||''),entry?.calls)}>
                 {channels.map((_,i)=><Cell key={i} fill={COLORS[i]}/>)}</Pie>
                 <Tooltip/><Legend/></PieChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Em qual tentativa houve contato?" subtitle="Ordem cronológica da 1ª até a 10ª ligação por lead no período.">
-              {hasCalls?<Plot><BarChart data={attemptSequence} margin={{top:5,right:12,bottom:5,left:-20}}><Axes/>
+              {hasCalls?<Plot><BarChart data={attemptSequence} margin={{top:5,right:12,bottom:5,left:-20}} onClick={(state:any)=>clickedPoint(state,'attempt','attemptValue','conversations','Contatos na tentativa')}><Axes/>
                 <XAxis dataKey="attempt" tick={{fontSize:10}}/><YAxis allowDecimals={false} tick={{fontSize:10}}/>
                 <Tooltip/><Bar dataKey="conversations" name="Primeiro contato efetivo" fill="#7951e7" radius={[5,5,0,0]}/></BarChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Eficiência em cada tentativa" subtitle="Taxa de sucesso em cada posição da cadência 5+5.">
-              {hasCalls?<Plot><LineChart data={attemptSequence} margin={{top:5,right:12,bottom:5,left:-20}}><Axes/>
+              {hasCalls?<Plot><LineChart data={attemptSequence} margin={{top:5,right:12,bottom:5,left:-20}} onClick={(state:any)=>clickedPoint(state,'attempt','attemptValue','conversations','Efetividade por tentativa')}><Axes/>
                 <XAxis dataKey="attempt" tick={{fontSize:10}}/><YAxis domain={[0,100]} unit="%" tick={{fontSize:10}}/>
                 <Tooltip/><Line dataKey="rate" name="Taxa %" stroke="#e05a78" strokeWidth={3} dot={{r:4}}/></LineChart></Plot>:<Empty/>}
             </Panel>
@@ -288,13 +300,13 @@ export const CommercialDashboard = () => {
         <div><h3 className="mb-3 text-base font-black text-slate-900">04 · Funil e resultados comerciais</h3>
           <div className="grid gap-4 xl:grid-cols-2">
             <Panel title="Distribuição da base por etapa" subtitle="Todos os leads não excluídos, independentemente do período das ligações.">
-              {stages.length?<Plot height={320}><BarChart data={stages} layout="vertical" margin={{top:5,right:12,bottom:5,left:0}}><Axes/>
+              {stages.length?<Plot height={320}><BarChart data={stages} layout="vertical" margin={{top:5,right:12,bottom:5,left:0}} onClick={(state:any)=>clickedPoint(state,'stage','status','leads','Etapa comercial')}><Axes/>
                 <XAxis type="number" allowDecimals={false} tick={{fontSize:10}}/><YAxis type="category" dataKey="stage" width={150} tick={{fontSize:10}}/>
                 <Tooltip/><Bar dataKey="leads" name="Leads" fill="#7951e7" radius={[0,5,5,0]}/></BarChart></Plot>:<Empty/>}
             </Panel>
             <Panel title="Composição do pipeline" subtitle="Participação de cada status no total de leads da Verto.">
-              {stages.length?<Plot height={320}><PieChart><Pie data={stages} dataKey="leads" nameKey="stage" innerRadius={54} outerRadius={95}
-                paddingAngle={2}>{stages.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}</Pie><Tooltip/><Legend/></PieChart></Plot>:<Empty/>}
+              {stages.length?<Plot height={320}><PieChart><Pie data={stages} dataKey="leads" nameKey="stage" innerRadius={54} outerRadius={95} paddingAngle={2}
+                onClick={(entry:any)=>showLeads('stage',String(entry?.status||''),'leads','Funil · '+String(entry?.stage||''),entry?.leads)}>{stages.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}</Pie><Tooltip/><Legend/></PieChart></Plot>:<Empty/>}
             </Panel>
           </div>
         </div>
