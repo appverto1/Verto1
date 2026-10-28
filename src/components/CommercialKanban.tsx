@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
+import { CommercialScriptsPanel } from './CommercialScriptsPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
@@ -69,6 +70,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [placements, setPlacements] = useState<Record<string,string>>({});
   const [overrides, setOverrides] = useState<Record<string,{details:Partial<Lead>;hidden:boolean}>>({});
   const [attempts, setAttempts] = useState<CommercialAttempt[]>([]);
+  const [scriptLabels,setScriptLabels]=useState<Array<{id:string;name:string;version_label:string;is_active:boolean}>>([]);
+  const [scriptsOpen,setScriptsOpen]=useState(false);
+  const [selectedScriptId,setSelectedScriptId]=useState('');
+  const [contactResult,setContactResult]=useState<'interested'|'not_interested'|''>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showStage, setShowStage] = useState('all');
@@ -84,7 +89,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [revision, setRevision] = useState(0);
   const [spokenChannel, setSpokenChannel] = useState<CommercialAttempt['channel']>('phone');
   const [spokenAtDraft,setSpokenAtDraft]=useState('');
-  const [attemptDialog,setAttemptDialog]=useState<{leadId:string;channel:'phone'|'whatsapp_call';attemptId?:string;localAt:string}|null>(null);
+  const [attemptDialog,setAttemptDialog]=useState<{leadId:string;channel:'phone'|'whatsapp_call';attemptId?:string;localAt:string;scriptVersionId:string}|null>(null);
   const [editingSpokenId,setEditingSpokenId]=useState<string|null>(null);
   const [editingSpokenAt,setEditingSpokenAt]=useState('');
   const [followups,setFollowups]=useState<Record<string,SalesFollowup>>({});
@@ -104,6 +109,34 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const idsKey = useMemo(() => leads.filter(x => !x.legacyReadOnly && isUuid(x.id))
     .map(x => x.id).sort().join(','), [leads]);
 
+  const refreshScripts=async()=>{
+    const data=await request('/api/owner/sales/scripts/active');
+    const versions:Array<{id:string;name:string;version_label:string;is_active:boolean}>=data.versions||[];
+    setScriptLabels(versions);
+    setSelectedScriptId(old=>{
+      if(old&&versions.some(v=>v.id===old&&v.is_active))return old;
+      const active=versions.filter(v=>v.is_active);
+      return active.length===1?active[0].id:'';
+    });
+  };
+  const scriptLabel=(id?:string|null)=>{
+    if(!id)return 'Sem fluxo atribuído';
+    const match=scriptLabels.find(x=>x.id===id);
+    return match?match.name+' · '+match.version_label:'Versão histórica';
+  };
+  const activeScripts=scriptLabels.filter(v=>v.is_active);
+  const scriptSelect=(value:string,onChange:(v:string)=>void,disabled=false)=>(
+    <label className="block text-xs font-bold text-slate-700">Fluxo utilizado
+      <select aria-label="Fluxo comercial utilizado" value={value} disabled={disabled}
+        onChange={e=>onChange(e.target.value)}
+        className="mt-1 block w-full rounded-lg border border-violet-200 bg-white p-2.5 text-sm">
+        {activeScripts.length===0?<option value="">Sem fluxo cadastrado</option>:<>
+          <option value="">Selecione o fluxo usado</option>
+          {activeScripts.map(v=><option key={v.id} value={v.id}>{v.name} · {v.version_label}</option>)}
+        </>}
+      </select>
+    </label>
+  );
   const request = async (url: string, init: RequestInit = {}) => {
     const supabase = await getSupabase();
     const { data: { session } } = await supabase.auth.getSession();
@@ -127,6 +160,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       try {
         const ids = idsKey ? idsKey.split(',') : [];
         const chunks = ids.length ? Array.from({length:Math.ceil(ids.length/80)},(_,i)=>ids.slice(i*80,i*80+80)) : [[]];
+        const scriptsPromise=request('/api/owner/sales/scripts/active');
         // In batches, support large lead volumes without a hard 100-ID request failure.
         const pages = await Promise.all(chunks.map(async chunk => {
           const q = encodeURIComponent(chunk.join(','));
@@ -136,7 +170,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           ]);
           return { board,history };
         }));
+        const scriptData=await scriptsPromise;
         if (!live) return;
+        const versions=scriptData.versions||[];
+        setScriptLabels(versions);
+        setSelectedScriptId(current=>{
+          if(current&&versions.some((v:any)=>v.id===current&&v.is_active))return current;
+          const active=versions.filter((v:any)=>v.is_active);
+          return active.length===1?active[0].id:'';
+        });
         setColumns(pages[0].board.columns || []);
         const nextPlacements: Record<string,string> = {};
         const nextOverrides: Record<string,{details:Partial<Lead>;hidden:boolean}> = {};
@@ -387,7 +429,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const recordAttempt = (lead:Lead,channel:'phone'|'whatsapp_call',outcome:'no_decisor'|'decisor_spoken') => {
     // Clicking any call button only opens the editor. Save persists.
     if(outcome!=='no_decisor'||busyLead)return;
-    setAttemptDialog({leadId:lead.id,channel,localAt:brazilLocalInput(new Date().toISOString())});
+    setAttemptDialog({leadId:lead.id,channel,localAt:brazilLocalInput(new Date().toISOString()),scriptVersionId:selectedScriptId});
     setError(null);
   };
   const saveAttemptTime=async()=>{
@@ -398,19 +440,24 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const keyName='attempt-time:'+draft.leadId+':'+(draft.attemptId||'new');
     try{
       const occurredAt=brazilInputToIso(draft.localAt);
+      if(!draft.attemptId&&activeScripts.length>0&&!draft.scriptVersionId)
+        throw Error('Selecione o fluxo usado na tentativa.');
+      const original=draft.attemptId?attempts.find(a=>a.id===draft.attemptId):null;
+      const scriptVersionId=original?.script_version_id||draft.scriptVersionId||null;
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setBusyLead(draft.leadId);setError(null);
       const json=await request('/api/owner/sales/leads/'+draft.leadId+'/prospecting-attempt-time',{
         method:'PUT',headers:{'X-Idempotency-Key':key},
-        body:JSON.stringify({attemptId:draft.attemptId||null,channel:draft.channel,occurredAt}),
+        body:JSON.stringify({attemptId:draft.attemptId||null,channel:draft.channel,occurredAt,scriptVersionId}),
       });
       delete keysRef.current[keyName];
       setAttempts(old=>draft.attemptId
         ? old.map(item=>item.id===draft.attemptId?{...item,occurred_at:json.data.occurredAt}:item)
         : old.some(item=>item.id===json.data.attemptId)?old:
           [...old,{id:json.data.attemptId,lead_id:draft.leadId,
-            channel:draft.channel,outcome:'no_decisor',occurred_at:json.data.occurredAt}]);
+            channel:draft.channel,outcome:'no_decisor',occurred_at:json.data.occurredAt,
+            script_version_id:scriptVersionId,contact_result:'no_answer'}]);
       onLeadPatch(draft.leadId,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setAttemptDialog(null);
       setInfo(draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
@@ -427,20 +474,27 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const keyName='decisor:'+lead.id+':'+(attempt?.id||'new');
     try{
       const occurredAt=brazilInputToIso(input);
+      if(!attempt&&activeScripts.length>0&&!selectedScriptId)
+        throw Error('Selecione o fluxo usado na conversa.');
+      if(!attempt&&!contactResult)
+        throw Error('Informe se houve interesse ou desinteresse do decisor.');
+      const scriptVersionId=attempt?.script_version_id||selectedScriptId||null;
+      const resolvedResult=attempt?.contact_result||contactResult||null;
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setBusyLead(lead.id);setError(null);
       const json=await request('/api/owner/sales/leads/'+lead.id+'/decisor-contact',{
         method:'PUT',headers:{'X-Idempotency-Key':key},
         body:JSON.stringify({channel:attempt?.channel||spokenChannel,
-          attemptId:attempt?.id||null,occurredAt}),
+          attemptId:attempt?.id||null,occurredAt,scriptVersionId,contactResult:resolvedResult}),
       });
       delete keysRef.current[keyName];
       setAttempts(old=>attempt
         ? old.map(item=>item.id===attempt.id?{...item,occurred_at:json.data.occurredAt}:item)
         : old.some(item=>item.id===json.data.attemptId)?old:
           [...old,{id:json.data.attemptId,lead_id:lead.id,
-            channel:spokenChannel,outcome:'decisor_spoken',occurred_at:json.data.occurredAt}]);
+            channel:spokenChannel,outcome:'decisor_spoken',occurred_at:json.data.occurredAt,
+            script_version_id:scriptVersionId,contact_result:resolvedResult as 'interested'|'not_interested'}]);
       onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setEditingSpokenId(null);
       setInfo(attempt?'Data e hora do contato corrigidas e auditadas.':'Contato com decisor salvo no horário informado.');
@@ -495,12 +549,17 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={()=>{setCreatingOpen(true);setError(null);}} className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-black text-white hover:bg-emerald-600"><Plus size={15}/> Nova oportunidade</button>
+          <button type="button" onClick={()=>setScriptsOpen(v=>!v)}
+            className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
+            Scripts / Testes A-B
+          </button>
           <button type="button" onClick={onMetrics} className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10"><BarChart3 size={15}/> Gráficos</button>
           <button type="button" onClick={()=>setEditing(v=>!v)} className={'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold '+(editing?'bg-violet-500':'border border-white/20 hover:bg-white/10')}><Settings2 size={15}/> {editing?'Concluir edição':'Editar colunas'}</button>
           <button type="button" onClick={()=>{void onRefresh().then(()=>setRevision(x=>x+1));}} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-900"><RefreshCw size={15}/> Atualizar</button>
         </div>
       </div>
 
+      {scriptsOpen&&<CommercialScriptsPanel onClose={()=>setScriptsOpen(false)} onChanged={refreshScripts}/>}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {columns.filter(c=>c.is_system).map(c=>(
           <button key={c.id} type="button" onClick={()=>setShowStage(x=>x===c.id?'all':c.id)}
@@ -626,6 +685,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               }}
               className="mt-2 block w-full rounded-lg border border-slate-200 bg-white p-3 text-sm"/>
           </label>
+          {attemptDialog.attemptId?
+            <p className="mt-3 text-xs text-slate-600">Fluxo histórico: {scriptLabel(attempts.find(a=>a.id===attemptDialog.attemptId)?.script_version_id)}</p>:
+            <div className="mt-3">{scriptSelect(attemptDialog.scriptVersionId,id=>{
+              setAttemptDialog(d=>d?{...d,scriptVersionId:id}:d);
+              delete keysRef.current['attempt-time:'+attemptDialog.leadId+':new'];
+            })}</div>}
           <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
             setAttemptDialog(d=>d?{...d,localAt:brazilLocalInput(new Date().toISOString())}:d);
             delete keysRef.current['attempt-time:'+attemptDialog.leadId+':'+(attemptDialog.attemptId||'new')];
@@ -786,6 +851,20 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         {item.label}
                       </button>)}
                   </div>
+                  {scriptSelect(selectedScriptId,id=>{setSelectedScriptId(id);delete keysRef.current['decisor:'+selected.id+':new'];})}
+                  <fieldset className="rounded-lg border border-emerald-200 bg-white p-2.5">
+                    <legend className="px-1 text-xs font-bold text-emerald-800">Resultado da conversa</legend>
+                    <div className="mt-1 flex flex-wrap gap-3">
+                      {([{value:'interested',label:'Demonstrou interesse'},
+                         {value:'not_interested',label:'Não demonstrou interesse'}] as const).map(item=>
+                        <label key={item.value} className="flex items-center gap-1.5 text-xs">
+                          <input type="radio" name="sales-decisor-interest" value={item.value}
+                            checked={contactResult===item.value}
+                            onChange={()=>{setContactResult(item.value);delete keysRef.current['decisor:'+selected.id+':new'];}}/>
+                          {item.label}
+                        </label>)}
+                    </div>
+                  </fieldset>
                   <button disabled={Boolean(busyLead)||!spokenAtDraft||
                       (spokenChannel==='phone'&&selectedCounts.phone>=5)||
                       (spokenChannel==='whatsapp_call'&&selectedCounts.whatsapp>=5)}
@@ -836,7 +915,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).map(a=>
                 <div key={a.id} className="border-b py-2 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>{a.channel==='phone'?'Ligação operadora':a.channel==='whatsapp_call'?'Ligação WhatsApp':'Mensagem WhatsApp'} · {a.outcome==='decisor_spoken'?'Decisor contatado':'Sem contato efetivo'}</span>
+                    <span>{a.channel==='phone'?'Ligação operadora':a.channel==='whatsapp_call'?'Ligação WhatsApp':'Mensagem WhatsApp'} · {a.contact_result==='interested'?'Interessado':a.contact_result==='not_interested'?'Sem interesse':a.outcome==='decisor_spoken'?'Decisor contatado':'Sem atendimento'}
+                      <span className="block text-[11px] text-slate-500">{scriptLabel(a.script_version_id)}</span>
+                    </span>
                     <div className="flex items-center gap-2">
                       <time className="text-slate-500">{dateText(a.occurred_at)}</time>
                       <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
@@ -844,7 +925,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                           setEditingSpokenId(a.id);setEditingSpokenAt(brazilLocalInput(a.occurred_at));
                         }else{
                           setAttemptDialog({leadId:selected.id,channel:a.channel as 'phone'|'whatsapp_call',
-                            attemptId:a.id,localAt:brazilLocalInput(a.occurred_at)});
+                            attemptId:a.id,localAt:brazilLocalInput(a.occurred_at),scriptVersionId:a.script_version_id||''});
                           setError(null);
                         }
                       }} className="text-xs font-semibold text-violet-700 underline disabled:opacity-40">

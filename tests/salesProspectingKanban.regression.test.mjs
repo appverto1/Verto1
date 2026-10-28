@@ -218,7 +218,7 @@ test('conversation success uses explicitly saved Brazilian date/time instead of 
   assert.match(kanban,/setAttempts\(old=>attempt/);
   assert.match(kanban,/onLeadPatch\(lead\.id,\{status:json\.data\.status/);
   assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/decisor-contact'/);
-  assert.match(routes,/save_sales_decisor_contact_v1/);
+  assert.match(routes,/save_sales_decisor_contact_v2/);
 });
 
 test('conversation edit is locked, audited, idempotent and protected from manipulation',()=>{
@@ -321,7 +321,7 @@ test('historical failed calls can be corrected, not re-counted or reclassified',
   assert.match(kanban,/attemptId:a\.id,localAt:brazilLocalInput\(a\.occurred_at\)/);
   assert.match(kanban,/setAttempts\(old=>draft\.attemptId/);
   assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
-  assert.match(routes,/save_sales_prospecting_attempt_time_v1/);
+  assert.match(routes,/save_sales_prospecting_attempt_time_v2/);
   assert.match(attemptTimeSql,/outcome='no_decisor' for update/);
   assert.match(attemptTimeSql,/update public\.sales_prospecting_attempts set occurred_at=p_occurred_at/);
   assert.match(attemptTimeSql,/attempt_time_corrected/);
@@ -340,4 +340,52 @@ test('actual attempt time is checked under a lead lock with MFA and idempotency'
   assert.match(attemptTimeSql,/revoke all on function public\.save_sales_prospecting_attempt_time_v1/);
   assert.match(attemptTimeSql,/to service_role/);
   assert.doesNotMatch(attemptTimeSql,/notification_jobs|push_subscriptions|cron\.schedule/);
+});
+
+
+const scriptsSql=readFileSync('supabase/migrations/20261028220000_sales_script_versions_analytics_v1.sql','utf8');
+const compatSql=readFileSync('supabase/migrations/20261028222000_sales_script_legacy_attempt_compat_v1.sql','utf8');
+const scriptRoutes=readFileSync('services/salesScriptRoutes.ts','utf8');
+const scriptPanel=readFileSync('src/components/CommercialScriptsPanel.tsx','utf8');
+
+test('script version library supports manual text, external maps and private file assets',()=>{
+  assert.match(scriptPanel,/Texto manual/);
+  assert.match(scriptPanel,/Link de mapa mental ou site/);
+  assert.match(scriptPanel,/Arquivo \/ imagem \(privado\)/);
+  assert.match(scriptPanel,/uploadToSignedUrl/);
+  assert.match(scriptRoutes,/createSignedUploadUrl/);
+  assert.match(scriptRoutes,/createSignedUrl/);
+  assert.match(scriptRoutes,/4194304/);
+  assert.match(scriptRoutes,/const guards=\[checkAuth,checkPlatformAdmin\]/);
+  assert.match(scriptsSql,/sales_script_source_shape/);
+  assert.match(scriptsSql,/sales-script-assets-private/);
+  assert.match(scriptsSql,/sales_script_versions_unique_name_version_idx/);
+  assert.doesNotMatch(scriptRoutes,/supabase\.from\('patient/);
+});
+
+test('only Save attributes a script and decision-maker interest; edits preserve historical version',()=>{
+  assert.match(kanban,/Scripts \/ Testes A-B/);
+  assert.match(kanban,/scriptSelect\(attemptDialog\.scriptVersionId/);
+  assert.match(kanban,/scriptSelect\(selectedScriptId/);
+  assert.match(kanban,/scriptVersionId,contactResult:resolvedResult/);
+  assert.match(kanban,/Demonstrou interesse/);
+  assert.match(kanban,/Não demonstrou interesse/);
+  assert.match(kanban,/scriptLabel\(a\.script_version_id\)/);
+  assert.match(routes,/save_sales_prospecting_attempt_time_v2/);
+  assert.match(routes,/save_sales_decisor_contact_v2/);
+  assert.match(scriptsSql,/SCRIPT_ATTRIBUTION_IMMUTABLE/);
+  assert.match(scriptsSql,/script_version_id uuid references public\.sales_script_versions\(id\)/);
+  assert.match(compatSql,/new\.contact_result:='no_answer'/);
+  assert.doesNotMatch(compatSql,/notification_jobs|push_subscriptions|cronService/);
+});
+
+test('script comparisons separate contactability and interested decisions without historical guesswork',()=>{
+  assert.match(scriptsSql,/count\(a\.id\) filter\(where a\.contact_result='no_answer'\)/);
+  assert.match(scriptsSql,/count\(a\.id\) filter\(where a\.contact_result='not_interested'\)/);
+  assert.match(scriptsSql,/count\(a\.id\) filter\(where a\.contact_result='interested'\)/);
+  assert.match(scriptPanel,/pct\(m\.decision_conversations,m\.total_attempts\)/);
+  assert.match(scriptPanel,/pct\(m\.interested,m\.decision_conversations\)/);
+  assert.match(scriptPanel,/pode manter várias vigentes/);
+  assert.match(scriptPanel,/Não incluem históricos sem fluxo/);
+  assert.match(scriptsSql,/is_active boolean not null default true/);
 });

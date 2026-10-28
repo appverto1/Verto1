@@ -1,3 +1,4 @@
+import { registerSalesScriptRoutes } from './salesScriptRoutes';
 // Verto CRM prospecting endpoints. Backend permission checks are mandatory.
 // The optional provided platform guard is server.ts's canonical MFA guard. In the
 // small-module bridge, use the same DB-backed active-platform-admin + TOTP checks.
@@ -44,6 +45,8 @@ export function registerSalesProspectingRoutes(
       return next();
     });
 
+  registerSalesScriptRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
+
   app.get('/api/owner/sales/prospecting/attempts', checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
     const leadIds = [...new Set(String(req.query?.leadIds || '').split(',').filter(Boolean))];
     if (leadIds.length === 0 || leadIds.length > 100 || leadIds.some((id) => !isUuid(id))) {
@@ -53,7 +56,7 @@ export function registerSalesProspectingRoutes(
       const actorId=sanitizeString(req.session?.user?.id,120);
       const [attempts, leads, followups] = await Promise.all([
         supabase.from('sales_prospecting_attempts')
-          .select('id,lead_id,channel,outcome,occurred_at')
+          .select('id,lead_id,channel,outcome,occurred_at,script_version_id,contact_result')
           .in('lead_id', leadIds)
           .order('occurred_at', { ascending: false })
           .limit(1000),
@@ -119,16 +122,17 @@ export function registerSalesProspectingRoutes(
       const channel=sanitizeString(req.body?.channel,32);
       const occurredAt=req.body?.occurredAt;
       const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
-      if(!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
+      const scriptVersionId=req.body?.scriptVersionId??null;
+      if((scriptVersionId!==null&&!isUuid(scriptVersionId))||!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
         ||!['phone','whatsapp_call'].includes(channel)
         ||typeof occurredAt!=='string'||occurredAt.length>40
         ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
         ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
         return res.status(400).json({success:false,error:'Data, horário ou canal inválidos.'});
       try{
-        const {data,error}=await supabase.rpc('save_sales_prospecting_attempt_time_v1',{
+        const {data,error}=await supabase.rpc('save_sales_prospecting_attempt_time_v2',{
           p_lead_id:leadId,p_attempt_id:attemptId||null,p_channel:channel,
-          p_occurred_at:occurredAt,p_action_key:key,p_actor_user_id:actorId,
+          p_occurred_at:occurredAt,p_action_key:key,p_actor_user_id:actorId,p_script_version_id:scriptVersionId,
         });
         if(error){
           const message=String(error.message||'');
@@ -136,7 +140,7 @@ export function registerSalesProspectingRoutes(
             return res.status(404).json({success:false,error:'Tentativa não encontrada.'});
           if(/INVALID_ATTEMPT_TIME|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
             return res.status(400).json({success:false,error:'Informe uma data passada, de segunda a sexta, das 9h às 17h30 (Brasília).'});
-          if(/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED|IDEMPOTENCY_CONFLICT/.test(message))
+          if(/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED|IDEMPOTENCY_CONFLICT|SCRIPT_REQUIRED|SCRIPT_NOT_ACTIVE/.test(message))
             return res.status(409).json({success:false,error:'Já existe ligação nessa data, limite atingido ou oportunidade indisponível.'});
           throw error;
         }
@@ -154,24 +158,29 @@ export function registerSalesProspectingRoutes(
       const attemptId=sanitizeString(req.body?.attemptId,120);
       const occurredAt=req.body?.occurredAt;
       const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
-      if(!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
+      const scriptVersionId=req.body?.scriptVersionId??null;
+      const contactResult=req.body?.contactResult??null;
+      if((scriptVersionId!==null&&!isUuid(scriptVersionId))||
+         (contactResult!==null&&!['interested','not_interested'].includes(contactResult))||
+         !isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
          ||!['phone','whatsapp_call','whatsapp_message'].includes(channel)
          ||typeof occurredAt!=='string'||occurredAt.length>40
          ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
          ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
         return res.status(400).json({success:false,error:'Data, hora ou canal inválidos.'});
       try{
-        const {data,error}=await supabase.rpc('save_sales_decisor_contact_v1',{
+        const {data,error}=await supabase.rpc('save_sales_decisor_contact_v2',{
           p_lead_id:leadId,p_attempt_id:attemptId||null,p_channel:channel,
           p_occurred_at:occurredAt,p_action_key:key,p_actor_user_id:actorId,
+          p_script_version_id:scriptVersionId,p_contact_result:contactResult,
         });
         if(error){
           const message=String(error.message||'');
           if(/LEAD_NOT_FOUND|CONTACT_NOT_FOUND/.test(message))
             return res.status(404).json({success:false,error:'Registro não encontrado.'});
-          if(/INVALID_CONTACT_TIME|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
+          if(/INVALID_CONTACT_TIME|INVALID_CONTACT_RESULT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
             return res.status(400).json({success:false,error:'Informe horário passado, em dia útil, entre 9h e 17h30 (Brasília).'});
-          if(/PROSPECTING_ALREADY_TODAY|DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT|IDEMPOTENCY_CONFLICT|PROSPECTING_NOT_ALLOWED/.test(message))
+          if(/PROSPECTING_ALREADY_TODAY|DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT|IDEMPOTENCY_CONFLICT|PROSPECTING_NOT_ALLOWED|SCRIPT_REQUIRED|SCRIPT_NOT_ACTIVE/.test(message))
             return res.status(409).json({success:false,error:'Conflito com outra tentativa ou oportunidade indisponível.'});
           throw error;
         }

@@ -11,6 +11,8 @@ import { SALES_LEAD_STATUS_LABELS } from '../constants/salesCommercial';
 export type CommercialAttempt = {
   id: string; lead_id: string; channel: 'phone' | 'whatsapp_call' | 'whatsapp_message';
   outcome: 'no_decisor' | 'decisor_spoken'; occurred_at: string;
+  script_version_id?: string | null;
+  contact_result?: 'no_answer' | 'interested' | 'not_interested' | null;
 };
 type NumberPoint = { calls: number; conversations: number };
 type Analytics = {
