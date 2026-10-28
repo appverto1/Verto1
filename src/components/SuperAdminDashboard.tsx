@@ -1003,7 +1003,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         <LogoVerto size={28} />
       </div>
       <main className={compactDesktopMenu
-          ? 'ml-0 flex h-[calc(100dvh-3.5rem)] min-h-0 min-w-0 flex-col overflow-hidden p-3 md:ml-[66px] md:h-screen'
+          ? 'ml-0 flex min-h-[calc(100dvh-3.5rem)] min-w-0 flex-col p-3 md:ml-[66px] md:min-h-screen'
           : 'min-w-0 p-4 md:ml-72 md:p-8'}>
         <div className={'flex flex-wrap justify-between items-center gap-4 '+(activeTab==='leads'&&commercialView==='kanban'?'mb-3':'mb-8')}>
           <div>

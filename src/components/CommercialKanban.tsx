@@ -391,7 +391,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       && (ch==='phone'?n.phone<5:n.whatsapp<5);
   };
   return (
-    <section className="min-h-0 min-w-0 flex-1 flex flex-col gap-3" aria-label="Kanban comercial de tela inteira">
+    <section className="min-w-0 flex-1 flex flex-col gap-3" aria-label="Kanban comercial de tela inteira">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#10192D] px-4 py-3 text-white">
         <div>
           <h2 className="text-base font-black tracking-tight">Central de prospecção <span className="ml-1 text-xs font-medium text-slate-400">· Quadro operacional</span></h2>
@@ -448,11 +448,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           className="rounded-md border p-1.5 text-slate-600 disabled:opacity-30"><ChevronRight size={16}/></button>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden pb-2" aria-label="Etapas comerciais">
-        <div className="flex h-full min-h-[380px] w-max min-w-full gap-2.5">
+      <div ref={scrollRef} className="min-w-0 overflow-x-auto pb-2" aria-label="Etapas comerciais">
+        <div className="flex min-h-[380px] w-max min-w-full gap-2.5">
           {shownColumns.map((col,index)=>{
             const cards=filtered.filter(l=>columnFor(l)===col.id);
-            return <div key={col.id} className="flex h-full w-[315px] min-w-[315px] flex-col overflow-hidden rounded-xl border shadow-sm"
+            return <div key={col.id} className="flex w-[315px] min-w-[315px] flex-col overflow-hidden rounded-xl border shadow-sm"
               style={{backgroundColor:col.color+'0D',borderColor:col.color+'44'}}
               onDragOver={e=>{if(col.kind!=='customers')e.preventDefault();}}
               onDrop={e=>{e.preventDefault();const id=e.dataTransfer.getData('text/plain');const lead=leads.find(x=>x.id===id);if(lead)moveLead(lead,col);}}>
@@ -470,7 +470,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 <span className="text-[10px] text-slate-500">Posição {index+1}</span>
                 {!col.is_system&&<button title="Excluir etapa personalizada" onClick={()=>deleteColumn(col)} className="rounded border border-red-200 p-1 text-red-600"><Trash2 size={14}/></button>}
               </div>}
-              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+              <div className="flex-1 space-y-2 p-2">
                 {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">Nenhum card nesta etapa</div>}
                 {cards.map(lead=>{
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
