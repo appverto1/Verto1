@@ -48,7 +48,10 @@ export function installVertoBackgroundWorkerCronGuard(params: {
 
   const originalSchedule = scheduler.schedule.bind(scheduler);
   scheduler.schedule = ((expression: string, task: (...args: any[]) => any, options?: any) => {
-    if (isEssentialEconomyNotificationSchedule(expression, options)) {
+    // Staging-only: the externally scheduled worker handles both durable queues.
+    // Without this flag the existing minute dispatcher stays active, fail-safe.
+    if (isEssentialEconomyNotificationSchedule(expression, options) &&
+        String(env.VERTO_STAGING_NOTIFICATION_DISPATCH || '').trim() !== 'external-cron') {
       params.logger?.log?.('[Background Workers] Entrega essencial de notificacoes habilitada no modo economy.', {
         deploymentEnv, workerMode: mode, taskName: options.name,
       });
