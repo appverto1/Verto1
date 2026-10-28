@@ -562,7 +562,7 @@ test('Kanban integrates date time and source options while reusing saved followu
 const drilldownSql=readFileSync('supabase/migrations/20261028235000_sales_prospecting_chart_drilldown_v1.sql','utf8');
 test('every commercial funnel stage can open the exact paginated underlying lead list',()=>{
   assert.match(dashboard,/status:x.status,leads:x.leads/);
-  assert.match(dashboard,/clickedPoint\(state,'stage','status','leads'/);
+  assert.match(dashboard,/onClick=\{\(entry:any\)=>showLeads\('stage',String\(entry\?\.payload\?\.status/);
   assert.match(dashboard,/onClick=\{\(entry:any\)=>showLeads\('stage'/);
   assert.match(dashboard,/stages\.map\(stage=><button/);
   assert.match(dashboard,/Leads identificados/);
