@@ -718,3 +718,66 @@ test('call/save UI now labels cadence as advisory and reports only real remainin
   assert.doesNotMatch(attemptRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
   assert.doesNotMatch(contactRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
 });
+
+
+const bulkCreationSql=readFileSync('supabase/migrations/20261028235930_sales_bulk_acquisition_atomic_v1.sql','utf8');
+const bulkExistingSql=readFileSync('supabase/migrations/20261028235940_sales_acquisition_multicard_atomic_v1.sql','utf8');
+const acquisitionRoutes=readFileSync('services/salesAcquisitionRoutes.ts','utf8');
+
+test('bulk lead import preselects any subset and assigns different active acquisition channels by contact',()=>{
+  assert.match(kanban,/Selecionar todos/);
+  assert.match(kanban,/Desmarcar todos/);
+  assert.match(kanban,/Aplicar canais aos \{bulkSelectedRows\.length\} selecionados/);
+  assert.match(kanban,/Editar canais deste contato/);
+  assert.match(kanban,/bulkPhones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
+  assert.match(kanban,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
+  assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
+  assert.match(routes,/create_sales_kanban_opportunities_v2/);
+  assert.match(routes,/channelsByPhone\.length!==phones\.length/);
+  assert.match(bulkCreationSql,/create_sales_kanban_opportunities_v1\(p_phones,p_actor_id,p_action_key\)/);
+  assert.match(bulkCreationSql,/sales_lead_acquisition_channels\(lead_id,channel_id,assigned_by\)/);
+  assert.match(bulkCreationSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(bulkCreationSql,/ACQUISITION_CHANNEL_UNAVAILABLE/);
+});
+
+test('existing cards can be chosen in a group with add-preserving or explicit replace semantics',()=>{
+  assert.match(kanban,/Selecionar vários cards/);
+  assert.match(kanban,/Incluir na classificação em lote/);
+  assert.match(kanban,/Selecionar até 100 visíveis/);
+  assert.match(kanban,/Substituir os canais atuais \(em vez de adicionar\)/);
+  assert.match(kanban,/\[\.\.\.new Set\(\[\.\.\.\(acquisitionByLead\[leadId\]\|\|\[\]\),\.\.\.bulkExistingChannels\]\)\]/);
+  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/leads\/bulk'/);
+  assert.match(kanban,/for\(const item of result\.selections\|\|\[\]\)next\[item\.leadId\]=item\.channelIds\|\|\[\]/);
+  assert.match(acquisitionRoutes,/app\.put\('\/api\/owner\/sales\/acquisition\/leads\/bulk',\.\.\.guard/);
+  assert.match(bulkExistingSql,/save_sales_lead_acquisition_channels_v1\(/);
+  assert.match(bulkExistingSql,/DUPLICATE_ACQUISITION_LEAD/);
+});
+
+test('bulk mutations are SQL atomic, audited, private and block partial invalid selections',()=>{
+  for(const contents of [bulkCreationSql,bulkExistingSql]){
+    assert.match(contents,/^begin;/m);
+    assert.match(contents,/^commit;/m);
+    assert.match(contents,/enable row level security/);
+    assert.match(contents,/revoke all on.*from public,anon,authenticated/);
+    assert.match(contents,/to service_role/);
+    assert.match(contents,/platform_admins/);
+    assert.match(contents,/pg_advisory_xact_lock/);
+    assert.doesNotMatch(contents,/notification_jobs|patient_sessions|public\.stripe|update public\.sales_leads set/i);
+  }
+  assert.match(bulkExistingSql,/order by value->>'leadId'/);
+  assert.match(bulkCreationSql,/bulk_acquisition_assigned/);
+});
+
+test('lead feedback is isolated by card id so a new drawer never inherits a prior action confirmation',()=>{
+  assert.match(kanban,/const \[cardFeedback,setCardFeedback\]/);
+  assert.match(kanban,/const feedbackFor=\(leadId:string\)=>cardFeedback\?\.leadId===leadId\?cardFeedback:null/);
+  assert.match(kanban,/const openCard=\(leadId:string\)=>\{/);
+  assert.match(kanban,/setError\(null\);setInfo\(null\);setCardFeedback\(null\)/);
+  assert.match(kanban,/onClick=\{\(\)=>openCard\(lead\.id\)\}/);
+  assert.match(kanban,/feedbackFor\(selected\.id\)\?\.info/);
+  assert.match(kanban,/feedbackFor\(selected\.id\)\?\.error/);
+  assert.match(kanban,/cardInfo\(draft\.leadId,/);
+  assert.match(kanban,/cardInfo\(dialog\.leadId,/);
+  assert.match(kanban,/cardError\(lead\.id,/);
+  assert.doesNotMatch(kanban,/selected&&<div[\s\S]*?\{info&&<p className="rounded-lg bg-emerald-50/);
+});
