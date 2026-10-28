@@ -624,3 +624,37 @@ test('legacy success timestamp correction preserves null script and historical o
   assert.match(kanban,/setScriptCatalogUnavailable\(false\)/);
   assert.match(kanban,/setAcquisitionCatalogUnavailable\(false\)/);
 });
+
+
+const visibleAnalyticsSql=readFileSync('supabase/migrations/20261028235800_sales_commercial_visible_leads_analytics_v1.sql','utf8');
+
+test('deleted Kanban opportunities disappear from every CRM chart without deleting canonical conversions',()=>{
+  assert.match(visibleAnalyticsSql,/CREATE OR REPLACE FUNCTION public\.sales_prospecting_analytics_v1/i);
+  assert.match(visibleAnalyticsSql,/CREATE OR REPLACE FUNCTION public\.sales_prospecting_drilldown_v1/i);
+  assert.match(visibleAnalyticsSql,/public\.sales_kanban_opportunity_overrides hidden where hidden\.lead_id=/);
+  assert.match(visibleAnalyticsSql,/hidden\.hidden_at is not null/);
+  // All stage totals, overview counts, attempts over time and lead drilldown
+  // must share the same visibility contract.
+  assert.ok((visibleAnalyticsSql.match(/hidden\.hidden_at is not null/g)||[]).length>=15);
+  assert.match(visibleAnalyticsSql,/from public\.sales_leads visible_lead where visible_lead\.deleted_at is null/);
+  assert.match(visibleAnalyticsSql,/from public\.sales_prospecting_attempts event/);
+  assert.match(visibleAnalyticsSql,/where l\.deleted_at is null and not exists/);
+});
+
+test('hidden leads are excluded from script and acquisition conversion metrics, without history mutation',()=>{
+  assert.match(visibleAnalyticsSql,/CREATE OR REPLACE FUNCTION public\.sales_acquisition_channel_metrics_v1/i);
+  assert.match(visibleAnalyticsSql,/CREATE OR REPLACE FUNCTION public\.sales_script_metrics_v1/i);
+  assert.match(visibleAnalyticsSql,/left join public\.sales_leads l on l\.id=sel\.lead_id and l\.deleted_at is null and not exists/);
+  assert.match(visibleAnalyticsSql,/left join public\.sales_prospecting_attempts a on a\.script_version_id=s\.id and exists/);
+  assert.doesNotMatch(visibleAnalyticsSql,/\b(?:update|delete from|truncate)\s+(?:public\.)?(?:sales_leads|sales_offers|sales_checkout_links|sales_prospecting_attempts)/i);
+  assert.match(visibleAnalyticsSql,/revoke all on function public\.sales_prospecting_analytics_v1\(integer\) from public,anon,authenticated/);
+  assert.match(visibleAnalyticsSql,/grant execute on function public\.sales_prospecting_drilldown_v1/);
+});
+
+test('commercial UI states only Kanban-visible leads count, and hidden clients retain payment history',()=>{
+  assert.match(dashboard,/Oportunidades visíveis no Kanban/);
+  assert.match(dashboard,/Oportunidades removidas do Kanban não entram nesses indicadores/);
+  assert.match(dashboard,/vínculos históricos de clientes e pagamentos são preservados/);
+  assert.match(kanban,/hidden:Boolean\(item\.hidden_at\)/);
+  assert.match(kanban,/\.filter\(lead => !overrides\[lead\.id\]\?\.hidden\)/);
+});

@@ -170,7 +170,7 @@ export const CommercialDashboard = () => {
   const bestDay=weekdays.filter(x=>x.calls>0).sort((a,b)=>b.rate-a.rate||b.calls-a.calls)[0];
   const cards:Array<{title:string;value:string;detail:string;dimension:DrilldownSelection['dimension'];
     group:string;measure:DrilldownSelection['measure'];expected:number}>=[
-    {title:'Leads na base',value:n(overview?.totalLeads||0),detail:'Todos os leads não excluídos',dimension:'overview',group:'all',measure:'leads',expected:overview?.totalLeads||0},
+    {title:'Leads na base',value:n(overview?.totalLeads||0),detail:'Oportunidades visíveis no Kanban',dimension:'overview',group:'all',measure:'leads',expected:overview?.totalLeads||0},
     {title:'Leads abordados',value:n(overview?.attemptedLeads||0),detail:'Pelo menos uma ligação no período',dimension:'overview',group:'attempted',measure:'attempted',expected:overview?.attemptedLeads||0},
     {title:'Ligações realizadas',value:n(overview?.totalCalls||0),detail:'Operadora + chamada de WhatsApp',dimension:'overview',group:'calls',measure:'calls',expected:overview?.totalCalls||0},
     {title:'Decisores contatados',value:n(overview?.contactedLeads||0),detail:'Ligações e mensagens efetivas',dimension:'overview',group:'contacted',measure:'conversations',expected:overview?.contactedLeads||0},
@@ -183,7 +183,7 @@ export const CommercialDashboard = () => {
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#141C34] p-5 text-white">
         <div><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-300">Business intelligence · Verto</p>
           <h2 className="mt-1 text-2xl font-black">Inteligência comercial</h2>
-          <p className="mt-1 text-xs text-slate-300">Indicadores reais agregados no banco, não limitados aos cards carregados no Kanban.</p></div>
+          <p className="mt-1 text-xs text-slate-300">Indicadores das oportunidades visíveis no Kanban, sem limitação de paginação.</p></div>
         <div className="flex items-center gap-2">
           <select aria-label="Período de análise comercial" value={days} onChange={e=>setDays(Number(e.target.value))}
             className="rounded-lg border border-white/20 bg-slate-800 px-3 py-2 text-xs font-bold text-white">
@@ -197,7 +197,7 @@ export const CommercialDashboard = () => {
         <b>Regra de sucesso:</b> uma conversa efetiva com o decisor pode ocorrer por ligação ou mensagem WhatsApp.
         Envio ou leitura sem resposta do decisor, tentativas sem atendimento e conversas com recepcionistas não contam como contato efetivo.
         Mensagens não entram nos indicadores de quantidade e efetividade das ligações.
-        Horários em Brasília. As métricas de atividade respeitam o período selecionado; totais de leads e estados são atuais.
+        Horários em Brasília. As métricas de atividade respeitam o período selecionado; totais de leads e estados são atuais. Oportunidades removidas do Kanban não entram nesses indicadores, mas os vínculos históricos de clientes e pagamentos são preservados.
       </div>
       {loading&&<div role="status" className="rounded-xl bg-white p-5 text-sm text-slate-500">Atualizando inteligência comercial…</div>}
       {error&&<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
@@ -336,7 +336,7 @@ export const CommercialDashboard = () => {
           <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-4 sm:p-5">
             <div>
               <h3 className="text-lg font-black text-slate-900">{drilldown.label}</h3>
-              <p className="mt-1 text-xs text-slate-600">Leads que compõem este ponto do gráfico · período: {days} dias, exceto etapas atuais.</p>
+              <p className="mt-1 text-xs text-slate-600">Oportunidades visíveis que compõem o gráfico · período: {days} dias, exceto etapas atuais.</p>
             </div>
             <button type="button" onClick={()=>setDrilldown(null)} aria-label="Fechar leads do gráfico"
               className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50"><X size={19}/></button>
