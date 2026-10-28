@@ -148,13 +148,19 @@ export function registerSalesProspectingRoutes(
         .order('position', { ascending: true }).order('created_at', { ascending: true });
       if (columns.error) throw columns.error;
       let placements: any[] = [];
+      let overrides: any[] = [];
       if (leadIds.length) {
-        const found = await supabase.from('sales_kanban_placements')
-          .select('lead_id,column_id').in('lead_id',leadIds).limit(100);
-        if (found.error) throw found.error;
+        const [found, edited] = await Promise.all([
+          supabase.from('sales_kanban_placements').select('lead_id,column_id')
+            .in('lead_id',leadIds).limit(100),
+          supabase.from('sales_kanban_opportunity_overrides').select('lead_id,details,hidden_at')
+            .in('lead_id',leadIds).limit(100),
+        ]);
+        if (found.error || edited.error) throw found.error || edited.error;
         placements = found.data || [];
+        overrides = edited.data || [];
       }
-      return res.json({success: true, columns: columns.data || [], placements});
+      return res.json({success: true, columns: columns.data || [], placements, overrides});
     } catch { return boardError(res, 'Configuração do Kanban indisponível.'); }
   });
 
@@ -279,11 +285,16 @@ export function registerSalesProspectingRoutes(
         .eq('id',leadId).is('deleted_at',null).limit(1).maybeSingle();
       if(result.error)throw result.error;
       if(!result.data)return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
+      const extra = await supabase.from('sales_kanban_opportunity_overrides')
+        .select('details,hidden_at').eq('lead_id',leadId).maybeSingle();
+      if (extra.error) throw extra.error;
+      if (extra.data?.hidden_at) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
+      const details = extra.data?.details || {};
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,lead:{
         id:result.data.id,name:result.data.name,phone:result.data.phone,
         email:result.data.email,clinicName:result.data.clinic_name,
-        notes:result.data.notes,status:result.data.status,
+        notes:result.data.notes,status:result.data.status,...details,
       }});
     }catch{return boardError(res,'Não foi possível abrir os dados da oportunidade.');}
   });
@@ -307,8 +318,8 @@ export function registerSalesProspectingRoutes(
       if (result.error) {
         const message=String(result.error.message||'');
         if (message.includes('LEAD_NOT_FOUND')) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
-        if (/LEAD_LOCKED|IDEMPOTENCY_CONFLICT|23505/.test(message+' '+result.error.code))
-          return res.status(409).json({success:false,error:'Oportunidade protegida ou telefone/e-mail já cadastrado.'});
+        if (/IDEMPOTENCY_CONFLICT|23505/.test(message+' '+result.error.code))
+          return res.status(409).json({success:false,error:'Conflito entre alterações simultâneas. Reabra a edição e tente novamente.'});
         if (/INVALID_EDIT/.test(message)) return res.status(400).json({success:false,error:'Verifique nome, telefone e demais campos.'});
         throw result.error;
       }
@@ -330,7 +341,7 @@ export function registerSalesProspectingRoutes(
         const m=String(result.error.message||'');
         if (m.includes('LEAD_NOT_FOUND')) return res.status(404).json({success:false,error:'Oportunidade não encontrada.'});
         if (/LEAD_LOCKED|IDEMPOTENCY_CONFLICT/.test(m))
-          return res.status(409).json({success:false,error:'Oportunidade com conversão ou proposta ativa não pode ser excluída.'});
+          return res.status(409).json({success:false,error:'Conflito ao excluir a oportunidade. Atualize o card e tente novamente.'});
         throw result.error;
       }
       return res.json({success:true,data:result.data});
