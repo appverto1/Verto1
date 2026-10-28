@@ -229,6 +229,23 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         method:'PATCH',headers:{'X-Idempotency-Key':key},body:JSON.stringify(patch),
       });
       delete keysRef.current[keyName];
+      // The server's Kanban-only overlay must win over a previously fetched snapshot,
+      // including a second edit without a page refresh.
+      setOverrides(current=>{
+        const next={...current};
+        if(json.lead?.kanbanOnly){
+          next[selected.id]={
+            hidden:false,
+            details:{
+              name:json.lead.name,phone:json.lead.phone,
+              email:json.lead.email,clinicName:json.lead.clinicName,notes:json.lead.notes,
+            },
+          };
+        }else{
+          delete next[selected.id];
+        }
+        return next;
+      });
       onLeadPatch(selected.id,json.lead);
       setEditingLead(false);
       setInfo(json.lead?.kanbanOnly

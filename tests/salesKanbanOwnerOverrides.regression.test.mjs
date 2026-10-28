@@ -46,3 +46,13 @@ test('read-after-write applies stored overrides, excludes hidden cards and keeps
   assert.match(kanban,/onLeadDeleted\(lead\.id\)/);
   assert.match(kanban,/Salvar alterações/);
 });
+
+test('a second saved edit immediately replaces stale Kanban-only card values without F5',()=>{
+  const saveBlock = kanban.split('const saveLeadDetails = async () => {')[1]
+    .split('const deleteLead = async')[0];
+  assert.match(saveBlock,/setOverrides\(current=>\{/);
+  assert.match(saveBlock,/next\[selected\.id\]=\{/);
+  assert.match(saveBlock,/details:\{/);
+  assert.match(saveBlock,/delete next\[selected\.id\]/);
+  assert.match(saveBlock,/onLeadPatch\(selected\.id,json\.lead\)/);
+});
