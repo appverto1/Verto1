@@ -9,7 +9,7 @@ import { getSupabase } from '../lib/supabase';
 import { SALES_LEAD_STATUS_LABELS } from '../constants/salesCommercial';
 
 export type CommercialAttempt = {
-  id: string; lead_id: string; channel: 'phone' | 'whatsapp_call';
+  id: string; lead_id: string; channel: 'phone' | 'whatsapp_call' | 'whatsapp_message';
   outcome: 'no_decisor' | 'decisor_spoken'; occurred_at: string;
 };
 type NumberPoint = { calls: number; conversations: number };
@@ -17,6 +17,7 @@ type Analytics = {
   days: number;
   overview: {
     totalLeads: number; attemptedLeads: number; contactedLeads: number; totalCalls: number;
+    callContactedLeads?: number; messageContacts?: number;
     successfulCalls: number; convertedLeads: number; lostLeads: number;
   };
   daily: (NumberPoint & { day: string })[];
@@ -116,8 +117,9 @@ export const CommercialDashboard = () => {
     ['Leads na base',n(overview?.totalLeads||0),'Todos os leads não excluídos'],
     ['Leads abordados',n(overview?.attemptedLeads||0),'Pelo menos uma ligação no período'],
     ['Ligações realizadas',n(overview?.totalCalls||0),'Operadora + chamada de WhatsApp'],
-    ['Decisores contatados',n(overview?.contactedLeads||0),'Conversa telefônica confirmada'],
-    ['Taxa de contato',percent(overview?.contactedLeads||0,overview?.attemptedLeads||0),'Entre os leads abordados'],
+    ['Decisores contatados',n(overview?.contactedLeads||0),'Ligações e mensagens efetivas'],
+    ['Por mensagem WhatsApp',n(overview?.messageContacts||0),'Conversas efetivas por texto, sem virar ligação'],
+    ['Taxa de contato por ligação',percent(overview?.callContactedLeads??overview?.contactedLeads??0,overview?.attemptedLeads||0),'Entre os leads abordados por ligação'],
     ['Efetividade por ligação',percent(overview?.successfulCalls||0,overview?.totalCalls||0),'Conversas / ligações registradas'],
   ];
   return (
@@ -136,8 +138,9 @@ export const CommercialDashboard = () => {
         </div>
       </div>
       <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-xs text-violet-800">
-        <b>Regra de sucesso:</b> somente uma conversa por ligação com o decisor, mesmo que ele não compre.
-        Mensagens recebidas, tentativas sem atendimento e conversas com recepcionistas não contam como contato efetivo.
+        <b>Regra de sucesso:</b> uma conversa efetiva com o decisor pode ocorrer por ligação ou mensagem WhatsApp.
+        Envio ou leitura sem resposta do decisor, tentativas sem atendimento e conversas com recepcionistas não contam como contato efetivo.
+        Mensagens não entram nos indicadores de quantidade e efetividade das ligações.
         Horários em Brasília. As métricas de atividade respeitam o período selecionado; totais de leads e estados são atuais.
       </div>
       {loading&&<div role="status" className="rounded-xl bg-white p-5 text-sm text-slate-500">Atualizando inteligência comercial…</div>}
