@@ -193,3 +193,17 @@ test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile h
   assert.match(superAdmin,/mobileMenuTriggerRef.current\?\.focus\(\)/);
   assert.doesNotMatch(superAdmin,/h-screen sticky top-0 flex flex-col overflow-x-hidden/);
 });
+
+test('Kanban page scrolls vertically without clipping cards while keeping horizontal column navigation',()=>{
+  const mainClass = superAdmin.match(/<main className=\{compactDesktopMenu\s*\? '([^']+)'/)?.[1];
+  assert.ok(mainClass, 'Super Admin Kanban main class exists');
+  assert.match(mainClass,/min-h-\[calc\(100dvh-3\.5rem\)\]/);
+  assert.match(mainClass,/md:min-h-screen/);
+  assert.doesNotMatch(mainClass,/(?:^|\s)(?:h-screen|md:h-screen|overflow-hidden)(?:\s|$)/);
+  assert.match(kanban,/ref=\{scrollRef\} className="min-w-0 overflow-x-auto pb-2"/);
+  assert.match(kanban,/className="flex min-h-\[380px\] w-max min-w-full gap-2\.5"/);
+  assert.match(kanban,/className="flex-1 space-y-2 p-2"/);
+  assert.doesNotMatch(kanban,/ref=\{scrollRef\} className="[^"]*overflow-y-hidden/);
+  assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
+  assert.match(kanban,/Navegar horizontalmente no Kanban/);
+});
