@@ -74,6 +74,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [scriptLabels,setScriptLabels]=useState<Array<{id:string;name:string;version_label:string;is_active:boolean}>>([]);
   const [scriptsOpen,setScriptsOpen]=useState(false);
   const [acquisitionOpen,setAcquisitionOpen]=useState(false);
+  const [acquisitionRefreshKey,setAcquisitionRefreshKey]=useState(0);
   const [acquisitionChannels,setAcquisitionChannels]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
   const [acquisitionByLead,setAcquisitionByLead]=useState<Record<string,string[]>>({});
   const [acquisitionDialog,setAcquisitionDialog]=useState<{leadId:string;channelIds:string[]}|null>(null);
@@ -170,6 +171,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       delete keysRef.current[keyName];
       setAcquisitionByLead(old=>({...old,[dialog.leadId]:result.selection.channelIds||[]}));
+      setAcquisitionRefreshKey(k=>k+1);
       setAcquisitionDialog(null);
       setInfo('Canais de aquisição salvos sem atualizar a página.');
     }catch(e:any){setError(e.message||'Não foi possível salvar os canais.');}
@@ -610,7 +612,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       </div>
 
       {scriptsOpen&&<CommercialScriptsPanel onClose={()=>setScriptsOpen(false)} onChanged={refreshScripts}/>}
-      {acquisitionOpen&&<CommercialAcquisitionPanel onClose={()=>setAcquisitionOpen(false)} onChanged={refreshAcquisitionCatalog}/>}
+      {acquisitionOpen&&<CommercialAcquisitionPanel refreshKey={acquisitionRefreshKey} onClose={()=>setAcquisitionOpen(false)} onChanged={refreshAcquisitionCatalog}/>}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {columns.filter(c=>c.is_system).map(c=>(
           <button key={c.id} type="button" onClick={()=>setShowStage(x=>x===c.id?'all':c.id)}
