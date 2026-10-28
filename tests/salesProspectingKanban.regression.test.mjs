@@ -90,7 +90,7 @@ test('configurable columns and audited movements are durable, private and atomic
 });
 
 test('full-width Kanban supports custom titles, colors, ordering, deletion, drawer and batch fetching',()=>{
-  assert.match(kanban,/min-h-0 min-w-0 flex-1 flex flex-col/);
+  assert.match(kanban,/className="min-w-0 flex-1 flex flex-col gap-3"/);
   assert.match(kanban,/Navegar horizontalmente no Kanban/);
   assert.match(kanban,/Editar colunas/);
   assert.match(kanban,/type="color"/);
