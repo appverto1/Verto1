@@ -461,6 +461,35 @@ export function registerSalesProspectingRoutes(
     } catch { return boardError(res,'Não foi possível excluir a oportunidade.'); }
   });
 
+  // Dashboard drill-down returns the actual paginated leads, not currently loaded
+  // Kanban cards. All filtering/permissions are enforced server-side and in SQL.
+  app.get('/api/owner/sales/prospecting/analytics/drilldown', ...salesGuard, async (req: any, res: any) => {
+    const actorId=sanitizeString(req.session?.user?.id,120);
+    const days=Number(req.query?.days??90);
+    const dimension=sanitizeString(req.query?.dimension,20);
+    const value=sanitizeString(req.query?.value,40);
+    const measure=sanitizeString(req.query?.measure,20);
+    const offset=Number(req.query?.offset??0);
+    if(!isUuid(actorId)||![7,30,90,365].includes(days)||
+      !['stage','overview','daily','cumulative','hour','weekday','channel','attempt'].includes(dimension)||
+      !['leads','calls','conversations','failures','messages','attempted'].includes(measure)||
+      !value||value.length>40||!Number.isInteger(offset)||offset<0||offset>100000)
+      return res.status(400).json({success:false,error:'Filtro do gráfico inválido.'});
+    try{
+      const result=await supabase.rpc('sales_prospecting_drilldown_v1',{
+        p_actor_user_id:actorId,p_days:days,p_dimension:dimension,p_value:value,
+        p_measure:measure,p_offset:offset,p_limit:25,
+      });
+      if(result.error){
+        if(/INVALID_DRILLDOWN_FILTER/.test(String(result.error.message||'')))
+          return res.status(400).json({success:false,error:'Filtro do gráfico inválido.'});
+        throw result.error;
+      }
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,data:result.data});
+    }catch{return res.status(503).json({success:false,error:'Não foi possível carregar os leads deste gráfico.'});}
+  });
+
   app.get('/api/owner/sales/prospecting/analytics', ...salesGuard, async (req: any, res: any) => {
     const days = Number(req.query?.days || 90);
     if (![7,30,90,365].includes(days))
