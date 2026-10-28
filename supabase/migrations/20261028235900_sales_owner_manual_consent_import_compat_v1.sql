@@ -30,7 +30,7 @@ create table public.sales_crm_import_lead_map (
 create index sales_crm_import_lead_map_target_idx on public.sales_crm_import_lead_map(target_lead_id);
 alter table public.sales_crm_import_lead_map enable row level security;
 revoke all on public.sales_crm_import_lead_map from public,anon,authenticated;
-grant select,insert,update to service_role;
+grant select,insert,update on public.sales_crm_import_lead_map to service_role;
 
 -- Prevent unprivileged clients from inferring import identities via direct SQL.
 -- The bridge is for deterministic operator reconciliation and is never used as
