@@ -157,7 +157,7 @@ test('phone and WhatsApp cards are counters only, and loss needs explicit owner 
   assert.match(kanban,/Contabilizar WhatsApp/);
   assert.match(kanban,/recordAttempt\(lead,'phone','no_decisor'\)/);
   assert.match(kanban,/recordAttempt\(lead,'whatsapp_call','no_decisor'\)/);
-  assert.match(kanban,/window\.confirm\('Foram registradas 10 tentativas/);
+  assert.doesNotMatch(kanban,/window\.confirm\('Foram registradas 10 tentativas/);
   assert.match(crudSql,/needsLossDecision/);
   assert.doesNotMatch(crudSql,/prospecting-auto-lost/);
 });
@@ -657,4 +657,34 @@ test('commercial UI states only Kanban-visible leads count, and hidden clients r
   assert.match(dashboard,/vínculos históricos de clientes e pagamentos são preservados/);
   assert.match(kanban,/hidden:Boolean\(item\.hidden_at\)/);
   assert.match(kanban,/\.filter\(lead => !overrides\[lead\.id\]\?\.hidden\)/);
+});
+
+
+const anyStageCallsSql=readFileSync('supabase/migrations/20261029001000_sales_calls_any_kanban_stage_v1.sql','utf8');
+
+test('operator and WhatsApp calls are never disabled by column, stage, or prior decision-maker contact',()=>{
+  assert.match(kanban,/const callEnabled=\(_lead:Lead,_ch:'phone'\|'whatsapp_call'\)=>!busyLead/);
+  assert.match(kanban,/disabled=\{!callEnabled\(lead,'phone'\)\}/);
+  assert.match(kanban,/disabled=\{!callEnabled\(lead,'whatsapp_call'\)\}/);
+  assert.match(kanban,/disabled=\{!callEnabled\(selected,'phone'\)\}/);
+  assert.match(kanban,/disabled=\{!callEnabled\(selected,'whatsapp_call'\)\}/);
+  assert.doesNotMatch(kanban,/selected\.status\)\&\&<div className="mt-3 space-y-2">/);
+  assert.doesNotMatch(kanban,/selectedCounts\.phone>=5|selectedCounts\.whatsapp>=5/);
+  assert.doesNotMatch(kanban,/Operadora \{a\.phone\}\/5|WhatsApp \{a\.whatsapp\}\/5/);
+  assert.match(kanban,/Ten calls is a visual cadence reference, not a hard stop/);
+});
+
+test('new attempt, actual-time and conversation RPCs accept all funnel stages and unlimited calls while retaining safety guards',()=>{
+  for(const fn of ['record_sales_prospecting_attempt_v1','save_sales_prospecting_attempt_time_v1',
+    'save_sales_prospecting_attempt_time_v2','save_sales_decisor_contact_v2'])
+    assert.match(anyStageCallsSql,new RegExp('CREATE OR REPLACE FUNCTION public\\.'+fn));
+  assert.doesNotMatch(anyStageCallsSql,/DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT/);
+  assert.doesNotMatch(anyStageCallsSql,/v_lead\.status in \('lost','archived','converted'\)/);
+  assert.match(anyStageCallsSql,/v_lead\.do_not_contact/);
+  assert.match(anyStageCallsSql,/sales_kanban_opportunity_overrides h/);
+  assert.match(anyStageCallsSql,/PROSPECTING_ALREADY_TODAY/);
+  assert.match(anyStageCallsSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.match(anyStageCallsSql,/sales_lead_events/);
+  assert.match(anyStageCallsSql,/revoke all on function public\.save_sales_decisor_contact_v2/);
+  assert.doesNotMatch(anyStageCallsSql,/delete from public\.sales_leads|drop table|truncate/i);
 });
