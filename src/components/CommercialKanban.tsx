@@ -8,6 +8,10 @@ import type { CommercialAttempt } from './CommercialDashboard';
 import { CommercialScriptsPanel } from './CommercialScriptsPanel';
 import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
+import {
+  brazilDateKey,followupBucket,followupFilters,matchesFollowup,progressColor,progressWidth,
+  type FollowupFilter,
+} from '../utils/salesKanbanFollowupVisuals.mjs';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
 type Lead = {
@@ -84,6 +88,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [showStage, setShowStage] = useState('all');
+  const [globalFollowupFilter,setGlobalFollowupFilter]=useState<FollowupFilter>('all');
+  const [columnFollowupFilters,setColumnFollowupFilters]=useState<Record<string,FollowupFilter>>({});
+  const [calendarToday,setCalendarToday]=useState(()=>brazilDateKey(new Date()));
   const [editing, setEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
@@ -102,6 +109,17 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [followups,setFollowups]=useState<Record<string,SalesFollowup>>({});
   const [followupAtDraft,setFollowupAtDraft]=useState('');
   const [savingFollowup,setSavingFollowup]=useState(false);
+  // Refresh the São Paulo calendar date on tab return; no background polling/requests.
+  useEffect(()=>{
+    const update=()=>setCalendarToday(brazilDateKey(new Date()));
+    const onVisibility=()=>{if(!document.hidden)update();};
+    window.addEventListener('focus',update);
+    document.addEventListener('visibilitychange',onVisibility);
+    return()=>{
+      window.removeEventListener('focus',update);
+      document.removeEventListener('visibilitychange',onVisibility);
+    };
+  },[]);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
   const [creatingBusy,setCreatingBusy] = useState(false);
@@ -328,6 +346,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       delete keysRef.current.create;
       onLeadsCreated(json.leads||[]);
       setPhonesDraft('');setCreatingOpen(false);setSearch('');setShowStage('all');
+      setGlobalFollowupFilter('all');setColumnFollowupFilters({});
       setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s). Abra os cards para editar.');
     }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
     finally{setCreatingBusy(false);}
@@ -582,7 +601,25 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   };
 
   const shownColumns=columns.filter(c=>showStage==='all'||showStage===c.id);
-  const cardCount=(c:Column)=>filtered.filter(l=>columnFor(l)===c.id).length;
+  const matchReturnFilter=(lead:Lead,filter:FollowupFilter)=>
+    matchesFollowup(followups[lead.id],filter,calendarToday,lead.status);
+  const effectiveReturnFilter=(columnId:string)=>
+    columnFollowupFilters[columnId]??globalFollowupFilter;
+  const cardCount=(c:Column)=>filtered.filter(l=>columnFor(l)===c.id&&
+    matchReturnFilter(l,effectiveReturnFilter(c.id))).length;
+  const returnsTodayCount=filtered.filter(l=>matchReturnFilter(l,'today')).length;
+  const overdueCount=filtered.filter(l=>matchReturnFilter(l,'overdue')).length;
+  const shownCount=filtered.filter(l=>{
+    const id=columnFor(l);
+    if(!id)return false;
+    return (showStage==='all'||id===showStage)&&
+      matchReturnFilter(l,effectiveReturnFilter(id));
+  }).length;
+  const chooseGlobalFollowupFilter=(filter:FollowupFilter)=>{
+    setCalendarToday(brazilDateKey(new Date()));
+    setGlobalFollowupFilter(filter);
+    setColumnFollowupFilters({});
+  };
   const callEnabled=(lead:Lead,ch:'phone'|'whatsapp_call')=>{
     const n=leadCounts(lead.id);
     return !busyLead && !n.spoken && !['converted','lost','archived'].includes(lead.status)
@@ -637,8 +674,37 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           className="flex h-10 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs font-bold text-white">
           <Plus size={15}/> Adicionar coluna
         </button>}
-        <span className="text-xs text-slate-500">{filtered.length} resultados</span>
+        <span className="text-xs text-slate-500">{shownCount} de {filtered.length} cards carregados</span>
         {remaining>0&&<button onClick={()=>void onLoadMore()} disabled={loadingMore} className="h-10 rounded-lg border border-violet-300 px-3 text-xs font-bold text-violet-700 disabled:opacity-50">{loadingMore?"Carregando...":"Carregar mais "+Math.min(remaining,100)+" leads ("+remaining+" restantes)"}</button>}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2"
+        aria-label="Filtros de retorno do Kanban">
+        <span className="px-2 text-xs font-bold text-slate-700">Retornos:</span>
+        {([
+          {key:'all' as const,title:'Todos'},
+          {key:'today' as const,title:'Hoje',count:returnsTodayCount},
+          {key:'overdue' as const,title:'Atrasados',count:overdueCount},
+        ]).map(item=><button key={item.key} type="button"
+          aria-pressed={globalFollowupFilter===item.key&&Object.keys(columnFollowupFilters).length===0}
+          onClick={()=>chooseGlobalFollowupFilter(item.key)}
+          className={'rounded-lg px-3 py-2 text-xs font-bold '+(
+            globalFollowupFilter===item.key&&Object.keys(columnFollowupFilters).length===0
+            ? 'bg-violet-700 text-white':'border border-slate-200 text-slate-700 hover:bg-violet-50'
+          )}>
+          {item.title}{typeof item.count==='number'?' · '+item.count:''}
+        </button>)}
+        <label className="ml-auto flex items-center gap-2 text-xs font-semibold text-slate-700">
+          Mais filtros
+          <select aria-label="Filtrar todos os retornos" value={globalFollowupFilter}
+            onChange={e=>chooseGlobalFollowupFilter(e.target.value as FollowupFilter)}
+            className="rounded-lg border border-slate-200 bg-white px-2 py-2 text-xs">
+            {followupFilters.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
+        </label>
+        {remaining>0&&<p className="w-full px-2 text-[11px] text-amber-700">
+          Os filtros consideram os cards carregados. Use “Carregar mais leads” para incluir os demais.
+        </p>}
       </div>
 
       {(error||info)&&<div role={error?'alert':'status'} className={'rounded-lg border px-3 py-2 text-xs '+(error?'border-red-200 bg-red-50 text-red-700':'border-green-200 bg-green-50 text-green-800')}>
@@ -659,7 +725,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       <div ref={scrollRef} className="min-w-0 overflow-x-auto pb-2" aria-label="Etapas comerciais">
         <div className="flex min-h-[380px] w-max min-w-full gap-2.5">
           {shownColumns.map((col,index)=>{
-            const cards=filtered.filter(l=>columnFor(l)===col.id);
+            const columnFilter=effectiveReturnFilter(col.id);
+            const allCards=filtered.filter(l=>columnFor(l)===col.id);
+            const cards=allCards.filter(l=>matchReturnFilter(l,columnFilter))
+              .sort((a,b)=>columnFilter==='all'||columnFilter==='none'?0:
+                Date.parse(followups[a.id]?.contact_due_at||'')-
+                Date.parse(followups[b.id]?.contact_due_at||''));
             return <div key={col.id} className="flex w-[315px] min-w-[315px] flex-col overflow-hidden rounded-xl border shadow-sm"
               style={{backgroundColor:col.color+'0D',borderColor:col.color+'44'}}
               onDragOver={e=>{if(col.kind!=='customers')e.preventDefault();}}
@@ -678,8 +749,20 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 <span className="text-[10px] text-slate-500">Posição {index+1}</span>
                 {!col.is_system&&<button title="Excluir etapa personalizada" onClick={()=>deleteColumn(col)} className="rounded border border-red-200 p-1 text-red-600"><Trash2 size={14}/></button>}
               </div>}
+              <div className="border-b border-slate-200 bg-white/90 px-2 py-2">
+                <label className="block text-[11px] font-bold text-slate-700">
+                  Filtrar retornos nesta coluna
+                  <select aria-label={'Filtrar retornos da coluna '+col.title}
+                    value={columnFilter}
+                    onChange={e=>setColumnFollowupFilters(old=>({...old,[col.id]:e.target.value as FollowupFilter}))}
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-xs">
+                    {followupFilters.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
+                  </select>
+                </label>
+                <p className="mt-1 text-[10px] text-slate-500">{cards.length} de {allCards.length} cards nesta coluna</p>
+              </div>
               <div className="flex-1 space-y-2 p-2">
-                {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">Nenhum card nesta etapa</div>}
+                {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">{allCards.length>0?'Nenhum card corresponde ao filtro':'Nenhum card nesta etapa'}</div>}
                 {cards.map(lead=>{
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
                   return <article key={lead.id} draggable={!busyLead&&!editing&&lead.status!=='converted'}
@@ -697,8 +780,26 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total}/10</b></div>
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Status</span><b className={'line-clamp-1 text-[10px] '+(a.spoken?'text-green-700':'text-slate-700')}>{a.spoken?(a.spokenVia==='whatsapp_message'?'Decisor por mensagem':'Decisor por ligação'):SALES_LEAD_STATUS_LABELS[lead.status]||lead.status}</b></div>
                       </div>
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{width:(total*10)+'%',backgroundColor:col.color}}/></div>
+                      <div role="progressbar" aria-label="Tentativas de ligação"
+                        aria-valuemin={0} aria-valuemax={10} aria-valuenow={Math.min(total,10)}
+                        title={total+' de 10 ligações realizadas'}
+                        className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-full rounded-full transition-all duration-300"
+                          style={{width:progressWidth(total),backgroundColor:progressColor(total)}}/>
+                      </div>
                       <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone}/5 · Ligação WhatsApp {a.whatsapp}/5</p>
+                      {followups[lead.id]?.status==='scheduled'&&
+                        !['converted','lost','archived'].includes(lead.status)&&
+                        <p className={'mt-2 rounded-lg px-2 py-1.5 text-[10px] font-bold '+(
+                          followupBucket(followups[lead.id],calendarToday)==='overdue'
+                          ? 'bg-red-50 text-red-800'
+                          : followupBucket(followups[lead.id],calendarToday)==='today'
+                          ? 'bg-amber-100 text-amber-900':'bg-violet-50 text-violet-800'
+                        )}>
+                          {followupBucket(followups[lead.id],calendarToday)==='overdue'?'Retorno atrasado':
+                           followupBucket(followups[lead.id],calendarToday)==='today'?'Retornar hoje':'Próximo retorno'}
+                          {' · '+dateText(followups[lead.id].contact_due_at)}
+                        </p>}
                       {total<10&&!a.spoken&&<p className="mt-1 text-[10px] font-semibold text-violet-700">Próxima janela: {nextWindow(lead.id)?slotLabel(nextWindow(lead.id)):'—'}</p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
@@ -917,7 +1018,14 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
               <div className="flex items-center justify-between"><h4 className="font-black">Cadência de ligações</h4><span className="text-sm font-black">{selectedCounts.phone+selectedCounts.whatsapp}/10</span></div>
-              <div className="mt-3 h-2 rounded-full bg-slate-100"><div className="h-full rounded-full bg-violet-500" style={{width:((selectedCounts.phone+selectedCounts.whatsapp)*10)+'%'}}/></div>
+              <div role="progressbar" aria-label="Progresso das tentativas de ligação"
+                aria-valuemin={0} aria-valuemax={10}
+                aria-valuenow={Math.min(10,selectedCounts.phone+selectedCounts.whatsapp)}
+                className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full transition-all duration-300"
+                  style={{width:progressWidth(selectedCounts.phone+selectedCounts.whatsapp),
+                    backgroundColor:progressColor(selectedCounts.phone+selectedCounts.whatsapp)}}/>
+              </div>
               <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
                 <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}/5</b></div>
                 <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}/5</b></div>

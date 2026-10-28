@@ -430,3 +430,68 @@ test('channel comparison uses lead-based counts and discloses multi-touch attrib
   assert.match(acquisitionSql,/a\.contact_result='interested'/);
   assert.doesNotMatch(acquisitionSql,/notification_jobs|push_subscriptions|cron\.schedule/);
 });
+
+
+// Pure calendar and visual helpers are imported to test their real behavior,
+// not only matching strings in the React source.
+const {brazilDateKey,followupBucket,matchesFollowup,progressColor,progressWidth,followupFilters}=
+  await import('../src/utils/salesKanbanFollowupVisuals.mjs');
+
+test('return today follows Brazil calendar across UTC midnight and distinguishes overdue appointments',()=>{
+  assert.equal(brazilDateKey('2026-10-29T02:59:59Z'),'2026-10-28');
+  assert.equal(brazilDateKey('2026-10-29T03:00:00Z'),'2026-10-29');
+  const today='2026-10-28';
+  const callback={status:'scheduled',contact_due_at:'2026-10-28T10:30:00-03:00'};
+  assert.equal(followupBucket(callback,today),'today');
+  assert.equal(matchesFollowup(callback,'today',today,'contact_started'),true);
+  assert.equal(matchesFollowup(callback,'overdue',today,'contact_started'),false);
+  assert.equal(matchesFollowup({status:'scheduled',contact_due_at:'2026-10-27T16:00:00-03:00'},'overdue',today,'new'),true);
+  assert.equal(matchesFollowup(callback,'today',today,'converted'),false);
+  assert.equal(matchesFollowup(callback,'all',today,'converted'),true);
+});
+
+test('follow-up date filters handle the coming week, canceled and absent returns without guessing',()=>{
+  const base='2026-10-28';
+  const in7={status:'scheduled',contact_due_at:'2026-11-04T09:00:00-03:00'};
+  const after7={status:'scheduled',contact_due_at:'2026-11-05T09:00:00-03:00'};
+  assert.equal(matchesFollowup(in7,'next7',base,'new'),true);
+  assert.equal(matchesFollowup(after7,'next7',base,'new'),false);
+  assert.equal(matchesFollowup(after7,'future',base,'new'),true);
+  assert.equal(matchesFollowup(in7,'today',base,'new'),false);
+  assert.equal(matchesFollowup(null,'none',base,'new'),true);
+  assert.equal(matchesFollowup({status:'canceled',contact_due_at:'2026-10-28T10:00:00Z'},'none',base,'new'),true);
+  assert.equal(matchesFollowup(null,'none',base,'lost'),false);
+  assert.deepEqual(followupFilters.map(x=>x.value),['all','today','overdue','next7','future','none']);
+});
+
+test('call progress moves monotonically from green to red and never exceeds ten phone attempts',()=>{
+  const hues=Array.from({length:11},(_,n)=>{
+    const value=/^hsl\((\d+) 78% 42%\)$/.exec(progressColor(n));
+    assert.ok(value,'valid progress color for '+n);
+    return Number(value[1]);
+  });
+  assert.equal(hues[0],138);
+  assert.equal(hues[10],0);
+  assert.ok(hues.every((value,index)=>index===0||hues[index-1]>value));
+  assert.equal(progressColor(15),progressColor(10));
+  assert.equal(progressWidth(0),'0%');
+  assert.equal(progressWidth(4),'40%');
+  assert.equal(progressWidth(10),'100%');
+  assert.equal(progressWidth(17),'100%');
+  assert.equal(progressWidth(-2),'0%');
+});
+
+test('Kanban shows shared filters in each column, same-day badge and identical progress on card and drawer',()=>{
+  assert.match(kanban,/Filtrar retornos da coluna/);
+  assert.match(kanban,/Filtrar todos os retornos/);
+  assert.match(kanban,/Retornar hoje/);
+  assert.match(kanban,/Retorno atrasado/);
+  assert.match(kanban,/matchReturnFilter\(l,columnFilter\)/);
+  assert.match(kanban,/setFollowups\(old=>/);
+  assert.match(kanban,/progressColor\(total\)/);
+  assert.match(kanban,/progressColor\(selectedCounts\.phone\+selectedCounts\.whatsapp\)/);
+  assert.match(kanban,/progressWidth\(total\)/);
+  assert.match(kanban,/progressWidth\(selectedCounts\.phone\+selectedCounts\.whatsapp\)/);
+  assert.match(kanban,/remaining>0&&<p className="w-full/);
+  assert.doesNotMatch(kanban,/style=\{\{width:\(total\*10\)\+'%',backgroundColor:col.color\}\}/);
+});
