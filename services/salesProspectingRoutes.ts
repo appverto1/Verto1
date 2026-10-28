@@ -50,7 +50,8 @@ export function registerSalesProspectingRoutes(
       return res.status(400).json({ success: false, error: 'Lista de leads inválida.' });
     }
     try {
-      const [attempts, leads] = await Promise.all([
+      const actorId=sanitizeString(req.session?.user?.id,120);
+      const [attempts, leads, followups] = await Promise.all([
         supabase.from('sales_prospecting_attempts')
           .select('id,lead_id,channel,outcome,occurred_at')
           .in('lead_id', leadIds)
@@ -58,9 +59,12 @@ export function registerSalesProspectingRoutes(
           .limit(1000),
         supabase.from('sales_leads').select('id,status,lost_at')
           .in('id', leadIds).is('deleted_at', null).limit(100),
+        supabase.from('sales_contact_followups')
+          .select('id,lead_id,contact_due_at,status')
+          .eq('actor_user_id',actorId).in('lead_id',leadIds).limit(100),
       ]);
-      if (attempts.error || leads.error) throw attempts.error || leads.error;
-      return res.json({ success: true, data: attempts.data || [], leads: leads.data || [] });
+      if (attempts.error || leads.error || followups.error) throw attempts.error || leads.error || followups.error;
+      return res.json({ success: true, data: attempts.data || [], leads: leads.data || [], followups: followups.data || [] });
     } catch {
       return res.status(500).json({ success: false, error: 'Histórico indisponível.' });
     }
@@ -104,6 +108,70 @@ export function registerSalesProspectingRoutes(
       }
     },
   );
+
+
+  // The user-supplied timestamp is converted on the client, but is checked
+  // again by the database. A successful button press is the only write.
+  app.put('/api/owner/sales/leads/:leadId/decisor-contact',
+    checkAuth,checkPlatformAdmin,async (req:any,res:any)=>{
+      const leadId=sanitizeString(req.params?.leadId,120);
+      const actorId=sanitizeString(req.session?.user?.id,120);
+      const channel=sanitizeString(req.body?.channel,32);
+      const attemptId=sanitizeString(req.body?.attemptId,120);
+      const occurredAt=req.body?.occurredAt;
+      const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
+      if(!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
+         ||!['phone','whatsapp_call'].includes(channel)
+         ||typeof occurredAt!=='string'||occurredAt.length>40
+         ||!/T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$/.test(occurredAt)
+         ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
+        return res.status(400).json({success:false,error:'Data, hora ou canal inválidos.'});
+      try{
+        const {data,error}=await supabase.rpc('save_sales_decisor_contact_v1',{
+          p_lead_id:leadId,p_attempt_id:attemptId||null,p_channel:channel,
+          p_occurred_at:occurredAt,p_action_key:key,p_actor_user_id:actorId,
+        });
+        if(error){
+          const message=String(error.message||'');
+          if(/LEAD_NOT_FOUND|CONTACT_NOT_FOUND/.test(message))
+            return res.status(404).json({success:false,error:'Registro não encontrado.'});
+          if(/INVALID_CONTACT_TIME|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
+            return res.status(400).json({success:false,error:'Informe horário passado, em dia útil, entre 9h e 17h30 (Brasília).'});
+          if(/PROSPECTING_ALREADY_TODAY|DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT|IDEMPOTENCY_CONFLICT|PROSPECTING_NOT_ALLOWED/.test(message))
+            return res.status(409).json({success:false,error:'Conflito com outra tentativa ou oportunidade indisponível.'});
+          throw error;
+        }
+        return res.json({success:true,data});
+      }catch{return res.status(500).json({success:false,error:'Não foi possível salvar o contato.'});}
+    });
+
+  app.put('/api/owner/sales/leads/:leadId/followup',
+    checkAuth,checkPlatformAdmin,async (req:any,res:any)=>{
+      const leadId=sanitizeString(req.params?.leadId,120);
+      const actorId=sanitizeString(req.session?.user?.id,120);
+      const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
+      const due=req.body?.contactDueAt;
+      if(!isUuid(leadId)||!isUuid(actorId)||key.length<12||key.length>120
+         ||(due!==null&&(typeof due!=='string'||due.length>40
+           ||!/T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$/.test(due)
+           ||!Number.isFinite(Date.parse(due)))))
+        return res.status(400).json({success:false,error:'Data ou horário de retorno inválidos.'});
+      try{
+        const {data,error}=await supabase.rpc('save_sales_contact_followup_v1',{
+          p_lead_id:leadId,p_actor_user_id:actorId,
+          p_contact_due_at:due,p_action_key:key,
+        });
+        if(error){
+          const message=String(error.message||'');
+          if(/LEAD_NOT_FOUND|FOLLOWUP_NOT_FOUND/.test(message))
+            return res.status(404).json({success:false,error:'Retorno não encontrado.'});
+          if(/INVALID_FOLLOWUP_DATE|IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(400).json({success:false,error:'Informe uma data futura válida para o retorno.'});
+          throw error;
+        }
+        return res.json({success:true,followup:data});
+      }catch{return res.status(500).json({success:false,error:'Não foi possível salvar o retorno.'});}
+    });
 
   app.post('/api/owner/sales/leads/:leadId/mark-lost',
     checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
