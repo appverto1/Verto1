@@ -1,6 +1,7 @@
 import type { Express } from 'express';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { registerSalesProspectingRoutes } from './salesProspectingRoutes';
 import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 import { publishedTutorialHelpProjection } from './helpTutorialCatalog';
 
@@ -34,6 +35,9 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     const contextKey=createHash('sha256').update(JSON.stringify([userId,clinicId,membershipId,audience,[...capabilities].sort(),[...modules].sort()])).digest('hex');
     return { clinicId, clinicName, audience, capabilities, modules, userId, membershipId, contextKey };
   };
+
+  // Secured owner CRM routes, using active platform-admin plus TOTP guard.
+  registerSalesProspectingRoutes(app,{supabase,checkAuth});
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
     const { clinicId, clinicName, audience, capabilities, modules, userId, contextKey } = helpContext(req);
