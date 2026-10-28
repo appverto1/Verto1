@@ -193,7 +193,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   };
   const openAcquisitionEditor=(leadId:string)=>{
     if(savingAcquisition||acquisitionCatalogUnavailable){
-      if(acquisitionCatalogUnavailable)setError('Canais indisponíveis. Atualize o quadro antes de editar as origens.');
+      if(acquisitionCatalogUnavailable)cardError(leadId,'Canais indisponíveis. Atualize o quadro antes de editar as origens.');
       return;
     }
     setAcquisitionDialog({leadId,channelIds:[...(acquisitionByLead[leadId]||[])]});
@@ -215,8 +215,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       setAcquisitionByLead(old=>({...old,[dialog.leadId]:result.selection.channelIds||[]}));
       setAcquisitionRefreshKey(k=>k+1);
       setAcquisitionDialog(null);
-      setInfo('Canais de aquisição salvos sem atualizar a página.');
-    }catch(e:any){setError(e.message||'Não foi possível salvar os canais.');}
+      cardInfo(dialog.leadId,'Canais de aquisição salvos sem atualizar a página.');
+    }catch(e:any){cardError(dialog.leadId,e.message||'Não foi possível salvar os canais.');}
     finally{setSavingAcquisition(false);}
   };
   const request = async (url: string, init: RequestInit = {}) => {
@@ -419,7 +419,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       onLeadPatch(lead.id,json.lead);
       setEditingLead(true);
-    }catch(e:any){setError(e.message||'Não foi possível abrir o cadastro.');}
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível abrir o cadastro.');}
     finally{setLoadingLeadDetails(false);}
   };
   const saveLeadDetails = async () => {
@@ -454,10 +454,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       onLeadPatch(selected.id,json.lead);
       setEditingLead(false);
-      setInfo(json.lead?.kanbanOnly
+      cardInfo(selected.id,json.lead?.kanbanOnly
         ? 'Dados salvos na ficha do Kanban. Cadastros de clientes, propostas e cobranças não foram alterados.'
         : 'Oportunidade salva.');
-    }catch(e:any){setError(e.message||'Erro ao salvar oportunidade.');}
+    }catch(e:any){cardError(selected.id,e.message||'Erro ao salvar oportunidade.');}
     finally{setSavingLead(false);}
   };
   const deleteLead = async (lead:Lead) => {
@@ -471,7 +471,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       delete keysRef.current[keyName];
       setSelectedId(null);onLeadDeleted(lead.id);setInfo('Oportunidade removida do Kanban. Vínculos e histórico preservados.');
-    }catch(e:any){setError(e.message||'Erro ao excluir oportunidade.');}
+    }catch(e:any){cardError(lead.id,e.message||'Erro ao excluir oportunidade.');}
     finally{setDeletingLead(false);}
   };
 
@@ -545,8 +545,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           const next={...old};if(column.kind==='custom')next[lead.id]=column.id;else delete next[lead.id];return next;
         });
         onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
-        setInfo('Lead movido para '+column.title+'.');
-      } catch(e:any){setError(e.message || 'Erro ao mover lead.');}
+        cardInfo(lead.id,'Lead movido para '+column.title+'.');
+      } catch(e:any){cardError(lead.id,e.message || 'Erro ao mover lead.');}
       finally{setBusyLead(null);}
     })();
   };
@@ -560,7 +560,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const draft=attemptDialog;
     if(!draft||busyLead)return;
     const lead=visibleLeads.find(x=>x.id===draft.leadId);
-    if(!lead){setError('Oportunidade não encontrada.');return;}
+    if(!lead){cardError(draft.leadId,'Oportunidade não encontrada.');return;}
     const keyName='attempt-time:'+draft.leadId+':'+(draft.attemptId||'new');
     try{
       const occurredAt=brazilInputToIso(draft.localAt);
@@ -588,10 +588,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             script_version_id:scriptVersionId,contact_result:'no_answer'}]);
       onLeadPatch(draft.leadId,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setAttemptDialog(null);
-      setInfo(draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
+      cardInfo(draft.leadId,draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
       // Ten calls is a visual cadence reference, not a hard stop or automatic loss.
       // A lead remains in its existing funnel stage until explicitly changed.
-    }catch(e:any){setError(e.message||'Não foi possível salvar a tentativa.');}
+    }catch(e:any){cardError(draft.leadId,e.message||'Não foi possível salvar a tentativa.');}
     finally{setBusyLead(null);}
   };
   const saveSpokenContact=async(lead:Lead,attempt?:CommercialAttempt)=>{
@@ -626,8 +626,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             script_version_id:scriptVersionId,contact_result:resolvedResult as 'interested'|'not_interested'}]);
       onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setEditingSpokenId(null);
-      setInfo(attempt?'Data e hora do contato corrigidas e auditadas.':'Contato com decisor salvo no horário informado.');
-    }catch(e:any){setError(e.message||'Não foi possível salvar o contato.');}
+      cardInfo(lead.id,attempt?'Data e hora do contato corrigidas e auditadas.':'Contato com decisor salvo no horário informado.');
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível salvar o contato.');}
     finally{setBusyLead(null);}
   };
   const saveFollowup=async(lead:Lead,cancel=false)=>{
@@ -643,8 +643,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       delete keysRef.current[keyName];
       setFollowups(old=>({...old,[lead.id]:json.followup}));
-      setInfo(cancel?'Retorno cancelado.':'Data e hora do retorno salvas (sem notificações).');
-    }catch(e:any){setError(e.message||'Não foi possível salvar o retorno.');}
+      cardInfo(lead.id,cancel?'Retorno cancelado.':'Data e hora do retorno salvas (sem notificações).');
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível salvar o retorno.');}
     finally{setSavingFollowup(false);}
   };
   const manualLost = (lead:Lead, confirmed=false) => {
@@ -658,8 +658,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       delete keysRef.current[keyName];
       setPlacements(old=>{const next={...old};delete next[lead.id];return next;});
       onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
-      setInfo('Lead movido para Perdidos.');
-    }catch(e:any){setError(e.message);}finally{setBusyLead(null);}})();
+      cardInfo(lead.id,'Lead movido para Perdidos.');
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível mover o lead.');}finally{setBusyLead(null);}})();
   };
 
   const shownColumns=columns.filter(c=>showStage==='all'||showStage===c.id);
@@ -931,7 +931,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
                     style={{borderLeftColor:col.color}}>
-                    <button type="button" onClick={()=>setSelectedId(lead.id)} className="w-full text-left" aria-label={'Abrir lead '+(lead.name||'sem nome')}>
+                    <button type="button" onClick={()=>openCard(lead.id)} className="w-full text-left" aria-label={'Abrir lead '+(lead.name||'sem nome')}>
                       <div className="flex items-start justify-between gap-2">
                         <strong className="line-clamp-2 text-xs font-black uppercase leading-5 text-slate-900">{lead.name||'Lead sem nome'}</strong>
                         <GripVertical size={15} className="shrink-0 text-slate-300 group-hover:text-slate-500"/>
@@ -968,6 +968,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         </p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
+                    {feedbackFor(lead.id)&&<p role={feedbackFor(lead.id)?.error?'alert':'status'}
+                      className={'mt-2 rounded-lg px-2 py-1.5 text-[10px] '+(feedbackFor(lead.id)?.error
+                        ? 'bg-red-50 text-red-700':'bg-green-50 text-green-800')}>
+                      {feedbackFor(lead.id)?.error||feedbackFor(lead.id)?.info}
+                    </p>}
                     <button type="button" onClick={()=>openAcquisitionEditor(lead.id)}
                       className="mt-2 w-full rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-2 text-left text-[11px] font-bold text-indigo-700"
                       aria-label={'Selecionar canais de aquisição para '+(lead.name||'oportunidade')}>
@@ -983,7 +988,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <button type="button" disabled={!callEnabled(lead,'whatsapp_call')}
                         onClick={()=>recordAttempt(lead,'whatsapp_call','no_decisor')} aria-label={'Contabilizar ligação pelo WhatsApp para '+lead.name}
                         className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}</button>
-                      <button onClick={()=>setSelectedId(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
+                      <button onClick={()=>openCard(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
                     </div>
                   </article>;
                 })}
@@ -1018,7 +1023,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             })}
             {acquisitionChannels.length===0&&<p className="text-xs text-slate-500">Nenhum canal cadastrado. Use “Canais + Resultados”.</p>}
           </fieldset>
-          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
+          {feedbackFor(acquisitionDialog.leadId)?.error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{feedbackFor(acquisitionDialog.leadId)?.error}</p>}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" disabled={savingAcquisition} onClick={()=>{setAcquisitionDialog(null);setError(null);}}
               className="rounded-lg border px-4 py-2 text-xs font-semibold">Cancelar</button>
@@ -1063,7 +1068,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             Usar horário atual
           </button>
           <p className="mt-2 text-xs text-slate-500">Registre a data e hora reais da tentativa, inclusive se houve outra ligação no mesmo dia ou fora do expediente. A cadência é apenas sugestão.</p>
-          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
+          {feedbackFor(attemptDialog.leadId)?.error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(attemptDialog.leadId)?.error}</p>}}
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={Boolean(busyLead)}
               onClick={()=>{setAttemptDialog(null);setError(null);}}
@@ -1203,8 +1208,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <button type="button" onClick={()=>setSelectedId(null)} aria-label="Fechar detalhes" className="rounded-lg border p-2"><X size={18}/></button>
           </div>
           <div className="space-y-5 p-5">
-            {error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-            {info&&<p className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{info}</p>}
+            {feedbackFor(selected.id)?.error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(selected.id)?.error}</p>}
+            {feedbackFor(selected.id)?.info&&<p role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{feedbackFor(selected.id)?.info}</p>}
             <div className="flex flex-wrap gap-2">
               <button type="button" disabled={savingLead||loadingLeadDetails||deletingLead||Boolean(busyLead)}
                 onClick={()=>void openLeadEditor(selected)}
