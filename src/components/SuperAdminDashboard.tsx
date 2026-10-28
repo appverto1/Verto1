@@ -13,6 +13,7 @@ import {
   Loader2,
   LogOut,
   Mail,
+  Menu,
   MessageCircle,
   Phone,
   RotateCcw,
@@ -142,6 +143,29 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
   const [leadSearch, setLeadSearch] = useState('');
   const [commercialView, setCommercialView] = useState<'kanban'|'list'>('kanban');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuCloseRef = useRef<HTMLButtonElement | null>(null);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    if (!mobileMenuOpen) return;
+    mobileMenuCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileMenuOpen(false);
+        mobileMenuTriggerRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMenuOpen]);
+  const closeMobileMenu = () => {
+    setMobileMenuOpen(false);
+    mobileMenuTriggerRef.current?.focus();
+  };
+  const selectAdminTab = (tab: typeof activeTab) => {
+    setActiveTab(tab);
+    if (mobileMenuOpen) closeMobileMenu();
+  };
   const [financialView, setFinancialView] = useState<'dre'|'sales'>('dre');
   const [leadNextPage, setLeadNextPage] = useState(2);
   const [leadTotal, setLeadTotal] = useState(0);
@@ -905,21 +929,33 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const trialingCustomers = financial.trialingCustomers || [];
   const hasRealFinancialLedger = financial.source === 'platform_invoice_ledger';
 
+  const compactDesktopMenu = activeTab === 'leads' && commercialView === 'kanban' &&
+    import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true';
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900 flex">
-      <aside className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true'
-        ? "w-[66px] shrink-0 bg-white/95 border-r border-slate-200 h-screen sticky top-0 flex flex-col overflow-x-hidden"
-        : "w-72 shrink-0 bg-white/80 backdrop-blur border-r border-slate-100 h-screen sticky top-0 flex flex-col overflow-x-hidden"}>
-        <div className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'flex justify-center py-5' : 'p-8 flex items-center gap-3'}>
-          <LogoVerto size={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 34 : 42} />
-          {!(activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true') && <div>
+    <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900">
+      {mobileMenuOpen && (
+        <button type="button" aria-label="Fechar menu de navegação" onClick={closeMobileMenu}
+          className="fixed inset-0 z-40 bg-slate-950/50 md:hidden" />
+      )}
+      <aside id="super-admin-navigation" aria-label="Navegação Super Admin"
+        className={(mobileMenuOpen ? 'flex' : 'hidden md:flex') +
+          ' fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] flex-col overflow-x-hidden border-r border-slate-200 bg-white/95 backdrop-blur md:max-w-none' +
+          (compactDesktopMenu ? ' md:w-[66px]' : ' md:w-72')}>
+        <button ref={mobileMenuCloseRef} type="button" aria-label="Fechar menu"
+          onClick={closeMobileMenu}
+          className="absolute right-3 top-4 rounded-lg p-2 text-slate-600 hover:bg-slate-100 md:hidden">
+          <X size={22} />
+        </button>
+        <div className={compactDesktopMenu ? 'flex items-center gap-3 p-6 pt-16 md:justify-center md:px-0 md:py-5' : 'flex items-center gap-3 p-6 pt-16 md:p-8'}>
+          <LogoVerto size={compactDesktopMenu ? 34 : 42} />
+          <div className={compactDesktopMenu ? 'md:hidden' : ''}>
             <p className="text-xs uppercase tracking-[0.2em] text-slate-400 font-bold">Painel</p>
             <h2 className="text-xl font-black text-slate-900">SUPER ADMIN</h2>
-          </div>}
+          </div>
         </div>
 
-        {activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? (
-          <nav className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-3">
+        {compactDesktopMenu && (
+          <nav className="hidden min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-3 md:flex">
             {[
               {id:'overview',label:'Resumo',icon:<LayoutDashboard size={19}/>},
               {id:'financial',label:'DRE e gráficos',icon:<BarChart3 size={19}/>},
@@ -930,34 +966,45 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               {id:'protocols',label:'Protocolos',icon:<ClipboardCheck size={19}/>},
               {id:'aba-v3-rollout',label:'Rollout ABA V3',icon:<Shield size={19}/>},
             ].map(nav=><button key={nav.id} type="button" aria-label={nav.label} title={nav.label}
-              onClick={()=>setActiveTab(nav.id as typeof activeTab)}
+              onClick={()=>selectAdminTab(nav.id as typeof activeTab)}
               className={'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition '+(activeTab===nav.id?'bg-[#10192D] text-white shadow':'text-slate-500 hover:bg-slate-100')}>
               {nav.icon}</button>)}
           </nav>
-        ) : <nav className="px-4 space-y-2 min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-          <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
-          <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
-          <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
-          <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
-          <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => setActiveTab('simulation-settings')} />
-          <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
-          <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
-          <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => setActiveTab('aba-v3-rollout')} />
-        </nav>}
+        )}
+        <nav className={'min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden px-4 ' + (compactDesktopMenu ? 'md:hidden' : '')}>
+          <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => selectAdminTab('overview')} />
+          <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => selectAdminTab('financial')} />
+          <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => selectAdminTab('customers')} />
+          <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => selectAdminTab('leads')} />
+          <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => selectAdminTab('simulation-settings')} />
+          <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => selectAdminTab('demos')} />
+          <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => selectAdminTab('protocols')} />
+          <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => selectAdminTab('aba-v3-rollout')} />
+        </nav>
 
-        <div className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'mt-auto p-2 border-t border-slate-100' : 'mt-auto p-6 border-t border-slate-100'}>
+        <div className={compactDesktopMenu ? 'mt-auto border-t border-slate-100 p-6 md:p-2' : 'mt-auto border-t border-slate-100 p-6'}>
           <button
             onClick={onLogout}
-            className={'w-full flex items-center gap-3 rounded-2xl font-bold text-slate-500 hover:bg-red-50 hover:text-red-500 transition-all '+(activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'justify-center p-3' : 'px-4 py-3')}
+            className={'flex w-full items-center gap-3 rounded-2xl font-bold text-slate-500 transition-all hover:bg-red-50 hover:text-red-500 ' +
+              (compactDesktopMenu ? 'px-4 py-3 md:justify-center md:p-3' : 'px-4 py-3')}
           >
-            <LogOut size={18} /> {!(activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true') && 'Sair'}
+            <LogOut size={18} /> <span className={compactDesktopMenu ? 'md:hidden' : ''}>Sair</span>
           </button>
         </div>
       </aside>
 
-      <main className={activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true'
-          ? 'min-w-0 h-screen min-h-0 flex-1 overflow-hidden p-3 flex flex-col'
-          : 'min-w-0 flex-1 p-8 overflow-y-auto'}>
+      <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 shadow-sm md:hidden">
+        <button ref={mobileMenuTriggerRef} type="button" aria-label="Abrir menu de navegação" aria-controls="super-admin-navigation"
+          aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-800 hover:bg-slate-100">
+          <Menu size={24} />
+        </button>
+        <span className="text-sm font-black tracking-wide text-slate-900">SUPER ADMIN</span>
+        <LogoVerto size={28} />
+      </div>
+      <main className={compactDesktopMenu
+          ? 'ml-0 flex h-[calc(100dvh-3.5rem)] min-h-0 min-w-0 flex-col overflow-hidden p-3 md:ml-[66px] md:h-screen'
+          : 'min-w-0 p-4 md:ml-72 md:p-8'}>
         <div className={'flex flex-wrap justify-between items-center gap-4 '+(activeTab==='leads'&&commercialView==='kanban'?'mb-3':'mb-8')}>
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">{activeTab === 'aba-v3-rollout' ? 'Governança Clínica' : activeTab === 'leads' ? 'Operação comercial' : 'Governança e inteligência'}</p>

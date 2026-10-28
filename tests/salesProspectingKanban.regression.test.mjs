@@ -172,3 +172,21 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(kanban,/nextSalesCadenceSlots/);
   assert.match(kanban,/canRecordSalesAttemptNow/);
 });
+
+test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile hamburger',()=>{
+  assert.match(superAdmin,/const \[mobileMenuOpen, setMobileMenuOpen\] = useState\(false\)/);
+  assert.match(superAdmin,/aria-label="Abrir menu de navegação"/);
+  assert.match(superAdmin,/aria-expanded=\{mobileMenuOpen\}/);
+  assert.match(superAdmin,/aria-controls="super-admin-navigation"/);
+  assert.match(superAdmin,/id="super-admin-navigation"/);
+  assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
+  assert.match(superAdmin,/compactDesktopMenu \? ' md:w-\[66px\]' : ' md:w-72'/);
+  assert.match(superAdmin,/md:ml-\[66px\]/);
+  assert.match(superAdmin,/md:ml-72 md:p-8/);
+  assert.match(superAdmin,/className="sticky top-0 z-30[^"]*md:hidden"/);
+  assert.match(superAdmin,/compactDesktopMenu \? 'md:hidden' : ''/);
+  assert.match(superAdmin,/onClick=\{\(\) => selectAdminTab\('leads'\)\}/);
+  assert.match(superAdmin,/event.key === 'Escape'/);
+  assert.match(superAdmin,/mobileMenuTriggerRef.current\?\.focus\(\)/);
+  assert.doesNotMatch(superAdmin,/h-screen sticky top-0 flex flex-col overflow-x-hidden/);
+});
