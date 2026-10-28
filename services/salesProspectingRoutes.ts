@@ -1,3 +1,4 @@
+import { registerSalesAcquisitionRoutes } from './salesAcquisitionRoutes';
 import { registerSalesScriptRoutes } from './salesScriptRoutes';
 // Verto CRM prospecting endpoints. Backend permission checks are mandatory.
 // The optional provided platform guard is server.ts's canonical MFA guard. In the
@@ -46,6 +47,7 @@ export function registerSalesProspectingRoutes(
     });
 
   registerSalesScriptRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
+  registerSalesAcquisitionRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
 
   app.get('/api/owner/sales/prospecting/attempts', checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
     const leadIds = [...new Set(String(req.query?.leadIds || '').split(',').filter(Boolean))];
