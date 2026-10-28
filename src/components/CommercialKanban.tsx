@@ -1078,18 +1078,95 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       </div>}
 
       {creatingOpen&&<div className="fixed inset-0 z-[155] flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Cadastrar oportunidades">
-        <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-          <div className="flex items-center justify-between"><h3 className="text-lg font-black">Nova oportunidade</h3>
+        <div className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
+          <div className="flex shrink-0 items-center justify-between"><h3 className="text-lg font-black">Novas oportunidades e canais de aquisição</h3>
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} aria-label="Fechar cadastro"><X size={20}/></button></div>
-          <p className="mt-2 text-sm text-slate-600">Informe um ou vários números com DDD. Cada número cria um card em Prospecção, para você editar depois.</p>
+          <p className="mt-2 shrink-0 text-sm text-slate-600">Cole até 100 números com DDD e escolha os canais de aquisição para todos, alguns ou cada contato.</p>
           {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-          <label className="mt-4 block text-xs font-bold text-slate-700">Telefones (até 100 por cadastro)
-            <textarea autoFocus rows={7} maxLength={5000} disabled={creatingBusy} value={phonesDraft}
-              onChange={e=>{setPhonesDraft(e.target.value);delete keysRef.current.create;}}
-              placeholder={'11 99999-9999\\n21 98888-8888'}
-              className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500" />
-          </label>
-          <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+            <label className="block text-xs font-bold text-slate-700">Telefones (até 100 por cadastro)
+              <textarea autoFocus rows={4} maxLength={5000} disabled={creatingBusy} value={phonesDraft}
+                onChange={e=>{
+                  const text=e.target.value;
+                  setPhonesDraft(text);
+                  const count=text.split(/[\\n,;]+/).map(v=>v.trim()).filter(Boolean).length;
+                  setBulkSelectedRows(Array.from({length:Math.min(count,100)},(_,i)=>i));
+                  setBulkChannelsByRow({});
+                  delete keysRef.current.create;
+                }}
+                placeholder={'11 99999-9999\\n21 98888-8888'}
+                className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500"/>
+            </label>
+            <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+            {bulkPhones.length>0&&<div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-xs text-indigo-950">{bulkPhones.length} contato(s) · {bulkSelectedRows.length} selecionado(s)</strong>
+                <div className="flex gap-2">
+                  <button type="button" disabled={creatingBusy}
+                    onClick={()=>setBulkSelectedRows(bulkPhones.map((_,i)=>i))}
+                    className="rounded-lg border bg-white px-2 py-1.5 text-xs font-semibold">Selecionar todos</button>
+                  <button type="button" disabled={creatingBusy} onClick={()=>setBulkSelectedRows([])}
+                    className="rounded-lg border bg-white px-2 py-1.5 text-xs font-semibold">Desmarcar todos</button>
+                </div>
+              </div>
+              <fieldset className="mt-3 rounded-lg border border-indigo-100 bg-white p-3">
+                <legend className="px-1 text-xs font-bold text-indigo-950">Canais a aplicar aos selecionados</legend>
+                {acquisitionChannels.filter(ch=>ch.is_active).map(channel=><label key={channel.id}
+                  className="mr-4 inline-flex items-center gap-1.5 py-1 text-xs">
+                  <input type="checkbox" disabled={creatingBusy} checked={bulkChannelsToApply.includes(channel.id)}
+                    onChange={e=>setBulkChannelsToApply(old=>e.target.checked?[...old,channel.id]:old.filter(id=>id!==channel.id))}
+                    className="h-4 w-4 accent-indigo-700"/>
+                  {channel.name}
+                </label>)}
+                {!acquisitionChannels.some(ch=>ch.is_active)&&
+                  <p className="text-xs text-slate-600">Cadastre canais antes pelo botão “Canais + Resultados” no Kanban.</p>}
+              </fieldset>
+              <button type="button" disabled={creatingBusy||!bulkSelectedRows.length||acquisitionCatalogUnavailable}
+                onClick={applyBulkChannels}
+                className="mt-2 rounded-lg bg-indigo-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">
+                Aplicar canais aos {bulkSelectedRows.length} selecionados
+              </button>
+              <p className="mt-2 text-[11px] text-slate-600">
+                Depois de aplicar, você pode ajustar individualmente cada número.
+                Os contatos desmarcados não serão alterados.
+              </p>
+              <div className="mt-3 max-h-56 space-y-1.5 overflow-y-auto">
+                {bulkPhones.slice(0,100).map((phone,index)=><div key={index}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" aria-label={'Selecionar contato '+(index+1)}
+                      disabled={creatingBusy} checked={bulkSelectedRows.includes(index)}
+                      onChange={e=>setBulkSelectedRows(old=>e.target.checked?
+                        [...old,index]:old.filter(i=>i!==index))}
+                      className="h-4 w-4 accent-indigo-700"/>
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{index+1}. {phone}</span>
+                    <span className="max-w-[48%] truncate text-[11px] text-indigo-700">
+                      {(bulkChannelsByRow[index]||[]).map(id=>acquisitionChannels.find(c=>c.id===id)?.name||'Canal histórico').join(', ')||'Sem canal'}
+                    </span>
+                  </div>
+                  <details className="mt-1 pl-6 text-xs">
+                    <summary className="cursor-pointer font-semibold text-violet-700">Editar canais deste contato</summary>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+                      {acquisitionChannels.filter(ch=>ch.is_active).map(channel=><label key={channel.id}
+                        className="inline-flex items-center gap-1.5">
+                        <input type="checkbox" disabled={creatingBusy}
+                          checked={(bulkChannelsByRow[index]||[]).includes(channel.id)}
+                          onChange={e=>{
+                            setBulkChannelsByRow(old=>{
+                              const current=old[index]||[];
+                              return {...old,[index]:e.target.checked?[...current,channel.id]:current.filter(id=>id!==channel.id)};
+                            });
+                            delete keysRef.current.create;
+                          }}
+                          className="h-4 w-4 accent-indigo-700"/>
+                        {channel.name}
+                      </label>)}
+                    </div>
+                  </details>
+                </div>)}
+              </div>
+            </div>}
+          </div>
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} className="rounded-lg border px-4 py-2 text-sm">Cancelar</button>
             <button type="button" disabled={creatingBusy||!phonesDraft.trim()} onClick={()=>void createOpportunities()}
