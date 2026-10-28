@@ -123,7 +123,7 @@ export function registerSalesProspectingRoutes(
       if(!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
          ||!['phone','whatsapp_call'].includes(channel)
          ||typeof occurredAt!=='string'||occurredAt.length>40
-         ||!/T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$/.test(occurredAt)
+         ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
          ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
         return res.status(400).json({success:false,error:'Data, hora ou canal inválidos.'});
       try{
@@ -153,7 +153,7 @@ export function registerSalesProspectingRoutes(
       const due=req.body?.contactDueAt;
       if(!isUuid(leadId)||!isUuid(actorId)||key.length<12||key.length>120
          ||(due!==null&&(typeof due!=='string'||due.length>40
-           ||!/T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$/.test(due)
+           ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(due)
            ||!Number.isFinite(Date.parse(due)))))
         return res.status(400).json({success:false,error:'Data ou horário de retorno inválidos.'});
       try{
