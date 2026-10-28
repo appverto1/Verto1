@@ -67,6 +67,35 @@ export function registerSalesAcquisitionRoutes(app:any,deps:Deps){
     }catch{return res.status(503).json({success:false,error:'Não foi possível alterar o canal.'});}
   });
 
+  // Atomic selection for existing Kanban cards; all selections succeed or none.
+  app.put('/api/owner/sales/acquisition/leads/bulk',...guard,async(req:any,res:any)=>{
+    const actorId=actor(req);
+    const key=sanitizeString(req.headers?.['x-idempotency-key'],121);
+    const selections=req.body?.selections;
+    if(!isUuid(actorId)||key.length<12||key.length>120||
+      !Array.isArray(selections)||selections.length<1||selections.length>100||
+      selections.some((item:any)=>!item||!isUuid(item.leadId)||
+        !Array.isArray(item.channelIds)||item.channelIds.length>20||
+        item.channelIds.some((id:unknown)=>typeof id!=='string'||!isUuid(id))||
+        new Set(item.channelIds).size!==item.channelIds.length)||
+      new Set(selections.map((item:any)=>item.leadId)).size!==selections.length)
+      return res.status(400).json({success:false,error:'Revise os cards selecionados e seus canais.'});
+    try{
+      const {data,error}=await supabase.rpc('save_sales_lead_acquisition_channels_bulk_v1',{
+        p_actor_user_id:actorId,p_items:selections,p_action_key:key,
+      });
+      if(error){
+        const msg=String(error.message||'');
+        if(/ACQUISITION_CHANNEL_UNAVAILABLE|LEAD_NOT_FOUND|IDEMPOTENCY_CONFLICT/.test(msg))
+          return res.status(409).json({success:false,error:'Um dos cards ou canais não está disponível. Nenhuma seleção foi alterada.'});
+        if(/INVALID_ACQUISITION_BATCH|DUPLICATE_ACQUISITION_LEAD|DUPLICATE_BATCH_CHANNEL/.test(msg))
+          return res.status(400).json({success:false,error:'Seleção de canais inválida.'});
+        throw error;
+      }
+      return res.json({success:true,selections:data});
+    }catch{return res.status(503).json({success:false,error:'Não foi possível atribuir os canais em lote.'});}
+  });
+
   app.put('/api/owner/sales/acquisition/leads/:leadId',...guard,async(req:any,res:any)=>{
     const leadId=sanitizeString(req.params?.leadId,120);
     const actorId=actor(req);
