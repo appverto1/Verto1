@@ -34,6 +34,19 @@ alter table public.sales_crm_import_lead_map enable row level security;
 revoke all on public.sales_crm_import_lead_map from public,anon,authenticated;
 grant select,insert,update on public.sales_crm_import_lead_map to service_role;
 
+create table public.sales_crm_import_actor_refs (
+ source_environment text not null default 'staging' check(source_environment='staging'),
+ source_table text not null check(source_table in ('sales_prospecting_attempts','sales_script_versions','sales_lead_acquisition_channels')),
+ source_record_key text not null,
+ source_actor_user_id uuid,
+ mapped_actor_user_id uuid references public.users(id),
+ imported_at timestamptz not null default clock_timestamp(),
+ primary key(source_environment,source_table,source_record_key)
+);
+alter table public.sales_crm_import_actor_refs enable row level security;
+revoke all on public.sales_crm_import_actor_refs from public,anon,authenticated;
+grant select,insert,update on public.sales_crm_import_actor_refs to service_role;
+
 -- Prevent unprivileged clients from inferring import identities via direct SQL.
 -- The bridge is for deterministic operator reconciliation and is never used as
 -- financial/customer identity authority.
