@@ -249,7 +249,8 @@ const backgroundWorkerMode = read('services/backgroundWorkerMode.ts');
 const backgroundWorkerModeConfig = read('services/backgroundWorkerModeConfig.ts');
 const distributedRuntime = read('services/distributedRuntimeState.ts');
 const server = read('server.ts');
-const envExample = read('.env.example');
+const envExamplePath = path.join(root, '.env.example');
+const envExample = fs.existsSync(envExamplePath) ? read('.env.example') : null;
 
 // All known node-cron recurring workers use the singleton guarded by backgroundWorkerMode.
 assert.equal((recurringCronSources.match(/cron\.schedule\(/g) || []).length, 1);
@@ -278,8 +279,12 @@ assert.match(server, /drainActivePatientSyncQueue\('scheduled_retry_drain'\)/);
 assert.match(server, /reconcileActivePatientSyncQueue/);
 assert.match(server, /drainActivePatientSyncQueue/);
 
-assert.match(envExample, /VERTO_BACKGROUND_WORKER_MODE=/);
-assert.doesNotMatch(envExample, /VITE_VERTO_BACKGROUND_WORKER_MODE/);
+// The sample env file is excluded from Railway's Docker build context on purpose.
+// Check it in full-repo runs; runtime and production-safety tests still run in Docker.
+if (envExample !== null) {
+  assert.match(envExample, /VERTO_BACKGROUND_WORKER_MODE=/);
+  assert.doesNotMatch(envExample, /VITE_VERTO_BACKGROUND_WORKER_MODE/);
+}
 assert.doesNotMatch(backgroundWorkerMode, /localStorage|querystring|window\.location/);
 
 console.log('backgroundWorkerEconomyMode.test.ts: OK');
