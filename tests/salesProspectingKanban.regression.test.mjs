@@ -389,3 +389,44 @@ test('script comparisons separate contactability and interested decisions withou
   assert.match(scriptPanel,/Não incluem históricos sem fluxo/);
   assert.match(scriptsSql,/is_active boolean not null default true/);
 });
+
+
+const acquisitionSql=readFileSync('supabase/migrations/20261028233000_sales_acquisition_multiselect_v1.sql','utf8');
+const acquisitionApi=readFileSync('services/salesAcquisitionRoutes.ts','utf8');
+const acquisitionPanel=readFileSync('src/components/CommercialAcquisitionPanel.tsx','utf8');
+test('global acquisition catalog seeds event, paid traffic and referral with owner-only isolation',()=>{
+  assert.match(acquisitionSql,/values\('Evento'\),\('Tráfego pago'\),\('Indicação'\)/);
+  assert.match(acquisitionSql,/sales_acquisition_channels_name_uidx/);
+  assert.match(acquisitionSql,/sales_lead_acquisition_channels\(/);
+  assert.match(acquisitionSql,/primary key\(lead_id,channel_id\)/);
+  assert.match(acquisitionSql,/enable row level security/g);
+  assert.match(acquisitionSql,/from public,anon,authenticated/);
+  assert.match(acquisitionSql,/to service_role;/);
+  assert.match(acquisitionApi,/const guard=\[checkAuth,checkPlatformAdmin\]/);
+  assert.match(routes,/registerSalesAcquisitionRoutes\(app/);
+});
+test('every card supports acquisition multiselect without F5 and serialized Save authority',()=>{
+  assert.match(kanban,/Selecionar canais de aquisição para/);
+  assert.match(kanban,/Canais de aquisição · selecionar/);
+  assert.match(kanban,/Marcar origens \(múltipla escolha\)/);
+  assert.match(kanban,/type="checkbox" checked=\{checked\}/);
+  assert.match(kanban,/Salvar canais/);
+  assert.match(kanban,/setAcquisitionByLead\(old=>/);
+  assert.match(kanban,/acquisition\/board\?leadIds=/);
+  assert.match(acquisitionApi,/save_sales_lead_acquisition_channels_v1/);
+  assert.match(acquisitionSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(acquisitionSql,/acquisition_channels_saved/);
+  assert.match(acquisitionSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(acquisitionSql,/ACQUISITION_CHANNEL_UNAVAILABLE/);
+});
+test('channel comparison uses lead-based counts and discloses multi-touch attribution',()=>{
+  assert.match(acquisitionPanel,/Atribuição múltipla/);
+  assert.match(acquisitionPanel,/Compare taxas, não some os totais entre canais/);
+  assert.match(acquisitionPanel,/rate\(m\.converted,m\.opportunities\)/);
+  assert.match(acquisitionPanel,/Cadastrar canal/);
+  assert.match(acquisitionPanel,/Desativar/);
+  assert.match(acquisitionSql,/count\(l\.id\)::int as opportunities/);
+  assert.match(acquisitionSql,/l\.status='converted'/);
+  assert.match(acquisitionSql,/a\.contact_result='interested'/);
+  assert.doesNotMatch(acquisitionSql,/notification_jobs|push_subscriptions|cron\.schedule/);
+});
