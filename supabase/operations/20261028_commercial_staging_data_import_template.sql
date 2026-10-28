@@ -106,6 +106,17 @@ coalesce(src.metadata,'{}'::jsonb)||jsonb_build_object('importedFrom','staging',
 from _crm_stage_events src join public.sales_crm_import_lead_map m on m.source_lead_id=src.lead_id
 on conflict do nothing;
 
+insert into public.sales_crm_import_actor_refs(source_table,source_record_key,source_actor_user_id,mapped_actor_user_id)
+select 'sales_prospecting_attempts',id::text,actor_user_id,null
+from _crm_stage_attempts on conflict do nothing;
+insert into public.sales_crm_import_actor_refs(source_table,source_record_key,source_actor_user_id,mapped_actor_user_id)
+select 'sales_script_versions',id::text,created_by,admin_id
+from _crm_stage_scripts on conflict do nothing;
+insert into public.sales_crm_import_actor_refs(source_table,source_record_key,source_actor_user_id,mapped_actor_user_id)
+select 'sales_lead_acquisition_channels',lead_id::text||':'||channel_id::text,assigned_by,admin_id
+from _crm_stage_links on conflict do nothing;
+
+if (select count(*) from public.sales_crm_import_actor_refs)<>31 then raise exception 'ACTOR_PROVENANCE_NOT_31';end if;
 if (select count(*) from public.sales_crm_import_lead_map)<>47 then raise exception 'MAPPING_COUNT_NOT_47';end if;
 if (select count(*) from public.sales_leads)<>59 then raise exception 'LEAD_COUNT_NOT_59';end if;
 if (select count(*) from public.sales_prospecting_attempts)<>21 then raise exception 'ATTEMPT_COUNT_NOT_21';end if;
