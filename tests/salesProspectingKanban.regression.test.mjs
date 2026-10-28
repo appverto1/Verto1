@@ -262,8 +262,8 @@ test('WhatsApp text has an explicit selectable channel and persists only through
   assert.match(kanban,/a.channel==='whatsapp_call'\?'Ligação WhatsApp':'Mensagem WhatsApp'/);
   assert.match(kanban,/Decisor por mensagem/);
   assert.match(kanban,/setAttempts\(old=>attempt/);
-  assert.match(routes,/! \['phone', 'whatsapp_call'\]\.includes\(channel\)/);
-  assert.match(routes,/! \['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
+  assert.match(routes,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
+  assert.match(routes,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
 });
 
 test('text contact never increments phone or WhatsApp call counters and preserves future follow-ups',()=>{
