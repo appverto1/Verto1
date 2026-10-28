@@ -158,10 +158,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [mobileMenuOpen]);
-  const selectAdminTab = (tab: typeof activeTab) => {
-    setActiveTab(tab);
+  const closeMobileMenu = () => {
     setMobileMenuOpen(false);
     mobileMenuTriggerRef.current?.focus();
+  };
+  const selectAdminTab = (tab: typeof activeTab) => {
+    setActiveTab(tab);
+    if (mobileMenuOpen) closeMobileMenu();
   };
   const [financialView, setFinancialView] = useState<'dre'|'sales'>('dre');
   const [leadNextPage, setLeadNextPage] = useState(2);
@@ -931,7 +934,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900">
       {mobileMenuOpen && (
-        <button type="button" aria-label="Fechar menu de navegação" onClick={() => setMobileMenuOpen(false)}
+        <button type="button" aria-label="Fechar menu de navegação" onClick={closeMobileMenu}
           className="fixed inset-0 z-40 bg-slate-950/50 md:hidden" />
       )}
       <aside id="super-admin-navigation" aria-label="Navegação Super Admin"
@@ -939,7 +942,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           ' fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] flex-col overflow-x-hidden border-r border-slate-200 bg-white/95 backdrop-blur md:max-w-none' +
           (compactDesktopMenu ? ' md:w-[66px]' : ' md:w-72')}>
         <button ref={mobileMenuCloseRef} type="button" aria-label="Fechar menu"
-          onClick={() => { setMobileMenuOpen(false); mobileMenuTriggerRef.current?.focus(); }}
+          onClick={closeMobileMenu}
           className="absolute right-3 top-4 rounded-lg p-2 text-slate-600 hover:bg-slate-100 md:hidden">
           <X size={22} />
         </button>
