@@ -559,10 +559,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       onLeadPatch(draft.leadId,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setAttemptDialog(null);
       setInfo(draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
-      if(!draft.attemptId&&json.data.needsLossDecision&&
-         window.confirm('Foram registradas 10 tentativas sem conversar com o decisor. Marcar a oportunidade como perdida?')){
-        manualLost(lead,true);
-      }
+      // Ten calls is a visual cadence reference, not a hard stop or automatic loss.
+      // A lead remains in its existing funnel stage until explicitly changed.
     }catch(e:any){setError(e.message||'Não foi possível salvar a tentativa.');}
     finally{setBusyLead(null);}
   };
@@ -689,11 +687,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setColumnFollowupFilters({});
     setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
   };
-  const callEnabled=(lead:Lead,ch:'phone'|'whatsapp_call')=>{
-    const n=leadCounts(lead.id);
-    return !busyLead && !n.spoken && !['converted','lost','archived'].includes(lead.status)
-      && (ch==='phone'?n.phone<5:n.whatsapp<5);
-  };
+  // A funnel stage, prior conversation or cadence milestone must never disable
+  // either call button. Only an in-flight save temporarily prevents double taps.
+  const callEnabled=(_lead:Lead,_ch:'phone'|'whatsapp_call')=>!busyLead;
   return (
     <section className="min-w-0 flex-1 flex flex-col gap-3" aria-label="Kanban comercial de tela inteira">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#10192D] px-4 py-3 text-white">
@@ -913,7 +909,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <p className="mt-1 truncate text-[11px] font-semibold text-slate-600">{lead.clinicName||'Clínica não informada'}</p>
                       <p className="mt-1 truncate text-[11px] text-slate-500">{lead.phone||'Telefone não informado'}</p>
                       <div className="mt-3 grid grid-cols-2 gap-1.5">
-                        <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total}/10</b></div>
+                        <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total} ligações</b></div>
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Status</span><b className={'line-clamp-1 text-[10px] '+(a.spoken?'text-green-700':'text-slate-700')}>{a.spoken?(a.spokenVia==='whatsapp_message'?'Decisor por mensagem':'Decisor por ligação'):SALES_LEAD_STATUS_LABELS[lead.status]||lead.status}</b></div>
                       </div>
                       <div role="progressbar" aria-label="Tentativas de ligação"
@@ -923,7 +919,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         <div className="h-full rounded-full transition-all duration-300"
                           style={{width:progressWidth(total),backgroundColor:progressColor(total)}}/>
                       </div>
-                      <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone}/5 · Ligação WhatsApp {a.whatsapp}/5</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone} · Ligação WhatsApp {a.whatsapp}</p>
                       {followups[lead.id]?.status==='scheduled'&&
                         !['converted','lost','archived'].includes(lead.status)&&
                         <p className={'mt-2 rounded-lg px-2 py-1.5 text-[10px] font-bold '+(
@@ -953,10 +949,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
                       <button type="button" disabled={!callEnabled(lead,'phone')}
                         onClick={()=>recordAttempt(lead,'phone','no_decisor')} aria-label={'Contabilizar ligação pela operadora para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}/5</button>
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}</button>
                       <button type="button" disabled={!callEnabled(lead,'whatsapp_call')}
                         onClick={()=>recordAttempt(lead,'whatsapp_call','no_decisor')} aria-label={'Contabilizar ligação pelo WhatsApp para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}/5</button>
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}</button>
                       <button onClick={()=>setSelectedId(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
                     </div>
                   </article>;
@@ -1156,7 +1152,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               <p className="mt-1 text-[11px] text-slate-500">Movimentos salvos no histórico, sem atualizar a página. Cliente convertido só muda por pagamento confirmado.</p>
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center justify-between"><h4 className="font-black">Cadência de ligações</h4><span className="text-sm font-black">{selectedCounts.phone+selectedCounts.whatsapp}/10</span></div>
+              <div className="flex items-center justify-between"><h4 className="font-black">Cadência de ligações</h4><span className="text-sm font-black">{selectedCounts.phone+selectedCounts.whatsapp} ligações</span></div>
               <div role="progressbar" aria-label="Progresso das tentativas de ligação"
                 aria-valuemin={0} aria-valuemax={10}
                 aria-valuenow={Math.min(10,selectedCounts.phone+selectedCounts.whatsapp)}
@@ -1166,11 +1162,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     backgroundColor:progressColor(selectedCounts.phone+selectedCounts.whatsapp)}}/>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-                <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}/5</b></div>
-                <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}/5</b></div>
+                <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}</b></div>
+                <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}</b></div>
               </div>
-              <p className="mt-3 text-[11px] text-slate-500">Os botões contabilizam tentativas, sem abrir aplicativos. Limite: uma por dia, de segunda a sexta, das 9h às 17h30 (Brasília).</p>
-              {!selectedCounts.spoken&&selectedCounts.phone+selectedCounts.whatsapp<10&&
+              <p className="mt-3 text-[11px] text-slate-500">Os botões funcionam em todas as etapas, inclusive após contato e conversão. O servidor valida horário comercial, uma ligação por dia e a preferência de não contato.</p>
+              {selectedCounts.phone+selectedCounts.whatsapp<10&&
                 <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3 text-xs">
                   <h5 className="font-bold text-violet-800">Cadência sugerida — dias e horários alternados</h5>
                   <ol className="mt-2 grid grid-cols-2 gap-1.5 text-violet-800">
@@ -1180,7 +1176,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                   </ol>
                   <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. O servidor valida dia útil, expediente e uma ligação por dia.</p>
                 </div>}
-              {!selectedCounts.spoken&&!['converted','lost','archived'].includes(selected.status)&&<div className="mt-3 space-y-2">
+              {<div className="mt-3 space-y-2">
                 <button disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
                   className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação operadora sem falar com decisor</button>
                 <button disabled={!callEnabled(selected,'whatsapp_call')} onClick={()=>recordAttempt(selected,'whatsapp_call','no_decisor')}
@@ -1219,9 +1215,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         </label>)}
                     </div>
                   </fieldset>
-                  <button disabled={Boolean(busyLead)||!spokenAtDraft||
-                      (spokenChannel==='phone'&&selectedCounts.phone>=5)||
-                      (spokenChannel==='whatsapp_call'&&selectedCounts.whatsapp>=5)}
+                  <button disabled={Boolean(busyLead)||!spokenAtDraft}
                     onClick={()=>void saveSpokenContact(selected)}
                     className="w-full rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">
                     Salvar contato com decisor
