@@ -611,7 +611,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const overdueCount=filtered.filter(l=>matchReturnFilter(l,'overdue')).length;
   const shownCount=filtered.filter(l=>{
     const id=columnFor(l);
-    return Boolean(id)&&(showStage==='all'||id===showStage)&&
+    if(!id)return false;
+    return (showStage==='all'||id===showStage)&&
       matchReturnFilter(l,effectiveReturnFilter(id));
   }).length;
   const chooseGlobalFollowupFilter=(filter:FollowupFilter)=>{
