@@ -9,8 +9,9 @@ import { CommercialScriptsPanel } from './CommercialScriptsPanel';
 import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import {
+  agendaMatches,compareAgendaPriority,resolveAgendaMoment,
   brazilDateKey,followupBucket,followupFilters,matchesFollowup,progressColor,progressWidth,
-  type FollowupFilter,
+  type AgendaMode,type AgendaSource,type AgendaMoment,type FollowupFilter,
 } from '../utils/salesKanbanFollowupVisuals.mjs';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
@@ -91,6 +92,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [globalFollowupFilter,setGlobalFollowupFilter]=useState<FollowupFilter>('all');
   const [columnFollowupFilters,setColumnFollowupFilters]=useState<Record<string,FollowupFilter>>({});
   const [calendarToday,setCalendarToday]=useState(()=>brazilDateKey(new Date()));
+  const [clockNow,setClockNow]=useState(()=>Date.now());
+  const [agendaMode,setAgendaMode]=useState<AgendaMode>('all');
+  const [agendaSource,setAgendaSource]=useState<AgendaSource>('all');
+  const [agendaDate,setAgendaDate]=useState(()=>brazilDateKey(new Date()));
+  const [agendaFrom,setAgendaFrom]=useState('');
+  const [agendaTo,setAgendaTo]=useState('');
   const [editing, setEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
@@ -111,11 +118,17 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [savingFollowup,setSavingFollowup]=useState(false);
   // Refresh the São Paulo calendar date on tab return; no background polling/requests.
   useEffect(()=>{
-    const update=()=>setCalendarToday(brazilDateKey(new Date()));
+    const update=()=>{
+      const now=Date.now();
+      setClockNow(now);
+      setCalendarToday(brazilDateKey(new Date(now)));
+    };
     const onVisibility=()=>{if(!document.hidden)update();};
+    const interval=window.setInterval(update,60000); // UI-only clock, no HTTP polling.
     window.addEventListener('focus',update);
     document.addEventListener('visibilitychange',onVisibility);
     return()=>{
+      window.clearInterval(interval);
       window.removeEventListener('focus',update);
       document.removeEventListener('visibilitychange',onVisibility);
     };
@@ -302,7 +315,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     return map;
   },[attempts]);
   const leadAttemptDates=(id:string)=>attemptsByLead.get(id)||[];
-  const nextWindow=(id:string)=>nextSalesCadenceSlots(leadAttemptDates(id))[0];
   const slotLabel=(date:Date)=>date.toLocaleString('pt-BR',{
     timeZone:'America/Sao_Paulo',weekday:'short',day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',
   });
@@ -347,6 +359,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       onLeadsCreated(json.leads||[]);
       setPhonesDraft('');setCreatingOpen(false);setSearch('');setShowStage('all');
       setGlobalFollowupFilter('all');setColumnFollowupFilters({});
+      setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
       setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s). Abra os cards para editar.');
     }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
     finally{setCreatingBusy(false);}
@@ -601,24 +614,59 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   };
 
   const shownColumns=columns.filter(c=>showStage==='all'||showStage===c.id);
+  // A manually agreed date takes precedence over the next suggested call slot.
+  // Suggested slots are computed once per loaded lead and never persisted as appointments.
+  const agendaByLead=useMemo(()=>{
+    const map=new Map<string,AgendaMoment|null>();
+    for(const lead of filtered){
+      const count=countByLead.get(lead.id);
+      const callCount=(count?.phone||0)+(count?.whatsapp||0);
+      const eligible=!['lost','archived','converted'].includes(lead.status);
+      const hasManual=followups[lead.id]?.status==='scheduled';
+      const suggestion=eligible&&!hasManual&&!count?.spoken&&callCount<10
+        ? nextSalesCadenceSlots(attemptsByLead.get(lead.id)||[],new Date(clockNow))[0]
+        : null;
+      map.set(lead.id,resolveAgendaMoment(followups[lead.id],suggestion,eligible));
+    }
+    return map;
+  },[filtered,followups,countByLead,attemptsByLead,clockNow]);
+  const agendaActive=agendaMode!=='all'||agendaSource!=='all'||Boolean(agendaFrom||agendaTo);
+  const agendaPass=(leadId:string)=>agendaMatches(agendaByLead.get(leadId),{
+    mode:agendaMode,source:agendaSource,date:agendaDate,from:agendaFrom,to:agendaTo,now:clockNow,
+  });
+  const filterAgendaAndSort=(items:Lead[])=>{
+    const matched=items.filter(l=>agendaPass(l.id));
+    if(!agendaActive)return matched;
+    return matched.sort((a,b)=>
+      compareAgendaPriority(agendaByLead.get(a.id),agendaByLead.get(b.id),clockNow));
+  };
+  const setAgendaFilter=(mode:AgendaMode)=>{
+    setClockNow(Date.now());
+    setAgendaMode(mode);
+    // Agenda and legacy manual-return filters are separate views; reset legacy
+    // filters so suggested slots don't disappear behind the stored-only filter.
+    setGlobalFollowupFilter('all');
+    setColumnFollowupFilters({});
+  };
   const matchReturnFilter=(lead:Lead,filter:FollowupFilter)=>
     matchesFollowup(followups[lead.id],filter,calendarToday,lead.status);
   const effectiveReturnFilter=(columnId:string)=>
     columnFollowupFilters[columnId]??globalFollowupFilter;
   const cardCount=(c:Column)=>filtered.filter(l=>columnFor(l)===c.id&&
-    matchReturnFilter(l,effectiveReturnFilter(c.id))).length;
+    matchReturnFilter(l,effectiveReturnFilter(c.id))&&agendaPass(l.id)).length;
   const returnsTodayCount=filtered.filter(l=>matchReturnFilter(l,'today')).length;
   const overdueCount=filtered.filter(l=>matchReturnFilter(l,'overdue')).length;
   const shownCount=filtered.filter(l=>{
     const id=columnFor(l);
     if(!id)return false;
     return (showStage==='all'||id===showStage)&&
-      matchReturnFilter(l,effectiveReturnFilter(id));
+      matchReturnFilter(l,effectiveReturnFilter(id))&&agendaPass(l.id);
   }).length;
   const chooseGlobalFollowupFilter=(filter:FollowupFilter)=>{
     setCalendarToday(brazilDateKey(new Date()));
     setGlobalFollowupFilter(filter);
     setColumnFollowupFilters({});
+    setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
   };
   const callEnabled=(lead:Lead,ch:'phone'|'whatsapp_call')=>{
     const n=leadCounts(lead.id);
@@ -707,6 +755,67 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         </p>}
       </div>
 
+      <div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/70 p-3"
+        aria-label="Agenda de retorno por data e horário">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-xs font-black text-violet-950">Agenda priorizada de contatos</h3>
+            <p className="text-[11px] text-violet-800">
+              Compromissos agendados ou janelas sugeridas pela cadência · mais urgentes primeiro
+            </p>
+          </div>
+          <button type="button" onClick={()=>{setAgendaFilter('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');}}
+            className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700">
+            Limpar agenda
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {([
+            {value:'priority' as const,label:'Priorizar retornos'},
+            {value:'today' as const,label:'Retornos de hoje'},
+            {value:'next2h' as const,label:'Próximas 2 horas'},
+            {value:'overdue' as const,label:'Atrasados'},
+          ]).map(item=><button type="button" key={item.value}
+            aria-pressed={agendaMode===item.value}
+            onClick={()=>setAgendaFilter(item.value)}
+            className={'rounded-lg px-3 py-2 text-xs font-bold '+(agendaMode===item.value
+              ? 'bg-violet-700 text-white':'border border-violet-200 bg-white text-violet-800')}>
+            {item.label}
+          </button>)}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <label className="text-xs font-bold text-slate-700">Data do retorno
+            <input type="date" aria-label="Data específica do retorno" value={agendaDate}
+              onChange={e=>{setAgendaDate(e.target.value);setAgendaFilter('date');}}
+              className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs"/>
+          </label>
+          <label className="text-xs font-bold text-slate-700">Horário a partir de
+            <input type="time" aria-label="Horário inicial do retorno" value={agendaFrom}
+              onChange={e=>{setAgendaFrom(e.target.value);if(agendaMode==='all')setAgendaFilter('priority');}}
+              className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs"/>
+          </label>
+          <label className="text-xs font-bold text-slate-700">Horário até
+            <input type="time" aria-label="Horário final do retorno" value={agendaTo}
+              onChange={e=>{setAgendaTo(e.target.value);if(agendaMode==='all')setAgendaFilter('priority');}}
+              className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs"/>
+          </label>
+          <label className="text-xs font-bold text-slate-700">Origem do horário
+            <select aria-label="Origem do retorno" value={agendaSource}
+              onChange={e=>{setAgendaSource(e.target.value as AgendaSource);if(agendaMode==='all')setAgendaFilter('priority');}}
+              className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-2 text-xs">
+              <option value="all">Agendados + sugeridos</option>
+              <option value="scheduled">Somente cadastrados</option>
+              <option value="suggested">Somente sugeridos</option>
+            </select>
+          </label>
+        </div>
+        <p className="text-[11px] text-slate-600">
+          {agendaActive?'Ordenado por urgência dentro de cada coluna. Atrasados aparecem antes dos próximos horários.':
+            'Selecione um filtro para ordenar os retornos por urgência.'}
+          {' '}Sugestões não são agendamentos e não enviam notificações.
+        </p>
+      </div>
+
       {(error||info)&&<div role={error?'alert':'status'} className={'rounded-lg border px-3 py-2 text-xs '+(error?'border-red-200 bg-red-50 text-red-700':'border-green-200 bg-green-50 text-green-800')}>
         {error||info} <button type="button" className="ml-2 underline" onClick={()=>{setError(null);setInfo(null);}}>Fechar</button>
       </div>}
@@ -727,8 +836,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           {shownColumns.map((col,index)=>{
             const columnFilter=effectiveReturnFilter(col.id);
             const allCards=filtered.filter(l=>columnFor(l)===col.id);
-            const cards=allCards.filter(l=>matchReturnFilter(l,columnFilter))
-              .sort((a,b)=>columnFilter==='all'||columnFilter==='none'?0:
+            const cards=filterAgendaAndSort(allCards.filter(l=>matchReturnFilter(l,columnFilter)))
+              .sort((a,b)=>agendaActive||columnFilter==='all'||columnFilter==='none'?0:
                 Date.parse(followups[a.id]?.contact_due_at||'')-
                 Date.parse(followups[b.id]?.contact_due_at||''));
             return <div key={col.id} className="flex w-[315px] min-w-[315px] flex-col overflow-hidden rounded-xl border shadow-sm"
@@ -800,7 +909,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                            followupBucket(followups[lead.id],calendarToday)==='today'?'Retornar hoje':'Próximo retorno'}
                           {' · '+dateText(followups[lead.id].contact_due_at)}
                         </p>}
-                      {total<10&&!a.spoken&&<p className="mt-1 text-[10px] font-semibold text-violet-700">Próxima janela: {nextWindow(lead.id)?slotLabel(nextWindow(lead.id)):'—'}</p>}
+                      {agendaByLead.get(lead.id)?.source==='suggested'&&
+                        <p className="mt-1 text-[10px] font-semibold text-violet-700">
+                          Sugerido · {dateText(agendaByLead.get(lead.id)?.at)}
+                        </p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
                     <button type="button" onClick={()=>openAcquisitionEditor(lead.id)}

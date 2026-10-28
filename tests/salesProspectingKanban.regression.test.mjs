@@ -495,3 +495,65 @@ test('Kanban shows shared filters in each column, same-day badge and identical p
   assert.match(kanban,/remaining>0&&<p className="w-full/);
   assert.doesNotMatch(kanban,/style=\{\{width:\(total\*10\)\+'%',backgroundColor:col.color\}\}/);
 });
+
+
+const {agendaMatches,compareAgendaPriority,resolveAgendaMoment}=
+  await import('../src/utils/salesKanbanFollowupVisuals.mjs');
+
+test('manual appointments are authoritative over cadenced suggestions and canceled dates fall back',()=>{
+  const scheduled={status:'scheduled',contact_due_at:'2026-10-28T10:00:00-03:00'};
+  const suggestion=new Date('2026-10-28T15:00:00-03:00');
+  assert.deepEqual(resolveAgendaMoment(scheduled,suggestion),{
+    at:'2026-10-28T13:00:00.000Z',source:'scheduled',
+  });
+  assert.deepEqual(resolveAgendaMoment({status:'canceled',contact_due_at:'2026-10-28T10:00:00-03:00'},suggestion),{
+    at:'2026-10-28T18:00:00.000Z',source:'suggested',
+  });
+  assert.equal(resolveAgendaMoment(scheduled,suggestion,false),null);
+  assert.equal(resolveAgendaMoment(null,null),null);
+});
+
+test('agenda date, São Paulo hour interval and source selection filter next callbacks',()=>{
+  const now=Date.parse('2026-10-28T09:30:00-03:00');
+  const manually={at:'2026-10-28T13:45:00.000Z',source:'scheduled'};
+  const suggested={at:'2026-10-28T14:45:00.000Z',source:'suggested'};
+  assert.equal(agendaMatches(manually,{mode:'today',now,source:'scheduled'}),true);
+  assert.equal(agendaMatches(manually,{mode:'today',now,source:'suggested'}),false);
+  assert.equal(agendaMatches(manually,{mode:'next2h',now}),true);
+  assert.equal(agendaMatches(suggested,{mode:'next2h',now}),false);
+  assert.equal(agendaMatches(manually,{mode:'date',date:'2026-10-28',from:'10:00',to:'11:00',now}),true);
+  assert.equal(agendaMatches(manually,{mode:'date',date:'2026-10-29',now}),false);
+  assert.equal(agendaMatches(suggested,{mode:'today',from:'11:00',to:'12:00',now}),true);
+  assert.equal(agendaMatches(suggested,{mode:'today',from:'09:00',to:'10:00',now}),false);
+  assert.equal(agendaMatches(null,{mode:'priority',now}),false);
+  assert.equal(agendaMatches(null,{mode:'all',now}),true);
+});
+
+test('urgent returns surface before tomorrow and next hours, with stable actual-date preference',()=>{
+  const now=Date.parse('2026-10-28T11:00:00-03:00');
+  const old={at:'2026-10-27T13:00:00.000Z',source:'scheduled'};
+  const overdue={at:'2026-10-28T12:30:00.000Z',source:'scheduled'};
+  const upcoming={at:'2026-10-28T15:00:00.000Z',source:'suggested'};
+  const later={at:'2026-10-29T13:00:00.000Z',source:'scheduled'};
+  const values=[upcoming,later,overdue,old].sort((a,b)=>compareAgendaPriority(a,b,now));
+  assert.deepEqual(values,[old,overdue,upcoming,later]);
+  assert.ok(compareAgendaPriority({at:upcoming.at,source:'scheduled'},upcoming,now)<0);
+  assert.equal(agendaMatches(old,{mode:'overdue',now}),true);
+  assert.equal(agendaMatches(upcoming,{mode:'overdue',now}),false);
+});
+
+test('Kanban integrates date time and source options while reusing saved followups and cadence',()=>{
+  assert.match(kanban,/Agenda priorizada de contatos/);
+  assert.match(kanban,/Próximas 2 horas/);
+  assert.match(kanban,/Data específica do retorno/);
+  assert.match(kanban,/Horário inicial do retorno/);
+  assert.match(kanban,/Horário final do retorno/);
+  assert.match(kanban,/Somente cadastrados/);
+  assert.match(kanban,/Somente sugeridos/);
+  assert.match(kanban,/resolveAgendaMoment\(followups\[lead\.id\],suggestion,eligible\)/);
+  assert.match(kanban,/nextSalesCadenceSlots\(attemptsByLead\.get\(lead\.id\)\|\|\[\],new Date\(clockNow\)\)/);
+  assert.match(kanban,/filterAgendaAndSort\(allCards\.filter/);
+  assert.match(kanban,/compareAgendaPriority\(agendaByLead\.get/);
+  assert.match(kanban,/setInterval\(update,60000\)/);
+  assert.match(kanban,/Sugestões não são agendamentos e não enviam notificações/);
+});
