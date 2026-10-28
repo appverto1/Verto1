@@ -20,6 +20,9 @@ if (!url.startsWith('https://') || !roleKey) {
 
 const supabase = createClient(url, roleKey, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+  // Required by verto_request_deployment_env_v1 for every service-role RPC.
+  // This cannot be derived from untrusted inbound input: worker is staging-only.
+  global: { headers: { 'x-verto-deployment-env': 'staging' } },
 });
 const result = await runStagingNotificationQueuesOnce({
   supabase,
