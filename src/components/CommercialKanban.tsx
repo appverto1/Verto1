@@ -49,6 +49,7 @@ const stageFromStatus = (status: string) => {
 export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDeleted, onOpenLead, onRefresh, onMetrics, onLoadMore, remaining, loadingMore }: Props) => {
   const [columns, setColumns] = useState<Column[]>([]);
   const [placements, setPlacements] = useState<Record<string,string>>({});
+  const [overrides, setOverrides] = useState<Record<string,{details:Partial<Lead>;hidden:boolean}>>({});
   const [attempts, setAttempts] = useState<CommercialAttempt[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -113,9 +114,13 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         if (!live) return;
         setColumns(pages[0].board.columns || []);
         const nextPlacements: Record<string,string> = {};
+        const nextOverrides: Record<string,{details:Partial<Lead>;hidden:boolean}> = {};
         const dedup = new Map<string,CommercialAttempt>();
         for (const page of pages) {
           for (const item of page.board.placements || []) nextPlacements[item.lead_id] = item.column_id;
+          for (const item of page.board.overrides || []) {
+            nextOverrides[item.lead_id] = { details:item.details || {}, hidden:Boolean(item.hidden_at) };
+          }
           for (const item of page.history.data || []) dedup.set(item.id,item);
           for (const item of page.history.leads || []) {
             // Only changed server facts cause an in-place patch; no F5 necessary.
@@ -126,6 +131,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         }
         setAttempts([...dedup.values()]);
         setPlacements(nextPlacements);
+        setOverrides(nextOverrides);
         setError(null);
       } catch (cause: any) { if (live) setError(cause.message || 'Falha ao carregar Kanban.'); }
       finally { if (live) setLoading(false); }
@@ -165,12 +171,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       return columns.find(c => c.slug === stageFromStatus(lead.status))?.id;
     return placements[lead.id] || columns.find(c => c.slug === stageFromStatus(lead.status))?.id;
   };
+  const visibleLeads = useMemo(() => leads
+    .filter(lead => !overrides[lead.id]?.hidden)
+    .map(lead => ({...lead,...(overrides[lead.id]?.details || {})})), [leads,overrides]);
   const filtered = useMemo(() => {
     const q = search.trim().toLocaleLowerCase('pt-BR');
-    return leads.filter(lead => !lead.legacyReadOnly && isUuid(lead.id) &&
+    return visibleLeads.filter(lead => !lead.legacyReadOnly && isUuid(lead.id) &&
       (!q || [lead.name,lead.clinicName,lead.email,lead.phone].some(v=>String(v||'').toLocaleLowerCase('pt-BR').includes(q))));
-  }, [leads,search]);
-  const selected = leads.find(x=>x.id === selectedId) || null;
+  }, [visibleLeads,search]);
+  const selected = visibleLeads.find(x=>x.id === selectedId) || null;
   const selectedCounts = selected ? leadCounts(selected.id) : {phone:0,whatsapp:0,spoken:false};
   useEffect(()=>{
     const lead=leads.find(x=>x.id===selectedId);
@@ -221,12 +230,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       delete keysRef.current[keyName];
       onLeadPatch(selected.id,json.lead);
-      setEditingLead(false);setInfo('Oportunidade salva.');
+      setEditingLead(false);
+      setInfo(json.lead?.kanbanOnly
+        ? 'Dados salvos na ficha do Kanban. Cadastros de clientes, propostas e cobranças não foram alterados.'
+        : 'Oportunidade salva.');
     }catch(e:any){setError(e.message||'Erro ao salvar oportunidade.');}
     finally{setSavingLead(false);}
   };
   const deleteLead = async (lead:Lead) => {
-    if(!window.confirm('Excluir '+(lead.name||lead.phone||'a oportunidade')+'? O histórico será preservado.'))return;
+    if(!window.confirm('Remover '+(lead.name||lead.phone||'a oportunidade')+' do Kanban? O histórico e os dados de clientes, propostas e pagamentos serão preservados.'))return;
     const keyName='delete:'+lead.id;
     const key=keysRef.current[keyName]||crypto.randomUUID();keysRef.current[keyName]=key;
     setDeletingLead(true);setError(null);
@@ -235,7 +247,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         method:'DELETE',headers:{'X-Idempotency-Key':key},
       });
       delete keysRef.current[keyName];
-      setSelectedId(null);onLeadDeleted(lead.id);setInfo('Oportunidade excluída; histórico preservado.');
+      setSelectedId(null);onLeadDeleted(lead.id);setInfo('Oportunidade removida do Kanban. Vínculos e histórico preservados.');
     }catch(e:any){setError(e.message||'Erro ao excluir oportunidade.');}
     finally{setDeletingLead(false);}
   };
@@ -542,6 +554,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-40"><Trash2 size={14}/> {deletingLead?'Excluindo...':'Excluir oportunidade'}</button>
             </div>
             {editingLead&&<div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+              <p className="text-xs text-slate-600">Em oportunidades vinculadas a propostas, clientes ou contatos duplicados, estas alterações são exclusivas da ficha do Kanban.</p>
               {([
                 ['name','Nome / identificação',180],['phone','Telefone com DDD',40],
                 ['clinicName','Nome da clínica',180],['email','E-mail (opcional)',254],
