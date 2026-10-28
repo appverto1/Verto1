@@ -110,6 +110,40 @@ export function registerSalesProspectingRoutes(
   );
 
 
+  // Save actual call time; legacy instant-attempt endpoint remains unchanged for compatibility.
+  app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time',
+    checkAuth,checkPlatformAdmin,async(req:any,res:any)=>{
+      const leadId=sanitizeString(req.params?.leadId,120);
+      const actorId=sanitizeString(req.session?.user?.id,120);
+      const attemptId=sanitizeString(req.body?.attemptId,120);
+      const channel=sanitizeString(req.body?.channel,32);
+      const occurredAt=req.body?.occurredAt;
+      const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
+      if(!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
+        ||!['phone','whatsapp_call'].includes(channel)
+        ||typeof occurredAt!=='string'||occurredAt.length>40
+        ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
+        ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
+        return res.status(400).json({success:false,error:'Data, horário ou canal inválidos.'});
+      try{
+        const {data,error}=await supabase.rpc('save_sales_prospecting_attempt_time_v1',{
+          p_lead_id:leadId,p_attempt_id:attemptId||null,p_channel:channel,
+          p_occurred_at:occurredAt,p_action_key:key,p_actor_user_id:actorId,
+        });
+        if(error){
+          const message=String(error.message||'');
+          if(/LEAD_NOT_FOUND|ATTEMPT_NOT_FOUND/.test(message))
+            return res.status(404).json({success:false,error:'Tentativa não encontrada.'});
+          if(/INVALID_ATTEMPT_TIME|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
+            return res.status(400).json({success:false,error:'Informe uma data passada, de segunda a sexta, das 9h às 17h30 (Brasília).'});
+          if(/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED|IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(409).json({success:false,error:'Já existe ligação nessa data, limite atingido ou oportunidade indisponível.'});
+          throw error;
+        }
+        return res.json({success:true,data});
+      }catch{return res.status(500).json({success:false,error:'Não foi possível salvar o horário da tentativa.'});}
+    });
+
   // The user-supplied timestamp is converted on the client, but is checked
   // again by the database. A successful button press is the only write.
   app.put('/api/owner/sales/leads/:leadId/decisor-contact',
