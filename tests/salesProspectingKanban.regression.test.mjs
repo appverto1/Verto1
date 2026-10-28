@@ -557,3 +557,46 @@ test('Kanban integrates date time and source options while reusing saved followu
   assert.match(kanban,/setInterval\(update,60000\)/);
   assert.match(kanban,/Sugestões não são agendamentos e não enviam notificações/);
 });
+
+
+const drilldownSql=readFileSync('supabase/migrations/20261028235000_sales_prospecting_chart_drilldown_v1.sql','utf8');
+test('every commercial funnel stage can open the exact paginated underlying lead list',()=>{
+  assert.match(dashboard,/status:x.status,leads:x.leads/);
+  assert.match(dashboard,/clickedPoint\(state,'stage','status','leads'/);
+  assert.match(dashboard,/onClick=\{\(entry:any\)=>showLeads\('stage'/);
+  assert.match(dashboard,/stages\.map\(stage=><button/);
+  assert.match(dashboard,/Leads identificados/);
+  assert.match(dashboard,/clinic_name/);
+  assert.match(dashboard,/converted_clinic_id/);
+  assert.match(dashboard,/converted_user_id/);
+  assert.match(dashboard,/Próximos leads/);
+  assert.match(dashboard,/Ver leads <ChevronRight/);
+});
+
+test('chart point drilldowns support all commercial dimensions and distinguish attempts from distinct leads',()=>{
+  for(const dimension of ['daily','cumulative','hour','weekday','channel','attempt','stage','overview'])
+    assert.match(drilldownSql,new RegExp("'"+dimension+"'"));
+  assert.match(dashboard,/const clickedPoint=/);
+  assert.match(dashboard,/onClick=\{\(entry:any\)=>showLeads\('channel'.*'failures'/);
+  assert.match(dashboard,/onClick=\{\(entry:any\)=>showLeads\('channel'.*'conversations'/);
+  assert.match(dashboard,/O agregado inclui/);
+  assert.match(dashboard,/matching_events/);
+  assert.match(dashboard,/matchingEvents/);
+  assert.match(dashboard,/Registros telefônicos são eventos/);
+  assert.match(dashboard,/const query=new URLSearchParams/);
+});
+
+test('commercial drilldown enforces owner MFA, window bounds, paging and SQL execute privileges',()=>{
+  assert.match(routes,/app\.get\('\/api\/owner\/sales\/prospecting\/analytics\/drilldown', \.\.\.salesGuard/);
+  assert.match(routes,/sales_prospecting_drilldown_v1/);
+  assert.match(routes,/p_limit:25/);
+  assert.match(drilldownSql,/platform_admins where user_id=p_actor_user_id and active=true/);
+  assert.match(drilldownSql,/p_offset>100000/);
+  assert.match(drilldownSql,/p_limit>50/);
+  assert.match(drilldownSql,/public\.sales_leads l where l\.deleted_at is null/);
+  assert.match(drilldownSql,/a\.channel in\('phone','whatsapp_call'\)/);
+  assert.match(drilldownSql,/revoke all on function public\.sales_prospecting_drilldown_v1/);
+  assert.match(drilldownSql,/from public,anon,authenticated/);
+  assert.match(drilldownSql,/to service_role/);
+  assert.doesNotMatch(drilldownSql,/notification_jobs|patient_sessions|public\.stripe/i);
+});
