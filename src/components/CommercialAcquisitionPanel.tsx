@@ -8,8 +8,8 @@ type Metrics={
 };
 const n=(x:number)=>Number(x||0).toLocaleString('pt-BR');
 const rate=(a:number,b:number)=>b?(a*100/b).toLocaleString('pt-BR',{maximumFractionDigits:1})+'%':'—';
-export function CommercialAcquisitionPanel({onClose,onChanged}:{
- onClose:()=>void;onChanged:()=>Promise<void>;
+export function CommercialAcquisitionPanel({onClose,onChanged,refreshKey}:{
+ onClose:()=>void;onChanged:()=>Promise<void>;refreshKey:number;
 }){
  const [channels,setChannels]=useState<Channel[]>([]);
  const [metrics,setMetrics]=useState<Metrics[]>([]);
@@ -48,7 +48,7 @@ export function CommercialAcquisitionPanel({onClose,onChanged}:{
   }catch(e:any){if(live)setError(e.message||'Não foi possível carregar os canais.');}
   finally{if(live)setLoading(false);}})();
   return()=>{live=false;};
- },[revision]);
+ },[revision,refreshKey]);
  const create=async()=>{
   if(busy)return;setBusy(true);setError('');setMessage('');
   try{
