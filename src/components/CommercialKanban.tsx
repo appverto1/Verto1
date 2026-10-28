@@ -1089,12 +1089,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 onChange={e=>{
                   const text=e.target.value;
                   setPhonesDraft(text);
-                  const count=text.split(/[\\n,;]+/).map(v=>v.trim()).filter(Boolean).length;
+                  const count=text.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean).length;
                   setBulkSelectedRows(Array.from({length:Math.min(count,100)},(_,i)=>i));
                   setBulkChannelsByRow({});
                   delete keysRef.current.create;
                 }}
-                placeholder={'11 99999-9999\\n21 98888-8888'}
+                placeholder={'11 99999-9999\n21 98888-8888'}
                 className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500"/>
             </label>
             <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
