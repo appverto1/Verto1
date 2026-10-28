@@ -41,7 +41,7 @@ test('each channel remains capped at five; manual loss stays protected', () => {
 
 
 test('clicking a prospecting button persists before updating UI and supports manual lost', () => {
-  assert.match(kanban, /\/prospecting-attempts/);
+  assert.match(kanban, /\/prospecting-attempt-time/);
   assert.match(kanban, /\/mark-lost/);
   assert.match(kanban, /crypto\.randomUUID\(\)/);
   assert.match(kanban, /onLeadPatch\(lead\.id,\{status:json\.data\.status/);
@@ -170,7 +170,7 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(guardSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
   assert.match(routes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
   assert.match(kanban,/nextSalesCadenceSlots/);
-  assert.match(kanban,/canRecordSalesAttemptNow/);
+  assert.match(kanban,/setAttemptDialog/);
 });
 
 test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile hamburger',()=>{
@@ -249,4 +249,95 @@ test('return date/time is stored as owner CRM metadata without notifications',()
   assert.doesNotMatch(contactSql,/notification_jobs|push_subscriptions|sendNotification|cron|queue/i);
   assert.doesNotMatch(routes,/callback-push-subscribe|save_sales_callback_reminder_v1/);
   assert.doesNotMatch(kanban,/Ativar notificações de retorno|Antecedência da notificação/);
+});
+
+
+const messageSql=readFileSync('supabase/migrations/20261028194500_sales_whatsapp_text_contact_channel_v1.sql','utf8');
+
+test('WhatsApp text has an explicit selectable channel and persists only through Save',()=>{
+  assert.match(kanban,/label:'Mensagem WhatsApp'/);
+  assert.match(kanban,/aria-pressed=\{spokenChannel===item.channel\}/);
+  assert.match(kanban,/Salvar contato com decisor/);
+  assert.match(kanban,/Histórico de ligações e mensagens/);
+  assert.match(kanban,/a.channel==='whatsapp_call'\?'Ligação WhatsApp':'Mensagem WhatsApp'/);
+  assert.match(kanban,/Decisor por mensagem/);
+  assert.match(kanban,/setAttempts\(old=>attempt/);
+  assert.match(routes,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
+  assert.match(routes,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
+});
+
+test('text contact never increments phone or WhatsApp call counters and preserves future follow-ups',()=>{
+  const counts=kanban.split('const countByLead = useMemo(() => {')[1].split('const leadCounts = ')[0];
+  assert.match(counts,/if \(attempt\.channel === 'phone'\) r\.phone\+\+/);
+  assert.match(counts,/else if \(attempt\.channel === 'whatsapp_call'\) r\.whatsapp\+\+/);
+  assert.doesNotMatch(counts,/else r\.whatsapp\+\+/);
+  assert.match(counts,/r\.spokenVia = attempt\.channel/);
+  assert.match(kanban,/selectedCounts\.spokenVia==='whatsapp_message'/);
+  assert.match(kanban,/Próximo retorno de contato/);
+});
+
+test('text contact is success-only, auditable, idempotent, independently validated on the server',()=>{
+  assert.equal((messageSql.match(/\$\$/g)||[]).length,4);
+  assert.match(messageSql,/channel in \('phone','whatsapp_call','whatsapp_message'\)/);
+  assert.match(messageSql,/channel <> 'whatsapp_message' or outcome = 'decisor_spoken'/);
+  assert.match(messageSql,/if p_channel <> 'whatsapp_message' and \(/);
+  assert.equal((messageSql.match(/if p_channel <> 'whatsapp_message' and exists\(/g)||[]).length,2);
+  assert.match(messageSql,/p_channel <> 'whatsapp_message' and v_count>=5/);
+  assert.match(messageSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(messageSql,/DECISOR_ALREADY_CONTACTED/);
+  assert.match(messageSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(messageSql,/decisor_time_corrected/);
+  assert.match(messageSql,/from public,anon,authenticated/);
+  assert.match(messageSql,/to service_role/);
+  assert.doesNotMatch(messageSql,/notification_jobs|push_subscriptions|cron\.schedule/i);
+});
+
+test('analytics keep calls and messages separate, including contacted-lead conversion rate',()=>{
+  assert.match(messageSql,/'messageContacts'/);
+  assert.match(messageSql,/'callContactedLeads'/);
+  assert.match(messageSql,/'totalCalls',\(select count\(\*\) from scoped where channel<>'whatsapp_message'\)/);
+  assert.match(messageSql,/'successfulCalls',\(select count\(\*\) from scoped where outcome='decisor_spoken' and channel<>'whatsapp_message'\)/);
+  assert.match(dashboard,/Por mensagem WhatsApp/);
+  assert.match(dashboard,/overview\?\.callContactedLeads\?\?overview\?\.contactedLeads/);
+  assert.match(dashboard,/Mensagens não entram nos indicadores de quantidade e efetividade das ligações/);
+});
+
+
+const attemptTimeSql=readFileSync('supabase/migrations/20261028201000_sales_attempt_actual_time_v1.sql','utf8');
+test('all call attempt buttons open the editable timestamp dialog and only Save writes',()=>{
+  assert.match(kanban,/const recordAttempt =/);
+  assert.match(kanban,/setAttemptDialog\(\{leadId:lead\.id,channel,localAt/);
+  assert.match(kanban,/aria-label=\{attemptDialog\.attemptId\?'Editar data e hora da tentativa'/);
+  assert.match(kanban,/type="datetime-local" value=\{attemptDialog\.localAt\}/);
+  assert.match(kanban,/Usar horário atual/);
+  assert.match(kanban,/Salvar tentativa/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(lead,'phone','no_decisor'\)\}/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(lead,'whatsapp_call','no_decisor'\)\}/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(selected,'phone','no_decisor'\)\}/);
+  assert.match(kanban,/onClick=\{\(\)=>recordAttempt\(selected,'whatsapp_call','no_decisor'\)\}/);
+  assert.doesNotMatch(kanban,/body:JSON\.stringify\(\{channel,outcome\}\)/);
+});
+test('historical failed calls can be corrected, not re-counted or reclassified',()=>{
+  assert.match(kanban,/attemptId:a\.id,localAt:brazilLocalInput\(a\.occurred_at\)/);
+  assert.match(kanban,/setAttempts\(old=>draft\.attemptId/);
+  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
+  assert.match(routes,/save_sales_prospecting_attempt_time_v1/);
+  assert.match(attemptTimeSql,/outcome='no_decisor' for update/);
+  assert.match(attemptTimeSql,/update public\.sales_prospecting_attempts set occurred_at=p_occurred_at/);
+  assert.match(attemptTimeSql,/attempt_time_corrected/);
+});
+test('actual attempt time is checked under a lead lock with MFA and idempotency',()=>{
+  assert.equal((attemptTimeSql.match(/\$\$/g)||[]).length,2);
+  assert.match(attemptTimeSql,/platform_admins where user_id=p_actor_user_id and active=true/);
+  assert.match(attemptTimeSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(attemptTimeSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.match(attemptTimeSql,/PROSPECTING_ALREADY_TODAY/);
+  assert.match(attemptTimeSql,/v_phone>=5/);
+  assert.match(attemptTimeSql,/v_whatsapp>=5/);
+  assert.match(attemptTimeSql,/needsLossDecision/);
+  assert.match(attemptTimeSql,/idempotency_key=p_action_key/);
+  assert.match(attemptTimeSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(attemptTimeSql,/revoke all on function public\.save_sales_prospecting_attempt_time_v1/);
+  assert.match(attemptTimeSql,/to service_role/);
+  assert.doesNotMatch(attemptTimeSql,/notification_jobs|push_subscriptions|cron\.schedule/);
 });

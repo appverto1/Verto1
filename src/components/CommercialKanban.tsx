@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
-import { canRecordSalesAttemptNow, nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
+import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
 
 type Lead = {
@@ -82,8 +82,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
-  const [spokenChannel, setSpokenChannel] = useState<'phone'|'whatsapp_call'>('phone');
+  const [spokenChannel, setSpokenChannel] = useState<CommercialAttempt['channel']>('phone');
   const [spokenAtDraft,setSpokenAtDraft]=useState('');
+  const [attemptDialog,setAttemptDialog]=useState<{leadId:string;channel:'phone'|'whatsapp_call';attemptId?:string;localAt:string}|null>(null);
   const [editingSpokenId,setEditingSpokenId]=useState<string|null>(null);
   const [editingSpokenAt,setEditingSpokenAt]=useState('');
   const [followups,setFollowups]=useState<Record<string,SalesFollowup>>({});
@@ -168,11 +169,17 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   }, [idsKey,revision]);
 
   const countByLead = useMemo(() => {
-    const map = new Map<string,{phone:number;whatsapp:number;spoken:boolean}>();
+    const map = new Map<string,{phone:number;whatsapp:number;spoken:boolean;spokenVia?:CommercialAttempt['channel']}>();
     for (const attempt of attempts) {
-      const r = map.get(attempt.lead_id) || {phone:0,whatsapp:0,spoken:false};
-      if (attempt.channel === 'phone') r.phone++; else r.whatsapp++;
-      if (attempt.outcome === 'decisor_spoken') r.spoken = true;
+      const r = map.get(attempt.lead_id) || {phone:0,whatsapp:0,spoken:false,
+        spokenVia:undefined as CommercialAttempt['channel']|undefined};
+      // Text messages are contact outcomes, not phone attempts.
+      if (attempt.channel === 'phone') r.phone++;
+      else if (attempt.channel === 'whatsapp_call') r.whatsapp++;
+      if (attempt.outcome === 'decisor_spoken') {
+        r.spoken = true;
+        r.spokenVia = attempt.channel;
+      }
       map.set(attempt.lead_id,r);
     }
     return map;
@@ -378,27 +385,41 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     })();
   };
   const recordAttempt = (lead:Lead,channel:'phone'|'whatsapp_call',outcome:'no_decisor'|'decisor_spoken') => {
-    const keyName='attempt:'+lead.id+':'+channel+':'+outcome;
-    const key=keysRef.current[keyName] || crypto.randomUUID();
-    keysRef.current[keyName]=key;
-    setBusyLead(lead.id);setError(null);
-    void (async()=>{
-      try {
-        const json=await request('/api/owner/sales/leads/'+lead.id+'/prospecting-attempts',{
-          method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({channel,outcome}),
-        });
-        delete keysRef.current[keyName];
-        setAttempts(old=>json.data?.attemptId && !old.some(x=>x.id===json.data.attemptId)
-          ? [...old,{id:json.data.attemptId,lead_id:lead.id,channel,outcome,occurred_at:json.data.occurredAt}]:old);
-        onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
-        setInfo(outcome==='decisor_spoken'?'Conversa com decisor registrada.':'Tentativa registrada com data e hora.');
-        if(json.data.needsLossDecision && outcome==='no_decisor' &&
-          window.confirm('Foram registradas 10 tentativas sem conversar com o decisor. Marcar a oportunidade como perdida?')) {
-          manualLost(lead,true);
-        }
-      }catch(e:any){setError(e.message || 'Não foi possível registrar ligação.');}
-      finally{setBusyLead(null);}
-    })();
+    // Clicking any call button only opens the editor. Save persists.
+    if(outcome!=='no_decisor'||busyLead)return;
+    setAttemptDialog({leadId:lead.id,channel,localAt:brazilLocalInput(new Date().toISOString())});
+    setError(null);
+  };
+  const saveAttemptTime=async()=>{
+    const draft=attemptDialog;
+    if(!draft||busyLead)return;
+    const lead=visibleLeads.find(x=>x.id===draft.leadId);
+    if(!lead){setError('Oportunidade não encontrada.');return;}
+    const keyName='attempt-time:'+draft.leadId+':'+(draft.attemptId||'new');
+    try{
+      const occurredAt=brazilInputToIso(draft.localAt);
+      const key=keysRef.current[keyName]||crypto.randomUUID();
+      keysRef.current[keyName]=key;
+      setBusyLead(draft.leadId);setError(null);
+      const json=await request('/api/owner/sales/leads/'+draft.leadId+'/prospecting-attempt-time',{
+        method:'PUT',headers:{'X-Idempotency-Key':key},
+        body:JSON.stringify({attemptId:draft.attemptId||null,channel:draft.channel,occurredAt}),
+      });
+      delete keysRef.current[keyName];
+      setAttempts(old=>draft.attemptId
+        ? old.map(item=>item.id===draft.attemptId?{...item,occurred_at:json.data.occurredAt}:item)
+        : old.some(item=>item.id===json.data.attemptId)?old:
+          [...old,{id:json.data.attemptId,lead_id:draft.leadId,
+            channel:draft.channel,outcome:'no_decisor',occurred_at:json.data.occurredAt}]);
+      onLeadPatch(draft.leadId,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
+      setAttemptDialog(null);
+      setInfo(draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
+      if(!draft.attemptId&&json.data.needsLossDecision&&
+         window.confirm('Foram registradas 10 tentativas sem conversar com o decisor. Marcar a oportunidade como perdida?')){
+        manualLost(lead,true);
+      }
+    }catch(e:any){setError(e.message||'Não foi possível salvar a tentativa.');}
+    finally{setBusyLead(null);}
   };
   const saveSpokenContact=async(lead:Lead,attempt?:CommercialAttempt)=>{
     if(busyLead)return;
@@ -463,7 +484,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const callEnabled=(lead:Lead,ch:'phone'|'whatsapp_call')=>{
     const n=leadCounts(lead.id);
     return !busyLead && !n.spoken && !['converted','lost','archived'].includes(lead.status)
-      && canRecordSalesAttemptNow(leadAttemptDates(lead.id))
       && (ch==='phone'?n.phone<5:n.whatsapp<5);
   };
   return (
@@ -563,10 +583,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <p className="mt-1 truncate text-[11px] text-slate-500">{lead.phone||'Telefone não informado'}</p>
                       <div className="mt-3 grid grid-cols-2 gap-1.5">
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total}/10</b></div>
-                        <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Status</span><b className={'line-clamp-1 text-[10px] '+(a.spoken?'text-green-700':'text-slate-700')}>{a.spoken?'Decisor contatado':SALES_LEAD_STATUS_LABELS[lead.status]||lead.status}</b></div>
+                        <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Status</span><b className={'line-clamp-1 text-[10px] '+(a.spoken?'text-green-700':'text-slate-700')}>{a.spoken?(a.spokenVia==='whatsapp_message'?'Decisor por mensagem':'Decisor por ligação'):SALES_LEAD_STATUS_LABELS[lead.status]||lead.status}</b></div>
                       </div>
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{width:(total*10)+'%',backgroundColor:col.color}}/></div>
-                      <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone}/5 · WhatsApp {a.whatsapp}/5</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone}/5 · Ligação WhatsApp {a.whatsapp}/5</p>
                       {total<10&&!a.spoken&&<p className="mt-1 text-[10px] font-semibold text-violet-700">Próxima janela: {nextWindow(lead.id)?slotLabel(nextWindow(lead.id)):'—'}</p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
@@ -586,6 +606,46 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           })}
         </div>
       </div>
+
+      {attemptDialog&&<div className="fixed inset-0 z-[180] flex items-center justify-center bg-slate-950/60 p-4"
+        role="dialog" aria-modal="true" aria-label={attemptDialog.attemptId?'Editar data e hora da tentativa':'Registrar data e hora da tentativa'}
+        onMouseDown={e=>{if(e.target===e.currentTarget&&!busyLead)setAttemptDialog(null);}}>
+        <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-lg font-black">{attemptDialog.attemptId?'Editar tentativa':'Registrar tentativa'}</h3>
+            <button type="button" aria-label="Fechar horário da tentativa" disabled={Boolean(busyLead)}
+              onClick={()=>{setAttemptDialog(null);setError(null);}}><X size={20}/></button>
+          </div>
+          <p className="mt-2 text-xs text-slate-600">{attemptDialog.channel==='phone'?'Ligação operadora':'Ligação WhatsApp'} · O horário só será registrado em Salvar.</p>
+          <label className="mt-4 block text-xs font-bold text-slate-700">
+            Data e hora reais da tentativa (Brasília)
+            <input autoFocus type="datetime-local" value={attemptDialog.localAt}
+              onChange={e=>{
+                setAttemptDialog(d=>d?{...d,localAt:e.target.value}:d);
+                delete keysRef.current['attempt-time:'+attemptDialog.leadId+':'+(attemptDialog.attemptId||'new')];
+              }}
+              className="mt-2 block w-full rounded-lg border border-slate-200 bg-white p-3 text-sm"/>
+          </label>
+          <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
+            setAttemptDialog(d=>d?{...d,localAt:brazilLocalInput(new Date().toISOString())}:d);
+            delete keysRef.current['attempt-time:'+attemptDialog.leadId+':'+(attemptDialog.attemptId||'new')];
+          }} className="mt-2 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700">
+            Usar horário atual
+          </button>
+          <p className="mt-2 text-xs text-slate-500">As ligações exigem data passada, de segunda a sexta, entre 9h e 17h30. É permitida uma ligação por dia.</p>
+          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
+          <div className="mt-5 flex justify-end gap-2">
+            <button type="button" disabled={Boolean(busyLead)}
+              onClick={()=>{setAttemptDialog(null);setError(null);}}
+              className="rounded-lg border border-slate-200 px-4 py-2 text-sm">Cancelar</button>
+            <button type="button" disabled={Boolean(busyLead)||!attemptDialog.localAt}
+              onClick={()=>void saveAttemptTime()}
+              className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-40">
+              {busyLead?'Salvando...':attemptDialog.attemptId?'Salvar alteração':'Salvar tentativa'}
+            </button>
+          </div>
+        </div>
+      </div>}
 
       {creatingOpen&&<div className="fixed inset-0 z-[155] flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Cadastrar oportunidades">
         <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
@@ -699,7 +759,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <li key={date.toISOString()}>{selectedCounts.phone+selectedCounts.whatsapp+i+1}ª · {slotLabel(date)}</li>
                     ))}
                   </ol>
-                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. A contabilização registra a hora real do clique; domingos, sábados, fora do expediente ou segunda tentativa no mesmo dia são bloqueados no servidor.</p>
+                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. O servidor valida dia útil, expediente e uma ligação por dia.</p>
                 </div>}
               {!selectedCounts.spoken&&!['converted','lost','archived'].includes(selected.status)&&<div className="mt-3 space-y-2">
                 <button disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
@@ -707,28 +767,39 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 <button disabled={!callEnabled(selected,'whatsapp_call')} onClick={()=>recordAttempt(selected,'whatsapp_call','no_decisor')}
                   className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação WhatsApp sem falar com decisor</button>
                 <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                  <label className="block text-xs font-bold text-emerald-800">Data e hora em que falou com o decisor (Brasília)
+                  <label className="block text-xs font-bold text-emerald-800">Data e hora do contato efetivo com o decisor (Brasília)
                     <input type="datetime-local" value={spokenAtDraft}
                       onChange={e=>{setSpokenAtDraft(e.target.value);delete keysRef.current['decisor:'+selected.id+':new'];}}
                       className="mt-1 block w-full rounded-lg border border-emerald-200 bg-white p-2 text-sm"/>
                   </label>
-                  <div className="flex gap-2">
-                    <select aria-label="Canal em que falou com decisor" value={spokenChannel}
-                      onChange={e=>{setSpokenChannel(e.target.value as 'phone'|'whatsapp_call');delete keysRef.current['decisor:'+selected.id+':new'];}}
-                      className="w-32 rounded-lg border border-slate-200 p-2 text-xs">
-                      <option value="phone">Operadora</option><option value="whatsapp_call">WhatsApp</option>
-                    </select>
-                    <button disabled={Boolean(busyLead)||!spokenAtDraft||
-                        (spokenChannel==='phone'?selectedCounts.phone>=5:selectedCounts.whatsapp>=5)}
-                      onClick={()=>void saveSpokenContact(selected)}
-                      className="flex-1 rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">
-                      Salvar contato com decisor
-                    </button>
+                  <div role="group" aria-label="Origem do contato com decisor" className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {([
+                      {channel:'phone',label:'Ligação operadora'},
+                      {channel:'whatsapp_call',label:'Ligação WhatsApp'},
+                      {channel:'whatsapp_message',label:'Mensagem WhatsApp'},
+                    ] as const).map(item=>
+                      <button key={item.channel} type="button" aria-pressed={spokenChannel===item.channel}
+                        onClick={()=>{setSpokenChannel(item.channel);delete keysRef.current['decisor:'+selected.id+':new'];}}
+                        className={'rounded-lg border px-2 py-2.5 text-xs font-bold transition-colors '+(spokenChannel===item.channel
+                          ? 'border-emerald-700 bg-emerald-700 text-white'
+                          : 'border-emerald-200 bg-white text-emerald-900 hover:border-emerald-500')}>
+                        {item.label}
+                      </button>)}
                   </div>
-                  <p className="text-[11px] text-emerald-900">O horário informado só é registrado ao clicar em Salvar. A cadência continua validada pelo servidor.</p>
+                  <button disabled={Boolean(busyLead)||!spokenAtDraft||
+                      (spokenChannel==='phone'&&selectedCounts.phone>=5)||
+                      (spokenChannel==='whatsapp_call'&&selectedCounts.whatsapp>=5)}
+                    onClick={()=>void saveSpokenContact(selected)}
+                    className="w-full rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">
+                    Salvar contato com decisor
+                  </button>
+                  <p className="text-[11px] text-emerald-900">
+                    Marque Mensagem WhatsApp somente quando houver conversa efetiva com o decisor, não apenas envio ou leitura.
+                    A mensagem não consome tentativa de ligação. O registro só é persistido em Salvar.
+                  </p>
                 </div>
               </div>}
-              {selectedCounts.spoken&&<p className="mt-3 rounded-lg bg-green-50 p-2 text-xs font-bold text-green-700">Conversa com o decisor registrada. Mensagens de texto não contam como contato efetivo.</p>}
+              {selectedCounts.spoken&&<p className="mt-3 rounded-lg bg-green-50 p-2 text-xs font-bold text-green-700">Conversa efetiva com o decisor registrada por {selectedCounts.spokenVia==='whatsapp_message'?'mensagem WhatsApp':selectedCounts.spokenVia==='whatsapp_call'?'ligação WhatsApp':'ligação operadora'}.</p>}
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
               <h4 className="font-black">Próximo retorno de contato</h4>
@@ -760,20 +831,25 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <button onClick={()=>{setSelectedId(null);onOpenLead(selected);}}
               className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 p-3 text-sm font-black text-white">
               <ExternalLink size={16}/> Abrir proposta, rentabilidade e cadastro completo</button>
-            <div className="border-t pt-4"><h4 className="mb-2 text-sm font-black">Histórico de ligações</h4>
-              {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).length===0&&<p className="text-xs text-slate-500">Nenhuma ligação registrada.</p>}
+            <div className="border-t pt-4"><h4 className="mb-2 text-sm font-black">Histórico de ligações e mensagens</h4>
+              {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).length===0&&<p className="text-xs text-slate-500">Nenhum contato registrado.</p>}
               {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).map(a=>
                 <div key={a.id} className="border-b py-2 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span>{a.channel==='phone'?'Operadora':'Ligação WhatsApp'} · {a.outcome==='decisor_spoken'?'Decisor contatado':'Sem contato efetivo'}</span>
+                    <span>{a.channel==='phone'?'Ligação operadora':a.channel==='whatsapp_call'?'Ligação WhatsApp':'Mensagem WhatsApp'} · {a.outcome==='decisor_spoken'?'Decisor contatado':'Sem contato efetivo'}</span>
                     <div className="flex items-center gap-2">
                       <time className="text-slate-500">{dateText(a.occurred_at)}</time>
-                      {a.outcome==='decisor_spoken'&&
-                        <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
+                      <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
+                        if(a.outcome==='decisor_spoken'){
                           setEditingSpokenId(a.id);setEditingSpokenAt(brazilLocalInput(a.occurred_at));
-                        }} className="text-xs font-semibold text-violet-700 underline disabled:opacity-40">
-                          Editar horário
-                        </button>}
+                        }else{
+                          setAttemptDialog({leadId:selected.id,channel:a.channel as 'phone'|'whatsapp_call',
+                            attemptId:a.id,localAt:brazilLocalInput(a.occurred_at)});
+                          setError(null);
+                        }
+                      }} className="text-xs font-semibold text-violet-700 underline disabled:opacity-40">
+                        Editar horário
+                      </button>
                     </div>
                   </div>
                   {editingSpokenId===a.id&&
