@@ -186,6 +186,9 @@ test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile h
   assert.match(superAdmin,/className="sticky top-0 z-30[^"]*md:hidden"/);
   assert.match(superAdmin,/compactDesktopMenu \? 'md:hidden' : ''/);
   assert.match(superAdmin,/onClick=\{\(\) => selectAdminTab\('leads'\)\}/);
+  assert.match(superAdmin,/onClick=\{closeMobileMenu\}/);
+  assert.match(superAdmin,/if \(mobileMenuOpen\) closeMobileMenu\(\)/);
+  assert.match(superAdmin,/mobileMenuCloseRef.current\?\.focus\(\)/);
   assert.match(superAdmin,/event.key === 'Escape'/);
   assert.match(superAdmin,/mobileMenuTriggerRef.current\?\.focus\(\)/);
   assert.doesNotMatch(superAdmin,/h-screen sticky top-0 flex flex-col overflow-x-hidden/);
