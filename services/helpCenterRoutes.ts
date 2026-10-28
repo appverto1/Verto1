@@ -37,7 +37,7 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   };
 
   // Secured owner CRM routes, using active platform-admin plus TOTP guard.
-  registerSalesProspectingRoutes(app,{supabase,checkAuth});
+  registerSalesProspectingRoutes(app, { supabase, checkAuth });
 
   app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
     const { clinicId, clinicName, audience, capabilities, modules, userId, contextKey } = helpContext(req);
