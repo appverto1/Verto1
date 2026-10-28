@@ -140,10 +140,14 @@ export function registerSalesProspectingRoutes(
           const message=String(error.message||'');
           if(/LEAD_NOT_FOUND|ATTEMPT_NOT_FOUND/.test(message))
             return res.status(404).json({success:false,error:'Tentativa não encontrada.'});
-          if(/INVALID_ATTEMPT_TIME|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
-            return res.status(400).json({success:false,error:'Informe uma data passada, de segunda a sexta, das 9h às 17h30 (Brasília).'});
-          if(/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED|IDEMPOTENCY_CONFLICT|SCRIPT_REQUIRED|SCRIPT_NOT_ACTIVE/.test(message))
-            return res.status(409).json({success:false,error:'Já existe ligação nessa data, limite atingido ou oportunidade indisponível.'});
+          if(/INVALID_ATTEMPT_TIME/.test(message))
+            return res.status(400).json({success:false,error:'Informe uma data e hora reais, sem selecionar um horário futuro.'});
+          if(/PROSPECTING_NOT_ALLOWED/.test(message))
+            return res.status(409).json({success:false,error:'Oportunidade removida ou com preferência explícita de não receber contatos.'});
+          if(/SCRIPT_NOT_ACTIVE|SCRIPT_REQUIRED/.test(message))
+            return res.status(409).json({success:false,error:'O fluxo escolhido não está vigente. Selecione outra versão.'});
+          if(/IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(409).json({success:false,error:'Esta tentativa já foi salva com outros dados. Atualize o histórico antes de tentar novamente.'});
           throw error;
         }
         return res.json({success:true,data});
@@ -180,10 +184,14 @@ export function registerSalesProspectingRoutes(
           const message=String(error.message||'');
           if(/LEAD_NOT_FOUND|CONTACT_NOT_FOUND/.test(message))
             return res.status(404).json({success:false,error:'Registro não encontrado.'});
-          if(/INVALID_CONTACT_TIME|INVALID_CONTACT_RESULT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
-            return res.status(400).json({success:false,error:'Informe horário passado, em dia útil, entre 9h e 17h30 (Brasília).'});
-          if(/PROSPECTING_ALREADY_TODAY|DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT|IDEMPOTENCY_CONFLICT|PROSPECTING_NOT_ALLOWED|SCRIPT_REQUIRED|SCRIPT_NOT_ACTIVE/.test(message))
-            return res.status(409).json({success:false,error:'Conflito com outra tentativa ou oportunidade indisponível.'});
+          if(/INVALID_CONTACT_TIME|INVALID_CONTACT_RESULT/.test(message))
+            return res.status(400).json({success:false,error:'Informe uma data e hora reais no passado e classifique o resultado do contato.'});
+          if(/PROSPECTING_NOT_ALLOWED/.test(message))
+            return res.status(409).json({success:false,error:'Oportunidade removida ou com preferência explícita de não receber contatos.'});
+          if(/SCRIPT_NOT_ACTIVE|SCRIPT_REQUIRED/.test(message))
+            return res.status(409).json({success:false,error:'O fluxo escolhido não está vigente. Selecione outra versão.'});
+          if(/IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(409).json({success:false,error:'Este contato já foi salvo com outros dados. Atualize o histórico antes de tentar novamente.'});
           throw error;
         }
         return res.json({success:true,data});
@@ -363,20 +371,29 @@ export function registerSalesProspectingRoutes(
   // atomic batches, idempotency and audit; never let browser-controlled roles authorize writes.
   app.post('/api/owner/sales/kanban/opportunities', ...salesGuard, async (req: any, res: any) => {
     const phones = req.body?.phones;
+    const channelsByPhone = req.body?.channelsByPhone;
     const actorId = sanitizeString(req.session?.user?.id, 120);
     const key = sanitizeString(req.headers?.['x-idempotency-key'], 120);
     if (!isUuid(actorId) || key.length < 12 || key.length > 120 ||
         !Array.isArray(phones) || phones.length < 1 || phones.length > 100 ||
-        phones.some((v: unknown) => typeof v !== 'string' || v.length > 40)) {
+        phones.some((v: unknown) => typeof v !== 'string' || v.length > 40) ||
+        !Array.isArray(channelsByPhone) || channelsByPhone.length!==phones.length ||
+        channelsByPhone.some((row:unknown)=>!Array.isArray(row)||row.length>20||
+          row.some((id:unknown)=>typeof id!=='string'||!isUuid(id))||
+          new Set(row).size!==row.length)) {
       return res.status(400).json({ success:false,error:'Informe entre 1 e 100 telefones válidos.' });
     }
     try {
-      const result = await supabase.rpc('create_sales_kanban_opportunities_v1',{
-        p_phones:phones,p_actor_id:actorId,p_action_key:key,
+      const result = await supabase.rpc('create_sales_kanban_opportunities_v2',{
+        p_phones:phones,p_actor_id:actorId,p_action_key:key,p_channels:channelsByPhone,
       });
       if (result.error) {
         if (/PHONE_ALREADY_EXISTS|DUPLICATE_IN_BATCH|IDEMPOTENCY_CONFLICT|23505/.test(String(result.error.message)+' '+result.error.code))
           return res.status(409).json({success:false,error:'Número já cadastrado ou repetido. Nenhuma oportunidade foi criada.'});
+        if (/ACQUISITION_CHANNEL_UNAVAILABLE|DUPLICATE_BATCH_CHANNEL/.test(String(result.error.message)))
+          return res.status(409).json({success:false,error:'Canal de aquisição inválido ou desativado. Nenhuma oportunidade foi criada.'});
+        if (/INVALID_BATCH_CHANNELS/.test(String(result.error.message)))
+          return res.status(400).json({success:false,error:'Revise a seleção de canais dos contatos.'});
         if (/INVALID_PHONE|INVALID_CREATION_KEY/.test(String(result.error.message)))
           return res.status(400).json({success:false,error:'Confira o formato dos números (DDD obrigatório).'});
         throw result.error;

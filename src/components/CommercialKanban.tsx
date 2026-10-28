@@ -137,6 +137,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   },[]);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
+  const [bulkSelectedRows,setBulkSelectedRows]=useState<number[]>([]);
+  const [bulkChannelsToApply,setBulkChannelsToApply]=useState<string[]>([]);
+  const [bulkChannelsByRow,setBulkChannelsByRow]=useState<Record<number,string[]>>({});
+  const [cardFeedback,setCardFeedback]=useState<{leadId:string;info?:string;error?:string}|null>(null);
+  const [bulkExistingMode,setBulkExistingMode]=useState(false);
+  const [bulkExistingIds,setBulkExistingIds]=useState<string[]>([]);
+  const [bulkExistingChannels,setBulkExistingChannels]=useState<string[]>([]);
+  const [bulkExistingReplace,setBulkExistingReplace]=useState(false);
+  const [bulkExistingBusy,setBulkExistingBusy]=useState(false);
   const [creatingBusy,setCreatingBusy] = useState(false);
   const [editingLead,setEditingLead] = useState(false);
   const [savingLead,setSavingLead] = useState(false);
@@ -189,7 +198,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   };
   const openAcquisitionEditor=(leadId:string)=>{
     if(savingAcquisition||acquisitionCatalogUnavailable){
-      if(acquisitionCatalogUnavailable)setError('Canais indisponíveis. Atualize o quadro antes de editar as origens.');
+      if(acquisitionCatalogUnavailable)cardError(leadId,'Canais indisponíveis. Atualize o quadro antes de editar as origens.');
       return;
     }
     setAcquisitionDialog({leadId,channelIds:[...(acquisitionByLead[leadId]||[])]});
@@ -211,8 +220,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       setAcquisitionByLead(old=>({...old,[dialog.leadId]:result.selection.channelIds||[]}));
       setAcquisitionRefreshKey(k=>k+1);
       setAcquisitionDialog(null);
-      setInfo('Canais de aquisição salvos sem atualizar a página.');
-    }catch(e:any){setError(e.message||'Não foi possível salvar os canais.');}
+      cardInfo(dialog.leadId,'Canais de aquisição salvos sem atualizar a página.');
+    }catch(e:any){cardError(dialog.leadId,e.message||'Não foi possível salvar os canais.');}
     finally{setSavingAcquisition(false);}
   };
   const request = async (url: string, init: RequestInit = {}) => {
@@ -348,6 +357,54 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       (!q || [lead.name,lead.clinicName,lead.email,lead.phone].some(v=>String(v||'').toLocaleLowerCase('pt-BR').includes(q))));
   }, [visibleLeads,search]);
   const selected = visibleLeads.find(x=>x.id === selectedId) || null;
+  const bulkPhones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+  const feedbackFor=(leadId:string)=>cardFeedback?.leadId===leadId?cardFeedback:null;
+  const cardInfo=(leadId:string,info:string)=>setCardFeedback({leadId,info});
+  const cardError=(leadId:string,error:string)=>setCardFeedback({leadId,error});
+  const openCard=(leadId:string)=>{
+    setError(null);setInfo(null);setCardFeedback(null);
+    setSelectedId(leadId);
+  };
+  const saveExistingBulkChannels=async()=>{
+    if(bulkExistingBusy||!bulkExistingIds.length||!bulkExistingChannels.length||
+      acquisitionCatalogUnavailable)return;
+    const selections=bulkExistingIds.map(leadId=>{
+      const channels=bulkExistingReplace?bulkExistingChannels:
+        [...new Set([...(acquisitionByLead[leadId]||[]),...bulkExistingChannels])];
+      return {leadId,channelIds:channels};
+    });
+    if(selections.some(item=>item.channelIds.length>20)){
+      setError('Há um card que excederia 20 canais. Revise a seleção.');return;
+    }
+    const keyName='acquisition-bulk-existing';
+    const key=keysRef.current[keyName]||crypto.randomUUID();
+    keysRef.current[keyName]=key;
+    setBulkExistingBusy(true);setError(null);setInfo(null);
+    try{
+      const result=await request('/api/owner/sales/acquisition/leads/bulk',{
+        method:'PUT',headers:{'X-Idempotency-Key':key},
+        body:JSON.stringify({selections}),
+      });
+      delete keysRef.current[keyName];
+      setAcquisitionByLead(old=>{
+        const next={...old};
+        for(const item of result.selections||[])next[item.leadId]=item.channelIds||[];
+        return next;
+      });
+      setAcquisitionRefreshKey(x=>x+1);
+      setBulkExistingIds([]);
+      setInfo(selections.length+' card(s) classificados em lote, sem atualizar a página.');
+    }catch(e:any){setError(e.message||'Não foi possível classificar os cards selecionados.');}
+    finally{setBulkExistingBusy(false);}
+  };
+  const applyBulkChannels=()=>{
+    setBulkChannelsByRow(old=>{
+      const next={...old};
+      for(const index of bulkSelectedRows)if(index<bulkPhones.length)next[index]=[...bulkChannelsToApply];
+      return next;
+    });
+    delete keysRef.current.create;
+  };
   const selectedCounts = selected ? leadCounts(selected.id) : {phone:0,whatsapp:0,spoken:false};
   useEffect(()=>{
     const lead=leads.find(x=>x.id===selectedId);
@@ -361,20 +418,30 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setFollowupAtDraft(saved?.status==='scheduled'?brazilLocalInput(saved.contact_due_at):'');
   },[selectedId,followups]);
   const createOpportunities = async () => {
-    const phones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+    const phones=bulkPhones;
     if(!phones.length||phones.length>100){setError('Informe de 1 a 100 números, separados por linha, vírgula ou ponto e vírgula.');return;}
+    const channelsByPhone=phones.map((_,index)=>bulkChannelsByRow[index]||[]);
+    if(acquisitionCatalogUnavailable&&channelsByPhone.some(ids=>ids.length)){
+      setError('Canais indisponíveis. Atualize antes de classificar o lote.');return;
+    }
     setCreatingBusy(true);setError(null);
     const key=keysRef.current.create||crypto.randomUUID();keysRef.current.create=key;
     try {
       const json=await request('/api/owner/sales/kanban/opportunities',{
-        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones}),
+        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones,channelsByPhone}),
       });
       delete keysRef.current.create;
       onLeadsCreated(json.leads||[]);
+      setAcquisitionByLead(old=>{
+        const next={...old};
+        for(const item of json.leads||[])next[item.id]=item.channelIds||[];
+        return next;
+      });
       setPhonesDraft('');setCreatingOpen(false);setSearch('');setShowStage('all');
+      setBulkChannelsByRow({});setBulkSelectedRows([]);setBulkChannelsToApply([]);
       setGlobalFollowupFilter('all');setColumnFollowupFilters({});
       setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
-      setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s). Abra os cards para editar.');
+      setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s) com as origens selecionadas.');
     }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
     finally{setCreatingBusy(false);}
   };
@@ -389,7 +456,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       onLeadPatch(lead.id,json.lead);
       setEditingLead(true);
-    }catch(e:any){setError(e.message||'Não foi possível abrir o cadastro.');}
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível abrir o cadastro.');}
     finally{setLoadingLeadDetails(false);}
   };
   const saveLeadDetails = async () => {
@@ -424,10 +491,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       onLeadPatch(selected.id,json.lead);
       setEditingLead(false);
-      setInfo(json.lead?.kanbanOnly
+      cardInfo(selected.id,json.lead?.kanbanOnly
         ? 'Dados salvos na ficha do Kanban. Cadastros de clientes, propostas e cobranças não foram alterados.'
         : 'Oportunidade salva.');
-    }catch(e:any){setError(e.message||'Erro ao salvar oportunidade.');}
+    }catch(e:any){cardError(selected.id,e.message||'Erro ao salvar oportunidade.');}
     finally{setSavingLead(false);}
   };
   const deleteLead = async (lead:Lead) => {
@@ -441,7 +508,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       delete keysRef.current[keyName];
       setSelectedId(null);onLeadDeleted(lead.id);setInfo('Oportunidade removida do Kanban. Vínculos e histórico preservados.');
-    }catch(e:any){setError(e.message||'Erro ao excluir oportunidade.');}
+    }catch(e:any){cardError(lead.id,e.message||'Erro ao excluir oportunidade.');}
     finally{setDeletingLead(false);}
   };
 
@@ -515,8 +582,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           const next={...old};if(column.kind==='custom')next[lead.id]=column.id;else delete next[lead.id];return next;
         });
         onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
-        setInfo('Lead movido para '+column.title+'.');
-      } catch(e:any){setError(e.message || 'Erro ao mover lead.');}
+        cardInfo(lead.id,'Lead movido para '+column.title+'.');
+      } catch(e:any){cardError(lead.id,e.message || 'Erro ao mover lead.');}
       finally{setBusyLead(null);}
     })();
   };
@@ -530,7 +597,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const draft=attemptDialog;
     if(!draft||busyLead)return;
     const lead=visibleLeads.find(x=>x.id===draft.leadId);
-    if(!lead){setError('Oportunidade não encontrada.');return;}
+    if(!lead){cardError(draft.leadId,'Oportunidade não encontrada.');return;}
     const keyName='attempt-time:'+draft.leadId+':'+(draft.attemptId||'new');
     try{
       const occurredAt=brazilInputToIso(draft.localAt);
@@ -558,12 +625,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             script_version_id:scriptVersionId,contact_result:'no_answer'}]);
       onLeadPatch(draft.leadId,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setAttemptDialog(null);
-      setInfo(draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
-      if(!draft.attemptId&&json.data.needsLossDecision&&
-         window.confirm('Foram registradas 10 tentativas sem conversar com o decisor. Marcar a oportunidade como perdida?')){
-        manualLost(lead,true);
-      }
-    }catch(e:any){setError(e.message||'Não foi possível salvar a tentativa.');}
+      cardInfo(draft.leadId,draft.attemptId?'Data e hora da tentativa corrigidas.':'Tentativa registrada na data e hora informadas.');
+      // Ten calls is a visual cadence reference, not a hard stop or automatic loss.
+      // A lead remains in its existing funnel stage until explicitly changed.
+    }catch(e:any){cardError(draft.leadId,e.message||'Não foi possível salvar a tentativa.');}
     finally{setBusyLead(null);}
   };
   const saveSpokenContact=async(lead:Lead,attempt?:CommercialAttempt)=>{
@@ -598,8 +663,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             script_version_id:scriptVersionId,contact_result:resolvedResult as 'interested'|'not_interested'}]);
       onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
       setEditingSpokenId(null);
-      setInfo(attempt?'Data e hora do contato corrigidas e auditadas.':'Contato com decisor salvo no horário informado.');
-    }catch(e:any){setError(e.message||'Não foi possível salvar o contato.');}
+      cardInfo(lead.id,attempt?'Data e hora do contato corrigidas e auditadas.':'Contato com decisor salvo no horário informado.');
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível salvar o contato.');}
     finally{setBusyLead(null);}
   };
   const saveFollowup=async(lead:Lead,cancel=false)=>{
@@ -615,8 +680,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       });
       delete keysRef.current[keyName];
       setFollowups(old=>({...old,[lead.id]:json.followup}));
-      setInfo(cancel?'Retorno cancelado.':'Data e hora do retorno salvas (sem notificações).');
-    }catch(e:any){setError(e.message||'Não foi possível salvar o retorno.');}
+      cardInfo(lead.id,cancel?'Retorno cancelado.':'Data e hora do retorno salvas (sem notificações).');
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível salvar o retorno.');}
     finally{setSavingFollowup(false);}
   };
   const manualLost = (lead:Lead, confirmed=false) => {
@@ -630,8 +695,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       delete keysRef.current[keyName];
       setPlacements(old=>{const next={...old};delete next[lead.id];return next;});
       onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
-      setInfo('Lead movido para Perdidos.');
-    }catch(e:any){setError(e.message);}finally{setBusyLead(null);}})();
+      cardInfo(lead.id,'Lead movido para Perdidos.');
+    }catch(e:any){cardError(lead.id,e.message||'Não foi possível mover o lead.');}finally{setBusyLead(null);}})();
   };
 
   const shownColumns=columns.filter(c=>showStage==='all'||showStage===c.id);
@@ -683,17 +748,20 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     return (showStage==='all'||id===showStage)&&
       matchReturnFilter(l,effectiveReturnFilter(id))&&agendaPass(l.id);
   }).length;
+  const currentlyShownLeadIds=filtered.filter(lead=>{
+    const id=columnFor(lead);
+    return Boolean(id)&&(showStage==='all'||showStage===id)&&
+      matchReturnFilter(lead,effectiveReturnFilter(id||''))&&agendaPass(lead.id);
+  }).map(lead=>lead.id);
   const chooseGlobalFollowupFilter=(filter:FollowupFilter)=>{
     setCalendarToday(brazilDateKey(new Date()));
     setGlobalFollowupFilter(filter);
     setColumnFollowupFilters({});
     setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
   };
-  const callEnabled=(lead:Lead,ch:'phone'|'whatsapp_call')=>{
-    const n=leadCounts(lead.id);
-    return !busyLead && !n.spoken && !['converted','lost','archived'].includes(lead.status)
-      && (ch==='phone'?n.phone<5:n.whatsapp<5);
-  };
+  // A funnel stage, prior conversation or cadence milestone must never disable
+  // either call button. Only an in-flight save temporarily prevents double taps.
+  const callEnabled=(_lead:Lead,_ch:'phone'|'whatsapp_call')=>!busyLead;
   return (
     <section className="min-w-0 flex-1 flex flex-col gap-3" aria-label="Kanban comercial de tela inteira">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#10192D] px-4 py-3 text-white">
@@ -707,6 +775,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
             Scripts / Testes A-B
           </button>
+          <button type="button" onClick={()=>{
+              setBulkExistingMode(v=>!v);setBulkExistingIds([]);setError(null);setInfo(null);
+            }} className={'flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-bold '+(
+              bulkExistingMode?'border-violet-300 bg-violet-600 text-white':'border-white/20 hover:bg-white/10')}>
+            {bulkExistingMode?'Concluir seleção':'Selecionar vários cards'}
+          </button>
           <button type="button" onClick={()=>setAcquisitionOpen(v=>!v)}
             className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10">
             Canais + Resultados
@@ -719,6 +793,43 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
 
       {scriptsOpen&&<CommercialScriptsPanel onClose={()=>setScriptsOpen(false)} onChanged={refreshScripts}/>}
       {acquisitionOpen&&<CommercialAcquisitionPanel refreshKey={acquisitionRefreshKey} onClose={()=>setAcquisitionOpen(false)} onChanged={refreshAcquisitionCatalog}/>}
+      {bulkExistingMode&&<div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4" aria-label="Classificação de cards em lote">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <strong className="text-sm text-indigo-950">Classificar cards em lote · {bulkExistingIds.length} selecionado(s)</strong>
+          <div className="flex gap-2">
+            <button type="button" disabled={bulkExistingBusy}
+              onClick={()=>setBulkExistingIds(currentlyShownLeadIds.slice(0,100))}
+              className="rounded-lg border bg-white px-3 py-2 text-xs font-bold">Selecionar até 100 visíveis</button>
+            <button type="button" disabled={bulkExistingBusy} onClick={()=>setBulkExistingIds([])}
+              className="rounded-lg border bg-white px-3 py-2 text-xs font-bold">Limpar seleção</button>
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-slate-600">Marque os cards no quadro ou selecione os visíveis após aplicar filtros. Os canais serão adicionados aos existentes por padrão.</p>
+        <fieldset className="mt-3 flex flex-wrap gap-3 rounded-lg border border-indigo-100 bg-white p-3">
+          <legend className="px-1 text-xs font-bold">Canais para os cards selecionados</legend>
+          {acquisitionChannels.filter(c=>c.is_active).map(channel=><label key={channel.id}
+            className="inline-flex items-center gap-2 text-xs">
+            <input type="checkbox" disabled={bulkExistingBusy} checked={bulkExistingChannels.includes(channel.id)}
+              onChange={e=>{
+                setBulkExistingChannels(old=>e.target.checked?[...old,channel.id]:old.filter(id=>id!==channel.id));
+                delete keysRef.current['acquisition-bulk-existing'];
+              }}
+              className="h-4 w-4 accent-indigo-700"/>{channel.name}
+          </label>)}
+        </fieldset>
+        <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-700">
+          <input type="checkbox" checked={bulkExistingReplace} disabled={bulkExistingBusy}
+            onChange={e=>{setBulkExistingReplace(e.target.checked);delete keysRef.current['acquisition-bulk-existing'];}}
+            className="h-4 w-4 accent-indigo-700"/>
+          Substituir os canais atuais (em vez de adicionar)
+        </label>
+        <button type="button" disabled={bulkExistingBusy||!bulkExistingIds.length||
+          !bulkExistingChannels.length||acquisitionCatalogUnavailable}
+          onClick={()=>void saveExistingBulkChannels()}
+          className="mt-3 rounded-lg bg-indigo-700 px-4 py-2.5 text-xs font-bold text-white disabled:opacity-40">
+          {bulkExistingBusy?'Salvando...':'Salvar canais nos '+bulkExistingIds.length+' cards'}
+        </button>
+      </div>}
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
         {columns.filter(c=>c.is_system).map(c=>(
           <button key={c.id} type="button" onClick={()=>setShowStage(x=>x===c.id?'all':c.id)}
@@ -905,7 +1016,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
                     style={{borderLeftColor:col.color}}>
-                    <button type="button" onClick={()=>setSelectedId(lead.id)} className="w-full text-left" aria-label={'Abrir lead '+(lead.name||'sem nome')}>
+                    {bulkExistingMode&&<label className="mb-2 flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-50 px-2 py-1.5 text-xs font-bold text-indigo-900">
+                      <input type="checkbox" aria-label={'Selecionar card '+(lead.name||lead.phone)}
+                        disabled={bulkExistingBusy}
+                        checked={bulkExistingIds.includes(lead.id)}
+                        onChange={e=>{
+                          setBulkExistingIds(old=>e.target.checked?
+                            old.length>=100?old:[...old,lead.id]:old.filter(id=>id!==lead.id));
+                          delete keysRef.current['acquisition-bulk-existing'];
+                        }}
+                        className="h-4 w-4 accent-indigo-700"/>
+                      Incluir na classificação em lote
+                    </label>}
+                    <button type="button" onClick={()=>openCard(lead.id)} className="w-full text-left" aria-label={'Abrir lead '+(lead.name||'sem nome')}>
                       <div className="flex items-start justify-between gap-2">
                         <strong className="line-clamp-2 text-xs font-black uppercase leading-5 text-slate-900">{lead.name||'Lead sem nome'}</strong>
                         <GripVertical size={15} className="shrink-0 text-slate-300 group-hover:text-slate-500"/>
@@ -913,7 +1036,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <p className="mt-1 truncate text-[11px] font-semibold text-slate-600">{lead.clinicName||'Clínica não informada'}</p>
                       <p className="mt-1 truncate text-[11px] text-slate-500">{lead.phone||'Telefone não informado'}</p>
                       <div className="mt-3 grid grid-cols-2 gap-1.5">
-                        <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total}/10</b></div>
+                        <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total} ligações</b></div>
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Status</span><b className={'line-clamp-1 text-[10px] '+(a.spoken?'text-green-700':'text-slate-700')}>{a.spoken?(a.spokenVia==='whatsapp_message'?'Decisor por mensagem':'Decisor por ligação'):SALES_LEAD_STATUS_LABELS[lead.status]||lead.status}</b></div>
                       </div>
                       <div role="progressbar" aria-label="Tentativas de ligação"
@@ -923,7 +1046,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         <div className="h-full rounded-full transition-all duration-300"
                           style={{width:progressWidth(total),backgroundColor:progressColor(total)}}/>
                       </div>
-                      <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone}/5 · Ligação WhatsApp {a.whatsapp}/5</p>
+                      <p className="mt-1 text-[10px] text-slate-500">Operadora {a.phone} · Ligação WhatsApp {a.whatsapp}</p>
                       {followups[lead.id]?.status==='scheduled'&&
                         !['converted','lost','archived'].includes(lead.status)&&
                         <p className={'mt-2 rounded-lg px-2 py-1.5 text-[10px] font-bold '+(
@@ -942,6 +1065,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         </p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
+                    {feedbackFor(lead.id)&&<p role={feedbackFor(lead.id)?.error?'alert':'status'}
+                      className={'mt-2 rounded-lg px-2 py-1.5 text-[10px] '+(feedbackFor(lead.id)?.error
+                        ? 'bg-red-50 text-red-700':'bg-green-50 text-green-800')}>
+                      {feedbackFor(lead.id)?.error||feedbackFor(lead.id)?.info}
+                    </p>}
                     <button type="button" onClick={()=>openAcquisitionEditor(lead.id)}
                       className="mt-2 w-full rounded-lg border border-indigo-200 bg-indigo-50 px-2 py-2 text-left text-[11px] font-bold text-indigo-700"
                       aria-label={'Selecionar canais de aquisição para '+(lead.name||'oportunidade')}>
@@ -953,11 +1081,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
                       <button type="button" disabled={!callEnabled(lead,'phone')}
                         onClick={()=>recordAttempt(lead,'phone','no_decisor')} aria-label={'Contabilizar ligação pela operadora para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}/5</button>
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40"><Phone size={12}/> Operadora {a.phone}</button>
                       <button type="button" disabled={!callEnabled(lead,'whatsapp_call')}
                         onClick={()=>recordAttempt(lead,'whatsapp_call','no_decisor')} aria-label={'Contabilizar ligação pelo WhatsApp para '+lead.name}
-                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}/5</button>
-                      <button onClick={()=>setSelectedId(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
+                        className="flex flex-1 items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] font-bold text-emerald-700 disabled:opacity-40"><MessageCircle size={12}/> WhatsApp {a.whatsapp}</button>
+                      <button onClick={()=>openCard(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
                     </div>
                   </article>;
                 })}
@@ -992,7 +1120,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             })}
             {acquisitionChannels.length===0&&<p className="text-xs text-slate-500">Nenhum canal cadastrado. Use “Canais + Resultados”.</p>}
           </fieldset>
-          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>}
+          {feedbackFor(acquisitionDialog.leadId)?.error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-2 text-xs text-red-700">{feedbackFor(acquisitionDialog.leadId)?.error}</p>}
           <div className="mt-4 flex justify-end gap-2">
             <button type="button" disabled={savingAcquisition} onClick={()=>{setAcquisitionDialog(null);setError(null);}}
               className="rounded-lg border px-4 py-2 text-xs font-semibold">Cancelar</button>
@@ -1036,8 +1164,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           }} className="mt-2 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700">
             Usar horário atual
           </button>
-          <p className="mt-2 text-xs text-slate-500">As ligações exigem data passada, de segunda a sexta, entre 9h e 17h30. É permitida uma ligação por dia.</p>
-          {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
+          <p className="mt-2 text-xs text-slate-500">Registre a data e hora reais da tentativa, inclusive se houve outra ligação no mesmo dia ou fora do expediente. A cadência é apenas sugestão.</p>
+          {feedbackFor(attemptDialog.leadId)?.error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(attemptDialog.leadId)?.error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={Boolean(busyLead)}
               onClick={()=>{setAttemptDialog(null);setError(null);}}
@@ -1052,18 +1180,95 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       </div>}
 
       {creatingOpen&&<div className="fixed inset-0 z-[155] flex items-center justify-center bg-slate-950/60 p-4" role="dialog" aria-modal="true" aria-label="Cadastrar oportunidades">
-        <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-          <div className="flex items-center justify-between"><h3 className="text-lg font-black">Nova oportunidade</h3>
+        <div className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
+          <div className="flex shrink-0 items-center justify-between"><h3 className="text-lg font-black">Novas oportunidades e canais de aquisição</h3>
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} aria-label="Fechar cadastro"><X size={20}/></button></div>
-          <p className="mt-2 text-sm text-slate-600">Informe um ou vários números com DDD. Cada número cria um card em Prospecção, para você editar depois.</p>
+          <p className="mt-2 shrink-0 text-sm text-slate-600">Cole até 100 números com DDD e escolha os canais de aquisição para todos, alguns ou cada contato.</p>
           {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-          <label className="mt-4 block text-xs font-bold text-slate-700">Telefones (até 100 por cadastro)
-            <textarea autoFocus rows={7} maxLength={5000} disabled={creatingBusy} value={phonesDraft}
-              onChange={e=>{setPhonesDraft(e.target.value);delete keysRef.current.create;}}
-              placeholder={'11 99999-9999\\n21 98888-8888'}
-              className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500" />
-          </label>
-          <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+            <label className="block text-xs font-bold text-slate-700">Telefones (até 100 por cadastro)
+              <textarea autoFocus rows={4} maxLength={5000} disabled={creatingBusy} value={phonesDraft}
+                onChange={e=>{
+                  const text=e.target.value;
+                  setPhonesDraft(text);
+                  const count=text.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean).length;
+                  setBulkSelectedRows(Array.from({length:Math.min(count,100)},(_,i)=>i));
+                  setBulkChannelsByRow({});
+                  delete keysRef.current.create;
+                }}
+                placeholder={'11 99999-9999\n21 98888-8888'}
+                className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500"/>
+            </label>
+            <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+            {bulkPhones.length>0&&<div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <strong className="text-xs text-indigo-950">{bulkPhones.length} contato(s) · {bulkSelectedRows.length} selecionado(s)</strong>
+                <div className="flex gap-2">
+                  <button type="button" disabled={creatingBusy}
+                    onClick={()=>setBulkSelectedRows(bulkPhones.map((_,i)=>i))}
+                    className="rounded-lg border bg-white px-2 py-1.5 text-xs font-semibold">Selecionar todos</button>
+                  <button type="button" disabled={creatingBusy} onClick={()=>setBulkSelectedRows([])}
+                    className="rounded-lg border bg-white px-2 py-1.5 text-xs font-semibold">Desmarcar todos</button>
+                </div>
+              </div>
+              <fieldset className="mt-3 rounded-lg border border-indigo-100 bg-white p-3">
+                <legend className="px-1 text-xs font-bold text-indigo-950">Canais a aplicar aos selecionados</legend>
+                {acquisitionChannels.filter(ch=>ch.is_active).map(channel=><label key={channel.id}
+                  className="mr-4 inline-flex items-center gap-1.5 py-1 text-xs">
+                  <input type="checkbox" disabled={creatingBusy} checked={bulkChannelsToApply.includes(channel.id)}
+                    onChange={e=>setBulkChannelsToApply(old=>e.target.checked?[...old,channel.id]:old.filter(id=>id!==channel.id))}
+                    className="h-4 w-4 accent-indigo-700"/>
+                  {channel.name}
+                </label>)}
+                {!acquisitionChannels.some(ch=>ch.is_active)&&
+                  <p className="text-xs text-slate-600">Cadastre canais antes pelo botão “Canais + Resultados” no Kanban.</p>}
+              </fieldset>
+              <button type="button" disabled={creatingBusy||!bulkSelectedRows.length||acquisitionCatalogUnavailable}
+                onClick={applyBulkChannels}
+                className="mt-2 rounded-lg bg-indigo-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">
+                Aplicar canais aos {bulkSelectedRows.length} selecionados
+              </button>
+              <p className="mt-2 text-[11px] text-slate-600">
+                Depois de aplicar, você pode ajustar individualmente cada número.
+                Os contatos desmarcados não serão alterados.
+              </p>
+              <div className="mt-3 max-h-56 space-y-1.5 overflow-y-auto">
+                {bulkPhones.slice(0,100).map((phone,index)=><div key={index}
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" aria-label={'Selecionar contato '+(index+1)}
+                      disabled={creatingBusy} checked={bulkSelectedRows.includes(index)}
+                      onChange={e=>setBulkSelectedRows(old=>e.target.checked?
+                        [...old,index]:old.filter(i=>i!==index))}
+                      className="h-4 w-4 accent-indigo-700"/>
+                    <span className="min-w-0 flex-1 truncate font-mono text-xs">{index+1}. {phone}</span>
+                    <span className="max-w-[48%] truncate text-[11px] text-indigo-700">
+                      {(bulkChannelsByRow[index]||[]).map(id=>acquisitionChannels.find(c=>c.id===id)?.name||'Canal histórico').join(', ')||'Sem canal'}
+                    </span>
+                  </div>
+                  <details className="mt-1 pl-6 text-xs">
+                    <summary className="cursor-pointer font-semibold text-violet-700">Editar canais deste contato</summary>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+                      {acquisitionChannels.filter(ch=>ch.is_active).map(channel=><label key={channel.id}
+                        className="inline-flex items-center gap-1.5">
+                        <input type="checkbox" disabled={creatingBusy}
+                          checked={(bulkChannelsByRow[index]||[]).includes(channel.id)}
+                          onChange={e=>{
+                            setBulkChannelsByRow(old=>{
+                              const current=old[index]||[];
+                              return {...old,[index]:e.target.checked?[...current,channel.id]:current.filter(id=>id!==channel.id)};
+                            });
+                            delete keysRef.current.create;
+                          }}
+                          className="h-4 w-4 accent-indigo-700"/>
+                        {channel.name}
+                      </label>)}
+                    </div>
+                  </details>
+                </div>)}
+              </div>
+            </div>}
+          </div>
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} className="rounded-lg border px-4 py-2 text-sm">Cancelar</button>
             <button type="button" disabled={creatingBusy||!phonesDraft.trim()} onClick={()=>void createOpportunities()}
@@ -1100,8 +1305,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <button type="button" onClick={()=>setSelectedId(null)} aria-label="Fechar detalhes" className="rounded-lg border p-2"><X size={18}/></button>
           </div>
           <div className="space-y-5 p-5">
-            {error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
-            {info&&<p className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{info}</p>}
+            {feedbackFor(selected.id)?.error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(selected.id)?.error}</p>}
+            {feedbackFor(selected.id)?.info&&<p role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{feedbackFor(selected.id)?.info}</p>}
             <div className="flex flex-wrap gap-2">
               <button type="button" disabled={savingLead||loadingLeadDetails||deletingLead||Boolean(busyLead)}
                 onClick={()=>void openLeadEditor(selected)}
@@ -1156,7 +1361,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               <p className="mt-1 text-[11px] text-slate-500">Movimentos salvos no histórico, sem atualizar a página. Cliente convertido só muda por pagamento confirmado.</p>
             </div>
             <div className="rounded-xl border border-slate-200 p-4">
-              <div className="flex items-center justify-between"><h4 className="font-black">Cadência de ligações</h4><span className="text-sm font-black">{selectedCounts.phone+selectedCounts.whatsapp}/10</span></div>
+              <div className="flex items-center justify-between"><h4 className="font-black">Cadência de ligações</h4><span className="text-sm font-black">{selectedCounts.phone+selectedCounts.whatsapp} ligações</span></div>
               <div role="progressbar" aria-label="Progresso das tentativas de ligação"
                 aria-valuemin={0} aria-valuemax={10}
                 aria-valuenow={Math.min(10,selectedCounts.phone+selectedCounts.whatsapp)}
@@ -1166,11 +1371,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     backgroundColor:progressColor(selectedCounts.phone+selectedCounts.whatsapp)}}/>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-                <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}/5</b></div>
-                <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}/5</b></div>
+                <div className="rounded-lg bg-blue-50 p-3"><span className="block text-blue-700">Operadora</span><b className="text-lg">{selectedCounts.phone}</b></div>
+                <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}</b></div>
               </div>
-              <p className="mt-3 text-[11px] text-slate-500">Os botões contabilizam tentativas, sem abrir aplicativos. Limite: uma por dia, de segunda a sexta, das 9h às 17h30 (Brasília).</p>
-              {!selectedCounts.spoken&&selectedCounts.phone+selectedCounts.whatsapp<10&&
+              <p className="mt-3 text-[11px] text-slate-500">Os botões funcionam em todas as etapas, inclusive após contato e conversão. Horários sugeridos não bloqueiam registros reais. A preferência explícita de não contato e a exclusão do lead continuam protegidas.</p>
+              {selectedCounts.phone+selectedCounts.whatsapp<10&&
                 <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3 text-xs">
                   <h5 className="font-bold text-violet-800">Cadência sugerida — dias e horários alternados</h5>
                   <ol className="mt-2 grid grid-cols-2 gap-1.5 text-violet-800">
@@ -1178,9 +1383,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                       <li key={date.toISOString()}>{selectedCounts.phone+selectedCounts.whatsapp+i+1}ª · {slotLabel(date)}</li>
                     ))}
                   </ol>
-                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. O servidor valida dia útil, expediente e uma ligação por dia.</p>
+                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. As sugestões não impedem registrar contatos em outros horários ou no mesmo dia.</p>
                 </div>}
-              {!selectedCounts.spoken&&!['converted','lost','archived'].includes(selected.status)&&<div className="mt-3 space-y-2">
+              {<div className="mt-3 space-y-2">
                 <button disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
                   className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação operadora sem falar com decisor</button>
                 <button disabled={!callEnabled(selected,'whatsapp_call')} onClick={()=>recordAttempt(selected,'whatsapp_call','no_decisor')}
@@ -1219,9 +1424,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         </label>)}
                     </div>
                   </fieldset>
-                  <button disabled={Boolean(busyLead)||!spokenAtDraft||
-                      (spokenChannel==='phone'&&selectedCounts.phone>=5)||
-                      (spokenChannel==='whatsapp_call'&&selectedCounts.whatsapp>=5)}
+                  <button disabled={Boolean(busyLead)||!spokenAtDraft}
                     onClick={()=>void saveSpokenContact(selected)}
                     className="w-full rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">
                     Salvar contato com decisor

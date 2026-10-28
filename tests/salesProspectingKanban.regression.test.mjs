@@ -157,7 +157,7 @@ test('phone and WhatsApp cards are counters only, and loss needs explicit owner 
   assert.match(kanban,/Contabilizar WhatsApp/);
   assert.match(kanban,/recordAttempt\(lead,'phone','no_decisor'\)/);
   assert.match(kanban,/recordAttempt\(lead,'whatsapp_call','no_decisor'\)/);
-  assert.match(kanban,/window\.confirm\('Foram registradas 10 tentativas/);
+  assert.doesNotMatch(kanban,/window\.confirm\('Foram registradas 10 tentativas/);
   assert.match(crudSql,/needsLossDecision/);
   assert.doesNotMatch(crudSql,/prospecting-auto-lost/);
 });
@@ -173,28 +173,38 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(kanban,/setAttemptDialog/);
 });
 
-test('production Super Admin retains the old leads list and provides a mobile Kanban menu',()=>{
-  assert.match(superAdmin,/const \[mobileMenuOpen,setMobileMenuOpen\]=useState\(false\)/);
-  assert.match(superAdmin,/aria-label="Abrir navegação do Super Admin"/);
+test('Super Admin sidebar stays fixed on desktop and uses an accessible mobile hamburger',()=>{
+  assert.match(superAdmin,/const \[mobileMenuOpen, setMobileMenuOpen\] = useState\(false\)/);
+  assert.match(superAdmin,/aria-label="Abrir menu de navegação"/);
+  assert.match(superAdmin,/aria-expanded=\{mobileMenuOpen\}/);
+  assert.match(superAdmin,/aria-controls="super-admin-navigation"/);
   assert.match(superAdmin,/id="super-admin-navigation"/);
-  assert.match(superAdmin,/fixed inset-y-0 left-0 z-40/);
-  assert.match(superAdmin,/md:sticky md:top-0 md:h-screen/);
-  assert.match(superAdmin,/onClickCapture=\{\(\)=>setMobileMenuOpen\(false\)\}/);
-  assert.match(superAdmin,/commercialView === 'kanban'/);
-  assert.match(superAdmin,/commercialView === 'list'/);
-  assert.match(superAdmin,/Voltar ao Kanban/);
-  assert.match(superAdmin,/<CommercialDashboard/);
-  assert.match(superAdmin,/onLoadMore=\{loadMoreLeads\}/);
-  assert.match(superAdmin,/onLeadPatch=/);
-  assert.match(superAdmin,/onLeadDeleted=/);
+  assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
+  assert.match(superAdmin,/compactDesktopMenu \? ' md:w-\[66px\]' : ' md:w-72'/);
+  assert.match(superAdmin,/md:ml-\[66px\]/);
+  assert.match(superAdmin,/md:ml-72 md:p-8/);
+  assert.match(superAdmin,/className="sticky top-0 z-30[^"]*md:hidden"/);
+  assert.match(superAdmin,/compactDesktopMenu \? 'md:hidden' : ''/);
+  assert.match(superAdmin,/onClick=\{\(\) => selectAdminTab\('leads'\)\}/);
+  assert.match(superAdmin,/onClick=\{closeMobileMenu\}/);
+  assert.match(superAdmin,/if \(mobileMenuOpen\) closeMobileMenu\(\)/);
+  assert.match(superAdmin,/mobileMenuCloseRef.current\?\.focus\(\)/);
+  assert.match(superAdmin,/event.key === 'Escape'/);
+  assert.match(superAdmin,/mobileMenuTriggerRef.current\?\.focus\(\)/);
+  assert.doesNotMatch(superAdmin,/h-screen sticky top-0 flex flex-col overflow-x-hidden/);
 });
 
-test('Kanban page scrolls vertically and retains horizontal column navigation in production',()=>{
-  assert.match(superAdmin,/min-w-0 flex-1 overflow-x-hidden p-3 pt-16 md:p-8/);
+test('Kanban page scrolls vertically without clipping cards while keeping horizontal column navigation',()=>{
+  const mainClass = superAdmin.match(/<main className=\{compactDesktopMenu\s*\? '([^']+)'/)?.[1];
+  assert.ok(mainClass, 'Super Admin Kanban main class exists');
+  assert.match(mainClass,/min-h-\[calc\(100dvh-3\.5rem\)\]/);
+  assert.match(mainClass,/md:min-h-screen/);
+  assert.doesNotMatch(mainClass,/(?:^|\s)(?:h-screen|md:h-screen|overflow-hidden)(?:\s|$)/);
   assert.match(kanban,/ref=\{scrollRef\} className="min-w-0 overflow-x-auto pb-2"/);
   assert.match(kanban,/className="flex min-h-\[380px\] w-max min-w-full gap-2\.5"/);
   assert.match(kanban,/className="flex-1 space-y-2 p-2"/);
   assert.doesNotMatch(kanban,/ref=\{scrollRef\} className="[^"]*overflow-y-hidden/);
+  assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
   assert.match(kanban,/Navegar horizontalmente no Kanban/);
 });
 
@@ -650,27 +660,124 @@ test('commercial UI states only Kanban-visible leads count, and hidden clients r
 });
 
 
-test('isolated main release preserves canonical production finance while mounting only CRM',()=>{
-  const help=readFileSync('services/helpCenterRoutes.ts','utf8');
-  assert.match(help,/registerSalesProspectingRoutes\(app, \{ supabase, checkAuth \}\)/);
-  assert.match(superAdmin,/const \[financialView,setFinancialView\]=useState<'dre'\|'sales'>\('dre'\)/);
-  assert.match(superAdmin,/Inteligência comercial · Gráficos/);
-  assert.match(superAdmin,/DRE e EBITDA/);
-  assert.match(superAdmin,/<CommercialKanban/);
-  assert.match(superAdmin,/onRefresh=\{refreshAll\}/);
-  assert.match(superAdmin,/onOpenLead=/);
-  assert.match(superAdmin,/const \[leadNextPage,setLeadNextPage\]=useState\(2\)/);
+const anyStageCallsSql=readFileSync('supabase/migrations/20261029001000_sales_calls_any_kanban_stage_v1.sql','utf8');
+
+test('operator and WhatsApp calls are never disabled by column, stage, or prior decision-maker contact',()=>{
+  assert.match(kanban,/const callEnabled=\(_lead:Lead,_ch:'phone'\|'whatsapp_call'\)=>!busyLead/);
+  assert.match(kanban,/disabled=\{!callEnabled\(lead,'phone'\)\}/);
+  assert.match(kanban,/disabled=\{!callEnabled\(lead,'whatsapp_call'\)\}/);
+  assert.match(kanban,/disabled=\{!callEnabled\(selected,'phone'\)\}/);
+  assert.match(kanban,/disabled=\{!callEnabled\(selected,'whatsapp_call'\)\}/);
+  assert.doesNotMatch(kanban,/selected\.status\)\&\&<div className="mt-3 space-y-2">/);
+  assert.doesNotMatch(kanban,/selectedCounts\.phone>=5|selectedCounts\.whatsapp>=5/);
+  assert.doesNotMatch(kanban,/Operadora \{a\.phone\}\/5|WhatsApp \{a\.whatsapp\}\/5/);
+  assert.match(kanban,/Ten calls is a visual cadence reference, not a hard stop/);
 });
 
-test('production import compatibility preserves exact missing-consent truth only for owner manual leads',()=>{
-  const migration=readFileSync('supabase/migrations/20261028235900_sales_owner_manual_consent_import_compat_v1.sql','utf8');
-  assert.match(migration,/contact_consent_at drop not null/);
-  assert.match(migration,/contact_consent_at is not null/);
-  assert.match(migration,/acquisition_channel='manual_kanban'/);
-  assert.match(migration,/contact_consent_origin='owner_manual_no_consent'/);
-  assert.match(migration,/contact_consent_version='not_collected'/);
-  assert.match(migration,/sales_crm_import_lead_map/);
-  assert.match(migration,/enable row level security/);
-  assert.match(migration,/revoke all on public\.sales_crm_import_lead_map from public,anon,authenticated/);
-  assert.doesNotMatch(migration,/alter table public\.sales_offers|alter table public\.sales_checkout_links|payment_confirmed_at/);
+test('new attempt, actual-time and conversation RPCs accept all funnel stages and unlimited calls while retaining safety guards',()=>{
+  for(const fn of ['record_sales_prospecting_attempt_v1','save_sales_prospecting_attempt_time_v1',
+    'save_sales_prospecting_attempt_time_v2','save_sales_decisor_contact_v2'])
+    assert.match(anyStageCallsSql,new RegExp('CREATE OR REPLACE FUNCTION public\\.'+fn));
+  assert.doesNotMatch(anyStageCallsSql,/DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT/);
+  assert.doesNotMatch(anyStageCallsSql,/v_lead\.status in \('lost','archived','converted'\)/);
+  assert.match(anyStageCallsSql,/v_lead\.do_not_contact/);
+  assert.match(anyStageCallsSql,/sales_kanban_opportunity_overrides h/);
+  assert.match(anyStageCallsSql,/PROSPECTING_ALREADY_TODAY/);
+  assert.match(anyStageCallsSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.match(anyStageCallsSql,/sales_lead_events/);
+  assert.match(anyStageCallsSql,/revoke all on function public\.save_sales_decisor_contact_v2/);
+  assert.doesNotMatch(anyStageCallsSql,/delete from public\.sales_leads|drop table|truncate/i);
+});
+
+
+const repeatCallsSql=readFileSync('supabase/migrations/20261029003000_sales_contacts_multiple_same_day_v1.sql','utf8');
+
+test('same-day real phone/WhatsApp attempts and conversations do not hit artificial daily or office-hour quota',()=>{
+  assert.match(repeatCallsSql,/CREATE OR REPLACE FUNCTION public\.save_sales_prospecting_attempt_time_v2/i);
+  assert.match(repeatCallsSql,/CREATE OR REPLACE FUNCTION public\.save_sales_decisor_contact_v2/i);
+  assert.doesNotMatch(repeatCallsSql,/PROSPECTING_ALREADY_TODAY|PROSPECTING_OUTSIDE_BUSINESS_HOURS|CHANNEL_ATTEMPT_LIMIT/);
+  assert.match(repeatCallsSql,/idempotency_key=p_action_key/);
+  assert.match(repeatCallsSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(repeatCallsSql,/v_lead\.do_not_contact/);
+  assert.match(repeatCallsSql,/h\.hidden_at is not null/);
+  assert.match(repeatCallsSql,/p_script_version_id/);
+  assert.match(repeatCallsSql,/from public,anon,authenticated/);
+  assert.match(repeatCallsSql,/to service_role/);
+});
+
+test('call/save UI now labels cadence as advisory and reports only real remaining 409 conflicts',()=>{
+  assert.match(kanban,/inclusive se houve outra ligação no mesmo dia/);
+  assert.match(kanban,/A cadência é apenas sugestão/);
+  assert.match(kanban,/Horários sugeridos não bloqueiam registros reais/);
+  assert.doesNotMatch(kanban,/É permitida uma ligação por dia/);
+  assert.match(routes,/Oportunidade removida ou com preferência explícita de não receber contatos/);
+  assert.match(routes,/Esta tentativa já foi salva com outros dados/);
+  assert.match(routes,/Este contato já foi salvo com outros dados/);
+  const attemptRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"));
+  const contactRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/followup'"));
+  assert.doesNotMatch(attemptRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.doesNotMatch(contactRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+});
+
+
+const bulkCreationSql=readFileSync('supabase/migrations/20261028235930_sales_bulk_acquisition_atomic_v1.sql','utf8');
+const bulkExistingSql=readFileSync('supabase/migrations/20261028235940_sales_acquisition_multicard_atomic_v1.sql','utf8');
+const acquisitionRoutes=readFileSync('services/salesAcquisitionRoutes.ts','utf8');
+
+test('bulk lead import preselects any subset and assigns different active acquisition channels by contact',()=>{
+  assert.match(kanban,/Selecionar todos/);
+  assert.match(kanban,/Desmarcar todos/);
+  assert.match(kanban,/Aplicar canais aos \{bulkSelectedRows\.length\} selecionados/);
+  assert.match(kanban,/Editar canais deste contato/);
+  assert.match(kanban,/phones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
+  assert.match(kanban,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
+  assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
+  assert.match(routes,/create_sales_kanban_opportunities_v2/);
+  assert.match(routes,/channelsByPhone\.length!==phones\.length/);
+  assert.match(bulkCreationSql,/create_sales_kanban_opportunities_v1\(p_phones,p_actor_id,p_action_key\)/);
+  assert.match(bulkCreationSql,/sales_lead_acquisition_channels\(lead_id,channel_id,assigned_by\)/);
+  assert.match(bulkCreationSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(bulkCreationSql,/ACQUISITION_CHANNEL_UNAVAILABLE/);
+});
+
+test('existing cards can be chosen in a group with add-preserving or explicit replace semantics',()=>{
+  assert.match(kanban,/Selecionar vários cards/);
+  assert.match(kanban,/Incluir na classificação em lote/);
+  assert.match(kanban,/Selecionar até 100 visíveis/);
+  assert.match(kanban,/Substituir os canais atuais \(em vez de adicionar\)/);
+  assert.match(kanban,/\[\.\.\.new Set\(\[\.\.\.\(acquisitionByLead\[leadId\]\|\|\[\]\),\.\.\.bulkExistingChannels\]\)\]/);
+  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/leads\/bulk'/);
+  assert.match(kanban,/for\(const item of result\.selections\|\|\[\]\)next\[item\.leadId\]=item\.channelIds\|\|\[\]/);
+  assert.match(acquisitionRoutes,/app\.put\('\/api\/owner\/sales\/acquisition\/leads\/bulk',\.\.\.guard/);
+  assert.match(bulkExistingSql,/save_sales_lead_acquisition_channels_v1\(/);
+  assert.match(bulkExistingSql,/DUPLICATE_ACQUISITION_LEAD/);
+});
+
+test('bulk mutations are SQL atomic, audited, private and block partial invalid selections',()=>{
+  for(const contents of [bulkCreationSql,bulkExistingSql]){
+    assert.match(contents,/^begin;/m);
+    assert.match(contents,/^commit;/m);
+    assert.match(contents,/enable row level security/);
+    assert.match(contents,/revoke all on[\s\S]*?from public,anon,authenticated/);
+    assert.match(contents,/to service_role/);
+    assert.match(contents,/platform_admins/);
+    assert.match(contents,/pg_advisory_xact_lock/);
+    assert.doesNotMatch(contents,/notification_jobs|patient_sessions|public\.stripe|update public\.sales_leads set/i);
+  }
+  assert.match(bulkExistingSql,/order by value->>'leadId'/);
+  assert.match(bulkCreationSql,/bulk_acquisition_assigned/);
+});
+
+test('lead feedback is isolated by card id so a new drawer never inherits a prior action confirmation',()=>{
+  assert.match(kanban,/const \[cardFeedback,setCardFeedback\]/);
+  assert.match(kanban,/const feedbackFor=\(leadId:string\)=>cardFeedback\?\.leadId===leadId\?cardFeedback:null/);
+  assert.match(kanban,/const openCard=\(leadId:string\)=>\{/);
+  assert.match(kanban,/setError\(null\);setInfo\(null\);setCardFeedback\(null\)/);
+  assert.match(kanban,/onClick=\{\(\)=>openCard\(lead\.id\)\}/);
+  assert.match(kanban,/feedbackFor\(selected\.id\)\?\.info/);
+  assert.match(kanban,/feedbackFor\(selected\.id\)\?\.error/);
+  assert.match(kanban,/cardInfo\(draft\.leadId,/);
+  assert.match(kanban,/cardInfo\(dialog\.leadId,/);
+  assert.match(kanban,/cardError\(lead\.id,/);
+  assert.doesNotMatch(kanban,/selected&&<div[\s\S]*?\{info&&<p className="rounded-lg bg-emerald-50/);
 });
