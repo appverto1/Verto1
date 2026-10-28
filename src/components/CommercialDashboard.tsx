@@ -73,6 +73,7 @@ export const CommercialDashboard = () => {
   const [error,setError] = useState<string|null>(null);
   const [drilldown,setDrilldown]=useState<DrilldownSelection|null>(null);
   const [drilldownOffset,setDrilldownOffset]=useState(0);
+  const [drilldownRetry,setDrilldownRetry]=useState(0);
   const [drilldownData,setDrilldownData]=useState<DrilldownResults|null>(null);
   const [drilldownLoading,setDrilldownLoading]=useState(false);
   const [drilldownError,setDrilldownError]=useState<string|null>(null);
@@ -104,7 +105,7 @@ export const CommercialDashboard = () => {
     }catch(e:any){if(live)setDrilldownError(e.message||'Detalhamento indisponível.');}
     finally{if(live)setDrilldownLoading(false);}})();
     return()=>{live=false;};
-  },[drilldown,drilldownOffset,days,refresh]);
+  },[drilldown,drilldownOffset,days,refresh,drilldownRetry]);
   useEffect(()=>{
     let active = true;
     setLoading(true);setError(null);
@@ -307,6 +308,13 @@ export const CommercialDashboard = () => {
             <Panel title="Composição do pipeline" subtitle="Participação de cada status no total de leads da Verto.">
               {stages.length?<Plot height={320}><PieChart><Pie data={stages} dataKey="leads" nameKey="stage" innerRadius={54} outerRadius={95} paddingAngle={2}
                 onClick={(entry:any)=>showLeads('stage',String(entry?.status||''),'leads','Funil · '+String(entry?.stage||''),entry?.leads)}>{stages.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}</Pie><Tooltip/><Legend/></PieChart></Plot>:<Empty/>}
+              <div className="mt-3 flex flex-wrap gap-1.5" aria-label="Abrir leads de cada etapa">
+                {stages.map(stage=><button key={stage.status} type="button"
+                  onClick={()=>showLeads('stage',stage.status,'leads','Etapa · '+stage.stage,stage.leads)}
+                  className="rounded-lg border border-violet-200 px-2 py-1.5 text-[11px] font-bold text-violet-700 hover:bg-violet-50">
+                  {stage.stage}: {n(stage.leads)}
+                </button>)}
+              </div>
             </Panel>
           </div>
         </div>
@@ -328,7 +336,7 @@ export const CommercialDashboard = () => {
             {drilldownLoading&&<p role="status" className="rounded-lg bg-violet-50 p-3 text-sm text-violet-800">Buscando leads no banco...</p>}
             {drilldownError&&<div role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">
               {drilldownError}
-              <button type="button" className="ml-2 font-bold underline" onClick={()=>setDrilldownOffset(v=>v)}>Tentar novamente</button>
+              <button type="button" className="ml-2 font-bold underline" onClick={()=>{setDrilldownData(null);setDrilldownRetry(v=>v+1);}}>Tentar novamente</button>
             </div>}
             {drilldownData&&<>
               <div className="mb-3 grid grid-cols-2 gap-3 rounded-xl bg-slate-50 p-3">
