@@ -207,3 +207,46 @@ test('Kanban page scrolls vertically without clipping cards while keeping horizo
   assert.match(superAdmin,/fixed inset-y-0 left-0 z-50/);
   assert.match(kanban,/Navegar horizontalmente no Kanban/);
 });
+
+const contactSql=readFileSync('supabase/migrations/20261028181000_sales_decisor_contact_followup_v1.sql','utf8');
+
+test('conversation success uses explicitly saved Brazilian date/time instead of click time',()=>{
+  assert.match(kanban,/brazilInputToIso\(input\)/);
+  assert.match(kanban,/type="datetime-local" value=\{spokenAtDraft\}/);
+  assert.match(kanban,/Salvar contato com decisor/);
+  assert.match(kanban,/Salvar alteração/);
+  assert.match(kanban,/setAttempts\(old=>attempt/);
+  assert.match(kanban,/onLeadPatch\(lead\.id,\{status:json\.data\.status/);
+  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/decisor-contact'/);
+  assert.match(routes,/save_sales_decisor_contact_v1/);
+});
+
+test('conversation edit is locked, audited, idempotent and protected from manipulation',()=>{
+  assert.equal((contactSql.match(/\$\$/g)||[]).length,4);
+  assert.match(contactSql,/p_attempt_id is not null then/);
+  assert.match(contactSql,/outcome='decisor_spoken' for update/);
+  assert.match(contactSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(contactSql,/v_attempt\.channel<>p_channel/);
+  assert.match(contactSql,/PROSPECTING_ALREADY_TODAY/);
+  assert.match(contactSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.match(contactSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(contactSql,/decisor_time_corrected/);
+  assert.match(contactSql,/not exists\(select 1 from public\.platform_admins/);
+  assert.match(contactSql,/grant execute on function public\.save_sales_decisor_contact_v1\([\s\S]*to service_role;/);
+  assert.doesNotMatch(contactSql,/grant execute on function[^;]*to (?:anon|authenticated);/);
+});
+
+test('return date/time is stored as owner CRM metadata without notifications',()=>{
+  assert.match(kanban,/Próximo retorno de contato/);
+  assert.match(kanban,/Salvar retorno/);
+  assert.match(kanban,/Cancelar retorno/);
+  assert.match(routes,/save_sales_contact_followup_v1/);
+  assert.match(routes,/eq\('actor_user_id',actorId\)/);
+  assert.match(contactSql,/unique\(lead_id,actor_user_id\)/);
+  assert.match(contactSql,/sales_contact_followups enable row level security/);
+  assert.match(contactSql,/followup_canceled/);
+  assert.match(contactSql,/followup_saved/);
+  assert.doesNotMatch(contactSql,/notification_jobs|push_subscriptions|sendNotification|cron|queue/i);
+  assert.doesNotMatch(routes,/callback-push-subscribe|save_sales_callback_reminder_v1/);
+  assert.doesNotMatch(kanban,/Ativar notificações de retorno|Antecedência da notificação/);
+});

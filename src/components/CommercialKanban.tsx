@@ -37,6 +37,24 @@ const dateText = (value?: string | null) => {
     ? date.toLocaleString('pt-BR', { dateStyle:'short', timeStyle:'short', timeZone:'America/Sao_Paulo' })
     : '—';
 };
+type SalesFollowup = {id:string;lead_id:string;contact_due_at:string;status:'scheduled'|'canceled'};
+const brazilLocalInput=(iso:string)=>{
+  const instant=new Date(iso);
+  if(!Number.isFinite(instant.getTime()))return '';
+  const parts=new Intl.DateTimeFormat('en-US',{
+    timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit',
+    hour:'2-digit',minute:'2-digit',hourCycle:'h23',
+  }).formatToParts(instant);
+  const get=(kind:string)=>parts.find(part=>part.type===kind)?.value||'';
+  return get('year')+'-'+get('month')+'-'+get('day')+'T'+get('hour')+':'+get('minute');
+};
+const brazilInputToIso=(local:string)=>{
+  if(!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(local))throw Error('Informe data e hora válidas.');
+  const parsed=new Date(local+':00-03:00');
+  if(!Number.isFinite(parsed.getTime())||brazilLocalInput(parsed.toISOString())!==local)
+    throw Error('Data ou horário inválido para Brasília.');
+  return parsed.toISOString();
+};
 const isUuid = (s: string) => /^[a-f\d]{8}-[a-f\d]{4}-[1-8][a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(s);
 const stageFromStatus = (status: string) => {
   if (status === 'new') return 'prospecting';
@@ -65,6 +83,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [spokenChannel, setSpokenChannel] = useState<'phone'|'whatsapp_call'>('phone');
+  const [spokenAtDraft,setSpokenAtDraft]=useState('');
+  const [editingSpokenId,setEditingSpokenId]=useState<string|null>(null);
+  const [editingSpokenAt,setEditingSpokenAt]=useState('');
+  const [followups,setFollowups]=useState<Record<string,SalesFollowup>>({});
+  const [followupAtDraft,setFollowupAtDraft]=useState('');
+  const [savingFollowup,setSavingFollowup]=useState(false);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
   const [creatingBusy,setCreatingBusy] = useState(false);
@@ -116,12 +140,14 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         const nextPlacements: Record<string,string> = {};
         const nextOverrides: Record<string,{details:Partial<Lead>;hidden:boolean}> = {};
         const dedup = new Map<string,CommercialAttempt>();
+        const loadedFollowups:Record<string,SalesFollowup>={};
         for (const page of pages) {
           for (const item of page.board.placements || []) nextPlacements[item.lead_id] = item.column_id;
           for (const item of page.board.overrides || []) {
             nextOverrides[item.lead_id] = { details:item.details || {}, hidden:Boolean(item.hidden_at) };
           }
           for (const item of page.history.data || []) dedup.set(item.id,item);
+          for (const followup of page.history.followups || []) loadedFollowups[followup.lead_id]=followup;
           for (const item of page.history.leads || []) {
             // Only changed server facts cause an in-place patch; no F5 necessary.
             const local = leads.find(x => x.id === item.id);
@@ -130,6 +156,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           }
         }
         setAttempts([...dedup.values()]);
+        setFollowups(loadedFollowups);
         setPlacements(nextPlacements);
         setOverrides(nextOverrides);
         setError(null);
@@ -185,7 +212,13 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const lead=leads.find(x=>x.id===selectedId);
     setLeadDraft({name:lead?.name||'',phone:lead?.phone||'',clinicName:lead?.clinicName||'',email:lead?.email||'',notes:lead?.notes||''});
     setEditingLead(false);
+    setEditingSpokenId(null);
+    setSpokenAtDraft(brazilLocalInput(new Date().toISOString()));
   },[selectedId]);
+  useEffect(()=>{
+    const saved=selectedId?followups[selectedId]:null;
+    setFollowupAtDraft(saved?.status==='scheduled'?brazilLocalInput(saved.contact_due_at):'');
+  },[selectedId,followups]);
   const createOpportunities = async () => {
     const phones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
     if(!phones.length||phones.length>100){setError('Informe de 1 a 100 números, separados por linha, vírgula ou ponto e vírgula.');return;}
@@ -366,6 +399,49 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       }catch(e:any){setError(e.message || 'Não foi possível registrar ligação.');}
       finally{setBusyLead(null);}
     })();
+  };
+  const saveSpokenContact=async(lead:Lead,attempt?:CommercialAttempt)=>{
+    if(busyLead)return;
+    const input=attempt?editingSpokenAt:spokenAtDraft;
+    const keyName='decisor:'+lead.id+':'+(attempt?.id||'new');
+    try{
+      const occurredAt=brazilInputToIso(input);
+      const key=keysRef.current[keyName]||crypto.randomUUID();
+      keysRef.current[keyName]=key;
+      setBusyLead(lead.id);setError(null);
+      const json=await request('/api/owner/sales/leads/'+lead.id+'/decisor-contact',{
+        method:'PUT',headers:{'X-Idempotency-Key':key},
+        body:JSON.stringify({channel:attempt?.channel||spokenChannel,
+          attemptId:attempt?.id||null,occurredAt}),
+      });
+      delete keysRef.current[keyName];
+      setAttempts(old=>attempt
+        ? old.map(item=>item.id===attempt.id?{...item,occurred_at:json.data.occurredAt}:item)
+        : old.some(item=>item.id===json.data.attemptId)?old:
+          [...old,{id:json.data.attemptId,lead_id:lead.id,
+            channel:spokenChannel,outcome:'decisor_spoken',occurred_at:json.data.occurredAt}]);
+      onLeadPatch(lead.id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt});
+      setEditingSpokenId(null);
+      setInfo(attempt?'Data e hora do contato corrigidas e auditadas.':'Contato com decisor salvo no horário informado.');
+    }catch(e:any){setError(e.message||'Não foi possível salvar o contato.');}
+    finally{setBusyLead(null);}
+  };
+  const saveFollowup=async(lead:Lead,cancel=false)=>{
+    if(savingFollowup)return;
+    const keyName='followup:'+lead.id;
+    try{
+      const contactDueAt=cancel?null:brazilInputToIso(followupAtDraft);
+      const key=keysRef.current[keyName]||crypto.randomUUID();
+      keysRef.current[keyName]=key;
+      setSavingFollowup(true);setError(null);
+      const json=await request('/api/owner/sales/leads/'+lead.id+'/followup',{
+        method:'PUT',headers:{'X-Idempotency-Key':key},body:JSON.stringify({contactDueAt}),
+      });
+      delete keysRef.current[keyName];
+      setFollowups(old=>({...old,[lead.id]:json.followup}));
+      setInfo(cancel?'Retorno cancelado.':'Data e hora do retorno salvas (sem notificações).');
+    }catch(e:any){setError(e.message||'Não foi possível salvar o retorno.');}
+    finally{setSavingFollowup(false);}
   };
   const manualLost = (lead:Lead, confirmed=false) => {
     if (!confirmed && !window.confirm('Marcar '+(lead.name || 'este lead')+' como perdido? A data e hora serão registradas.')) return;
@@ -630,13 +706,53 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                   className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação operadora sem falar com decisor</button>
                 <button disabled={!callEnabled(selected,'whatsapp_call')} onClick={()=>recordAttempt(selected,'whatsapp_call','no_decisor')}
                   className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação WhatsApp sem falar com decisor</button>
-                <div className="flex gap-2"><select aria-label="Canal em que falou com decisor" value={spokenChannel}
-                  onChange={e=>setSpokenChannel(e.target.value as 'phone'|'whatsapp_call')}
-                  className="w-32 rounded-lg border border-slate-200 p-2 text-xs"><option value="phone">Operadora</option><option value="whatsapp_call">WhatsApp</option></select>
-                  <button disabled={!callEnabled(selected,spokenChannel)} onClick={()=>recordAttempt(selected,spokenChannel,'decisor_spoken')}
-                    className="flex-1 rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">Falei com o decisor</button></div>
+                <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                  <label className="block text-xs font-bold text-emerald-800">Data e hora em que falou com o decisor (Brasília)
+                    <input type="datetime-local" value={spokenAtDraft}
+                      onChange={e=>{setSpokenAtDraft(e.target.value);delete keysRef.current['decisor:'+selected.id+':new'];}}
+                      className="mt-1 block w-full rounded-lg border border-emerald-200 bg-white p-2 text-sm"/>
+                  </label>
+                  <div className="flex gap-2">
+                    <select aria-label="Canal em que falou com decisor" value={spokenChannel}
+                      onChange={e=>{setSpokenChannel(e.target.value as 'phone'|'whatsapp_call');delete keysRef.current['decisor:'+selected.id+':new'];}}
+                      className="w-32 rounded-lg border border-slate-200 p-2 text-xs">
+                      <option value="phone">Operadora</option><option value="whatsapp_call">WhatsApp</option>
+                    </select>
+                    <button disabled={Boolean(busyLead)||!spokenAtDraft||
+                        (spokenChannel==='phone'?selectedCounts.phone>=5:selectedCounts.whatsapp>=5)}
+                      onClick={()=>void saveSpokenContact(selected)}
+                      className="flex-1 rounded-lg bg-emerald-600 p-3 text-xs font-bold text-white disabled:opacity-40">
+                      Salvar contato com decisor
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-emerald-900">O horário informado só é registrado ao clicar em Salvar. A cadência continua validada pelo servidor.</p>
+                </div>
               </div>}
               {selectedCounts.spoken&&<p className="mt-3 rounded-lg bg-green-50 p-2 text-xs font-bold text-green-700">Conversa com o decisor registrada. Mensagens de texto não contam como contato efetivo.</p>}
+            </div>
+            <div className="rounded-xl border border-slate-200 p-4">
+              <h4 className="font-black">Próximo retorno de contato</h4>
+              <p className="mt-1 text-xs text-slate-600">Registre a data e a hora combinadas. Este campo não envia notificações.</p>
+              {followups[selected.id]?.status==='scheduled'&&
+                <p className="mt-2 rounded-lg bg-violet-50 p-2 text-xs font-bold text-violet-800">
+                  Retorno agendado: {dateText(followups[selected.id].contact_due_at)}
+                </p>}
+              <label className="mt-3 block text-xs font-bold">Data e horário do retorno (Brasília)
+                <input type="datetime-local" value={followupAtDraft}
+                  onChange={e=>{setFollowupAtDraft(e.target.value);delete keysRef.current['followup:'+selected.id];}}
+                  className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"/>
+              </label>
+              <div className="mt-3 flex gap-2">
+                <button disabled={savingFollowup||!followupAtDraft} onClick={()=>void saveFollowup(selected)}
+                  className="flex-1 rounded-lg bg-violet-600 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-40">
+                  Salvar retorno
+                </button>
+                {followups[selected.id]?.status==='scheduled'&&
+                  <button disabled={savingFollowup} onClick={()=>void saveFollowup(selected,true)}
+                    className="rounded-lg border border-slate-200 px-3 py-2.5 text-xs font-bold disabled:opacity-40">
+                    Cancelar retorno
+                  </button>}
+              </div>
             </div>
             {selected.status==='lost'&&<p className="rounded-lg bg-red-50 p-3 text-xs font-bold text-red-700">Perdido em {dateText(selected.lostAt)}</p>}
             {!['lost','converted'].includes(selected.status)&&<button disabled={Boolean(busyLead)} onClick={()=>manualLost(selected)}
@@ -647,9 +763,32 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <div className="border-t pt-4"><h4 className="mb-2 text-sm font-black">Histórico de ligações</h4>
               {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).length===0&&<p className="text-xs text-slate-500">Nenhuma ligação registrada.</p>}
               {attempts.filter(a=>a.lead_id===selected.id).sort((a,b)=>b.occurred_at.localeCompare(a.occurred_at)).map(a=>
-                <div key={a.id} className="flex items-center justify-between border-b py-2 text-xs">
-                  <span>{a.channel==='phone'?'Operadora':'Ligação WhatsApp'} · {a.outcome==='decisor_spoken'?'Decisor contatado':'Sem contato efetivo'}</span>
-                  <time className="text-slate-500">{dateText(a.occurred_at)}</time>
+                <div key={a.id} className="border-b py-2 text-xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span>{a.channel==='phone'?'Operadora':'Ligação WhatsApp'} · {a.outcome==='decisor_spoken'?'Decisor contatado':'Sem contato efetivo'}</span>
+                    <div className="flex items-center gap-2">
+                      <time className="text-slate-500">{dateText(a.occurred_at)}</time>
+                      {a.outcome==='decisor_spoken'&&
+                        <button type="button" disabled={Boolean(busyLead)} onClick={()=>{
+                          setEditingSpokenId(a.id);setEditingSpokenAt(brazilLocalInput(a.occurred_at));
+                        }} className="text-xs font-semibold text-violet-700 underline disabled:opacity-40">
+                          Editar horário
+                        </button>}
+                    </div>
+                  </div>
+                  {editingSpokenId===a.id&&
+                    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 p-2">
+                      <label className="text-xs">Data e hora (Brasília)
+                        <input type="datetime-local" value={editingSpokenAt}
+                          onChange={e=>{setEditingSpokenAt(e.target.value);delete keysRef.current['decisor:'+selected.id+':'+a.id];}}
+                          className="mt-1 block rounded-lg border bg-white p-2"/>
+                      </label>
+                      <button type="button" disabled={Boolean(busyLead)||!editingSpokenAt}
+                        onClick={()=>void saveSpokenContact(selected,a)}
+                        className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">Salvar alteração</button>
+                      <button type="button" onClick={()=>setEditingSpokenId(null)}
+                        className="rounded-lg border px-3 py-2 text-xs">Cancelar</button>
+                    </div>}
                 </div>)}
             </div>
           </div>
