@@ -137,6 +137,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   },[]);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
+  const [bulkSelectedRows,setBulkSelectedRows]=useState<number[]>([]);
+  const [bulkChannelsToApply,setBulkChannelsToApply]=useState<string[]>([]);
+  const [bulkChannelsByRow,setBulkChannelsByRow]=useState<Record<number,string[]>>({});
+  const [cardFeedback,setCardFeedback]=useState<{leadId:string;info?:string;error?:string}|null>(null);
   const [creatingBusy,setCreatingBusy] = useState(false);
   const [editingLead,setEditingLead] = useState(false);
   const [savingLead,setSavingLead] = useState(false);
@@ -348,6 +352,22 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       (!q || [lead.name,lead.clinicName,lead.email,lead.phone].some(v=>String(v||'').toLocaleLowerCase('pt-BR').includes(q))));
   }, [visibleLeads,search]);
   const selected = visibleLeads.find(x=>x.id === selectedId) || null;
+  const bulkPhones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+  const feedbackFor=(leadId:string)=>cardFeedback?.leadId===leadId?cardFeedback:null;
+  const cardInfo=(leadId:string,info:string)=>setCardFeedback({leadId,info});
+  const cardError=(leadId:string,error:string)=>setCardFeedback({leadId,error});
+  const openCard=(leadId:string)=>{
+    setError(null);setInfo(null);setCardFeedback(null);
+    setSelectedId(leadId);
+  };
+  const applyBulkChannels=()=>{
+    setBulkChannelsByRow(old=>{
+      const next={...old};
+      for(const index of bulkSelectedRows)if(index<bulkPhones.length)next[index]=[...bulkChannelsToApply];
+      return next;
+    });
+    delete keysRef.current.create;
+  };
   const selectedCounts = selected ? leadCounts(selected.id) : {phone:0,whatsapp:0,spoken:false};
   useEffect(()=>{
     const lead=leads.find(x=>x.id===selectedId);
@@ -361,20 +381,30 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setFollowupAtDraft(saved?.status==='scheduled'?brazilLocalInput(saved.contact_due_at):'');
   },[selectedId,followups]);
   const createOpportunities = async () => {
-    const phones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+    const phones=bulkPhones;
     if(!phones.length||phones.length>100){setError('Informe de 1 a 100 números, separados por linha, vírgula ou ponto e vírgula.');return;}
+    const channelsByPhone=phones.map((_,index)=>bulkChannelsByRow[index]||[]);
+    if(acquisitionCatalogUnavailable&&channelsByPhone.some(ids=>ids.length)){
+      setError('Canais indisponíveis. Atualize antes de classificar o lote.');return;
+    }
     setCreatingBusy(true);setError(null);
     const key=keysRef.current.create||crypto.randomUUID();keysRef.current.create=key;
     try {
       const json=await request('/api/owner/sales/kanban/opportunities',{
-        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones}),
+        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones,channelsByPhone}),
       });
       delete keysRef.current.create;
       onLeadsCreated(json.leads||[]);
+      setAcquisitionByLead(old=>{
+        const next={...old};
+        for(const item of json.leads||[])next[item.id]=item.channelIds||[];
+        return next;
+      });
       setPhonesDraft('');setCreatingOpen(false);setSearch('');setShowStage('all');
+      setBulkChannelsByRow({});setBulkSelectedRows([]);setBulkChannelsToApply([]);
       setGlobalFollowupFilter('all');setColumnFollowupFilters({});
       setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
-      setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s). Abra os cards para editar.');
+      setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s) com as origens selecionadas.');
     }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
     finally{setCreatingBusy(false);}
   };
