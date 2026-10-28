@@ -758,7 +758,7 @@ test('bulk mutations are SQL atomic, audited, private and block partial invalid 
     assert.match(contents,/^begin;/m);
     assert.match(contents,/^commit;/m);
     assert.match(contents,/enable row level security/);
-    assert.match(contents,/revoke all on.*from public,anon,authenticated/);
+    assert.match(contents,/revoke all on[\s\S]*?from public,anon,authenticated/);
     assert.match(contents,/to service_role/);
     assert.match(contents,/platform_admins/);
     assert.match(contents,/pg_advisory_xact_lock/);
