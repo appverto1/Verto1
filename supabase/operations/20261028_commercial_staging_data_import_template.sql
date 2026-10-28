@@ -2,12 +2,20 @@
 -- Placeholder __STAGING_JSON_SQL_LITERAL__ is replaced IN MEMORY with a single
 -- escaped Postgres SQL string literal; NEVER commit prospect PII to GitHub.
 -- Execute in one transaction after schema migrations, with a rollback rehearsal.
--- Source reference safety: own staged UUID wins; only cross-environment phone
--- conflicts map to an existing production lead. Deleted staging records retain ID.
+-- Source reference safety: fail closed on phone/email/ID collisions between
+-- environments; never join two distinct leads or their histories automatically.
+-- Resolve source identities before importing, preserving all original records.
 begin;
 set local lock_timeout='3s';
 set local statement_timeout='180s';
 
+create temp table _crm_prod_before as
+select
+ (select count(*) from public.sales_leads) as leads,
+ (select count(*) from public.sales_lead_events) as events,
+ (select count(*) from public.sales_prospecting_attempts) as attempts,
+ (select count(*) from public.sales_offers) as offers,
+ (select count(*) from public.sales_checkout_links) as checkout_links;
 create temp table _crm_payload as select __STAGING_JSON_SQL_LITERAL__::jsonb as d;
 create temp table _crm_stage_leads as
 select x.*,(item->>'_hidden_at')::timestamptz as _source_hidden_at
@@ -26,6 +34,23 @@ create temp table _crm_stage_followups as select * from jsonb_populate_recordset
 do $import$
 declare leadcols text;admin_id uuid;
 begin
+-- Mandatory identity gate before the first persistent mutation. The
+-- normalized_phone uniqueness rule must never be bypassed or an unrelated
+-- production card's history altered by an accidental match.
+if exists (
+ select 1 from _crm_stage_leads s
+ join public.sales_leads d
+   on d.id=s.id
+   or (d.deleted_at is null and s.deleted_at is null and (
+        d.normalized_phone=s.normalized_phone
+        or (s.normalized_email is not null and d.normalized_email=s.normalized_email)))
+) then
+ raise exception 'CRM_STAGING_PRODUCTION_IDENTITY_CONFLICT_REQUIRES_REVIEW';
+end if;
+if exists (select 1 from _crm_stage_leads group by id having count(*)>1)
+   or exists (select 1 from _crm_stage_events group by id having count(*)>1)
+   or exists (select 1 from _crm_stage_attempts group by id having count(*)>1)
+then raise exception 'CRM_SOURCE_DUPLICATE_IDS';end if;
 select user_id into strict admin_id from public.platform_admins where active limit 1;
 select string_agg(format('%I',column_name),', ' order by ordinal_position) into leadcols
 from information_schema.columns where table_schema='public' and table_name='sales_leads'
@@ -116,11 +141,31 @@ insert into public.sales_crm_import_actor_refs(source_table,source_record_key,so
 select 'sales_lead_acquisition_channels',lead_id::text||':'||channel_id::text,assigned_by,admin_id
 from _crm_stage_links on conflict do nothing;
 
-if (select count(*) from public.sales_crm_import_actor_refs)<>31 then raise exception 'ACTOR_PROVENANCE_NOT_31';end if;
-if (select count(*) from public.sales_crm_import_lead_map)<>47 then raise exception 'MAPPING_COUNT_NOT_47';end if;
-if (select count(*) from public.sales_leads)<>59 then raise exception 'LEAD_COUNT_NOT_59';end if;
-if (select count(*) from public.sales_prospecting_attempts)<>21 then raise exception 'ATTEMPT_COUNT_NOT_21';end if;
-if (select count(*) from public.sales_lead_events)<>252 then raise exception 'EVENT_COUNT_NOT_252';end if;
+if (select count(*) from public.sales_crm_import_actor_refs)
+ <> (select (select count(*) from _crm_stage_attempts)
+    +(select count(*) from _crm_stage_scripts)
+    +(select count(*) from _crm_stage_links))
+ then raise exception 'ACTOR_PROVENANCE_COUNT_MISMATCH';end if;
+if (select count(*) from public.sales_crm_import_lead_map)
+ <> (select count(*) from _crm_stage_leads)
+ then raise exception 'MAPPING_COUNT_MISMATCH';end if;
+if (select count(*) from public.sales_leads)
+ <> (select leads from _crm_prod_before)+(select count(*) from _crm_stage_leads)
+ then raise exception 'LEAD_COUNT_MISMATCH';end if;
+if exists (
+ select 1 from _crm_stage_leads s
+ join public.sales_leads d on d.id=s.id
+ where d.notes is distinct from s.notes
+    or d.phone is distinct from s.phone
+    or d.normalized_phone is distinct from s.normalized_phone
+    or d.name is distinct from s.name)
+then raise exception 'STAGING_LEAD_FIELDS_NOT_PRESERVED';end if;
+if (select count(*) from public.sales_prospecting_attempts)
+ <> (select attempts from _crm_prod_before)+(select count(*) from _crm_stage_attempts)
+ then raise exception 'ATTEMPT_COUNT_MISMATCH';end if;
+if (select count(*) from public.sales_lead_events)
+ <> (select events from _crm_prod_before)+(select count(*) from _crm_stage_events)
+ then raise exception 'EVENT_COUNT_MISMATCH';end if;
 if (select count(*) from public.sales_lead_acquisition_channels)<>8 then raise exception 'LINKS_COUNT_NOT_8';end if;
 if (select count(*) from public.sales_script_versions)<>2 then raise exception 'SCRIPT_COUNT_NOT_2';end if;
 if (select count(*) from public.sales_kanban_columns)<>6 then raise exception 'COLUMN_COUNT_NOT_6';end if;
@@ -130,9 +175,11 @@ if (select count(*) from public.sales_leads where deleted_at is not null)<>1 the
 if (select count(*) from public.sales_leads l where l.status='converted' and l.deleted_at is null
  and not exists(select 1 from public.sales_kanban_opportunity_overrides ov where ov.lead_id=l.id and ov.hidden_at is not null))<>3
 then raise exception 'VISIBLE_PRODUCTION_CONVERSIONS_CHANGED';end if;
-if (select count(*) from public.sales_offers)<>12 or (select count(*) from public.sales_checkout_links)<>13
+if (select count(*) from public.sales_offers) is distinct from (select offers from _crm_prod_before)
+   or (select count(*) from public.sales_checkout_links) is distinct from
+      (select checkout_links from _crm_prod_before)
 then raise exception 'PRODUCTION_FINANCE_CHANGED';end if;
-raise notice 'PASS full CRM import: 47 mapped, 46 new, 1 collision, 21 attempts, 110 events, 6 columns, all relations';
+raise notice 'PASS CRM staging import: complete snapshot, collision-free mapping, preserved notes, calls, events and payment counts';
 end $import$;
 
 -- Replace with COMMIT only after dry-run, permission review, and source snapshot validation.
