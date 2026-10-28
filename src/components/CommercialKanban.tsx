@@ -1165,7 +1165,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             Usar horário atual
           </button>
           <p className="mt-2 text-xs text-slate-500">Registre a data e hora reais da tentativa, inclusive se houve outra ligação no mesmo dia ou fora do expediente. A cadência é apenas sugestão.</p>
-          {feedbackFor(attemptDialog.leadId)?.error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(attemptDialog.leadId)?.error}</p>}}
+          {feedbackFor(attemptDialog.leadId)?.error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(attemptDialog.leadId)?.error}</p>}
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={Boolean(busyLead)}
               onClick={()=>{setAttemptDialog(null);setError(null);}}
