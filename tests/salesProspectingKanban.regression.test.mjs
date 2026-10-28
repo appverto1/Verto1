@@ -729,7 +729,7 @@ test('bulk lead import preselects any subset and assigns different active acquis
   assert.match(kanban,/Desmarcar todos/);
   assert.match(kanban,/Aplicar canais aos \{bulkSelectedRows\.length\} selecionados/);
   assert.match(kanban,/Editar canais deste contato/);
-  assert.match(kanban,/bulkPhones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
+  assert.match(kanban,/phones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
   assert.match(kanban,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
   assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
   assert.match(routes,/create_sales_kanban_opportunities_v2/);
