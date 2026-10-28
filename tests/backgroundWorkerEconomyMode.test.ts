@@ -83,6 +83,26 @@ const announcementTask=fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{
 assert.equal(notificationTask.started,true,'essential patient reminders must run in economy');
 assert.equal(announcementTask.started,false,'announcements must not register a second poller');
 assert.equal(directScheduleCalls,1,'only the unified delivery cron may poll the backend');
+
+// With an independently running staging Cron worker, even the essential queue
+// schedule moves off the web process. Production and the default remain unchanged.
+let externalRecurringCalls = 0;
+let externalStoppedCalls = 0;
+const externalScheduler: any = {
+  schedule: () => { externalRecurringCalls += 1; return { started: true }; },
+  createTask: () => { externalStoppedCalls += 1; return { started: false }; },
+};
+const externalGuard = installVertoBackgroundWorkerCronGuard({
+  env: { ...deploymentEnv('staging'), VERTO_STAGING_NOTIFICATION_DISPATCH: 'external-cron' },
+  scheduler: externalScheduler,
+  logger: { log: () => undefined },
+});
+assert.deepEqual(externalGuard, { installed: true, mode: 'economy' });
+assert.equal(externalScheduler.schedule('* * * * *',()=>undefined,
+  {timezone:'UTC',name:'verto-notification-jobs'}).started,false);
+assert.equal(externalRecurringCalls,0,'externally dispatched staging notifications must not poll inside web server');
+assert.equal(externalStoppedCalls,1);
+
 assert.equal(fakeEconomyScheduler.schedule('* * * * *',()=>undefined,{timezone:'UTC',name:'unsafe-job'}).started,false);
 assert.equal(stoppedTaskCreations,3,'other work and the old announcement scheduler remain stopped');
 

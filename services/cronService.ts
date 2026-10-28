@@ -1613,13 +1613,13 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
   return { skipped: false, totalCandidates: jobs.length, sent24h, sent12h, failed };
 }
 
-async function runUnifiedDeliveryQueueScan(trigger: string) {
-  const options = activeOptions;
-  if (!options) return;
+async function runUnifiedDeliveryQueueScan(trigger: string, overrideOptions?: ActiveCronServiceOptions) {
+  const options = overrideOptions || activeOptions;
+  if (!options) return { skipped: true, failed: false };
   // Continue claiming once per minute even if an earlier batch is still being
   // delivered. PostgreSQL's SKIP LOCKED/CLAIMED state prevents duplicate claims;
   // pausing the next claim would unnecessarily delay new 24h/12h reminders.
-  await dispatchDueDeliveryQueues({
+  return await dispatchDueDeliveryQueues({
     supabase: options.supabase,
     deploymentEnv: options.deploymentEnv,
     workerId: options.runtimeOwnerId,
@@ -1628,6 +1628,32 @@ async function runUnifiedDeliveryQueueScan(trigger: string) {
     processNotificationJobs: (rows) => runNotificationJobQueue(options, trigger, rows),
     processClinicAnnouncements: (rows) => clinicAnnouncementService.runClinicAnnouncementDispatchScan(trigger, rows),
   });
+}
+
+/**
+ * Single-run durable queue drain for Railway Cron in staging.
+ * No timer, HTTP listener or global scan is started. Production is explicitly forbidden.
+ * Reuses the same transactional claim and idempotent delivery logic as the web server.
+ */
+export async function runStagingNotificationQueuesOnce(options: CronServiceOptions) {
+  const deploymentEnv = normalizeVertoDeploymentEnvironment(options.deploymentEnv);
+  if (deploymentEnv !== 'staging') {
+    throw new Error('STAGING_NOTIFICATION_CRON_PRODUCTION_FORBIDDEN');
+  }
+  if (!options.supabase) {
+    throw new Error('STAGING_NOTIFICATION_CRON_SUPABASE_REQUIRED');
+  }
+  const workerOptions: ActiveCronServiceOptions = {
+    supabase: options.supabase,
+    deploymentEnv,
+    vapidPublicKey: options.vapidPublicKey || null,
+    vapidPrivateKey: options.vapidPrivateKey || null,
+    logger: options.logger || console,
+    runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
+    requireDistributedLease: false,
+  };
+  clinicAnnouncementService.startClinicAnnouncementCron(workerOptions);
+  return runUnifiedDeliveryQueueScan('railway_staging_notification_cron', workerOptions);
 }
 
 export function triggerAppointmentReminderScan(_trigger = 'manual_trigger') {
