@@ -250,3 +250,54 @@ test('return date/time is stored as owner CRM metadata without notifications',()
   assert.doesNotMatch(routes,/callback-push-subscribe|save_sales_callback_reminder_v1/);
   assert.doesNotMatch(kanban,/Ativar notificações de retorno|Antecedência da notificação/);
 });
+
+
+const messageSql=readFileSync('supabase/migrations/20261028194500_sales_whatsapp_text_contact_channel_v1.sql','utf8');
+
+test('WhatsApp text has an explicit selectable channel and persists only through Save',()=>{
+  assert.match(kanban,/label:'Mensagem WhatsApp'/);
+  assert.match(kanban,/aria-pressed=\{spokenChannel===item.channel\}/);
+  assert.match(kanban,/Salvar contato com decisor/);
+  assert.match(kanban,/Histórico de ligações e mensagens/);
+  assert.match(kanban,/a.channel==='whatsapp_call'\?'Ligação WhatsApp':'Mensagem WhatsApp'/);
+  assert.match(kanban,/Decisor por mensagem/);
+  assert.match(kanban,/setAttempts\(old=>attempt/);
+  assert.match(routes,/! \['phone', 'whatsapp_call'\]\.includes\(channel\)/);
+  assert.match(routes,/! \['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
+});
+
+test('text contact never increments phone or WhatsApp call counters and preserves future follow-ups',()=>{
+  const counts=kanban.split('const countByLead = useMemo(() => {')[1].split('const leadCounts = ')[0];
+  assert.match(counts,/if \(attempt\.channel === 'phone'\) r\.phone\+\+/);
+  assert.match(counts,/else if \(attempt\.channel === 'whatsapp_call'\) r\.whatsapp\+\+/);
+  assert.doesNotMatch(counts,/else r\.whatsapp\+\+/);
+  assert.match(counts,/r\.spokenVia = attempt\.channel/);
+  assert.match(kanban,/selectedCounts\.spokenVia==='whatsapp_message'/);
+  assert.match(kanban,/Próximo retorno de contato/);
+});
+
+test('text contact is success-only, auditable, idempotent, independently validated on the server',()=>{
+  assert.equal((messageSql.match(/\$\$/g)||[]).length,4);
+  assert.match(messageSql,/channel in \('phone','whatsapp_call','whatsapp_message'\)/);
+  assert.match(messageSql,/channel <> 'whatsapp_message' or outcome = 'decisor_spoken'/);
+  assert.match(messageSql,/if p_channel <> 'whatsapp_message' and \(/);
+  assert.equal((messageSql.match(/if p_channel <> 'whatsapp_message' and exists\(/g)||[]).length,2);
+  assert.match(messageSql,/p_channel <> 'whatsapp_message' and v_count>=5/);
+  assert.match(messageSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(messageSql,/DECISOR_ALREADY_CONTACTED/);
+  assert.match(messageSql,/IDEMPOTENCY_CONFLICT/);
+  assert.match(messageSql,/decisor_time_corrected/);
+  assert.match(messageSql,/from public,anon,authenticated/);
+  assert.match(messageSql,/to service_role/);
+  assert.doesNotMatch(messageSql,/notification_jobs|push_subscriptions|cron\.schedule/i);
+});
+
+test('analytics keep calls and messages separate, including contacted-lead conversion rate',()=>{
+  assert.match(messageSql,/'messageContacts'/);
+  assert.match(messageSql,/'callContactedLeads'/);
+  assert.match(messageSql,/'totalCalls',\(select count\(\*\) from scoped where channel<>'whatsapp_message'\)/);
+  assert.match(messageSql,/'successfulCalls',\(select count\(\*\) from scoped where outcome='decisor_spoken' and channel<>'whatsapp_message'\)/);
+  assert.match(dashboard,/Por mensagem WhatsApp/);
+  assert.match(dashboard,/overview\?\.callContactedLeads\?\?overview\?\.contactedLeads/);
+  assert.match(dashboard,/Mensagens não entram nos indicadores de quantidade e efetividade das ligações/);
+});
