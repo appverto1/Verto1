@@ -56,7 +56,7 @@ begin
    (p_value !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' or
     p_value<'2020-01-01' or p_value>'2100-12-31')
  then raise exception 'INVALID_DRILLDOWN_FILTER';end if;
- if p_dimension='hour' and (p_value !~ '^[0-9]{1,2}$' or p_value::int not between 0 and 23)
+ if p_dimension='hour' and (p_value !~ '^[0-9]{1,2}$' or (case when p_value ~ '^[0-9]+ not between 0 and 23)
  then raise exception 'INVALID_DRILLDOWN_FILTER';end if;
  if p_dimension='weekday' and (p_value !~ '^[1-7]$')
  then raise exception 'INVALID_DRILLDOWN_FILTER';end if;
@@ -85,6 +85,175 @@ begin
       p_dimension='weekday' and extract(isodow from a.occurred_at at time zone 'America/Sao_Paulo')::int=p_value::int or
       p_dimension='channel' and a.channel=p_value or
       p_dimension='attempt' and a.attempt_number=p_value::int)
+     and (p_measure='calls' or p_measure='leads' or
+       p_measure='attempted' and a.channel<>'whatsapp_message' or
+       p_measure='messages' and a.channel='whatsapp_message' or
+       p_measure='conversations' and a.outcome='decisor_spoken' or
+       p_measure='failures' and a.outcome='no_decisor')
+ ),
+ grouped as (
+   select l.id,l.name,l.clinic_name,l.phone,l.email,l.status::text as status,
+     l.created_at,l.updated_at,l.last_contact_at,
+     l.converted_clinic_id,l.converted_user_id,
+     count(*)::bigint as matching_events,max(m.occurred_at) as matched_at
+   from matches m join public.sales_leads l on l.id=m.lead_id
+   where l.deleted_at is null group by l.id
+ ),
+ totals as (
+   select count(*)::bigint leads,coalesce(sum(matching_events),0)::bigint events from grouped
+ ),
+ page as (
+   select * from grouped order by matched_at desc,id limit p_limit offset p_offset
+ )
+ select totals.leads,totals.events,
+   coalesce((select jsonb_agg(to_jsonb(page) order by page.matched_at desc,page.id) from page),'[]'::jsonb)
+ into v_total,v_events,v_rows from totals;
+ return jsonb_build_object('totalLeads',v_total,'matchingEvents',v_events,
+   'items',v_rows,'offset',p_offset,'limit',p_limit);
+end $$;
+
+revoke all on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ from public,anon,authenticated;
+grant execute on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ to service_role;
+notify pgrst,'reload schema';
+commit;
+ then p_value::int else -1 end) not between 0 and 23)
+ then raise exception 'INVALID_DRILLDOWN_FILTER';end if;
+ if p_dimension='weekday' and (p_value !~ '^[1-7]$')
+ then raise exception 'INVALID_DRILLDOWN_FILTER';end if;
+ if p_dimension='attempt' and (p_value !~ '^([1-9]|10)$')
+ then raise exception 'INVALID_DRILLDOWN_FILTER';end if;
+
+ with scoped as (
+   select a.id,a.lead_id,a.channel,a.outcome,a.occurred_at,
+     row_number() over(partition by a.lead_id order by a.occurred_at,a.id)::int as attempt_number
+   from public.sales_prospecting_attempts a where a.occurred_at>=v_since
+     and (p_dimension='overview' and p_value in('contacted','messages')
+       or a.channel in('phone','whatsapp_call'))
+ ),
+ matches as (
+   select a.* from scoped a where
+     (p_dimension='overview' and (
+        p_value='attempted' and a.channel<>'whatsapp_message' or
+        p_value='calls' and a.channel<>'whatsapp_message' or
+        p_value='messages' and a.channel='whatsapp_message' or
+        p_value='contacted' and a.outcome='decisor_spoken' or
+        p_value='call_contacted' and a.channel<>'whatsapp_message' and a.outcome='decisor_spoken'
+      ) or
+      p_dimension='daily' and to_char(a.occurred_at at time zone 'America/Sao_Paulo','YYYY-MM-DD')=p_value or
+      p_dimension='cumulative' and to_char(a.occurred_at at time zone 'America/Sao_Paulo','YYYY-MM-DD')<=p_value or
+      p_dimension='hour' and extract(hour from a.occurred_at at time zone 'America/Sao_Paulo')::int=(case when p_value ~ '^[0-9]+ or
+      p_dimension='weekday' and extract(isodow from a.occurred_at at time zone 'America/Sao_Paulo')::int=p_value::int or
+      p_dimension='channel' and a.channel=p_value or
+      p_dimension='attempt' and a.attempt_number=p_value::int)
+     and (p_measure='calls' or p_measure='leads' or
+       p_measure='attempted' and a.channel<>'whatsapp_message' or
+       p_measure='messages' and a.channel='whatsapp_message' or
+       p_measure='conversations' and a.outcome='decisor_spoken' or
+       p_measure='failures' and a.outcome='no_decisor')
+ ),
+ grouped as (
+   select l.id,l.name,l.clinic_name,l.phone,l.email,l.status::text as status,
+     l.created_at,l.updated_at,l.last_contact_at,
+     l.converted_clinic_id,l.converted_user_id,
+     count(*)::bigint as matching_events,max(m.occurred_at) as matched_at
+   from matches m join public.sales_leads l on l.id=m.lead_id
+   where l.deleted_at is null group by l.id
+ ),
+ totals as (
+   select count(*)::bigint leads,coalesce(sum(matching_events),0)::bigint events from grouped
+ ),
+ page as (
+   select * from grouped order by matched_at desc,id limit p_limit offset p_offset
+ )
+ select totals.leads,totals.events,
+   coalesce((select jsonb_agg(to_jsonb(page) order by page.matched_at desc,page.id) from page),'[]'::jsonb)
+ into v_total,v_events,v_rows from totals;
+ return jsonb_build_object('totalLeads',v_total,'matchingEvents',v_events,
+   'items',v_rows,'offset',p_offset,'limit',p_limit);
+end $$;
+
+revoke all on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ from public,anon,authenticated;
+grant execute on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ to service_role;
+notify pgrst,'reload schema';
+commit;
+ then p_value::int else -1 end) or
+      p_dimension='weekday' and extract(isodow from a.occurred_at at time zone 'America/Sao_Paulo')::int=(case when p_value ~ '^[0-9]+ or
+      p_dimension='channel' and a.channel=p_value or
+      p_dimension='attempt' and a.attempt_number=p_value::int)
+     and (p_measure='calls' or p_measure='leads' or
+       p_measure='attempted' and a.channel<>'whatsapp_message' or
+       p_measure='messages' and a.channel='whatsapp_message' or
+       p_measure='conversations' and a.outcome='decisor_spoken' or
+       p_measure='failures' and a.outcome='no_decisor')
+ ),
+ grouped as (
+   select l.id,l.name,l.clinic_name,l.phone,l.email,l.status::text as status,
+     l.created_at,l.updated_at,l.last_contact_at,
+     l.converted_clinic_id,l.converted_user_id,
+     count(*)::bigint as matching_events,max(m.occurred_at) as matched_at
+   from matches m join public.sales_leads l on l.id=m.lead_id
+   where l.deleted_at is null group by l.id
+ ),
+ totals as (
+   select count(*)::bigint leads,coalesce(sum(matching_events),0)::bigint events from grouped
+ ),
+ page as (
+   select * from grouped order by matched_at desc,id limit p_limit offset p_offset
+ )
+ select totals.leads,totals.events,
+   coalesce((select jsonb_agg(to_jsonb(page) order by page.matched_at desc,page.id) from page),'[]'::jsonb)
+ into v_total,v_events,v_rows from totals;
+ return jsonb_build_object('totalLeads',v_total,'matchingEvents',v_events,
+   'items',v_rows,'offset',p_offset,'limit',p_limit);
+end $$;
+
+revoke all on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ from public,anon,authenticated;
+grant execute on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ to service_role;
+notify pgrst,'reload schema';
+commit;
+ then p_value::int else -1 end) or
+      p_dimension='channel' and a.channel=p_value or
+      p_dimension='attempt' and a.attempt_number=(case when p_value ~ '^[0-9]+)
+     and (p_measure='calls' or p_measure='leads' or
+       p_measure='attempted' and a.channel<>'whatsapp_message' or
+       p_measure='messages' and a.channel='whatsapp_message' or
+       p_measure='conversations' and a.outcome='decisor_spoken' or
+       p_measure='failures' and a.outcome='no_decisor')
+ ),
+ grouped as (
+   select l.id,l.name,l.clinic_name,l.phone,l.email,l.status::text as status,
+     l.created_at,l.updated_at,l.last_contact_at,
+     l.converted_clinic_id,l.converted_user_id,
+     count(*)::bigint as matching_events,max(m.occurred_at) as matched_at
+   from matches m join public.sales_leads l on l.id=m.lead_id
+   where l.deleted_at is null group by l.id
+ ),
+ totals as (
+   select count(*)::bigint leads,coalesce(sum(matching_events),0)::bigint events from grouped
+ ),
+ page as (
+   select * from grouped order by matched_at desc,id limit p_limit offset p_offset
+ )
+ select totals.leads,totals.events,
+   coalesce((select jsonb_agg(to_jsonb(page) order by page.matched_at desc,page.id) from page),'[]'::jsonb)
+ into v_total,v_events,v_rows from totals;
+ return jsonb_build_object('totalLeads',v_total,'matchingEvents',v_events,
+   'items',v_rows,'offset',p_offset,'limit',p_limit);
+end $$;
+
+revoke all on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ from public,anon,authenticated;
+grant execute on function public.sales_prospecting_drilldown_v1(uuid,integer,text,text,text,integer,integer)
+ to service_role;
+notify pgrst,'reload schema';
+commit;
+ then p_value::int else -1 end))
      and (p_measure='calls' or p_measure='leads' or
        p_measure='attempted' and a.channel<>'whatsapp_message' or
        p_measure='messages' and a.channel='whatsapp_message' or
