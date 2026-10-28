@@ -34,9 +34,7 @@ begin
     or p_occurred_at is null or p_occurred_at < timestamptz '2020-01-01T00:00:00Z'
     or p_occurred_at > v_now then raise exception 'INVALID_CONTACT_TIME'; end if;
   if p_attempt_id is null and p_contact_result not in ('interested','not_interested') then raise exception 'INVALID_CONTACT_RESULT'; end if;
-  -- Only phone calls follow the office-hours cadence. A text conversation can
-  -- happen at any hour and is not a phone attempt.
-  -- Calls or WhatsApp conversations can be logged at the actual historical time.
+  -- Log actual historic phone/WhatsApp events regardless of cadence suggestion.
   select * into v_lead from public.sales_leads
     where id=p_lead_id and deleted_at is null for update;
   if not found then raise exception 'LEAD_NOT_FOUND'; end if;
