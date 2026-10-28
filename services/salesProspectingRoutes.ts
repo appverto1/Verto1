@@ -140,10 +140,14 @@ export function registerSalesProspectingRoutes(
           const message=String(error.message||'');
           if(/LEAD_NOT_FOUND|ATTEMPT_NOT_FOUND/.test(message))
             return res.status(404).json({success:false,error:'Tentativa não encontrada.'});
-          if(/INVALID_ATTEMPT_TIME|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
-            return res.status(400).json({success:false,error:'Informe uma data passada, de segunda a sexta, das 9h às 17h30 (Brasília).'});
-          if(/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_NOT_ALLOWED|DECISOR_ALREADY_CONTACTED|IDEMPOTENCY_CONFLICT|SCRIPT_REQUIRED|SCRIPT_NOT_ACTIVE/.test(message))
-            return res.status(409).json({success:false,error:'Já existe ligação nessa data, limite atingido ou oportunidade indisponível.'});
+          if(/INVALID_ATTEMPT_TIME/.test(message))
+            return res.status(400).json({success:false,error:'Informe uma data e hora reais, sem selecionar um horário futuro.'});
+          if(/PROSPECTING_NOT_ALLOWED/.test(message))
+            return res.status(409).json({success:false,error:'Oportunidade removida ou com preferência explícita de não receber contatos.'});
+          if(/SCRIPT_NOT_ACTIVE|SCRIPT_REQUIRED/.test(message))
+            return res.status(409).json({success:false,error:'O fluxo escolhido não está vigente. Selecione outra versão.'});
+          if(/IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(409).json({success:false,error:'Esta tentativa já foi salva com outros dados. Atualize o histórico antes de tentar novamente.'});
           throw error;
         }
         return res.json({success:true,data});
@@ -180,10 +184,14 @@ export function registerSalesProspectingRoutes(
           const message=String(error.message||'');
           if(/LEAD_NOT_FOUND|CONTACT_NOT_FOUND/.test(message))
             return res.status(404).json({success:false,error:'Registro não encontrado.'});
-          if(/INVALID_CONTACT_TIME|INVALID_CONTACT_RESULT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/.test(message))
-            return res.status(400).json({success:false,error:'Informe horário passado, em dia útil, entre 9h e 17h30 (Brasília).'});
-          if(/PROSPECTING_ALREADY_TODAY|DECISOR_ALREADY_CONTACTED|CHANNEL_ATTEMPT_LIMIT|IDEMPOTENCY_CONFLICT|PROSPECTING_NOT_ALLOWED|SCRIPT_REQUIRED|SCRIPT_NOT_ACTIVE/.test(message))
-            return res.status(409).json({success:false,error:'Conflito com outra tentativa ou oportunidade indisponível.'});
+          if(/INVALID_CONTACT_TIME|INVALID_CONTACT_RESULT/.test(message))
+            return res.status(400).json({success:false,error:'Informe uma data e hora reais no passado e classifique o resultado do contato.'});
+          if(/PROSPECTING_NOT_ALLOWED/.test(message))
+            return res.status(409).json({success:false,error:'Oportunidade removida ou com preferência explícita de não receber contatos.'});
+          if(/SCRIPT_NOT_ACTIVE|SCRIPT_REQUIRED/.test(message))
+            return res.status(409).json({success:false,error:'O fluxo escolhido não está vigente. Selecione outra versão.'});
+          if(/IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(409).json({success:false,error:'Este contato já foi salvo com outros dados. Atualize o histórico antes de tentar novamente.'});
           throw error;
         }
         return res.json({success:true,data});
