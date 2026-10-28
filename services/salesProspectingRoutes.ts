@@ -121,7 +121,7 @@ export function registerSalesProspectingRoutes(
       const occurredAt=req.body?.occurredAt;
       const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
       if(!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
-         ||!['phone','whatsapp_call'].includes(channel)
+         ||!['phone','whatsapp_call','whatsapp_message'].includes(channel)
          ||typeof occurredAt!=='string'||occurredAt.length>40
          ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
          ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
