@@ -200,7 +200,7 @@ if exists (
  where d.id is null
     or (to_jsonb(d)-'converted_user_id'-'converted_clinic_id'-'assigned_owner_id')
        is distinct from
-       (to_jsonb(s)-'converted_user_id'-'converted_clinic_id'-'assigned_owner_id'))
+       (to_jsonb(s)-'converted_user_id'-'converted_clinic_id'-'assigned_owner_id'-'_source_hidden_at'))
 then raise exception 'STAGING_LEAD_FIELDS_NOT_PRESERVED';end if;
 if (select count(*) from public.sales_prospecting_attempts)
  <> (select attempts from _crm_prod_before)+(select count(*) from _crm_stage_attempts)
@@ -213,7 +213,11 @@ if (select count(*) from public.sales_script_versions)<>2 then raise exception '
 if (select count(*) from public.sales_kanban_columns)<>6 then raise exception 'COLUMN_COUNT_NOT_6';end if;
 if (select count(*) from public.sales_kanban_placements)<>3 then raise exception 'PLACEMENT_COUNT_NOT_3';end if;
 if (select count(*) from public.sales_kanban_opportunity_overrides where hidden_at is not null)<>1 then raise exception 'HIDDEN_NOT_PRESERVED';end if;
-if (select count(*) from public.sales_leads where deleted_at is not null)<>1 then raise exception 'DELETED_NOT_PRESERVED';end if;
+if exists(
+ select 1 from _crm_stage_leads src
+ left join public.sales_leads dest on dest.id=src.id
+ where dest.id is null or dest.deleted_at is distinct from src.deleted_at
+) then raise exception 'STAGING_DELETED_FLAGS_NOT_PRESERVED';end if;
 if (select count(*) from public.sales_leads l where l.status='converted' and l.deleted_at is null
  and not exists(select 1 from public.sales_kanban_opportunity_overrides ov where ov.lead_id=l.id and ov.hidden_at is not null))<>3
 then raise exception 'VISIBLE_PRODUCTION_CONVERSIONS_CHANGED';end if;
