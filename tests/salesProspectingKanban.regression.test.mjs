@@ -688,3 +688,33 @@ test('new attempt, actual-time and conversation RPCs accept all funnel stages an
   assert.match(anyStageCallsSql,/revoke all on function public\.save_sales_decisor_contact_v2/);
   assert.doesNotMatch(anyStageCallsSql,/delete from public\.sales_leads|drop table|truncate/i);
 });
+
+
+const repeatCallsSql=readFileSync('supabase/migrations/20261029003000_sales_contacts_multiple_same_day_v1.sql','utf8');
+
+test('same-day real phone/WhatsApp attempts and conversations do not hit artificial daily or office-hour quota',()=>{
+  assert.match(repeatCallsSql,/CREATE OR REPLACE FUNCTION public\.save_sales_prospecting_attempt_time_v2/i);
+  assert.match(repeatCallsSql,/CREATE OR REPLACE FUNCTION public\.save_sales_decisor_contact_v2/i);
+  assert.doesNotMatch(repeatCallsSql,/PROSPECTING_ALREADY_TODAY|PROSPECTING_OUTSIDE_BUSINESS_HOURS|CHANNEL_ATTEMPT_LIMIT/);
+  assert.match(repeatCallsSql,/idempotency_key=p_action_key/);
+  assert.match(repeatCallsSql,/where id=p_lead_id and deleted_at is null for update/);
+  assert.match(repeatCallsSql,/v_lead\.do_not_contact/);
+  assert.match(repeatCallsSql,/h\.hidden_at is not null/);
+  assert.match(repeatCallsSql,/p_script_version_id/);
+  assert.match(repeatCallsSql,/from public,anon,authenticated/);
+  assert.match(repeatCallsSql,/to service_role/);
+});
+
+test('call/save UI now labels cadence as advisory and reports only real remaining 409 conflicts',()=>{
+  assert.match(kanban,/inclusive se houve outra ligação no mesmo dia/);
+  assert.match(kanban,/A cadência é apenas sugestão/);
+  assert.match(kanban,/Horários sugeridos não bloqueiam registros reais/);
+  assert.doesNotMatch(kanban,/É permitida uma ligação por dia/);
+  assert.match(routes,/Oportunidade removida ou com preferência explícita de não receber contatos/);
+  assert.match(routes,/Esta tentativa já foi salva com outros dados/);
+  assert.match(routes,/Este contato já foi salvo com outros dados/);
+  const attemptRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"));
+  const contactRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/followup'"));
+  assert.doesNotMatch(attemptRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+  assert.doesNotMatch(contactRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
+});
