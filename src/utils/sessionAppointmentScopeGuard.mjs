@@ -40,13 +40,17 @@ export function detectUnsafeLocalSessionReuse(session,appointment,patientId) {
     ['CLINIC',field(session,'clinic_id','clinicId'),field(appointment,'clinic_id','clinicId')],
     ['PROFESSIONAL',field(session,'professional_id_snapshot','professional_id','professionalId','therapist_id','therapistId'),
       field(appointment,'professional_id','professionalId','therapist_id','therapistId')],
-    ['PLAN',field(session,'therapeutic_plan_id','therapeuticPlanId'),
-      field(appointment,'therapeutic_plan_id','therapeuticPlanId')],
   ];
   for(const [key,oldValue,newValue] of pairs){
     // Fail closed on unknown scope; a client cache is not a valid source of identity.
     if(!oldValue||!newValue)return deny(key+'_UNVERIFIED');
     if(oldValue!==newValue)return deny(key+'_MISMATCH');
   }
+  // Appointments do not have a top-level therapeutic_plan_id column.
+  // Reject a known mismatch, but do not invent an appointment plan link.
+  const planOnSession=field(session,'therapeutic_plan_id','therapeuticPlanId');
+  const planOnAppointment=field(appointment,'therapeutic_plan_id','therapeuticPlanId');
+  if(planOnSession&&planOnAppointment&&planOnSession!==planOnAppointment)
+    return deny('PLAN_MISMATCH');
   return Object.freeze({safe:true,reason:null,requiresServerAuthorization:true});
 }
