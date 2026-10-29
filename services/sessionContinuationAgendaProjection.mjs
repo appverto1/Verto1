@@ -22,16 +22,16 @@ export function createSessionContinuationAgendaProjection({
      !Array.isArray(cancelAppointmentIds)||cancelAppointmentIds.some(id=>!UUID.test(str(id)))||
      new Set(cancelAppointmentIds).size!==cancelAppointmentIds.length)
     deny('INVALID_APPOINTMENT_IDS');
-  const original=appointments.filter(x=>appId(x)===originalAppointmentId);
-  if(original.length!==1)deny('SOURCE_APPOINTMENT_NOT_UNIQUE');
-  if(str(original[0]?.clinicId??original[0]?.clinic_id)!==str(clinicId))
-    deny('SOURCE_CLINIC_MISMATCH');
   const seen=new Set();
   for(const item of appointments){
     if(!item||typeof item!=='object'||Array.isArray(item)||!UUID.test(appId(item)))deny('UNKNOWN_APPOINTMENT_ID');
     if(seen.has(appId(item)))deny('DUPLICATED_AGENDA_IDS');
     seen.add(appId(item));
   }
+  const original=appointments.filter(x=>appId(x)===originalAppointmentId);
+  if(original.length!==1)deny('SOURCE_APPOINTMENT_NOT_UNIQUE');
+  if(str(original[0]?.clinicId??original[0]?.clinic_id)!==str(clinicId))
+    deny('SOURCE_CLINIC_MISMATCH');
   const targets=new Set(cancelAppointmentIds);
   if(targets.has(originalAppointmentId))deny('CANNOT_CANCEL_SOURCE');
   for(const id of targets){
