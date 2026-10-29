@@ -141,3 +141,24 @@ assert.equal(dbThird.state.appointments.length,1);
 await assert.rejects(()=>runWith(createMock(),baseRequest,{...actor,serverAuthenticated:false}),
   e=>code(e)==='AUTHENTICATED_ACTOR_REQUIRED');
 console.log('sessionContinuationAtomicOrchestrator.test.mjs: ok (consistency, rollback, replay and three units)');
+
+const concurrent=createMock();
+// A real PostgreSQL adapter must lock the idempotency key and appointment.
+// This mock serializes transactions to prove the coordinator does not duplicate
+// financial reservations when two identical requests arrive simultaneously.
+const transaction=concurrent.withTransaction.bind(concurrent);
+let queue=Promise.resolve();
+concurrent.withTransaction=work=>{
+  const result=queue.then(()=>transaction(work));
+  queue=result.catch(()=>undefined);
+  return result;
+};
+const [sim1,sim2]=await Promise.all([runWith(concurrent),runWith(concurrent)]);
+assert.equal([sim1.replayed,sim2.replayed].filter(Boolean).length,1,
+  'simultaneous replay must return exactly one existing result');
+assert.equal(concurrent.state.appointments.length,1,'simultaneous replay cannot duplicate billing');
+assert.equal(concurrent.state.cancelled.length,1,'third-party appointment cancelled once');
+const differentClinic=createMock({override:{clinicId:id(6)}});
+await assert.rejects(()=>runWith(differentClinic),e=>code(e)==='SCOPE_MISMATCH');
+assert.equal(differentClinic.state.appointments.length,0);
+console.log('sessionContinuationAtomicOrchestrator.concurrent.test: ok');
