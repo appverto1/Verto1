@@ -42,6 +42,9 @@ export async function runSessionContinuationAtomic({actor,request,db}){
       clinicId:actor.clinicId,actorId:actor.id,key:text(request.idempotencyKey),
       appointmentId:text(request.appointmentId),sessionId:text(request.sessionId),
       choice:text(request.choice),
+      acceptedCancellationIds:Array.isArray(request.acceptedCancellationIds)?request.acceptedCancellationIds:[],
+      confirmedAdditionalCents:request.confirmedAdditionalCents,
+      acceptedFinancialCharge:request.acceptedFinancialCharge
     });
     if(prior){
       if(prior.requestMatches!==true||prior.committed!==true)fail('IDEMPOTENCY_CONFLICT');
@@ -115,14 +118,15 @@ export async function runSessionContinuationAtomic({actor,request,db}){
     });
     if(extended?.updated!==true)fail('SESSION_EXTENSION_FAILED');
 
-    await tx.appendAudit({
+    const audited=await tx.appendAudit({
       actorId:actor.id,clinicId:actor.clinicId,sessionId:plan.sessionId,
       action:plan.bookFullUnit?'BILLABLE_SESSION_CONTINUATION':'TIME_EXTENSION',
       continuationAppointmentId,cancelledAppointmentIds:plan.cancelAppointmentIds,
       idempotencyKey:request.idempotencyKey,
     });
+    if(audited?.durable!==true)fail('AUDIT_NOT_DURABLE');
     // Outbox persisted before commit, external delivery AFTER commit.
-    if(plan.cancelAppointmentIds.length){
+    if(plan.cancelAppointmentIds.length||plan.bookFullUnit){
       const outbox=await tx.enqueueOutbox({
         actorId:actor.id,clinicId:actor.clinicId,
         cancelledAppointmentIds:plan.cancelAppointmentIds,

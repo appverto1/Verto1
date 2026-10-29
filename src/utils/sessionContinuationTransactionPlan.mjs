@@ -17,7 +17,8 @@ export function planSessionContinuationTransaction(p){
  const q=p.quote, full=p.choice==='full';
  if(!Number.isInteger(q.additionalMinutes)||q.additionalMinutes!==(full?p.baseDurationMinutes:Number(p.choice))||
  !Number.isFinite(Date.parse(q.baselineEndAt))||!Number.isFinite(Date.parse(q.nextEndAt))||
- Date.parse(q.nextEndAt)<=Date.parse(q.baselineEndAt))return reject('INVALID_WINDOW');
+ Date.parse(q.nextEndAt)-Date.parse(q.baselineEndAt)!==q.additionalMinutes*60000)
+ return reject('INVALID_WINDOW');
  if(!Array.isArray(p.permissions)||['session.finish','calendar.appointment.create','finance.entries.manage']
  .some(cap=>!p.permissions.includes(cap)))return reject('MISSING_REQUIRED_CAPABILITY');
  if(p.conflicts?.safe!==true||!Array.isArray(p.conflicts.conflicting))return reject('UNVERIFIED_CONFLICTS');
