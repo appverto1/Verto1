@@ -498,7 +498,7 @@ test('Kanban shows shared filters in each column, same-day badge and identical p
 });
 
 
-const {agendaMatches,compareAgendaPriority,resolveAgendaMoment}=
+const {agendaMatches,compareAgendaPriority,resolveAgendaMoment,isCallDueToday}=
   await import('../src/utils/salesKanbanFollowupVisuals.mjs');
 
 test('manual appointments are authoritative over cadenced suggestions and canceled dates fall back',()=>{
@@ -781,4 +781,45 @@ test('lead feedback is isolated by card id so a new drawer never inherits a prio
   assert.match(kanban,/cardInfo\(dialog\.leadId,/);
   assert.match(kanban,/cardError\(lead\.id,/);
   assert.doesNotMatch(kanban,/selected&&<div[\s\S]*?\{info&&<p className="rounded-lg bg-emerald-50/);
+});
+
+test('smart follow-up queue highlights only active reachable due or overdue leads',()=>{
+  const today='2026-10-29';
+  const due={at:'2026-10-29T13:30:00.000Z',source:'suggested'};
+  const overdue={at:'2026-10-27T13:30:00.000Z',source:'suggested'};
+  const future={at:'2026-10-30T13:30:00.000Z',source:'suggested'};
+  assert.equal(isCallDueToday(due,today,'new',true,false),true);
+  assert.equal(isCallDueToday(overdue,today,'contact_started',true,false),true);
+  assert.equal(isCallDueToday(future,today,'new',true,false),false);
+  assert.equal(isCallDueToday(due,today,'converted',true,false),false);
+  assert.equal(isCallDueToday(due,today,'lost',true,false),false);
+  assert.equal(isCallDueToday(due,today,'new',false,false),false);
+  assert.equal(isCallDueToday(due,today,'new',true,true),false);
+  assert.equal(isCallDueToday({...due,source:'scheduled'},today,'new',true,true),true);
+  assert.equal(isCallDueToday(overdue,'2026-10-31','new',true,false),false);
+});
+
+test('Kanban tags genuinely uncalled leads after loading and exposes a daily phone queue',()=>{
+  assert.match(kanban,/const \[historyReady,setHistoryReady\]=useState\(false\)/);
+  assert.match(kanban,/setHistoryReady\(true\)/);
+  assert.match(kanban,/historyReady&&total===0/);
+  assert.match(kanban,/>Novo<\/span>/);
+  assert.match(kanban,/aria-label="Filtrar leads para ligar hoje"/);
+  assert.match(kanban,/aria-pressed=\{callTodayOnly\}/);
+  assert.match(kanban,/<Phone size=\{11\} aria-hidden="true"\/> Ligar hoje/);
+  assert.match(kanban,/const callTodayCount=filtered\.filter\(callDueToday\)\.length/);
+  assert.match(kanban,/const callFilterPass=\(lead:Lead\)=>!callTodayOnly\|\|callDueToday\(lead\)/);
+  assert.match(kanban,/matchReturnFilter\(l,columnFilter\)&&callFilterPass\(l\)/);
+  assert.match(kanban,/setCallTodayOnly\(false\)/);
+  assert.match(kanban,/Ligação sugerida pendente/);
+  assert.doesNotMatch(kanban,/disabled=\{.*canRecordSalesAttemptNow/);
+});
+
+test('suggested calls remain read-only and honor historic attempts and actual saved appointments',()=>{
+  assert.match(kanban,/nextSalesCadenceSlots\(attemptsByLead\.get\(lead\.id\)\|\|\[\],new Date\(clockNow\)\)\[0\]/);
+  assert.match(kanban,/resolveAgendaMoment\(followups\[lead\.id\],suggestion,eligible\)/);
+  assert.match(kanban,/Próximas ligações sugeridas — intervalo mínimo de 2 dias/);
+  assert.match(kanban,/Não são previsão garantida de atendimento, agendamentos ou notificações/);
+  assert.match(kanban,/const callEnabled=\(_lead:Lead,_ch:'phone'\|'whatsapp_call'\)=>!busyLead/);
+  assert.doesNotMatch(kanban,/POST.*schedule.*suggestion/);
 });
