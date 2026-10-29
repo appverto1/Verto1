@@ -7,6 +7,11 @@ const tests = [
   'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/sessionCompletionNoShow.regression.test.mjs',
   'tests/sessionAutoFinalization.regression.test.mjs',
+  // P0 #504: all safety gates before any session continuation rollout.
+  'tests/sessionContinuationPolicy.regression.test.mjs',
+  'tests/sessionContinuationTransactionPlan.test.mjs',
+  'tests/sessionAppointmentScopeGuard.regression.test.mjs',
+  'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/conventionalSessionLifecycle.regression.test.mjs',
   'tests/monthlySessionPatientBilling.regression.test.mjs',
   'tests/sessionSpecialtyIsolation.test.ts',
