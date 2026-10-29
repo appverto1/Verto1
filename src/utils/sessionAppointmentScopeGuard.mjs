@@ -20,3 +20,32 @@ export function assessScheduledSessionReuse({session,appointment,patientId,clini
  if(norm(sessionSpecialtyKey)!==norm(appointmentSpecialtyKey))return deny('SPECIALTY_MISMATCH');
  return Object.freeze({safe:true,reason:null});
 }
+
+/**
+ * UI-only rejection of clearly unsafe session reuse.
+ * NEVER treats localStorage/browser data as authorization for a backend write.
+ * An unlinked legacy session requires server-mediated recovery, not implicit rebinding.
+ */
+export function detectUnsafeLocalSessionReuse(session,appointment,patientId) {
+  if(!session||!appointment||!norm(patientId))return deny('MISSING_CONTEXT');
+  const oldAppointment=field(session,'appointment_id','appointmentId');
+  const requestedAppointment=field(appointment,'appointment_id','appointmentId','id');
+  if(!oldAppointment||!requestedAppointment)return deny('APPOINTMENT_UNVERIFIED');
+  if(oldAppointment!==requestedAppointment)return deny('APPOINTMENT_MISMATCH');
+  const oldPatient=field(session,'patient_id','patientId');
+  if(!oldPatient||oldPatient!==norm(patientId))return deny('PATIENT_MISMATCH');
+  const scheduledPatient=field(appointment,'patient_id','patientId');
+  if(scheduledPatient&&scheduledPatient!==oldPatient)return deny('PATIENT_MISMATCH');
+  const pairs=[
+    ['CLINIC',field(session,'clinic_id','clinicId'),field(appointment,'clinic_id','clinicId')],
+    ['PROFESSIONAL',field(session,'professional_id_snapshot','professional_id','professionalId','therapist_id','therapistId'),
+      field(appointment,'professional_id','professionalId','therapist_id','therapistId')],
+    ['PLAN',field(session,'therapeutic_plan_id','therapeuticPlanId'),
+      field(appointment,'therapeutic_plan_id','therapeuticPlanId')],
+  ];
+  for(const [key,oldValue,newValue] of pairs){
+    // Do not accept a contradictory known field, and do not silently relink unknown state.
+    if(oldValue&&newValue&&oldValue!==newValue)return deny(key+'_MISMATCH');
+  }
+  return Object.freeze({safe:true,reason:null,requiresServerAuthorization:true});
+}
