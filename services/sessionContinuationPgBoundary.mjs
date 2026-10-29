@@ -13,6 +13,7 @@ export function createSessionContinuationPgBoundary({pool,buildAdapter}){
         throw new Error('INVALID_POSTGRES_CONNECTION');
       }
       let started=false;
+      let discard=false;
       try{
         // Shared client + transaction ensure all calendar/finance writes either
         // commit together or roll back together, including trigger effects.
@@ -30,15 +31,14 @@ export function createSessionContinuationPgBoundary({pool,buildAdapter}){
           try{await client.query('ROLLBACK');}
           catch(rollbackError){
             // Do not mask the original failure; the connection is discarded.
-            client.release(true);
+            discard=true;
             throw new AggregateError([error,rollbackError],'SESSION_TRANSACTION_ROLLBACK_FAILED');
           }
         }
         throw error;
       }finally{
-        // A successfully rolled-back or committed client is returned to pool.
-        // If rollback itself failed, this release is redundant but harmless.
-        client.release();
+        // Rollback failure makes the connection unsuitable for reuse.
+        client.release(discard);
       }
     }
   });
