@@ -102,3 +102,17 @@ export const compareAgendaPriority=(a,b,now=Date.now())=>{
   if(a?.source!==b?.source)return a?.source==='scheduled'?-1:1;
   return 0;
 };
+
+/** One actionable call queue: today's due calls and earlier missed suggestions.
+ * Phone number is required, weekends are excluded, saved appointments win.
+ * This view does not schedule or persist a call.
+ */
+export const isCallDueToday=(moment,today,leadStatus,hasPhone=true,spoken=false)=>{
+  if(!moment?.at||!isActionable(leadStatus)||!hasPhone)return false;
+  if(spoken&&moment.source!=='scheduled')return false;
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(today))return false;
+  const weekday=new Date(today+'T12:00:00Z').getUTCDay();
+  if(weekday===0||weekday===6)return false;
+  const due=brazilDateKey(moment.at);
+  return Boolean(due&&due<=today);
+};
