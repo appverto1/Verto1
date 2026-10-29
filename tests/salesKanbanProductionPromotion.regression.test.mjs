@@ -46,3 +46,15 @@ test('Kanban mutations remain server-authorized without direct browser database 
   assert.match(kanban,/method:'PUT',headers:\{'X-Idempotency-Key':key\}/);
   assert.doesNotMatch(kanban,/\.from\('patients'\)|\.from\('clinics'\)|\.from\('auth\.users'\)/);
 });
+
+test('release scope guard rejects database, clinical, auth and infrastructure files',()=>{
+  const source=readFileSync('scripts/check-kanban-release-scope.mjs','utf8');
+  assert.match(source,/const ALLOWED = new Set/);
+  assert.match(source,/src\/components\/CommercialKanban\.tsx/);
+  assert.match(source,/src\/components\/SuperAdminDashboard\.tsx/);
+  assert.match(source,/const disallowed = changed\.filter\(path=>!ALLOWED\.has\(path\)\)/);
+  assert.match(source,/const missing = REQUIRED\.filter/);
+  assert.match(source,/\['diff','--no-ext-diff','--no-renames','--name-only'/);
+  assert.match(source,/SCOPE_GUARD_FAIL/);
+  assert.doesNotMatch(source,/execFileSync\('npm'|execFileSync\('railway'/);
+});
