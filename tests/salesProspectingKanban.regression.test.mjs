@@ -92,7 +92,8 @@ test('configurable columns and audited movements are durable, private and atomic
 test('full-width Kanban supports custom titles, colors, ordering, deletion, drawer and batch fetching',()=>{
   assert.match(kanban,/className="min-w-0 flex-1 flex flex-col gap-3"/);
   assert.match(kanban,/Navegar horizontalmente no Kanban/);
-  assert.match(kanban,/Editar colunas/);
+  assert.doesNotMatch(kanban,/Editar colunas/);
+  assert.match(kanban,/aria-label=\{'Editar '\+col\.title\}/);
   assert.match(kanban,/type="color"/);
   assert.match(kanban,/Adicionar coluna/);
   assert.match(kanban,/Excluir etapa personalizada/);
@@ -408,7 +409,7 @@ test('global acquisition catalog seeds event, paid traffic and referral with own
 test('every card supports acquisition multiselect without F5 and serialized Save authority',()=>{
   assert.match(kanban,/Selecionar canais de aquisição para/);
   assert.match(kanban,/Canais de aquisição · selecionar/);
-  assert.match(kanban,/Marcar origens \(múltipla escolha\)/);
+  assert.match(kanban,/checked=\{inlineChannelIds\.includes\(channel\.id\)\}/);
   assert.match(kanban,/type="checkbox" checked=\{checked\}/);
   assert.match(kanban,/Salvar canais/);
   assert.match(kanban,/setAcquisitionByLead\(old=>/);
