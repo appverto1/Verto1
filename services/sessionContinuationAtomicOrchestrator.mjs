@@ -31,13 +31,21 @@ export async function runSessionContinuationAtomic({actor,request,db}){
   if(!db||typeof db.withTransaction!=='function')fail('ATOMIC_TRANSACTION_REQUIRED');
 
   return db.withTransaction(async(tx)=>{
-    const required=['findIdempotency','lockAndLoad','verifyFinancialAndCalendar',
-      'extendSession','createContinuationAppointment','cancelAppointment',
+    const required=['lockRequestKey','findIdempotency','lockAndLoad','verifyFinancialAndCalendar',
+      'extendSession','createContinuationAppointment','cancelAppointment','syncAgendaProjection',
       'appendAudit','enqueueOutbox','recordIdempotency'];
     if(required.some(name=>typeof tx?.[name]!=='function'))fail('UNSAFE_TRANSACTION_ADAPTER');
 
-    // The adapter must serialize on clinic, appointment, session AND idempotency
-    // before returning. A replay with changed body is rejected.
+    // Acquire a transaction-scoped lock before reading idempotency state.
+    // A database implementation must also lock the session and every conflicting
+    // appointment before pricing, creating reservations or marking cancellation.
+    const idempotencyLocked=await tx.lockRequestKey({
+      actorId:actor.id,clinicId:actor.clinicId,
+      appointmentId:request.appointmentId,sessionId:request.sessionId,
+      key:request.idempotencyKey
+    });
+    if(idempotencyLocked?.locked!==true)fail('IDEMPOTENCY_LOCK_REQUIRED');
+    // A replay with changed body is rejected.
     const prior=await tx.findIdempotency({
       clinicId:actor.clinicId,actorId:actor.id,key:text(request.idempotencyKey),
       appointmentId:text(request.appointmentId),sessionId:text(request.sessionId),
@@ -117,6 +125,15 @@ export async function runSessionContinuationAtomic({actor,request,db}){
       continuationAppointmentId
     });
     if(extended?.updated!==true)fail('SESSION_EXTENSION_FAILED');
+    // Canonical appointments and the versioned clinic_state Agenda projection
+    // must move together. Updating only the canonical table leaves the UI stale.
+    const projected=await tx.syncAgendaProjection({
+      actorId:actor.id,clinicId:actor.clinicId,
+      sourceAppointmentId:request.appointmentId,
+      continuationAppointmentId,cancelledAppointmentIds:plan.cancelAppointmentIds,
+      effectiveEndAt:plan.endAt,idempotencyKey:request.idempotencyKey
+    });
+    if(projected?.updated!==true)fail('AGENDA_PROJECTION_NOT_COMMITTED');
 
     const audited=await tx.appendAudit({
       actorId:actor.id,clinicId:actor.clinicId,sessionId:plan.sessionId,
