@@ -44,8 +44,9 @@ export function detectUnsafeLocalSessionReuse(session,appointment,patientId) {
       field(appointment,'therapeutic_plan_id','therapeuticPlanId')],
   ];
   for(const [key,oldValue,newValue] of pairs){
-    // Do not accept a contradictory known field, and do not silently relink unknown state.
-    if(oldValue&&newValue&&oldValue!==newValue)return deny(key+'_MISMATCH');
+    // Fail closed on unknown scope; a client cache is not a valid source of identity.
+    if(!oldValue||!newValue)return deny(key+'_UNVERIFIED');
+    if(oldValue!==newValue)return deny(key+'_MISMATCH');
   }
   return Object.freeze({safe:true,reason:null,requiresServerAuthorization:true});
 }
