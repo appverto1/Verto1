@@ -12,6 +12,7 @@ const tests = [
   'tests/sessionContinuationTransactionPlan.test.mjs',
   'tests/sessionContinuationAtomicOrchestrator.test.mjs',
   'tests/sessionContinuationPgBoundary.test.mjs',
+  'tests/sessionContinuationAgendaProjection.test.mjs',
   'tests/sessionAppointmentScopeGuard.regression.test.mjs',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/conventionalSessionLifecycle.regression.test.mjs',
