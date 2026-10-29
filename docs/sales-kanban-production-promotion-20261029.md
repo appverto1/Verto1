@@ -6,7 +6,7 @@
 - Origem homologada: staging, commit `2095cdd205fdeda0c0d0c1d4f4e203f13632a671`.
 - Destino: branch `main` a partir de `201b74a5a74d997cf015469ea881c0253b322680`, em PR de revisão.
 - 11/11 smoke tests do Kanban aprovados pelo responsável em staging.
-- Escopo da mudança: `CommercialKanban.tsx` homologado; adaptação pontual da navegação de `SuperAdminDashboard.tsx` sobre a versão de produção; 3 testes de regressão; este roteiro.
+- Escopo da mudança: `CommercialKanban.tsx` homologado; adaptação pontual da navegação de `SuperAdminDashboard.tsx` sobre a versão de produção; 3 testes de regressão; verificador de escopo fail-closed; este roteiro.
 - SEM SQL, migrations, mudança de API/servidor, env vars, credenciais, Supabase Auth, pacientes, clínicas, financeiros ou sincronização de dados.
 
 ## Dependências verificadas
@@ -24,13 +24,33 @@
 6. Segurança pré-existente: o Advisor do Supabase marca tabelas comerciais RLS sem políticas como INFO (esperado para acesso somente server/service role); revisar grants antes de qualquer mudança futura do modelo de acesso. Não modificar RLS neste PR.
 
 ## Custo e CI
+- Os workflows `Controlled production promotion` e `Bidirectional reconciliation` estão `skipped` no PR #547 por filtrarem nomes de branches diferentes; esse status não comprova build nem regressão aprovada.
 - Nenhum novo serviço, banco, replica, cron, build preview ou variável Railway.
 - GitHub Actions deve manter teto US$ 0; não habilitar faturamento para liberar CI.
 - Não criar ambiente de preview automaticamente. Se um job da PR criar preview pago, desativar preventivamente/avaliar antes do rollout.
 - A comparação de código e testes estáticos de regressão foram preparados; **não alegar build/typecheck/npm test concluídos sem execução comprovada**.
 
+## Auditoria de escopo (read-only, sem deploy)
+- O arquivo `scripts/check-kanban-release-scope.mjs` compara a branch com o ancestral comum de `origin/main` e recusa alterações fora da lista explícita de arquivos permitidos.
+- Caso algum arquivo de pacientes, clínicas, autenticação, servidor, SQL/migrações, GitHub Actions ou Railway apareça no diff, o script falha fechado. Ele também recusa o diff vazio e a ausência dos arquivos mínimos da promoção.
+- Teste isolado do verificador: 4 cenários, incluindo escopo permitido, SQL inesperado, diff vazio e ausência de arquivo obrigatório (4/4 aprovados no avaliador V8 com respostas Git simuladas). **Ainda não executado como processo Node no checkout da branch.**
+- Com repositório disponível localmente e sem conexão a dados reais, executar:
+  ```bash
+  git fetch --no-tags origin main
+  node scripts/check-kanban-release-scope.mjs origin/main
+  npm ci --no-audit --no-fund
+  node tests/salesProspectingKanban.regression.test.mjs
+  node tests/salesKanbanProductionPromotion.regression.test.mjs
+  node tests/salesKanbanUsability.regression.test.mjs
+  npm run typecheck
+  npm run build
+  npm test
+  ```
+- Não alterar proteções da branch main nem executar deploy como consequência dessas verificações.
+
 ## Aprovação e execução futura (NÃO EXECUTAR NESTE PR)
-- [ ] Auditoria do diff final e verificação dos controles de deploy/PR previews.
+- [x] Auditoria de arquivos alterados no diff do PR #547 e verificação dos controles de deploy; nenhuma alteração fora do escopo.
+- [ ] Executar o novo `check-kanban-release-scope.mjs` no checkout real da branch.
 - [ ] Executar `npm run typecheck`, `npm test` e `npm run build` em ambiente isolado que não acessa dados reais e que não gera cobranças não aprovadas.
 - [ ] Obter autorização explícita para merge e deploy de produção.
 - [ ] Observar deploy Railway `SUCCESS` no SHA aprovado, réplicas online, sem crash.
