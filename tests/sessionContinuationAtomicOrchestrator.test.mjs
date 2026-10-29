@@ -29,6 +29,11 @@ function createMock({override={},failAt}={}){
     const ops=[];
     const fail=name=>{if(name===failAt)throw Error('TEST_INJECTED_'+name)};
     const tx={
+      async lockRequestKey(input){
+        fail('lock-key');
+        ops.push('lock-key');
+        return {locked:true};
+      },
       async findIdempotency(input){
         const previous=work.keys[input.key];
         if(!previous)return null;
@@ -56,6 +61,10 @@ function createMock({override={},failAt}={}){
       },
       async extendSession(input){
         fail('extend');work.sessionEnd=input.nextEndAt;ops.push('extend');
+        return {updated:true};
+      },
+      async syncAgendaProjection(input){
+        fail('projection');work.projection=input;ops.push('projection');
         return {updated:true};
       },
       async appendAudit(input){
@@ -93,7 +102,7 @@ assert.equal(db.state.appointments.length,1);
 assert.equal(db.state.cancelled.length,1);
 assert.equal(db.state.outbox.length,1);
 assert.equal(db.state.audit.length,1);
-assert.deepEqual(db.lastOps,['cancel','reserve','extend','audit','outbox','idempotency']);
+assert.deepEqual(db.lastOps,['lock-key','cancel','reserve','extend','projection','audit','outbox','idempotency']);
 const replay=await runWith(db);
 assert.equal(replay.replayed,true);
 assert.equal(db.state.appointments.length,1,'replay cannot duplicate payment-bearing appointment');
@@ -113,13 +122,14 @@ for(const [patch,expected] of [
   assert.equal(fresh.state.appointments.length,0);
 }
 
-for(const point of ['cancel','reserve','extend','audit','outbox','idempotency']){
+for(const point of ['lock-key','cancel','reserve','extend','projection','audit','outbox','idempotency']){
   const broken=createMock({failAt:point});
   await assert.rejects(()=>runWith(broken),e=>code(e)==='TEST_INJECTED_'+point);
   assert.equal(broken.state.cancelled.length,0,'rollback before and after cancellation');
   assert.equal(broken.state.appointments.length,0,'rollback before and after reservation');
   assert.equal(broken.state.outbox.length,0,'never notify without commit');
   assert.equal(broken.state.sessionEnd,null,'never extend session on failed transaction');
+  assert.equal(broken.state.projection,undefined,'versioned calendar projection must also roll back');
 }
 
 const small={...quote,choice:'10',additionalMinutes:10,additionalChargeCents:0,
