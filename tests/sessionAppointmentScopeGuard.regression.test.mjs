@@ -17,3 +17,13 @@ for (const [patch,reason] of [
  [{session:{...session,status:'completed'}},'SESSION_NOT_ACTIVE']
 ])assert.equal(check({...base,...patch}).reason,reason);
 console.log('sessionAppointmentScopeGuard.regression.test.mjs: ok');
+
+import {detectUnsafeLocalSessionReuse as detect} from '../src/utils/sessionAppointmentScopeGuard.mjs';
+const uiAppointment={id:'appointment-A',patient_id:'patient-A',clinic_id:'clinic-A',therapist_id:'professional-A'};
+const uiSession={...session,specialty_snapshot:'Fonoaudiólogo'};
+assert.equal(detect(uiSession,uiAppointment,'patient-A').safe,true);
+assert.equal(detect({...uiSession,appointment_id:'appointment-B'},uiAppointment,'patient-A').reason,'APPOINTMENT_MISMATCH');
+assert.equal(detect({...uiSession,appointment_id:null},uiAppointment,'patient-A').reason,'APPOINTMENT_UNVERIFIED');
+assert.equal(detect({...uiSession,patient_id:'patient-B'},uiAppointment,'patient-A').reason,'PATIENT_MISMATCH');
+assert.equal(detect({...uiSession,clinic_id:'clinic-B'},uiAppointment,'patient-A').reason,'CLINIC_MISMATCH');
+assert.equal(detect({...uiSession,professional_id:'professional-B'},uiAppointment,'patient-A').reason,'PROFESSIONAL_MISMATCH');
