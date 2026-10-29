@@ -10,7 +10,7 @@ import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import {
   agendaMatches,compareAgendaPriority,resolveAgendaMoment,
-  brazilDateKey,followupBucket,followupFilters,matchesFollowup,progressColor,progressWidth,
+  brazilDateKey,followupBucket,followupFilters,matchesFollowup,isCallDueToday,progressColor,progressWidth,
   type AgendaMode,type AgendaSource,type AgendaMoment,type FollowupFilter,
 } from '../utils/salesKanbanFollowupVisuals.mjs';
 import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/salesCommercial';
@@ -98,6 +98,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [search, setSearch] = useState('');
   const [showStage, setShowStage] = useState('all');
   const [globalFollowupFilter,setGlobalFollowupFilter]=useState<FollowupFilter>('all');
+  const [callTodayOnly,setCallTodayOnly]=useState(false);
   const [columnFollowupFilters,setColumnFollowupFilters]=useState<Record<string,FollowupFilter>>({});
   const [calendarToday,setCalendarToday]=useState(()=>brazilDateKey(new Date()));
   const [clockNow,setClockNow]=useState(()=>Date.now());
@@ -114,6 +115,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [historyReady,setHistoryReady]=useState(false);
   const [revision, setRevision] = useState(0);
   const [spokenChannel, setSpokenChannel] = useState<CommercialAttempt['channel']>('phone');
   const [spokenAtDraft,setSpokenAtDraft]=useState('');
@@ -248,6 +250,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   useEffect(() => {
     let live = true;
     setLoading(true);
+    setHistoryReady(false);
     const load = async () => {
       try {
         const ids = idsKey ? idsKey.split(',') : [];
@@ -306,6 +309,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         setAcquisitionChannels(pages[0]?.acquisition.channels||[]);
         setAcquisitionByLead(acquired);
         setAttempts([...dedup.values()]);
+        setHistoryReady(true);
         setFollowups(loadedFollowups);
         setPlacements(nextPlacements);
         setOverrides(nextOverrides);
@@ -741,16 +745,20 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     const map=new Map<string,AgendaMoment|null>();
     for(const lead of filtered){
       const count=countByLead.get(lead.id);
-      const callCount=(count?.phone||0)+(count?.whatsapp||0);
       const eligible=!['lost','archived','converted'].includes(lead.status);
       const hasManual=followups[lead.id]?.status==='scheduled';
-      const suggestion=eligible&&!hasManual&&!count?.spoken&&callCount<10
+      const suggestion=historyReady&&eligible&&!hasManual&&!count?.spoken
         ? nextSalesCadenceSlots(attemptsByLead.get(lead.id)||[],new Date(clockNow))[0]
         : null;
       map.set(lead.id,resolveAgendaMoment(followups[lead.id],suggestion,eligible));
     }
     return map;
-  },[filtered,followups,countByLead,attemptsByLead,clockNow]);
+  },[filtered,followups,countByLead,attemptsByLead,clockNow,historyReady]);
+  const callDueToday=(lead:Lead)=>historyReady&&
+    isCallDueToday(agendaByLead.get(lead.id),calendarToday,lead.status,
+      Boolean(String(lead.phone||'').trim()),Boolean(countByLead.get(lead.id)?.spoken));
+  const callFilterPass=(lead:Lead)=>!callTodayOnly||callDueToday(lead);
+  const callTodayCount=filtered.filter(callDueToday).length;
   const agendaActive=agendaMode!=='all'||agendaSource!=='all'||Boolean(agendaFrom||agendaTo);
   const agendaPass=(leadId:string)=>agendaMatches(agendaByLead.get(leadId),{
     mode:agendaMode,source:agendaSource,date:agendaDate,from:agendaFrom,to:agendaTo,now:clockNow,
@@ -764,6 +772,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const setAgendaFilter=(mode:AgendaMode)=>{
     setClockNow(Date.now());
     setAgendaMode(mode);
+    setCallTodayOnly(false);
     // Agenda and legacy manual-return filters are separate views; reset legacy
     // filters so suggested slots don't disappear behind the stored-only filter.
     setGlobalFollowupFilter('all');
@@ -774,24 +783,31 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const effectiveReturnFilter=(columnId:string)=>
     columnFollowupFilters[columnId]??globalFollowupFilter;
   const cardCount=(c:Column)=>filtered.filter(l=>columnFor(l)===c.id&&
-    matchReturnFilter(l,effectiveReturnFilter(c.id))&&agendaPass(l.id)).length;
+    matchReturnFilter(l,effectiveReturnFilter(c.id))&&agendaPass(l.id)&&callFilterPass(l)).length;
   const returnsTodayCount=filtered.filter(l=>matchReturnFilter(l,'today')).length;
   const overdueCount=filtered.filter(l=>matchReturnFilter(l,'overdue')).length;
   const shownCount=filtered.filter(l=>{
     const id=columnFor(l);
     if(!id)return false;
     return (showStage==='all'||id===showStage)&&
-      matchReturnFilter(l,effectiveReturnFilter(id))&&agendaPass(l.id);
+      matchReturnFilter(l,effectiveReturnFilter(id))&&agendaPass(l.id)&&callFilterPass(l);
   }).length;
   const currentlyShownLeadIds=filtered.filter(lead=>{
     const id=columnFor(lead);
     return Boolean(id)&&(showStage==='all'||showStage===id)&&
-      matchReturnFilter(lead,effectiveReturnFilter(id||''))&&agendaPass(lead.id);
+      matchReturnFilter(lead,effectiveReturnFilter(id||''))&&agendaPass(lead.id)&&callFilterPass(lead);
   }).map(lead=>lead.id);
   const chooseGlobalFollowupFilter=(filter:FollowupFilter)=>{
     setCalendarToday(brazilDateKey(new Date()));
     setGlobalFollowupFilter(filter);
+    setCallTodayOnly(false);
     setColumnFollowupFilters({});
+    setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
+  };
+  const toggleCallToday=()=>{
+    setClockNow(Date.now());setCalendarToday(brazilDateKey(new Date()));
+    setCallTodayOnly(value=>!value);
+    setGlobalFollowupFilter('all');setColumnFollowupFilters({});
     setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
   };
   // A funnel stage, prior conversation or cadence milestone must never disable
@@ -893,6 +909,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2"
         aria-label="Filtros de retorno do Kanban">
         <span className="px-2 text-xs font-bold text-slate-700">Retornos:</span>
+        <button type="button" aria-label="Filtrar leads para ligar hoje"
+          aria-pressed={callTodayOnly} onClick={toggleCallToday}
+          className={'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold '+
+            (callTodayOnly?'bg-teal-700 text-white':'border border-teal-200 bg-teal-50 text-teal-800 hover:bg-teal-100')}>
+          <Phone size={14}/> Ligar hoje · {callTodayCount}
+        </button>
         {([
           {key:'all' as const,title:'Todos'},
           {key:'today' as const,title:'Hoje',count:returnsTodayCount},
@@ -1011,7 +1033,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           {shownColumns.map((col)=>{
             const columnFilter=effectiveReturnFilter(col.id);
             const allCards=filtered.filter(l=>columnFor(l)===col.id);
-            const cards=filterAgendaAndSort(allCards.filter(l=>matchReturnFilter(l,columnFilter)))
+            const cards=filterAgendaAndSort(allCards.filter(l=>matchReturnFilter(l,columnFilter)&&callFilterPass(l)))
               .sort((a,b)=>agendaActive||columnFilter==='all'||columnFilter==='none'?0:
                 Date.parse(followups[a.id]?.contact_due_at||'')-
                 Date.parse(followups[b.id]?.contact_due_at||''));
@@ -1043,7 +1065,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                   Filtrar retornos nesta coluna
                   <select aria-label={'Filtrar retornos da coluna '+col.title}
                     value={columnFilter}
-                    onChange={e=>setColumnFollowupFilters(old=>({...old,[col.id]:e.target.value as FollowupFilter}))}
+                    onChange={e=>{setCallTodayOnly(false);setColumnFollowupFilters(old=>({...old,[col.id]:e.target.value as FollowupFilter}));}}
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-white p-2 text-xs">
                     {followupFilters.map(item=><option key={item.value} value={item.value}>{item.label}</option>)}
                   </select>
@@ -1054,6 +1076,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">{allCards.length>0?'Nenhum card corresponde ao filtro':'Nenhum card nesta etapa'}</div>}
                 {cards.map(lead=>{
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
+                  const newLead=historyReady&&total===0&&!['converted','lost','archived'].includes(lead.status);
+                  const dueToday=callDueToday(lead);
                   return <article key={lead.id} draggable={!busyLead&&lead.status!=='converted'}
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
@@ -1072,7 +1096,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                     </label>}
                     <button type="button" onClick={()=>openCard(lead.id)} className="w-full text-left" aria-label={'Abrir lead '+(lead.name||'sem nome')}>
                       <div className="flex items-start justify-between gap-2">
-                        <strong className="line-clamp-2 text-xs font-black uppercase leading-5 text-slate-900">{lead.name||'Lead sem nome'}</strong>
+                        <div className="min-w-0 flex-1">
+                          <strong className="line-clamp-2 text-xs font-black uppercase leading-5 text-slate-900">{lead.name||'Lead sem nome'}</strong>
+                          {(newLead||dueToday)&&<div className="mt-1 flex flex-wrap items-center gap-1.5">
+                            {newLead&&<span className="rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500">Novo</span>}
+                            {dueToday&&<span className="inline-flex items-center gap-1 rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 text-[10px] font-bold text-teal-800">
+                              <Phone size={11} aria-hidden="true"/> Ligar hoje
+                            </span>}
+                          </div>}
+                        </div>
                         <GripVertical size={15} className="shrink-0 text-slate-300 group-hover:text-slate-500"/>
                       </div>
                       <p className="mt-1 truncate text-[11px] font-semibold text-slate-600">{lead.clinicName||'Clínica não informada'}</p>
@@ -1103,7 +1135,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         </p>}
                       {agendaByLead.get(lead.id)?.source==='suggested'&&
                         <p className="mt-1 text-[10px] font-semibold text-violet-700">
-                          Sugerido · {dateText(agendaByLead.get(lead.id)?.at)}
+                          {dueToday&&brazilDateKey(agendaByLead.get(lead.id)?.at)<calendarToday
+                            ? 'Ligação sugerida pendente' : 'Próxima ligação sugerida'}
+                          {' · '+dateText(agendaByLead.get(lead.id)?.at)}
                         </p>}
                       {lead.status==='lost'&&<p className="mt-1 text-[10px] font-bold text-red-700">Perdido · {dateText(lead.lostAt)}</p>}
                     </button>
@@ -1473,15 +1507,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 <div className="rounded-lg bg-emerald-50 p-3"><span className="block text-emerald-700">Ligação WhatsApp</span><b className="text-lg">{selectedCounts.whatsapp}</b></div>
               </div>
               <p className="mt-3 text-[11px] text-slate-500">Os botões funcionam em todas as etapas, inclusive após contato e conversão. Horários sugeridos não bloqueiam registros reais. A preferência explícita de não contato e a exclusão do lead continuam protegidas.</p>
-              {selectedCounts.phone+selectedCounts.whatsapp<10&&
+              {!selectedCounts.spoken&&!['lost','archived','converted'].includes(selected.status)&&historyReady&&
                 <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3 text-xs">
-                  <h5 className="font-bold text-violet-800">Cadência sugerida — dias e horários alternados</h5>
+                  <h5 className="font-bold text-violet-800">Próximas ligações sugeridas — intervalo mínimo de 2 dias, sem fins de semana</h5>
                   <ol className="mt-2 grid grid-cols-2 gap-1.5 text-violet-800">
                     {nextSalesCadenceSlots(leadAttemptDates(selected.id)).map((date,i)=>(
                       <li key={date.toISOString()}>{selectedCounts.phone+selectedCounts.whatsapp+i+1}ª · {slotLabel(date)}</li>
                     ))}
                   </ol>
-                  <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. As sugestões não impedem registrar contatos em outros horários ou no mesmo dia.</p>
+                  <p className="mt-2 text-[11px] text-slate-600">
+                    Sugestões baseadas na alternância entre manhã e tarde e nos horários de tentativas anteriores sem resposta.
+                    Não são previsão garantida de atendimento, agendamentos ou notificações. A data da ligação real
+                    continua livre e só é registrada após Salvar.
+                  </p>
                 </div>}
               {<div className="mt-3 space-y-2">
                 <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
