@@ -54,3 +54,20 @@ test('agenda collapses without discarding selected filters; production sidebar i
   assert.match(source,/setAgendaFilter\('date'\)/);
   assert.match(source,/Limpar agenda/);
 });
+
+test('board cards can expand read-only up-to-date notes without opening the editor',()=>{
+  const card=source.split('{cards.map(lead=>{')[1]?.split('</article>;')[0];
+  assert.ok(card,'the Kanban board card exists');
+  assert.match(card,/aria-label=\{'Visualizar observações de '/);
+  assert.match(card,/aria-expanded=\{notesPreviewId===lead\.id\}/);
+  assert.match(card,/onClick=\{\(\)=>setNotesPreviewId\(current=>current===lead\.id\?null:lead\.id\)\}/);
+  assert.match(card,/role="region"/);
+  assert.match(card,/notesPreviewText\.trim\(\)\|\|'Sem observações registradas\.'/);
+  assert.match(card,/notesPreviewLoading/);
+  assert.match(card,/notesPreviewError/);
+  assert.match(card,/Tentar novamente/);
+  assert.match(source,/request\('\/api\/owner\/sales\/kanban\/opportunities\/'\+notesPreviewId\)/);
+  assert.match(source,/return \(\)=>\{active=false;\}/);
+  assert.match(source,/if\(notesPreviewId===selected\.id\)setNotesPreviewText/);
+  assert.doesNotMatch(card,/textarea|saveLeadDetails/);
+});

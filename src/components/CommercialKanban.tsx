@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart3, Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, GripVertical,
-  MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, Trash2, X,
+  FileText, MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, Trash2, X,
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
@@ -90,6 +90,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [selectedScriptId,setSelectedScriptId]=useState('');
   const [contactResult,setContactResult]=useState<'interested'|'not_interested'|''>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [notesPreviewId,setNotesPreviewId]=useState<string|null>(null);
+  const [notesPreviewText,setNotesPreviewText]=useState('');
+  const [notesPreviewLoading,setNotesPreviewLoading]=useState(false);
+  const [notesPreviewError,setNotesPreviewError]=useState('');
+  const [notesPreviewReload,setNotesPreviewReload]=useState(0);
   const [search, setSearch] = useState('');
   const [showStage, setShowStage] = useState('all');
   const [globalFollowupFilter,setGlobalFollowupFilter]=useState<FollowupFilter>('all');
@@ -367,6 +372,21 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setInlineChannelIds([...(acquisitionByLead[leadId]||[])]);
     setSelectedId(leadId);
   };
+  useEffect(()=>{
+    if(!notesPreviewId){
+      setNotesPreviewText('');setNotesPreviewLoading(false);setNotesPreviewError('');
+      return;
+    }
+    // The board listing may omit notes. Load one authoritative record only on demand.
+    let active=true;
+    setNotesPreviewLoading(true);setNotesPreviewError('');
+    void request('/api/owner/sales/kanban/opportunities/'+notesPreviewId).then(json=>{
+      if(active)setNotesPreviewText(String(json.lead?.notes||''));
+    }).catch((e:Error)=>{
+      if(active)setNotesPreviewError(e.message||'Não foi possível consultar as observações.');
+    }).finally(()=>{if(active)setNotesPreviewLoading(false);});
+    return ()=>{active=false;};
+  },[notesPreviewId,notesPreviewReload]);
   const saveExistingBulkChannels=async()=>{
     if(bulkExistingBusy||!bulkExistingIds.length||!bulkExistingChannels.length||
       acquisitionCatalogUnavailable)return;
@@ -494,6 +514,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         return next;
       });
       onLeadPatch(selected.id,json.lead);
+      if(notesPreviewId===selected.id)setNotesPreviewText(String(json.lead?.notes||''));
       cardInfo(selected.id,json.lead?.kanbanOnly
         ? 'Dados salvos na ficha do Kanban. Cadastros de clientes, propostas e cobranças não foram alterados.'
         : 'Oportunidade salva.');
@@ -1099,6 +1120,28 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         {acquisitionNames(lead.id).join(' · ')||'Nenhum canal marcado'}
                       </span>
                     </button>
+                    <button type="button"
+                      onClick={()=>setNotesPreviewId(current=>current===lead.id?null:lead.id)}
+                      aria-label={'Visualizar observações de '+(lead.name||lead.phone||'oportunidade')}
+                      aria-expanded={notesPreviewId===lead.id}
+                      aria-controls={notesPreviewId===lead.id?'notes-preview-'+lead.id:undefined}
+                      className="mt-2 flex w-full items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-left text-[11px] font-bold text-slate-700 hover:bg-slate-100">
+                      <span className="flex items-center gap-1.5"><FileText size={13}/> Observações</span>
+                      <ChevronDown size={14} className={notesPreviewId===lead.id?'rotate-180 transition-transform':'transition-transform'}/>
+                    </button>
+                    {notesPreviewId===lead.id&&<div id={'notes-preview-'+lead.id} role="region"
+                      aria-label={'Observações de '+(lead.name||lead.phone||'oportunidade')}
+                      className="mt-1 max-h-44 overflow-y-auto rounded-lg border border-slate-200 bg-white p-2.5">
+                      {notesPreviewError?<div role="alert" className="text-[11px] text-red-700">
+                        <p>{notesPreviewError}</p>
+                        <button type="button" onClick={()=>setNotesPreviewReload(value=>value+1)}
+                          className="mt-2 rounded border border-red-200 px-2 py-1 font-bold">Tentar novamente</button>
+                      </div>:notesPreviewLoading?
+                        <p role="status" className="text-[11px] text-slate-500">Carregando observações...</p>:
+                        <p className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-slate-700">
+                          {notesPreviewText.trim()||'Sem observações registradas.'}
+                        </p>}
+                    </div>}
                     <div className="mt-2 flex gap-1.5 border-t border-slate-100 pt-2">
                       <button type="button" disabled={!callEnabled(lead,'phone')}
                         onClick={()=>recordAttempt(lead,'phone','no_decisor')} aria-label={'Contabilizar ligação pela operadora para '+lead.name}
