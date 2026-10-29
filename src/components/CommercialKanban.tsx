@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BarChart3, Check, ChevronLeft, ChevronRight, ExternalLink, GripVertical,
-  MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, Settings2, Trash2, X,
+  BarChart3, Check, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, GripVertical,
+  MessageCircle, Pencil, Phone, Plus, RefreshCw, Search, Trash2, X,
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
@@ -86,6 +86,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [acquisitionByLead,setAcquisitionByLead]=useState<Record<string,string[]>>({});
   const [acquisitionDialog,setAcquisitionDialog]=useState<{leadId:string;channelIds:string[]}|null>(null);
   const [savingAcquisition,setSavingAcquisition]=useState(false);
+  const [inlineChannelIds,setInlineChannelIds]=useState<string[]>([]);
   const [selectedScriptId,setSelectedScriptId]=useState('');
   const [contactResult,setContactResult]=useState<'interested'|'not_interested'|''>('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -100,7 +101,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [agendaDate,setAgendaDate]=useState(()=>brazilDateKey(new Date()));
   const [agendaFrom,setAgendaFrom]=useState('');
   const [agendaTo,setAgendaTo]=useState('');
-  const [editing, setEditing] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftColor, setDraftColor] = useState('#943B75');
@@ -147,9 +147,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [bulkExistingReplace,setBulkExistingReplace]=useState(false);
   const [bulkExistingBusy,setBulkExistingBusy]=useState(false);
   const [creatingBusy,setCreatingBusy] = useState(false);
-  const [editingLead,setEditingLead] = useState(false);
   const [savingLead,setSavingLead] = useState(false);
   const [loadingLeadDetails,setLoadingLeadDetails] = useState(false);
+  const [leadDetailsError,setLeadDetailsError]=useState(false);
+  const [leadReload,setLeadReload]=useState(0);
   const [deletingLead,setDeletingLead] = useState(false);
   const [leadDraft,setLeadDraft] = useState({name:'',phone:'',clinicName:'',email:'',notes:''});
   const keysRef = useRef<Record<string,string>>({});
@@ -204,8 +205,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setAcquisitionDialog({leadId,channelIds:[...(acquisitionByLead[leadId]||[])]});
     setError(null);
   };
-  const saveAcquisition=async()=>{
-    const dialog=acquisitionDialog;
+  const saveAcquisition=async(dialog:{leadId:string;channelIds:string[]}|null=acquisitionDialog)=>{
     if(!dialog||savingAcquisition||acquisitionCatalogUnavailable)return;
     const keyName='acquisition:'+dialog.leadId;
     try{
@@ -363,6 +363,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const cardError=(leadId:string,error:string)=>setCardFeedback({leadId,error});
   const openCard=(leadId:string)=>{
     setError(null);setInfo(null);setCardFeedback(null);
+    setLoadingLeadDetails(true);setLeadDetailsError(false);
+    setInlineChannelIds([...(acquisitionByLead[leadId]||[])]);
     setSelectedId(leadId);
   };
   const saveExistingBulkChannels=async()=>{
@@ -409,10 +411,26 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   useEffect(()=>{
     const lead=leads.find(x=>x.id===selectedId);
     setLeadDraft({name:lead?.name||'',phone:lead?.phone||'',clinicName:lead?.clinicName||'',email:lead?.email||'',notes:lead?.notes||''});
-    setEditingLead(false);
     setEditingSpokenId(null);
     setSpokenAtDraft(brazilLocalInput(new Date().toISOString()));
-  },[selectedId]);
+    if(!selectedId){setLoadingLeadDetails(false);setLeadDetailsError(false);return;}
+    // Fetch the authoritative record once per open; ignore responses from previously opened cards.
+    let active=true;
+    setLoadingLeadDetails(true);setLeadDetailsError(false);
+    void request('/api/owner/sales/kanban/opportunities/'+selectedId).then(json=>{
+      if(!active)return;
+      setLeadDraft({
+        name:json.lead.name||'',phone:json.lead.phone||'',
+        clinicName:json.lead.clinicName||'',email:json.lead.email||'',notes:json.lead.notes||'',
+      });
+      onLeadPatch(selectedId,json.lead);
+    }).catch((e:Error)=>{
+      if(!active)return;
+      setLeadDetailsError(true);
+      cardError(selectedId,e.message||'Não foi possível abrir o cadastro.');
+    }).finally(()=>{if(active)setLoadingLeadDetails(false);});
+    return ()=>{active=false;};
+  },[selectedId,leadReload]);
   useEffect(()=>{
     const saved=selectedId?followups[selectedId]:null;
     setFollowupAtDraft(saved?.status==='scheduled'?brazilLocalInput(saved.contact_due_at):'');
@@ -445,25 +463,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
     finally{setCreatingBusy(false);}
   };
-  const openLeadEditor = async (lead:Lead) => {
-    if (editingLead) { setEditingLead(false); return; }
-    setLoadingLeadDetails(true);setError(null);
-    try {
-      const json=await request('/api/owner/sales/kanban/opportunities/'+lead.id);
-      setLeadDraft({
-        name:json.lead.name||'',phone:json.lead.phone||'',
-        clinicName:json.lead.clinicName||'',email:json.lead.email||'',notes:json.lead.notes||'',
-      });
-      onLeadPatch(lead.id,json.lead);
-      setEditingLead(true);
-    }catch(e:any){cardError(lead.id,e.message||'Não foi possível abrir o cadastro.');}
-    finally{setLoadingLeadDetails(false);}
-  };
   const saveLeadDetails = async () => {
     if(!selected||savingLead)return;
     const patch=Object.fromEntries(Object.entries(leadDraft).filter(([k,v])=>
       String(v||'')!==String((selected as unknown as Record<string,unknown>)[k]||'')));
-    if(!Object.keys(patch).length){setEditingLead(false);return;}
+    if(!Object.keys(patch).length)return;
     const keyName='edit:'+selected.id;
     const key=keysRef.current[keyName]||crypto.randomUUID();keysRef.current[keyName]=key;
     setSavingLead(true);setError(null);
@@ -490,7 +494,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         return next;
       });
       onLeadPatch(selected.id,json.lead);
-      setEditingLead(false);
       cardInfo(selected.id,json.lead?.kanbanOnly
         ? 'Dados salvos na ficha do Kanban. Cadastros de clientes, propostas e cobranças não foram alterados.'
         : 'Oportunidade salva.');
@@ -550,12 +553,22 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     }
     setEditingId(null);
   });
+  const saveColumnOrder=async(next:Column[])=>{
+    await request('/api/owner/sales/kanban/columns/order',{method:'PATCH',body:JSON.stringify({ids:next.map(c=>c.id)})});
+    setColumns(next.map((c,i)=>({...c,position:i})));
+  };
   const reorder = (id:string,delta:number) => void doAction(async()=>{
     const next=[...columns];const i=next.findIndex(x=>x.id===id),j=i+delta;
     if (i<0 || j<0 || j>=next.length) return;
     [next[i],next[j]]=[next[j],next[i]];
-    await request('/api/owner/sales/kanban/columns/order',{method:'PATCH',body:JSON.stringify({ids:next.map(c=>c.id)})});
-    setColumns(next.map((c,i)=>({...c,position:i})));
+    await saveColumnOrder(next);
+  });
+  const moveColumnTo=(fromId:string,toId:string)=>void doAction(async()=>{
+    const next=[...columns];
+    const from=next.findIndex(c=>c.id===fromId),to=next.findIndex(c=>c.id===toId);
+    if(from<0||to<0||from===to)return;
+    next.splice(to,0,next.splice(from,1)[0]);
+    await saveColumnOrder(next);
   });
   const deleteColumn = (col:Column) => {
     if (col.is_system || !window.confirm('Excluir a coluna "'+col.title+'"? Os cards voltarão à etapa comercial definida pelo seu status.')) return;
@@ -563,6 +576,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       await request('/api/owner/sales/kanban/columns/'+col.id,{method:'DELETE'});
       setColumns(old=>old.filter(c=>c.id!==col.id));
       setPlacements(old=>Object.fromEntries(Object.entries(old).filter(([,id])=>id!==col.id)));
+      setEditingId(null);
       setInfo('Coluna excluída. Leads preservados.');
     });
   };
@@ -762,6 +776,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   // A funnel stage, prior conversation or cadence milestone must never disable
   // either call button. Only an in-flight save temporarily prevents double taps.
   const callEnabled=(_lead:Lead,_ch:'phone'|'whatsapp_call')=>!busyLead;
+  const editingColumn=columns.find(c=>c.id===editingId);
+  const editingColumnIndex=columns.findIndex(c=>c.id===editingId);
   return (
     <section className="min-w-0 flex-1 flex flex-col gap-3" aria-label="Kanban comercial de tela inteira">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-[#10192D] px-4 py-3 text-white">
@@ -786,7 +802,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             Canais + Resultados
           </button>
           <button type="button" onClick={onMetrics} className="flex items-center gap-1.5 rounded-lg border border-white/20 px-3 py-2 text-xs font-bold hover:bg-white/10"><BarChart3 size={15}/> Gráficos</button>
-          <button type="button" onClick={()=>setEditing(v=>!v)} className={'flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-bold '+(editing?'bg-violet-500':'border border-white/20 hover:bg-white/10')}><Settings2 size={15}/> {editing?'Concluir edição':'Editar colunas'}</button>
           <button type="button" onClick={()=>{void onRefresh().then(()=>setRevision(x=>x+1));}} className="flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-900"><RefreshCw size={15}/> Atualizar</button>
         </div>
       </div>
@@ -850,10 +865,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           <option value="all">Todas as colunas</option>
           {columns.map(c=><option value={c.id} key={c.id}>{c.title}</option>)}
         </select>
-        {editing && <button type="button" onClick={()=>{setDraftTitle('Nova etapa');setDraftColor(DEFAULT_COLORS[5]);setEditingId('new');}}
-          className="flex h-10 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-xs font-bold text-white">
-          <Plus size={15}/> Adicionar coluna
-        </button>}
         <span className="text-xs text-slate-500">{shownCount} de {filtered.length} cards carregados</span>
         {remaining>0&&<button onClick={()=>void onLoadMore()} disabled={loadingMore} className="h-10 rounded-lg border border-violet-300 px-3 text-xs font-bold text-violet-700 disabled:opacity-50">{loadingMore?"Carregando...":"Carregar mais "+Math.min(remaining,100)+" leads ("+remaining+" restantes)"}</button>}
       </div>
@@ -887,20 +898,24 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
         </p>}
       </div>
 
-      <div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/70 p-3"
+      <details className="group rounded-xl border border-violet-200 bg-violet-50/70 p-3"
         aria-label="Agenda de retorno por data e horário">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <summary className="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
           <div>
             <h3 className="text-xs font-black text-violet-950">Agenda priorizada de contatos</h3>
-            <p className="text-[11px] text-violet-800">
-              Compromissos agendados ou janelas sugeridas pela cadência · mais urgentes primeiro
-            </p>
+            <p className="text-[11px] text-violet-800">Compromissos agendados e janelas sugeridas · mais urgentes primeiro</p>
           </div>
-          <button type="button" onClick={()=>{setAgendaFilter('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');}}
-            className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700">
-            Limpar agenda
-          </button>
-        </div>
+          <span className="flex shrink-0 items-center gap-1 text-xs font-bold text-violet-800">
+            {agendaActive?'Filtro ativo':'Filtros'} <ChevronDown size={16} className="transition-transform group-open:rotate-180"/>
+          </span>
+        </summary>
+        <div className="mt-3 space-y-3">
+          <div className="flex justify-end">
+            <button type="button" onClick={()=>{setAgendaFilter('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');}}
+              className="rounded-lg border border-violet-200 bg-white px-3 py-2 text-xs font-bold text-violet-700">
+              Limpar agenda
+            </button>
+          </div>
         <div className="flex flex-wrap gap-2">
           {([
             {value:'priority' as const,label:'Priorizar retornos'},
@@ -946,7 +961,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             'Selecione um filtro para ordenar os retornos por urgência.'}
           {' '}Sugestões não são agendamentos e não enviam notificações.
         </p>
-      </div>
+        </div>
+      </details>
 
       {(error||info)&&<div role={error?'alert':'status'} className={'rounded-lg border px-3 py-2 text-xs '+(error?'border-red-200 bg-red-50 text-red-700':'border-green-200 bg-green-50 text-green-800')}>
         {error||info} <button type="button" className="ml-2 underline" onClick={()=>{setError(null);setInfo(null);}}>Fechar</button>
@@ -971,7 +987,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
 
       <div ref={scrollRef} className="min-w-0 overflow-x-auto pb-2" aria-label="Etapas comerciais">
         <div className="flex min-h-[380px] w-max min-w-full gap-2.5">
-          {shownColumns.map((col,index)=>{
+          {shownColumns.map((col)=>{
             const columnFilter=effectiveReturnFilter(col.id);
             const allCards=filtered.filter(l=>columnFor(l)===col.id);
             const cards=filterAgendaAndSort(allCards.filter(l=>matchReturnFilter(l,columnFilter)))
@@ -980,22 +996,27 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 Date.parse(followups[b.id]?.contact_due_at||''));
             return <div key={col.id} className="flex w-[315px] min-w-[315px] flex-col overflow-hidden rounded-xl border shadow-sm"
               style={{backgroundColor:col.color+'0D',borderColor:col.color+'44'}}
-              onDragOver={e=>{if(col.kind!=='customers')e.preventDefault();}}
-              onDrop={e=>{e.preventDefault();const id=e.dataTransfer.getData('text/plain');const lead=leads.find(x=>x.id===id);if(lead)moveLead(lead,col);}}>
+              onDragOver={e=>{if(e.dataTransfer.types.includes('application/x-verto-kanban-column')||col.kind!=='customers')e.preventDefault();}}
+              onDrop={e=>{
+                e.preventDefault();
+                const sourceColumn=e.dataTransfer.getData('application/x-verto-kanban-column');
+                if(sourceColumn){moveColumnTo(sourceColumn,col.id);return;}
+                const id=e.dataTransfer.getData('text/plain');
+                const lead=leads.find(x=>x.id===id);if(lead)moveLead(lead,col);
+              }}>
               <div className="px-3 py-3 text-white" style={{backgroundColor:col.color}}>
                 <div className="flex items-center justify-between gap-2">
-                  <h3 title={col.title} className="min-w-0 flex-1 truncate text-sm font-black">{col.title}</h3>
+                  <h3 draggable={!busy} onDragStart={e=>{
+                    e.dataTransfer.setData('application/x-verto-kanban-column',col.id);
+                    e.dataTransfer.effectAllowed='move';
+                  }} title={'Arraste para reordenar '+col.title}
+                    className="min-w-0 flex-1 cursor-grab truncate text-sm font-black active:cursor-grabbing">{col.title}</h3>
+                  <button type="button" aria-label={'Editar '+col.title} title={'Editar '+col.title}
+                    disabled={busy} onClick={()=>editColumn(col)} className="rounded p-1 hover:bg-white/20 disabled:opacity-40"><Pencil size={14}/></button>
                   <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs font-black tabular-nums">{cards.length}</span>
-                  {editing && <button type="button" aria-label={'Editar '+col.title} onClick={()=>editColumn(col)} className="rounded p-1 hover:bg-white/20"><Pencil size={14}/></button>}
                 </div>
                 <p className="mt-1 text-[10px] font-medium opacity-85">{col.kind==='custom'?'Etapa personalizada':col.kind==='customers'?'Conversão confirmada pelo pagamento':'Arraste ou selecione um card para mover'}</p>
               </div>
-              {editing&&<div className="flex items-center justify-between gap-1 border-b border-slate-200 bg-white px-2 py-1">
-                <button title="Mover para a esquerda" disabled={index===0||busy} onClick={()=>reorder(col.id,-1)} className="rounded border p-1 disabled:opacity-30"><ChevronLeft size={14}/></button>
-                <button title="Mover para a direita" disabled={index===shownColumns.length-1||busy} onClick={()=>reorder(col.id,1)} className="rounded border p-1 disabled:opacity-30"><ChevronRight size={14}/></button>
-                <span className="text-[10px] text-slate-500">Posição {index+1}</span>
-                {!col.is_system&&<button title="Excluir etapa personalizada" onClick={()=>deleteColumn(col)} className="rounded border border-red-200 p-1 text-red-600"><Trash2 size={14}/></button>}
-              </div>}
               <div className="border-b border-slate-200 bg-white/90 px-2 py-2">
                 <label className="block text-[11px] font-bold text-slate-700">
                   Filtrar retornos nesta coluna
@@ -1012,7 +1033,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">{allCards.length>0?'Nenhum card corresponde ao filtro':'Nenhum card nesta etapa'}</div>}
                 {cards.map(lead=>{
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
-                  return <article key={lead.id} draggable={!busyLead&&!editing&&lead.status!=='converted'}
+                  return <article key={lead.id} draggable={!busyLead&&lead.status!=='converted'}
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
                     style={{borderLeftColor:col.color}}>
@@ -1092,6 +1113,13 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
               </div>
             </div>;
           })}
+          <div className="flex w-[104px] min-w-[104px] items-start justify-center pt-3">
+            <button type="button" aria-label="Adicionar coluna" title="Adicionar coluna" disabled={busy}
+              onClick={()=>{setDraftTitle('Nova etapa');setDraftColor(DEFAULT_COLORS[5]);setEditingId('new');}}
+              className="flex w-[88px] flex-col items-center gap-2 rounded-xl border-2 border-dashed border-violet-300 bg-white px-2 py-5 text-xs font-bold text-violet-700 hover:bg-violet-50 disabled:opacity-40">
+              <Plus size={20}/> Coluna
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1291,6 +1319,18 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           </label>
           <div className="mt-3 flex flex-wrap gap-1.5">{DEFAULT_COLORS.map(hex=><button key={hex} title={hex} aria-label={'Cor '+hex} onClick={()=>setDraftColor(hex)}
             className="h-8 w-8 rounded-md border-2" style={{backgroundColor:hex,borderColor:draftColor===hex?'#111827':'transparent'}}/>)}</div>
+          {editingColumn&&<div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
+            <span className="mr-auto text-xs font-bold text-slate-700">Ordem da coluna</span>
+            <button type="button" aria-label="Mover coluna para a esquerda" disabled={busy||editingColumnIndex===0}
+              onClick={()=>reorder(editingColumn.id,-1)}
+              className="rounded-lg border border-slate-200 p-2 disabled:opacity-30"><ChevronLeft size={16}/></button>
+            <button type="button" aria-label="Mover coluna para a direita" disabled={busy||editingColumnIndex===columns.length-1}
+              onClick={()=>reorder(editingColumn.id,1)}
+              className="rounded-lg border border-slate-200 p-2 disabled:opacity-30"><ChevronRight size={16}/></button>
+            {!editingColumn.is_system&&<button type="button" title="Excluir etapa personalizada" disabled={busy}
+              onClick={()=>deleteColumn(editingColumn)}
+              className="rounded-lg border border-red-200 px-2 py-2 text-xs font-bold text-red-700 disabled:opacity-40"><Trash2 size={14}/> Excluir</button>}
+          </div>}
           <div className="mt-6 flex justify-end gap-2"><button className="rounded-lg border px-4 py-2 text-sm" onClick={()=>setEditingId(null)}>Cancelar</button>
             <button disabled={busy||!draftTitle.trim()} onClick={saveColumn} className="flex items-center gap-1 rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Check size={15}/> Salvar</button></div>
         </div>
@@ -1308,42 +1348,57 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             {feedbackFor(selected.id)?.error&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-xs text-red-700">{feedbackFor(selected.id)?.error}</p>}
             {feedbackFor(selected.id)?.info&&<p role="status" className="rounded-lg bg-emerald-50 p-3 text-xs text-emerald-700">{feedbackFor(selected.id)?.info}</p>}
             <div className="flex flex-wrap gap-2">
-              <button type="button" disabled={savingLead||loadingLeadDetails||deletingLead||Boolean(busyLead)}
-                onClick={()=>void openLeadEditor(selected)}
-                className="flex items-center gap-1.5 rounded-lg border border-violet-200 px-3 py-2 text-xs font-bold text-violet-700 disabled:opacity-40"><Pencil size={14}/> {loadingLeadDetails?'Abrindo...':editingLead?'Cancelar edição':'Editar oportunidade'}</button>
               <button type="button" disabled={savingLead||deletingLead||Boolean(busyLead)}
                 onClick={()=>void deleteLead(selected)}
                 className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-40"><Trash2 size={14}/> {deletingLead?'Excluindo...':'Excluir oportunidade'}</button>
             </div>
-            {editingLead&&<div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+            <div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="text-xs font-black text-violet-900">Dados da oportunidade e observações</h4>
+                {loadingLeadDetails&&<span role="status" className="text-[11px] text-violet-700">Carregando...</span>}
+              </div>
+              {leadDetailsError&&<button type="button" onClick={()=>{setCardFeedback(null);setLeadReload(n=>n+1);}}
+                className="rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700">Tentar carregar novamente</button>}
               <p className="text-xs text-slate-600">Em oportunidades vinculadas a propostas, clientes ou contatos duplicados, estas alterações são exclusivas da ficha do Kanban.</p>
               {([
                 ['name','Nome / identificação',180],['phone','Telefone com DDD',40],
                 ['clinicName','Nome da clínica',180],['email','E-mail (opcional)',254],
               ] as const).map(([field,title,limit])=><label key={field} className="block text-xs font-bold text-slate-700">{title}
-                <input value={leadDraft[field]} maxLength={limit} disabled={savingLead}
+                <input value={leadDraft[field]} maxLength={limit} disabled={savingLead||loadingLeadDetails||leadDetailsError}
                   onChange={e=>{setLeadDraft(d=>({...d,[field]:e.target.value}));delete keysRef.current['edit:'+selected.id];}}
                   className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"/>
               </label>)}
               <label className="block text-xs font-bold text-slate-700">Observações
-                <textarea rows={3} maxLength={1500} value={leadDraft.notes} disabled={savingLead}
+                <textarea rows={3} maxLength={1500} value={leadDraft.notes} disabled={savingLead||loadingLeadDetails||leadDetailsError}
                   onChange={e=>{setLeadDraft(d=>({...d,notes:e.target.value}));delete keysRef.current['edit:'+selected.id];}}
                   className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm"/>
               </label>
-              <button type="button" disabled={savingLead||!leadDraft.name.trim()||!leadDraft.phone.trim()}
+              <button type="button" disabled={savingLead||loadingLeadDetails||leadDetailsError||!leadDraft.name.trim()||!leadDraft.phone.trim()}
                 onClick={()=>void saveLeadDetails()}
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-violet-600 p-3 text-sm font-black text-white disabled:opacity-40"><Check size={16}/> {savingLead?'Salvando...':'Salvar alterações'}</button>
-            </div>}
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">Telefone</span><strong>{selected.phone||'Não cadastrado'}</strong></div>
-              <div className="rounded-lg bg-slate-50 p-3"><span className="block text-slate-500">E-mail</span><strong className="break-all">{selected.email||'Não cadastrado'}</strong></div>
             </div>
             <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4">
-              <h4 className="text-xs font-black text-indigo-900">Canais de aquisição</h4>
-              <p className="mt-1 text-xs text-slate-600">{acquisitionNames(selected.id).join(' · ')||'Nenhuma origem selecionada'}</p>
-              <button type="button" onClick={()=>openAcquisitionEditor(selected.id)}
-                className="mt-2 rounded-lg bg-indigo-700 px-3 py-2 text-xs font-bold text-white">
-                Marcar origens (múltipla escolha)
+              <fieldset disabled={savingAcquisition||acquisitionCatalogUnavailable}>
+                <legend className="text-xs font-black text-indigo-900">Canais de aquisição</legend>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2">
+                  {acquisitionChannels.map(channel=><label key={channel.id} className="inline-flex items-center gap-2 text-xs text-indigo-950">
+                    <input type="checkbox" checked={inlineChannelIds.includes(channel.id)}
+                      disabled={!channel.is_active&&!inlineChannelIds.includes(channel.id)}
+                      onChange={e=>{
+                        setInlineChannelIds(old=>e.target.checked?[...old,channel.id]:old.filter(id=>id!==channel.id));
+                        delete keysRef.current['acquisition:'+selected.id];
+                      }}
+                      className="h-4 w-4 accent-indigo-700"/>{channel.name}
+                  </label>)}
+                </div>
+              </fieldset>
+              {acquisitionCatalogUnavailable&&<p role="alert" className="mt-2 text-xs text-amber-800">Canais indisponíveis. Atualize o quadro para editar.</p>}
+              {acquisitionChannels.length===0&&<p className="mt-2 text-xs text-slate-600">Nenhum canal cadastrado. Use “Canais + Resultados”.</p>}
+              <button type="button" disabled={savingAcquisition||acquisitionCatalogUnavailable||
+                [...inlineChannelIds].sort().join(',')===[...(acquisitionByLead[selected.id]||[])].sort().join(',')}
+                onClick={()=>void saveAcquisition({leadId:selected.id,channelIds:inlineChannelIds})}
+                className="mt-3 w-full rounded-lg bg-indigo-700 px-3 py-2.5 text-xs font-bold text-white disabled:opacity-40">
+                {savingAcquisition?'Salvando...':'Salvar canais'}
               </button>
             </div>
             <div className="flex gap-2">
@@ -1386,10 +1441,6 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                   <p className="mt-2 text-[11px] text-slate-600">Janelas orientativas. O clique abre a edição da data real; apenas Salvar registra. As sugestões não impedem registrar contatos em outros horários ou no mesmo dia.</p>
                 </div>}
               {<div className="mt-3 space-y-2">
-                <button disabled={!callEnabled(selected,'phone')} onClick={()=>recordAttempt(selected,'phone','no_decisor')}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação operadora sem falar com decisor</button>
-                <button disabled={!callEnabled(selected,'whatsapp_call')} onClick={()=>recordAttempt(selected,'whatsapp_call','no_decisor')}
-                  className="w-full rounded-lg border border-slate-200 px-3 py-3 text-left text-xs font-bold disabled:opacity-40">+ Registrar ligação WhatsApp sem falar com decisor</button>
                 <div className="space-y-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                   <label className="block text-xs font-bold text-emerald-800">Data e hora do contato efetivo com o decisor (Brasília)
                     <input type="datetime-local" value={spokenAtDraft}
