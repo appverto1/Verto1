@@ -146,7 +146,29 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [leadNextPage,setLeadNextPage]=useState(2);
   const [leadTotal,setLeadTotal]=useState(0);
   const [loadingMoreLeads,setLoadingMoreLeads]=useState(false);
-  const [mobileMenuOpen,setMobileMenuOpen]=useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuCloseRef = useRef<HTMLButtonElement | null>(null);
+  const mobileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    if (!mobileMenuOpen) return;
+    mobileMenuCloseRef.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMobileMenuOpen(false);
+        mobileMenuTriggerRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMenuOpen]);
+  const closeMobileMenu = () => {
+    setMobileMenuOpen(false);
+    mobileMenuTriggerRef.current?.focus();
+  };
+  const selectAdminTab = (tab: typeof activeTab) => {
+    setActiveTab(tab);
+    if (mobileMenuOpen) closeMobileMenu();
+  };
   const [leadStatusFilter, setLeadStatusFilter] = useState<'all' | SalesLeadStatus>('all');
   const [leadAction, setLeadAction] = useState<string | null>(null);
   const leadStatusRequestKeysRef = useRef<Record<string, string>>({});
@@ -906,14 +928,20 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#F5FBFF] via-[#F8FAFC] to-[#FFF6ED] text-slate-900">
-      {mobileMenuOpen&&<button type="button" aria-label="Fechar navegação" className="fixed inset-0 z-30 bg-slate-950/50 md:hidden" onClick={()=>setMobileMenuOpen(false)}/>}
-      <button type="button" aria-label="Abrir navegação do Super Admin"
-        onClick={()=>setMobileMenuOpen(true)}
-        className="fixed left-3 top-3 z-20 rounded-lg bg-white px-3 py-2 text-sm font-bold shadow-md md:hidden">☰ Menu</button>
+      {mobileMenuOpen&&<button type="button" aria-label="Fechar navegação" className="fixed inset-0 z-40 bg-slate-950/50 md:hidden" onClick={closeMobileMenu}/>}
+      <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-slate-200 bg-white/95 px-4 shadow-sm md:hidden">
+        <button ref={mobileMenuTriggerRef} type="button" aria-label="Abrir menu de navegação" aria-controls="super-admin-navigation"
+          aria-expanded={mobileMenuOpen} onClick={() => setMobileMenuOpen(true)}
+          className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-800 hover:bg-slate-100">
+          <Menu size={24} />
+        </button>
+        <span className="text-sm font-black tracking-wide text-slate-900">SUPER ADMIN</span>
+        <LogoVerto size={28} />
+      </div>
       <aside id="super-admin-navigation" className={(mobileMenuOpen?'flex':'hidden md:flex')+
-        ' fixed inset-y-0 left-0 z-40 w-72 max-w-[88vw] flex-col overflow-x-hidden border-r border-slate-100 bg-white/95 backdrop-blur md:max-w-none' +
+        ' fixed inset-y-0 left-0 z-50 w-72 max-w-[88vw] flex-col overflow-x-hidden border-r border-slate-100 bg-white/95 backdrop-blur md:max-w-none' +
         (compactDesktopMenu ? ' md:w-[66px]' : ' md:w-72')}>
-        <button type="button" onClick={()=>setMobileMenuOpen(false)} aria-label="Fechar menu"
+        <button ref={mobileMenuCloseRef} type="button" onClick={closeMobileMenu} aria-label="Fechar menu"
           className="absolute right-3 top-3 rounded-lg p-2 text-slate-700 md:hidden"><X size={20}/></button>
         <div className={compactDesktopMenu ? 'flex items-center gap-3 p-8 md:justify-center md:px-0 md:py-5' : 'flex items-center gap-3 p-8'}>
           <LogoVerto size={compactDesktopMenu ? 34 : 42} />
@@ -936,22 +964,22 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               {id:'protocols',label:'Protocolos',icon:<ClipboardCheck size={19}/>},
               {id:'aba-v3-rollout',label:'Rollout ABA V3',icon:<Shield size={19}/>},
             ].map(nav=><button key={nav.id} type="button" aria-label={nav.label} title={nav.label}
-              onClick={()=>setActiveTab(nav.id as typeof activeTab)}
+              onClick={()=>selectAdminTab(nav.id as typeof activeTab)}
               className={'flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition '+
                 (activeTab===nav.id?'bg-[#10192D] text-white shadow':'text-slate-500 hover:bg-slate-100')}>
               {nav.icon}</button>)}
           </nav>
         )}
         <nav className={'min-h-0 flex-1 space-y-2 overflow-y-auto px-4 ' + (compactDesktopMenu ? 'md:hidden' : '')}
-          onClickCapture={()=>setMobileMenuOpen(false)}>
-          <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => setActiveTab('overview')} />
-          <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => setActiveTab('financial')} />
-          <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => setActiveTab('customers')} />
-          <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => setActiveTab('leads')} />
-          <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => setActiveTab('simulation-settings')} />
-          <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => setActiveTab('demos')} />
-          <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => setActiveTab('protocols')} />
-          <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => setActiveTab('aba-v3-rollout')} />
+          onClickCapture={()=>{if(mobileMenuOpen) closeMobileMenu();}}>
+          <SidebarItem icon={<LayoutDashboard size={18} />} label="Resumo" active={activeTab === 'overview'} onClick={() => selectAdminTab('overview')} />
+          <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => selectAdminTab('financial')} />
+          <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => selectAdminTab('customers')} />
+          <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => selectAdminTab('leads')} />
+          <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => selectAdminTab('simulation-settings')} />
+          <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => selectAdminTab('demos')} />
+          <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => selectAdminTab('protocols')} />
+          <SidebarItem icon={<Shield size={18} />} label="Rollout ABA V3" active={activeTab === 'aba-v3-rollout'} onClick={() => selectAdminTab('aba-v3-rollout')} />
         </nav>
 
         <div className={compactDesktopMenu ? 'mt-auto border-t border-slate-100 p-6 md:p-2' : 'mt-auto border-t border-slate-100 p-6'}>
@@ -966,8 +994,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
       </aside>
 
       <main className={compactDesktopMenu
-        ? 'min-w-0 overflow-x-hidden p-3 pt-16 md:ml-[66px] md:p-3 md:pt-6'
-        : 'min-w-0 overflow-x-hidden p-3 pt-16 md:ml-72 md:p-8'}>
+        ? 'min-h-[calc(100dvh-3.5rem)] min-w-0 overflow-x-hidden p-3 md:ml-[66px] md:min-h-screen md:p-3 md:pt-6'
+        : 'min-w-0 overflow-x-hidden p-3 md:ml-72 md:p-8'}>
         <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-slate-400 font-bold">{activeTab === 'aba-v3-rollout' ? 'Governança Clínica' : 'Governanca Financeira'}</p>
