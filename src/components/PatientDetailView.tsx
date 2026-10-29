@@ -71,6 +71,8 @@ import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } 
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
 import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
+import { detectUnsafeLocalSessionReuse } from '../utils/sessionAppointmentScopeGuard.mjs';
+import { clinicalSpecialtyScopeKey } from '../utils/clinicalSpecialties';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -2818,6 +2820,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         scheduledSessionForPatient?.id ||
         null;
       const sessionAppointmentId = sessionToOpen?.appointment_id || sessionToOpen?.appointmentId || null;
+      // Fail closed before restoring any local/previously persisted session.
+      // A legacy/unlinked session must be recovered through authenticated server authority,
+      // never opportunistically assigned to the appointment the user just clicked.
+      const localScope = detectUnsafeLocalSessionReuse(sessionToOpen, scheduledSessionForPatient, String(patient.id));
+      const requestedSpecialty = appointmentClinicalSpecialtyKey(scheduledSessionForPatient);
+      const storedSpecialty = clinicalSpecialtyScopeKey(
+        sessionToOpen?.specialty_snapshot || sessionToOpen?.specialtySnapshot ||
+        sessionToOpen?.specialty || sessionToOpen?.service_type || sessionToOpen?.serviceType
+      );
+      if (!localScope.safe || !requestedSpecialty || !storedSpecialty || requestedSpecialty !== storedSpecialty) {
+        alert('A sessão anterior não corresponde a este agendamento, profissional ou especialidade. ' +
+          'Os registros foram preservados. A recuperação exige validação pelo servidor; não é permitido ' +
+          'reutilizar dados de outra sessão. Solicite revisão da equipe antes de prosseguir.');
+        return;
+      }
       if (scheduledAppointmentId && !sessionAppointmentId) {
         const linkedSession = {
           ...sessionToOpen,
