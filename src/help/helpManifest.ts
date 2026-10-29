@@ -8,6 +8,33 @@ export type HelpArticle = { articleId:string; slug:string; status:HelpPublicatio
 export const HELP_MEDIA_BUCKET='help-center-media-private';
 export const HELP_MEDIA: readonly HelpMedia[]=[];
 export const HELP_ARTICLES: readonly HelpArticle[]=[
+ {
+  articleId:'help-getting-started-v1',slug:'ajuda/primeiros-passos',status:'published',
+  title:'Como usar a Ajuda e os tutoriais',theme:'Primeiros passos',
+  summary:'Encontre instruções para seu papel e entenda como pesquisar os recursos da Verto.',
+  keywords:['ajuda','tutorial','começar','papel','permissões','buscar'],
+  steps:[
+    'Abra Ajuda e tutoriais no menu disponível para o seu papel.',
+    'Use a busca para localizar uma tarefa pelo nome, por exemplo agenda ou prontuário.',
+    'Escolha um tema e siga as instruções exibidas para sua função.',
+    'Se algum recurso não aparecer, peça à gestão para conferir seu vínculo e suas permissões; a Ajuda não modifica acessos.'
+  ],
+  audiences:['director','coordinator','therapist','supervisor','receptionist','biller'],
+  requiredCapabilities:[],requiredModules:[],mediaIds:[]
+ },
+ {
+  articleId:'billing-orientation-v1',slug:'faturamento/orientacao-inicial',status:'published',
+  title:'Orientação inicial do faturista',theme:'Convênios e faturamento',
+  summary:'Saiba por onde começar a conferir sessões e itens faturáveis sem alterar cobranças.',
+  keywords:['faturista','faturamento','sessões','recebíveis','convênio'],
+  steps:[
+    'Confirme a clínica ativa antes de iniciar qualquer conferência.',
+    'Abra a área de faturamento disponível na sua conta.',
+    'Revise as sessões e pendências apresentadas pelo sistema conforme as permissões concedidas.',
+    'Para corrigir uma cobrança ou executar um envio, siga o fluxo autorizado e confira o resultado antes de prosseguir.'
+  ],
+  audiences:['biller'],requiredCapabilities:['billing.sessions.view'],requiredModules:[],mediaIds:[]
+ },
  {articleId:'billing-start-v1',slug:'faturamento/comece-aqui',status:'published',title:'Comece no faturamento da clínica',theme:'Convênios e faturamento',summary:'Localize as áreas principais do faturamento sem sair do contexto da clínica ativa.',keywords:['tiss','faturamento','guia','xml','convenio'],synonyms:['convenio','convenios','faturista'],steps:['Confirme a clínica ativa no topo da tela.','Escolha a tarefa de faturamento no menu lateral.','Antes de alterar dados, confira o contexto e o convênio selecionados.'],audiences:['biller','coordinator','director'],audienceLabel:'Faturamento, coordenação e direção autorizados',requiredCapabilities:['reports.billing.view'],requiredModules:['insurance_tiss'],prerequisites:['Módulo Convênios e TISS ativo na clínica.','Permissão para visualizar informações de faturamento.'],expectedResult:'Reconhecer a área de faturamento correta no contexto da clínica ativa e seguir para a tarefa desejada sem trocar de tenant.',recovery:['Se a área não aparecer, confirme a clínica ativa e suas permissões com a gestão.','Se o módulo não estiver disponível, volte à Verto e verifique se Convênios e TISS está ativo para a clínica.'],relatedArticleIds:[],routeKey:'billing_workspace',mediaIds:[]}
 ];
 export function projectHelpArticles(articles:readonly HelpArticle[],media:readonly HelpMedia[],audience:string,capabilities:readonly string[],modules:readonly string[]=[]){
