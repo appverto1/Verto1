@@ -18,7 +18,7 @@ test('desktop sidebar is fixed, compact only for Kanban, and keeps mobile hambur
   assert.match(shell,/aria-label=\{nav.label\}/);
   assert.match(admin,/md:ml-\[66px\]/);
   assert.match(admin,/md:ml-72/);
-  assert.match(admin,/Abrir navegação do Super Admin/);
+  assert.match(admin,/aria-label="Abrir menu de navegação"/);
   assert.match(admin,/setMobileMenuOpen\(true\)/);
 });
 
