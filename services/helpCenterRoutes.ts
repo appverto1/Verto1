@@ -4,6 +4,7 @@ import { registerSalesProspectingRoutes } from './salesProspectingRoutes';
 import { fileURLToPath } from 'node:url';
 import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 import { publishedTutorialHelpProjection } from './helpTutorialCatalog';
+import { isClinicBaseRole } from '../src/constants/authorizationModel';
 
 type Deps = {
   supabase: any;
@@ -23,11 +24,28 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   const resolveMedia = deps.resolveMedia || resolveHelpMedia;
   const helpContext = (req:any) => buildHelpContext(req, currentClinicId);
 
+  // Help is informational. Requiring clinic.view here prevents legitimate
+  // therapists/receptionists from opening their own role-filtered tutorials.
+  // Do NOT grant clinic.view globally: check the verified active membership,
+  // selected clinic and clinical role, and let article permissions filter topics.
+  const requireActiveHelpMembership = (req:any,res:any,next:any) => {
+    const context=req.authorizationContext;
+    const current=helpContext(req);
+    const trustedClinicId=String(context?.clinicId||'').trim();
+    const sessionClinicId=String(currentClinicId(req.session?.user)||'').trim();
+    if(!context||!sessionClinicId||!current.userId||!current.membershipId||
+      !isClinicBaseRole(current.audience)||
+      (trustedClinicId&&trustedClinicId!==sessionClinicId)) {
+      return res.status(403).json({success:false,error:'HELP_ACTIVE_CLINIC_MEMBERSHIP_REQUIRED'});
+    }
+    return next();
+  };
+
   // Compatibility mount: keep CRM routes isolated while avoiding a 4MB server.ts rewrite.
   // registerSalesProspectingRoutes independently verifies active platform_admins + TOTP MFA.
   registerSalesProspectingRoutes(app, { supabase, checkAuth });
 
-  app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
+  app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireActiveHelpMembership, async (req: any, res: any) => {
     const { clinicId, clinicName, audience, capabilities, modules, userId, membershipId, contextKey } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const articles = projectArticles(audience, capabilities, modules);
@@ -49,7 +67,7 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     return res.json({ clinicId, clinicName, contextKey, articles, progress });
   });
 
-  app.get('/api/help/tutorial-media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), (req:any,res:any)=>{
+  app.get('/api/help/tutorial-media/:mediaId', noStoreDynamicResponse, checkAuth, requireActiveHelpMembership, (req:any,res:any)=>{
     const {clinicId,audience,capabilities,modules}=helpContext(req);
     const id=String(req.params.mediaId||'');
     if(!clinicId||!/^verto-tutorial-[a-z0-9-]{1,100}$/.test(id)||
@@ -103,10 +121,10 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
         message:`Envie uma mensagem para o WhatsApp ${number}. Informe sua clínica, o assunto “${article.title}” e especifique a sua dúvida.`});
     }catch{return res.status(503).json({error:'HELP_PROGRESS_UNAVAILABLE'});}
   };
-  app.post('/api/help/tutorial-progress', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), actionLimiter, validateAction, handleAction(false));
-  app.post('/api/help/support', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), actionLimiter, validateAction, handleAction(true));
+  app.post('/api/help/tutorial-progress', noStoreDynamicResponse, checkAuth, requireActiveHelpMembership, actionLimiter, validateAction, handleAction(false));
+  app.post('/api/help/support', noStoreDynamicResponse, checkAuth, requireActiveHelpMembership, actionLimiter, validateAction, handleAction(true));
 
-  app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
+  app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireActiveHelpMembership, async (req: any, res: any) => {
     const { clinicId, audience, capabilities, modules } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const mediaId = String(req.params.mediaId || '');
