@@ -409,7 +409,7 @@ test('global acquisition catalog seeds event, paid traffic and referral with own
 test('every card supports acquisition multiselect without F5 and serialized Save authority',()=>{
   assert.match(kanban,/Selecionar canais de aquisição para/);
   assert.match(kanban,/Canais de aquisição · selecionar/);
-  assert.match(kanban,/Marcar origens \(múltipla escolha\)/);
+  assert.match(kanban,/checked=\{inlineChannelIds\.includes\(channel\.id\)\}/);
   assert.match(kanban,/type="checkbox" checked=\{checked\}/);
   assert.match(kanban,/Salvar canais/);
   assert.match(kanban,/setAcquisitionByLead\(old=>/);
