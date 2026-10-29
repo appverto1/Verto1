@@ -8,3 +8,7 @@ const helpCenter=fs.readFileSync(new URL('../src/components/HelpCenter.tsx',impo
 assert.ok(helpCenter.indexOf('setTopics([]);')<helpCenter.indexOf("fetch('/api/help/catalog'"),'context refresh clears stale projection before request');
 assert.match(helpCenter,/body\.includes\(q\)/,'search ranking includes procedural body/steps');
 console.log('helpCenterIntegration.test: PASS');
+
+const helpRoutes=fs.readFileSync(new URL('../services/helpCenterRoutes.ts',import.meta.url),'utf8');
+assert.doesNotMatch(helpRoutes,/requireClinicCapability\('clinic\.view'\)/,'tutorial cannot depend on clinic.view');
+assert.match(helpRoutes,/requireClinicMembershipContext/,'tutorial validates membership, not privileged clinic permission');
