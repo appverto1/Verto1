@@ -12,3 +12,17 @@ console.log('helpCenterIntegration.test: PASS');
 const helpRoutes=fs.readFileSync(new URL('../services/helpCenterRoutes.ts',import.meta.url),'utf8');
 assert.doesNotMatch(helpRoutes,/requireClinicCapability\('clinic\.view'\)/,'tutorial cannot depend on clinic.view');
 assert.match(helpRoutes,/requireClinicMembershipContext/,'tutorial validates membership, not privileged clinic permission');
+
+
+import { publishedHelpProjection } from '../src/help/helpManifest';
+import { getDefaultCapabilitiesForRole } from '../src/constants/authorizationModel';
+for(const role of ['director','coordinator','therapist','supervisor','receptionist','biller'] as const){
+  const topics=publishedHelpProjection(role,[],[]);
+  assert.ok(topics.some(article=>article.articleId==='help-getting-started-v1'),
+    role+' must receive a general introduction without clinic.view');
+}
+const billingTopics=publishedHelpProjection('biller',Array.from(getDefaultCapabilitiesForRole('biller')),[]);
+assert.ok(billingTopics.some(article=>article.articleId==='billing-orientation-v1'),
+  'faturista must have useful billing instructions even without insurance_tiss');
+assert.equal(publishedHelpProjection('patient',[],[]).length,0,
+  'help for clinic roles must not be exposed to the patient portal');
