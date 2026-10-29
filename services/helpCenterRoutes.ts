@@ -4,12 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { registerSalesProspectingRoutes } from './salesProspectingRoutes';
 import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 import { publishedTutorialHelpProjection } from './helpTutorialCatalog';
+import { CAPABILITY_CATALOG, isClinicBaseRole } from '../src/constants/authorizationModel';
 
 type Deps = {
   supabase: any;
   noStoreDynamicResponse: any;
   checkAuth: any;
   requireClinicCapability: (capability: string) => any;
+  requireAnyClinicCapability: (...capabilities: string[]) => any;
   currentClinicId: (user: any) => string | null;
   projectArticles?: typeof publishedHelpProjection;
   resolveMedia?: typeof resolveHelpMedia;
@@ -20,7 +22,7 @@ type Deps = {
 const setValues = (value:any): string[] => value instanceof Set ? Array.from(value).map(String) : Array.isArray(value) ? value.map(String) : [];
 
 export function registerHelpCenterRoutes(app: Express, deps: Deps) {
-  const { supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability, currentClinicId } = deps;
+  const { supabase, noStoreDynamicResponse, checkAuth, currentClinicId } = deps;
   const projectArticles = deps.projectArticles || publishedTutorialHelpProjection;
   const resolveMedia = deps.resolveMedia || resolveHelpMedia;
   const helpContext = (req:any) => {
@@ -36,10 +38,26 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     return { clinicId, clinicName, audience, capabilities, modules, userId, membershipId, contextKey };
   };
 
+  // All verified clinic roles can access their role-filtered tutorials.
+  // No grants are added and the patient portal does not enter this route.
+  const requireClinicMembershipContext=deps.requireAnyClinicCapability(
+    ...CAPABILITY_CATALOG.filter(item=>item.domain!=='portal').map(item=>item.key)
+  );
+  const requireActiveHelpMembership=(req:any,res:any,next:any)=>{
+    const context=req.authorizationContext;
+    const help=helpContext(req);
+    const clinic=String(currentClinicId(req.session?.user)||'').trim();
+    const trusted=String(context?.clinicId||'').trim();
+    if(!context||!clinic||!trusted||clinic!==trusted||
+       !help.userId||!help.membershipId||!isClinicBaseRole(help.audience))
+      return res.status(403).json({success:false,error:'HELP_ACTIVE_CLINIC_MEMBERSHIP_REQUIRED'});
+    return next();
+  };
+
   // Secured owner CRM routes, using active platform-admin plus TOTP guard.
   registerSalesProspectingRoutes(app, { supabase, checkAuth });
 
-  app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
+  app.get('/api/help/catalog', noStoreDynamicResponse, checkAuth, requireClinicMembershipContext, requireActiveHelpMembership, async (req: any, res: any) => {
     const { clinicId, clinicName, audience, capabilities, modules, userId, contextKey } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const articles = projectArticles(audience, capabilities, modules);
@@ -60,7 +78,7 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     return res.json({ clinicId, clinicName, contextKey, articles, progress });
   });
 
-  app.get('/api/help/tutorial-media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), (req:any,res:any)=>{
+  app.get('/api/help/tutorial-media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicMembershipContext, requireActiveHelpMembership, (req:any,res:any)=>{
     const {clinicId,audience,capabilities,modules}=helpContext(req);
     const id=String(req.params.mediaId||'');
     if(!clinicId||!/^verto-tutorial-[a-z0-9-]{1,100}$/.test(id)||
@@ -114,10 +132,10 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
         message:`Envie uma mensagem para o WhatsApp ${number}. Informe sua clínica, o assunto “${article.title}” e especifique a sua dúvida.`});
     }catch{return res.status(503).json({error:'HELP_PROGRESS_UNAVAILABLE'});}
   };
-  app.post('/api/help/tutorial-progress', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), actionLimiter, validateAction, handleAction(false));
-  app.post('/api/help/support', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), actionLimiter, validateAction, handleAction(true));
+  app.post('/api/help/tutorial-progress', noStoreDynamicResponse, checkAuth, requireClinicMembershipContext, requireActiveHelpMembership, actionLimiter, validateAction, handleAction(false));
+  app.post('/api/help/support', noStoreDynamicResponse, checkAuth, requireClinicMembershipContext, requireActiveHelpMembership, actionLimiter, validateAction, handleAction(true));
 
-  app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicCapability('clinic.view'), async (req: any, res: any) => {
+  app.get('/api/help/media/:mediaId', noStoreDynamicResponse, checkAuth, requireClinicMembershipContext, requireActiveHelpMembership, async (req: any, res: any) => {
     const { clinicId, audience, capabilities, modules } = helpContext(req);
     if (!clinicId) return res.status(403).json({ error: 'HELP_CLINIC_CONTEXT_REQUIRED' });
     const mediaId = String(req.params.mediaId || '');
