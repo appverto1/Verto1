@@ -47,7 +47,7 @@ test('loss popup allows catalog creation, auto-selects the new reason and only s
   assert.match(ui,/setInlineLossError\(e\.message\|\|'Não foi possível cadastrar o motivo\.'\)/);
   assert.match(ui,/A oportunidade só será marcada como perdida ao clicar em Salvar perda\./);
   assert.match(ui,/onClick=\{\(\)=>void saveLoss\(\)\}/);
-  assert.match(ui,/disabled=\{Boolean\(busyLead\)\|\|inlineLossBusy\|\|!lossReasons\.some/);
+  assert.match(ui,/disabled=\{Boolean\(busyLead\)\|\|inlineLossBusy\|\|Boolean\(inlineLossName\.trim\(\)\)\|\|!lossReasons\.some/);
   assert.match(lossRoutes,/app\.post\('\/api\/owner\/sales\/loss-reasons',\.\.\.guard/);
   assert.match(lossRoutes,/save_sales_loss_reason_v1/);
   assert.match(ui,/onLeadPatch\(id,\{status:json\.data\.status,lostAt:json\.data\.lostAt,updatedAt:json\.data\.updatedAt,lossReasonId:json\.data\.lossReasonId\}\)/);
