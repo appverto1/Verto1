@@ -11,7 +11,7 @@ type Deps = {
   noStoreDynamicResponse: any;
   checkAuth: any;
   requireClinicCapability: (capability: string) => any;
-  requireAnyClinicCapability: (...capabilities: string[]) => any;
+  requireAnyClinicCapability?: (...capabilities: string[]) => any;
   currentClinicId: (user: any) => string | null;
   projectArticles?: typeof publishedHelpProjection;
   resolveMedia?: typeof resolveHelpMedia;
@@ -45,9 +45,12 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
   // Resolve a verified active clinic membership using the existing server
   // authorization middleware. Any legitimate clinic role can reach Help,
   // regardless of clinic.view, without granting new clinical capabilities.
-  const requireClinicMembershipContext = deps.requireAnyClinicCapability(
-    ...CAPABILITY_CATALOG.filter(capability=>capability.domain!=='portal').map(capability=>capability.key)
-  );
+  // Legacy server.ts registers Help directly without requireAnyClinicCapability.
+  // All six built-in clinic roles include patient.list; use that existing
+  // authorization middleware as a fail-closed compatibility fallback.
+  const requireClinicMembershipContext=typeof deps.requireAnyClinicCapability==='function'
+    ? deps.requireAnyClinicCapability(...CAPABILITY_CATALOG.filter(item=>item.domain!=='portal').map(item=>item.key))
+    : deps.requireClinicCapability('patient.list');
 
   // Compatibility mount: keep CRM routes isolated while avoiding a 4MB server.ts rewrite.
   // registerSalesProspectingRoutes independently verifies active platform_admins + TOTP MFA.
