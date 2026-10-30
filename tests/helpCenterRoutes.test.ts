@@ -44,3 +44,38 @@ const ranged=await invoke('/api/help/media/:mediaId',{...baseReq,headers:{range:
 assert.equal(ranged.status,307,'Range request redirects preserving GET/Range semantics'); assert.equal(ranged.headers.Location,'https://signed.invalid/object'); assert.equal(ranged.headers['Accept-Ranges'],'bytes'); assert.equal(ranged.headers['Cache-Control'],'private, no-store'); assert.equal(signed,2);
 assert.equal((await invoke('/api/help/media/:mediaId',{...baseReq,params:{mediaId:'../secret'}})).status,404,'arbitrary path denied');
 console.log('helpCenterRoutes.test: PASS');
+
+
+const legacyRoutes=new Map<string,Handler[]>();
+const legacyApp:any={
+ get:(path:string,...handlers:Handler[])=>legacyRoutes.set(path,handlers),
+ post:(path:string,...handlers:Handler[])=>legacyRoutes.set(path,handlers)
+};
+registerHelpCenterRoutes(legacyApp,{
+ supabase:{storage:{from:()=>({createSignedUrl:async()=>({data:null,error:null})})}},
+ noStoreDynamicResponse:pass,checkAuth,
+ requireClinicCapability:(capability:string):Handler=>(req,res,next)=>{
+   if(req.authorizationContext?.capabilities?.has(capability))return next?.();
+   return res.status(403).json({error:'CLINIC_CAPABILITY_DENIED'});
+ },
+ currentClinicId:(user:any)=>user?.clinicId==='clinic-a'?'clinic-a':null,
+ projectArticles:()=>[]
+} as any);
+let legacyStatus=200;
+const legacyReq={
+ ...baseReq,
+ authorizationContext:{...baseReq.authorizationContext,
+   role:'therapist',capabilities:new Set(['patient.list'])}
+};
+const legacyResponse:any={
+ status:(code:number)=>{legacyStatus=code;return legacyResponse;},
+ json:()=>legacyResponse
+};
+const legacyStack=legacyRoutes.get('/api/help/catalog')||[];
+let legacyIndex=-1;
+const legacyNext=async()=>{
+ legacyIndex++;
+ if(legacyIndex<legacyStack.length)await legacyStack[legacyIndex](legacyReq,legacyResponse,legacyNext);
+};
+await legacyNext();
+assert.equal(legacyStatus,200,'legacy server mount works for therapist without clinic.view');
