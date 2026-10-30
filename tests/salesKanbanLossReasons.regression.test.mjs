@@ -35,7 +35,7 @@ assert.match(catalog,/name\.length<2\|\|name\.length>100/);
 assert.match(board,/column\.kind==='lost'[\s\S]*?setLossDialog/,'dragging to Perdidos opens unsaved dialog');
 assert.match(board,/manualLost = \(lead:Lead\)/);
 assert.match(board,/onClick=\{\(\)=>void saveLoss\(\)\}/);
-assert.match(board,/disabled=\{Boolean\(busyLead\)\|\|!lossReasons\.some/);
+assert.match(board,/disabled=\{Boolean\(busyLead\)\|\|inlineLossBusy\|\|Boolean\(inlineLossName\.trim\(\)\)\|\|!lossReasons\.some/);
 assert.match(board,/lossReasonId:json\.data\.lossReasonId/);
 assert.match(board,/setLossReasons\(old=>/,'editing reason immediately refreshes labels without F5');
 assert.match(board,/Editar motivo de perda/);
