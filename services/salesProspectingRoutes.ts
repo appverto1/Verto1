@@ -377,6 +377,45 @@ export function registerSalesProspectingRoutes(
     } catch { return boardError(res,'Não foi possível mover o lead.'); }
   });
 
+  // Preview only: the create RPC and its unique index remain the final write authority.
+  // One indexed batch lookup, independent of Kanban pagination or visible stage.
+  app.post('/api/owner/sales/kanban/opportunities/duplicates', ...salesGuard, async (req: any, res: any) => {
+    const phones = req.body?.phones;
+    if (!Array.isArray(phones) || phones.length < 1 || phones.length > 100 ||
+        phones.some((value: unknown) => typeof value !== 'string' || value.length > 40)) {
+      return res.status(400).json({success:false,error:'Informe entre 1 e 100 telefones.'});
+    }
+    const normalized = (phones as string[]).map(value => {
+      let digits = value.replace(/[^0-9]/g, '');
+      if (digits.length === 10 || digits.length === 11) digits = '55' + digits;
+      return /^55[1-9][0-9][0-9]{8,9}$/.test(digits) ? digits : null;
+    });
+    const counts = new Map<string,number>();
+    for (const phone of normalized) if (phone) counts.set(phone,(counts.get(phone)||0)+1);
+    const unique = [...counts.keys()];
+    try {
+      const existingByPhone = new Map<string,{id:string;name:string|null;phone:string|null;status:string}>();
+      if (unique.length) {
+        const found = await supabase.from('sales_leads')
+          .select('id,name,phone,status,normalized_phone')
+          .in('normalized_phone',unique).is('deleted_at',null).limit(101);
+        if (found.error || (found.data||[]).length > 100) throw found.error || Error('DUPLICATE_LOOKUP_LIMIT');
+        for (const lead of found.data||[]) {
+          existingByPhone.set(lead.normalized_phone,{
+            id:lead.id,name:lead.name,phone:lead.phone,status:lead.status,
+          });
+        }
+      }
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,matches:normalized.map(phone=>({
+        normalizedPhone:phone,
+        invalid:phone===null,
+        inBatch:phone!==null && (counts.get(phone)||0)>1,
+        existing:phone===null?null:existingByPhone.get(phone)||null,
+      }))});
+    } catch { return boardError(res,'Não foi possível verificar números repetidos.'); }
+  });
+
   // Owner-only manually created opportunities. Reuse the SQL authority for
   // atomic batches, idempotency and audit; never let browser-controlled roles authorize writes.
   app.post('/api/owner/sales/kanban/opportunities', ...salesGuard, async (req: any, res: any) => {

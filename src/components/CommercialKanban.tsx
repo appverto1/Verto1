@@ -20,6 +20,10 @@ type Lead = {
   status: SalesLeadStatus; lostAt?: string | null; lossReasonId?:string|null; updatedAt?: string; createdAt?: string;
   legacyReadOnly?: boolean;
 };
+type DuplicateMatch = {
+  normalizedPhone:string|null; invalid:boolean; inBatch:boolean;
+  existing:{id:string;name:string|null;phone:string|null;status:string}|null;
+};
 type Column = {
   id: string; slug: string; kind: string; title: string; color: string;
   position: number; is_system: boolean;
@@ -115,6 +119,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [lossReasons,setLossReasons]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
   const [lossDialog,setLossDialog]=useState<{leadId:string}|null>(null);
   const [lossReasonDraft,setLossReasonDraft]=useState('');
+  const [inlineLossName,setInlineLossName]=useState('');
+  const [inlineLossBusy,setInlineLossBusy]=useState(false);
+  const [inlineLossError,setInlineLossError]=useState<string|null>(null);
   const [lossCatalogUnavailable,setLossCatalogUnavailable]=useState(false);
   const [lossSettingsOpen,setLossSettingsOpen]=useState(false);
   const [lossSettingsBusy,setLossSettingsBusy]=useState(false);
@@ -153,6 +160,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   },[]);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
+  const [duplicateCheck,setDuplicateCheck] = useState<{draft:string;matches:DuplicateMatch[];error?:string}|null>(null);
+  const [duplicateCheckRetry,setDuplicateCheckRetry] = useState(0);
   const [bulkSelectedRows,setBulkSelectedRows]=useState<number[]>([]);
   const [bulkChannelsToApply,setBulkChannelsToApply]=useState<string[]>([]);
   const [bulkChannelsByRow,setBulkChannelsByRow]=useState<Record<number,string[]>>({});
@@ -382,6 +391,26 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   }, [visibleLeads,search]);
   const selected = visibleLeads.find(x=>x.id === selectedId) || null;
   const bulkPhones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+  const checkedDuplicates=duplicateCheck?.draft===phonesDraft&&!duplicateCheck.error?duplicateCheck.matches:null;
+  const blockedByDuplicate=Boolean(checkedDuplicates?.some(item=>item.invalid||item.inBatch||item.existing));
+  useEffect(()=>{
+    if(!creatingOpen||!bulkPhones.length||bulkPhones.length>100){
+      setDuplicateCheck(null);return;
+    }
+    let active=true;
+    setDuplicateCheck(null);
+    const timer=window.setTimeout(()=>{
+      void request('/api/owner/sales/kanban/opportunities/duplicates',{
+        method:'POST',body:JSON.stringify({phones:phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean)}),
+      }).then(json=>{
+        if(active)setDuplicateCheck({draft:phonesDraft,matches:json.matches||[]});
+      }).catch((e:Error)=>{
+        if(active)setDuplicateCheck({draft:phonesDraft,matches:[],error:e.message||'Verificação indisponível.'});
+      });
+    },350);
+    return()=>{active=false;window.clearTimeout(timer);};
+  },[creatingOpen,phonesDraft,duplicateCheckRetry]);
+
   const feedbackFor=(leadId:string)=>cardFeedback?.leadId===leadId?cardFeedback:null;
   const cardInfo=(leadId:string,info:string)=>setCardFeedback({leadId,info});
   const cardError=(leadId:string,error:string)=>setCardFeedback({leadId,error});
@@ -477,6 +506,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const createOpportunities = async () => {
     const phones=bulkPhones;
     if(!phones.length||phones.length>100){setError('Informe de 1 a 100 números, separados por linha, vírgula ou ponto e vírgula.');return;}
+    if(!checkedDuplicates||checkedDuplicates.length!==phones.length||blockedByDuplicate){
+      setError('Revise os números destacados antes de salvar. Nenhum registro será sobrescrito.');return;
+    }
     const channelsByPhone=phones.map((_,index)=>bulkChannelsByRow[index]||[]);
     if(acquisitionCatalogUnavailable&&channelsByPhone.some(ids=>ids.length)){
       setError('Canais indisponíveis. Atualize antes de classificar o lote.');return;
@@ -499,7 +531,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       setGlobalFollowupFilter('all');setColumnFollowupFilters({});
       setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
       setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s) com as origens selecionadas.');
-    }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
+    }catch(e:any){
+      setError(e.message||'Não foi possível cadastrar oportunidades.');
+      // Another owner session may have registered a phone after our preview.
+      if(/repetido|cadastrado/i.test(String(e.message||'')))setDuplicateCheckRetry(v=>v+1);
+    }
     finally{setCreatingBusy(false);}
   };
   const saveLeadDetails = async () => {
@@ -749,7 +785,28 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setLossDialog({leadId:lead.id});
     setError(null);
   };
+  useEffect(()=>{
+    setInlineLossName('');
+    setInlineLossError(null);
+  },[lossDialog?.leadId]);
+  const createInlineLossReason=async()=>{
+    const name=inlineLossName.trim();
+    if(inlineLossBusy||busyLead||name.length<2||name.length>100)return;
+    setInlineLossBusy(true);setInlineLossError(null);
+    try{
+      const json=await request('/api/owner/sales/loss-reasons',{
+        method:'POST',body:JSON.stringify({name}),
+      });
+      setLossReasons(old=>[...old.filter(reason=>reason.id!==json.reason.id),json.reason].sort((a,b)=>
+        Number(b.is_active)-Number(a.is_active)||a.name.localeCompare(b.name,'pt-BR')));
+      setLossReasonDraft(json.reason.id);
+      setInlineLossName('');
+      // Catalog creation is persisted separately; the lead stays unchanged until Save loss.
+    }catch(e:any){setInlineLossError(e.message||'Não foi possível cadastrar o motivo.');}
+    finally{setInlineLossBusy(false);}
+  };
   const saveLoss=async()=>{
+    if(inlineLossBusy)return;
     const id=lossDialog?.leadId;
     if(!id||!lossReasonDraft||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active))return;
     const keyName='lost:'+id+':'+lossReasonDraft;
@@ -1362,7 +1419,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
 
       {lossDialog&&<div className="fixed inset-0 z-[195] flex items-center justify-center bg-slate-950/60 p-4"
         role="dialog" aria-modal="true" aria-label="Selecionar motivo da perda">
-        <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+        <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
           <h3 className="text-base font-black">Por que a oportunidade foi perdida?</h3>
           <p className="mt-1 text-xs text-slate-600">O motivo é obrigatório. Só o botão Salvar confirma a perda ou altera a justificativa.</p>
           <select aria-label="Motivo da perda" value={lossReasonDraft} onChange={e=>setLossReasonDraft(e.target.value)}
@@ -1370,14 +1427,30 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <option value="">Selecione um motivo</option>
             {lossReasons.filter(r=>r.is_active).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
-          {lossCatalogUnavailable&&<p role="alert" className="mt-2 text-xs text-red-700">Não foi possível carregar os motivos. Feche e abra o catálogo para tentar novamente.</p>}
-          {!lossReasons.some(r=>r.is_active)&&!lossCatalogUnavailable&&<p className="mt-2 text-xs text-amber-700">Cadastre primeiro um motivo no botão Motivos de perda.</p>}
+          <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+            <label className="block text-xs font-bold text-violet-900">
+              Não encontrou o motivo? Cadastre aqui
+              <input type="text" maxLength={100} value={inlineLossName} disabled={inlineLossBusy||Boolean(busyLead)}
+                onChange={e=>{setInlineLossName(e.target.value);setInlineLossError(null);}}
+                placeholder="Ex.: Sem orçamento disponível"
+                className="mt-2 block w-full rounded-lg border border-violet-200 bg-white p-2.5 text-sm font-normal"/>
+            </label>
+            <button type="button" disabled={inlineLossBusy||Boolean(busyLead)||inlineLossName.trim().length<2}
+              onClick={()=>void createInlineLossReason()}
+              className="mt-2 rounded-lg bg-violet-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">
+              {inlineLossBusy?'Salvando motivo…':'Salvar motivo e selecionar'}
+            </button>
+            <p className="mt-2 text-[11px] text-slate-600">O motivo será incluído no catálogo e selecionado automaticamente. A oportunidade só será marcada como perdida ao clicar em Salvar perda.</p>
+            {inlineLossError&&<p role="alert" className="mt-2 text-xs text-red-700">{inlineLossError}</p>}
+          </div>
+          {lossCatalogUnavailable&&<p role="alert" className="mt-2 text-xs text-red-700">Não foi possível carregar os motivos existentes. Você pode tentar cadastrar um novo motivo.</p>}
+          {!lossReasons.some(r=>r.is_active)&&!lossCatalogUnavailable&&<p className="mt-2 text-xs text-amber-700">Nenhum motivo cadastrado. Crie o primeiro motivo acima.</p>}
           {error&&<p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
-            <button type="button" onClick={()=>{setLossDialog(null);setError(null);}} disabled={Boolean(busyLead)}
+            <button type="button" onClick={()=>{setLossDialog(null);setError(null);}} disabled={Boolean(busyLead)||inlineLossBusy}
               className="rounded-lg border px-4 py-2 text-xs font-bold">Cancelar</button>
             <button type="button" onClick={()=>void saveLoss()}
-              disabled={Boolean(busyLead)||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active)}
+              disabled={Boolean(busyLead)||inlineLossBusy||Boolean(inlineLossName.trim())||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active)}
               className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">
               {busyLead?'Salvando…':'Salvar perda'}
             </button>
@@ -1404,7 +1477,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 placeholder={'11 99999-9999\n21 98888-8888'}
                 className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500"/>
             </label>
-            <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+            <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. A verificação consulta todo o cadastro, não apenas os cards carregados.</p>
+            {bulkPhones.length>0&&<div role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+              {bulkPhones.length>100?'Máximo de 100 telefones por cadastro.':
+                duplicateCheck?.draft===phonesDraft&&duplicateCheck.error?
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Não foi possível verificar duplicidades: {duplicateCheck.error}</span>
+                  <button type="button" onClick={()=>setDuplicateCheckRetry(v=>v+1)} className="font-bold underline">Tentar novamente</button>
+                </div>:
+                !checkedDuplicates?'Verificando telefones existentes…':
+                blockedByDuplicate?
+                  <strong>{checkedDuplicates.filter(item=>item.invalid||item.inBatch||item.existing).length} número(s) exigem revisão. Corrija ou remova os repetidos para salvar.</strong>:
+                  <span className="font-semibold text-emerald-800">Nenhum telefone repetido encontrado no cadastro ou neste lote.</span>}
+            </div>}
             {bulkPhones.length>0&&<div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <strong className="text-xs text-indigo-950">{bulkPhones.length} contato(s) · {bulkSelectedRows.length} selecionado(s)</strong>
@@ -1447,10 +1532,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         [...old,index]:old.filter(i=>i!==index))}
                       className="h-4 w-4 accent-indigo-700"/>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">{index+1}. {phone}</span>
+                    {checkedDuplicates?.[index]?.invalid&&<span className="text-[11px] font-bold text-red-700">Inválido</span>}
+                    {checkedDuplicates?.[index]?.inBatch&&<span className="text-[11px] font-bold text-amber-700">Repetido no lote</span>}
+                    {checkedDuplicates?.[index]?.existing&&<span className="text-[11px] font-bold text-red-700">Já cadastrado</span>}
                     <span className="max-w-[48%] truncate text-[11px] text-indigo-700">
                       {(bulkChannelsByRow[index]||[]).map(id=>acquisitionChannels.find(c=>c.id===id)?.name||'Canal histórico').join(', ')||'Sem canal'}
                     </span>
                   </div>
+                  {checkedDuplicates?.[index]?.existing&&<p className="mt-1 pl-6 text-[11px] text-red-800">
+                    Cadastro existente: {checkedDuplicates[index].existing?.name||'Sem nome'} · {checkedDuplicates[index].existing?.phone||phone} ·
+                    {' '+(SALES_LEAD_STATUS_LABELS[checkedDuplicates[index].existing!.status as SalesLeadStatus]||checkedDuplicates[index].existing?.status)}
+                    {leads.some(lead=>lead.id===checkedDuplicates[index].existing?.id)&&<button type="button" className="ml-2 font-bold underline"
+                      onClick={()=>{const existingId=checkedDuplicates[index].existing!.id;setCreatingOpen(false);openCard(existingId);}}>Abrir card</button>}
+                  </p>}
                   <details className="mt-1 pl-6 text-xs">
                     <summary className="cursor-pointer font-semibold text-violet-700">Editar canais deste contato</summary>
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
@@ -1476,7 +1570,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           </div>
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} className="rounded-lg border px-4 py-2 text-sm">Cancelar</button>
-            <button type="button" disabled={creatingBusy||!phonesDraft.trim()} onClick={()=>void createOpportunities()}
+            <button type="button" disabled={creatingBusy||!phonesDraft.trim()||!checkedDuplicates||checkedDuplicates.length!==bulkPhones.length||blockedByDuplicate} onClick={()=>void createOpportunities()}
               className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Check size={15}/> {creatingBusy?'Salvando...':'Salvar oportunidades'}</button>
           </div>
         </div>
