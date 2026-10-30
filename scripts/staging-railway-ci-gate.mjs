@@ -18,6 +18,7 @@ const tests = [
   // Protect the staging economy worker mode and production notification obligations.
   'tests/backgroundWorkerEconomyMode.test.ts',
   'tests/stagingNotificationCron.test.ts',
+  'tests/helpTutorialRoleVisibility.test.ts',
 ];
 for (const file of tests) {
   if (!existsSync(file)) {
