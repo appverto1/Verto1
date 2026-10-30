@@ -11,7 +11,7 @@ type Deps = {
   noStoreDynamicResponse: any;
   checkAuth: any;
   requireClinicCapability: (capability: string) => any;
-  requireAnyClinicCapability: (...capabilities: string[]) => any;
+  requireAnyClinicCapability?: (...capabilities: string[]) => any;
   currentClinicId: (user: any) => string | null;
   projectArticles?: typeof publishedHelpProjection;
   resolveMedia?: typeof resolveHelpMedia;
@@ -40,9 +40,12 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
 
   // All verified clinic roles can access their role-filtered tutorials.
   // No grants are added and the patient portal does not enter this route.
-  const requireClinicMembershipContext=deps.requireAnyClinicCapability(
-    ...CAPABILITY_CATALOG.filter(item=>item.domain!=='portal').map(item=>item.key)
-  );
+  // Legacy server.ts registers Help directly without requireAnyClinicCapability.
+  // All six built-in clinic roles include patient.list; use that existing
+  // authorization middleware as a fail-closed compatibility fallback.
+  const requireClinicMembershipContext=typeof deps.requireAnyClinicCapability==='function'
+    ? deps.requireAnyClinicCapability(...CAPABILITY_CATALOG.filter(item=>item.domain!=='portal').map(item=>item.key))
+    : deps.requireClinicCapability('patient.list');
   const requireActiveHelpMembership=(req:any,res:any,next:any)=>{
     const context=req.authorizationContext;
     const help=helpContext(req);
