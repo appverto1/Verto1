@@ -9,6 +9,26 @@ export const HELP_MEDIA_BUCKET='help-center-media-private';
 export const HELP_MEDIA: readonly HelpMedia[]=[];
 export const HELP_ARTICLES: readonly HelpArticle[]=[
  {
+  articleId:'clinic-notices-guide-v1',
+  slug:'avisos/como-usar',
+  status:'published',
+  title:'Avisos: preparar, agendar e acompanhar',
+  theme:'Avisos',
+  summary:'Entenda como comunicar avisos, eventos e feriados aos pacientes da clínica quando seu acesso permitir.',
+  keywords:['avisos','comunicados','notificações','eventos','feriados','agendamento'],
+  steps:[
+    'Na clínica ativa, abra a área Avisos para consultar os avisos anteriores e suas situações de entrega.',
+    'Quando sua função permitir o envio, escolha Aviso, Evento ou Feriado e confira o título e a mensagem antes de prosseguir.',
+    'Escolha o público: todos os pacientes ativos ou pacientes selecionados. Confirme os destinatários sem trocar de clínica.',
+    'Para programar o envio, selecione uma data e um horário permitido. Respeite o período de não perturbe da clínica.',
+    'Depois de salvar ou enviar, confira o resultado e o histórico. Se o recurso não aparecer, peça à gestão para verificar seu acesso.'
+  ],
+  audiences:['director','coordinator','therapist','supervisor','receptionist','biller'],
+  requiredCapabilities:[],
+  requiredModules:[],
+  mediaIds:[]
+ },
+ {
   articleId:'help-getting-started-v1',slug:'ajuda/primeiros-passos',status:'published',
   title:'Como usar a Ajuda e os tutoriais',theme:'Primeiros passos',
   summary:'Encontre instruções para seu papel e entenda como pesquisar os recursos da Verto.',
