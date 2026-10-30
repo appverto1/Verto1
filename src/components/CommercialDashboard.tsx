@@ -15,7 +15,7 @@ export type CommercialAttempt = {
   contact_result?: 'no_answer' | 'interested' | 'not_interested' | null;
 };
 type DrilldownSelection={
-  dimension:'stage'|'overview'|'daily'|'cumulative'|'hour'|'weekday'|'channel'|'attempt';
+  dimension:'stage'|'overview'|'daily'|'cumulative'|'hour'|'weekday'|'channel'|'attempt'|'loss_reason';
   value:string;measure:'leads'|'calls'|'conversations'|'failures'|'messages'|'attempted';
   label:string;expected?:number;
 };
@@ -39,6 +39,7 @@ type Analytics = {
   channels: (NumberPoint & { channel: string })[];
   attempts: (NumberPoint & { attempt: number })[];
   stages: { status: string; leads: number }[];
+  lossReasons: { reasonId: string|null; name:string; leads:number }[];
 };
 const percent = (numerator: number, denominator: number) =>
   denominator ? (numerator * 100 / denominator).toLocaleString('pt-BR',{maximumFractionDigits:1}) + '%' : '—';
@@ -159,6 +160,9 @@ export const CommercialDashboard = () => {
     stage:SALES_LEAD_STATUS_LABELS[x.status as keyof typeof SALES_LEAD_STATUS_LABELS]||x.status,
     status:x.status,leads:x.leads,
   })).sort((a,b)=>b.leads-a.leads),[data]);
+  const lossReasons=useMemo(()=>(data?.lossReasons||[]).map(x=>({
+    reasonId:x.reasonId||'none',reason:x.name,leads:Number(x.leads)||0
+  })),[data]);
   const attemptSequence=useMemo(()=>Array.from({length:10},(_,i)=>{
     const row=data?.attempts?.find(x=>Number(x.attempt)===i+1);
     return {attempt:(i+1)+'ª',attemptValue:String(i+1),calls:row?.calls||0,conversations:row?.conversations||0,
@@ -327,7 +331,39 @@ export const CommercialDashboard = () => {
             </Panel>
           </div>
         </div>
-        <p className="text-xs text-slate-500">Fonte: agregações no Supabase Staging. Nenhum dado de receita foi presumido; clientes convertidos dependem de confirmação de pagamento.</p>
+        <div>
+          <h3 className="mb-3 text-base font-black text-slate-900">05 · Motivos de perda</h3>
+          <div className="grid gap-4 xl:grid-cols-2">
+            <Panel title="Oportunidades perdidas por motivo" subtitle="Situação atual dos leads visíveis, independentemente do período de ligações. Motivos antigos não informados permanecem identificados.">
+              {lossReasons.length?<Plot height={Math.min(620,Math.max(290,lossReasons.length*40+60))}>
+                <BarChart layout="vertical" data={lossReasons} margin={{top:5,right:10,bottom:5,left:5}}><Axes/>
+                  <XAxis type="number" allowDecimals={false} tick={{fontSize:10}}/>
+                  <YAxis type="category" dataKey="reason" width={150} tick={{fontSize:10}}/>
+                  <Tooltip/><Bar dataKey="leads" name="Oportunidades perdidas" fill="#e05a78" radius={[0,6,6,0]}
+                    onClick={(entry:any)=>showLeads('loss_reason',String(entry?.payload?.reasonId||'none'),'leads',
+                      'Perdas · '+String(entry?.payload?.reason||''),entry?.payload?.leads)}/>
+                </BarChart>
+              </Plot>:<p className="rounded-lg border border-dashed p-5 text-sm text-slate-500">Nenhuma oportunidade perdida no momento.</p>}
+            </Panel>
+            <Panel title="Participação de cada motivo" subtitle="Proporção de perdas por justificativa. Clique em uma categoria para ver os cards correspondentes.">
+              {lossReasons.length?<Plot height={Math.min(620,Math.max(290,lossReasons.length*40+60))}>
+                <PieChart><Pie data={lossReasons} dataKey="leads" nameKey="reason" innerRadius={57} outerRadius={105}
+                  paddingAngle={2} onClick={(entry:any)=>showLeads('loss_reason',String(entry?.reasonId||'none'),'leads',
+                    'Perdas · '+String(entry?.reason||''),entry?.leads)}>
+                  {lossReasons.map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]}/>)}
+                </Pie><Tooltip/><Legend/></PieChart>
+              </Plot>:<p className="rounded-lg border border-dashed p-5 text-sm text-slate-500">Os motivos aparecerão quando houver perdas.</p>}
+            </Panel>
+          </div>
+          {lossReasons.length>0&&<div className="mt-3 flex flex-wrap gap-2" aria-label="Detalhar motivos de perda">
+            {lossReasons.map(item=><button key={item.reasonId} type="button"
+              onClick={()=>showLeads('loss_reason',item.reasonId,'leads','Perdas · '+item.reason,item.leads)}
+              className="rounded-lg border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-700 hover:bg-rose-50">
+              {item.reason}: {n(item.leads)}
+            </button>)}
+          </div>}
+        </div>
+        <p className="text-xs text-slate-500">Fonte: agregações autenticadas no Supabase. Estados de leads e motivos de perda são atuais e excluem oportunidades ocultas. Nenhum dado de receita foi presumido; clientes convertidos dependem de confirmação de pagamento.</p>
       </div>}
       {drilldown&&<div role="dialog" aria-modal="true" aria-label={'Leads do gráfico: '+drilldown.label}
         className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-950/65 p-3 sm:p-5"
