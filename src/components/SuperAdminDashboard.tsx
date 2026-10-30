@@ -543,6 +543,18 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     fetchData();
   }, []);
 
+  // Kanban's manual refresh must not reload financials, customers, surveys or demo data.
+  const refreshKanbanLeads = async () => {
+    const supabase = await getSupabase();
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers = { Authorization: session?.access_token ? 'Bearer ' + session.access_token : '' };
+    const result = await fetchJsonSoft('/api/owner/sales/leads?page=1&pageSize=100', headers, 'Leads comerciais');
+    if (!result?.success) return;
+    setLeadRecoveryItems(result.data || []);
+    setLeadTotal(Number(result.pagination?.total || 0));
+    setLeadNextPage(2);
+  };
+
   const loadMoreLeads = async () => {
     if (loadingMoreLeads) return;
     setLoadingMoreLeads(true);
@@ -1583,7 +1595,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             onLeadsCreated={items=>{setLeadRecoveryItems(current=>{const known=new Set(current.map(item=>item.id));return [...items.filter(item=>!known.has(item.id)),...current];});setLeadTotal(t=>t+items.length);}}
             onLeadDeleted={id=>{setLeadRecoveryItems(current=>current.filter(item=>item.id!==id));setLeadTotal(t=>Math.max(0,t-1));}}
             onOpenLead={lead=>{setLeadSearch(lead.name||'');setLeadStatusFilter('all');setCommercialView('list');}}
-            onRefresh={refreshAll} onMetrics={()=>{setFinancialView('sales');setActiveTab('financial');}}
+            onRefresh={refreshKanbanLeads} onMetrics={()=>{setFinancialView('sales');setActiveTab('financial');}}
             onLoadMore={loadMoreLeads}
             remaining={Math.max(0,leadTotal-leadRecoveryItems.filter(item=>!item.legacyReadOnly).length)}
             loadingMore={loadingMoreLeads}
