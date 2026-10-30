@@ -1438,7 +1438,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <button type="button" disabled={inlineLossBusy||Boolean(busyLead)||inlineLossName.trim().length<2}
               onClick={()=>void createInlineLossReason()}
               className="mt-2 rounded-lg bg-violet-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">
-              {inlineLossBusy?'Cadastrando…':'Cadastrar motivo e selecionar'}
+              {inlineLossBusy?'Salvando motivo…':'Salvar motivo e selecionar'}
             </button>
             <p className="mt-2 text-[11px] text-slate-600">O motivo será incluído no catálogo e selecionado automaticamente. A oportunidade só será marcada como perdida ao clicar em Salvar perda.</p>
             {inlineLossError&&<p role="alert" className="mt-2 text-xs text-red-700">{inlineLossError}</p>}
@@ -1450,7 +1450,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <button type="button" onClick={()=>{setLossDialog(null);setError(null);}} disabled={Boolean(busyLead)||inlineLossBusy}
               className="rounded-lg border px-4 py-2 text-xs font-bold">Cancelar</button>
             <button type="button" onClick={()=>void saveLoss()}
-              disabled={Boolean(busyLead)||inlineLossBusy||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active)}
+              disabled={Boolean(busyLead)||inlineLossBusy||Boolean(inlineLossName.trim())||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active)}
               className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">
               {busyLead?'Salvando…':'Salvar perda'}
             </button>
