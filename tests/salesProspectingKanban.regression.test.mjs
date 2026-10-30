@@ -827,3 +827,22 @@ test('suggested calls remain read-only and honor historic attempts and actual sa
   assert.match(kanban,/const callEnabled=\(_lead:Lead,_ch:'phone'\|'whatsapp_call'\)=>!busyLead/);
   assert.doesNotMatch(kanban,/POST.*schedule.*suggestion/);
 });
+
+
+test('Kanban manual refresh reuses the paginated sales endpoint without reloading unrelated owner data', () => {
+  assert.match(superAdmin, /const refreshKanbanLeads = async \(\) =>/);
+  assert.match(superAdmin, /onRefresh=\{refreshKanbanLeads\}/);
+  assert.match(superAdmin, /setLeadRecoveryItems\(result\.data \|\| \[\]\)/);
+  assert.match(superAdmin, /setLeadNextPage\(2\)/);
+  const leanRefresh = superAdmin.split('const refreshKanbanLeads = async () => {')[1].split('const loadMoreLeads = async () => {')[0];
+  assert.doesNotMatch(leanRefresh, /\/api\/owner\/(?:stats|financial-overview|clients|financial-feature-surveys)/);
+  assert.doesNotMatch(leanRefresh, /fetchProtocolRequests|fetchDemoSandboxes/);
+});
+
+test('Acquisition catalog reuses one fetched result after save, without another catalog request', () => {
+  const editor = readFileSync('src/components/CommercialAcquisitionPanel.tsx', 'utf8');
+  assert.match(editor, /onChanged:\(channels:Channel\[\]\)=>Promise<void>/);
+  assert.match(editor, /return board\.channels\|\|\[\]/);
+  assert.match(editor, /onChanged\(await refresh\(\)\)/);
+  assert.match(kanban, /if\(channels\)\{[\s\S]*?setAcquisitionChannels\(channels\)/);
+});
