@@ -213,7 +213,13 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       </select>
     </label>
   );
-  const refreshAcquisitionCatalog=async()=>{
+  const refreshAcquisitionCatalog=async(channels?:Array<{id:string;name:string;is_active:boolean}>)=>{
+    // The acquisition editor has just loaded this catalog: reuse it, no duplicate HTTP/DB read.
+    if(channels){
+      setAcquisitionChannels(channels);
+      setAcquisitionCatalogUnavailable(false);
+      return;
+    }
     const result=await request('/api/owner/sales/acquisition/board');
     setAcquisitionChannels(result.channels||[]);
     setAcquisitionCatalogUnavailable(false);

@@ -9,7 +9,7 @@ type Metrics={
 const n=(x:number)=>Number(x||0).toLocaleString('pt-BR');
 const rate=(a:number,b:number)=>b?(a*100/b).toLocaleString('pt-BR',{maximumFractionDigits:1})+'%':'—';
 export function CommercialAcquisitionPanel({onClose,onChanged,refreshKey}:{
- onClose:()=>void;onChanged:()=>Promise<void>;refreshKey:number;
+ onClose:()=>void;onChanged:(channels:Channel[])=>Promise<void>;refreshKey:number;
 }){
  const [channels,setChannels]=useState<Channel[]>([]);
  const [metrics,setMetrics]=useState<Metrics[]>([]);
@@ -36,6 +36,7 @@ export function CommercialAcquisitionPanel({onClose,onChanged,refreshKey}:{
    request('/api/owner/sales/acquisition/metrics'),
   ]);
   setChannels(board.channels||[]);setMetrics(report.metrics||[]);
+  return board.channels||[];
  };
  useEffect(()=>{
   let live=true;setLoading(true);
@@ -54,7 +55,7 @@ export function CommercialAcquisitionPanel({onClose,onChanged,refreshKey}:{
   try{
    await request('/api/owner/sales/acquisition/channels',{method:'POST',
      body:JSON.stringify({name:name.trim()})});
-   setName('');await refresh();await onChanged();
+   setName('');await onChanged(await refresh());
    setMessage('Canal cadastrado. Já aparece em todos os cards, sem atualizar a página.');
   }catch(e:any){setError(e.message||'Não foi possível cadastrar o canal.');}
   finally{setBusy(false);}
@@ -64,7 +65,7 @@ export function CommercialAcquisitionPanel({onClose,onChanged,refreshKey}:{
   try{
    await request('/api/owner/sales/acquisition/channels/'+ch.id,{
      method:'PATCH',body:JSON.stringify({active:!ch.is_active})});
-   await refresh();await onChanged();
+   await onChanged(await refresh());
    setMessage(ch.is_active?'Canal desativado. Seleções anteriores preservadas.':'Canal reativado para novos registros.');
   }catch(e:any){setError(e.message||'Não foi possível alterar o canal.');}
   finally{setBusy(false);}
