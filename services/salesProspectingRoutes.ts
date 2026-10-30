@@ -1,5 +1,6 @@
 import { registerSalesAcquisitionRoutes } from './salesAcquisitionRoutes';
 import { registerSalesScriptRoutes } from './salesScriptRoutes';
+import { registerSalesLossReasonsRoutes } from './salesLossReasonsRoutes';
 // Verto CRM prospecting endpoints. Backend permission checks are mandatory.
 // The optional provided platform guard is server.ts's canonical MFA guard. In the
 // small-module bridge, use the same DB-backed active-platform-admin + TOTP checks.
@@ -48,6 +49,7 @@ export function registerSalesProspectingRoutes(
 
   registerSalesScriptRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
   registerSalesAcquisitionRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
+  registerSalesLossReasonsRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid});
 
   app.get('/api/owner/sales/prospecting/attempts', checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
     const leadIds = [...new Set(String(req.query?.leadIds || '').split(',').filter(Boolean))];
@@ -62,7 +64,7 @@ export function registerSalesProspectingRoutes(
           .in('lead_id', leadIds)
           .order('occurred_at', { ascending: false })
           .limit(1000),
-        supabase.from('sales_leads').select('id,status,lost_at')
+        supabase.from('sales_leads').select('id,status,lost_at,loss_reason_id')
           .in('id', leadIds).is('deleted_at', null).limit(100),
         supabase.from('sales_contact_followups')
           .select('id,lead_id,contact_due_at,status')
@@ -231,12 +233,14 @@ export function registerSalesProspectingRoutes(
       const leadId = sanitizeString(req.params?.leadId, 120);
       const key = sanitizeString(req.headers?.['x-idempotency-key'], 120);
       const actorId = sanitizeString(req.session?.user?.id, 120);
-      if (!isUuid(leadId) || !isUuid(actorId) || key.length < 12 || key.length > 120) {
-        return res.status(400).json({ success: false, error: 'Ação inválida.' });
+      const reasonId = sanitizeString(req.body?.reasonId,120);
+      if (!isUuid(leadId) || !isUuid(actorId) || !isUuid(reasonId) ||
+          key.length < 12 || key.length > 120) {
+        return res.status(400).json({ success: false, error: 'Selecione um motivo de perda antes de salvar.' });
       }
       try {
-        const { data, error } = await supabase.rpc('mark_sales_prospecting_lead_lost_v1', {
-          p_lead_id: leadId, p_action_key: key, p_actor_user_id: actorId,
+        const { data, error } = await supabase.rpc('mark_sales_lead_lost_with_reason_v1', {
+          p_lead_id: leadId, p_reason_id: reasonId, p_action_key: key, p_actor_user_id: actorId,
         });
         if (error) {
           const message = String(error.message || '');
@@ -244,6 +248,8 @@ export function registerSalesProspectingRoutes(
           if (message.includes('CONVERTED_LEAD_CANNOT_BE_LOST')) {
             return res.status(409).json({ success: false, error: 'Cliente convertido não pode ser perdido.' });
           }
+          if (/LOSS_REASON_UNAVAILABLE|IDEMPOTENCY_CONFLICT/.test(message))
+            return res.status(409).json({success:false,error:'Motivo indisponível ou operação já utilizada. Atualize a lista.'});
           throw error;
         }
         return res.json({ success: true, data });
@@ -352,6 +358,10 @@ export function registerSalesProspectingRoutes(
     if (![leadId,columnId,actorId].every(isUuid) || key.length < 12)
       return res.status(400).json({success:false,error:'Movimentação inválida.'});
     try {
+      const target = await supabase.from('sales_kanban_columns').select('kind').eq('id',columnId).maybeSingle();
+      if(target.error)throw target.error;
+      if(target.data?.kind==='lost')
+        return res.status(409).json({success:false,error:'Selecione um motivo de perda antes de mover o card.'});
       const result = await supabase.rpc('move_sales_kanban_lead_v1',{
         p_lead_id:leadId,p_column_id:columnId,p_actor_id:actorId,p_action_key:key,
       });
@@ -488,11 +498,20 @@ export function registerSalesProspectingRoutes(
     const measure=sanitizeString(req.query?.measure,20);
     const offset=Number(req.query?.offset??0);
     if(!isUuid(actorId)||![7,30,90,365].includes(days)||
-      !['stage','overview','daily','cumulative','hour','weekday','channel','attempt'].includes(dimension)||
+      !['stage','overview','daily','cumulative','hour','weekday','channel','attempt','loss_reason'].includes(dimension)||
       !['leads','calls','conversations','failures','messages','attempted'].includes(measure)||
-      !value||value.length>40||!Number.isInteger(offset)||offset<0||offset>100000)
+      !value||value.length>40||!Number.isInteger(offset)||offset<0||offset>100000||
+      (dimension==='loss_reason'&&(measure!=='leads'||(value!=='none'&&!isUuid(value)))))
       return res.status(400).json({success:false,error:'Filtro do gráfico inválido.'});
     try{
+      if(dimension==='loss_reason'){
+        const result=await supabase.rpc('sales_loss_reason_drilldown_v1',{
+          p_actor_user_id:actorId,p_reason_id:value==='none'?null:value,p_offset:offset,p_limit:25
+        });
+        if(result.error)throw result.error;
+        res.setHeader('Cache-Control','private, no-store');
+        return res.json({success:true,data:result.data});
+      }
       const result=await supabase.rpc('sales_prospecting_drilldown_v1',{
         p_actor_user_id:actorId,p_days:days,p_dimension:dimension,p_value:value,
         p_measure:measure,p_offset:offset,p_limit:25,
@@ -512,10 +531,15 @@ export function registerSalesProspectingRoutes(
     if (![7,30,90,365].includes(days))
       return res.status(400).json({success:false,error:'Período inválido.'});
     try {
-      const result = await supabase.rpc('sales_prospecting_analytics_v1',{p_days:days});
-      if (result.error) throw result.error;
+      const actorId=sanitizeString(req.session?.user?.id,120);
+      if(!isUuid(actorId))return res.status(403).json({success:false,error:'Sem autorização.'});
+      const [result,lossReasons]=await Promise.all([
+        supabase.rpc('sales_prospecting_analytics_v1',{p_days:days}),
+        supabase.rpc('sales_loss_reasons_analytics_v1',{p_actor_user_id:actorId})
+      ]);
+      if (result.error||lossReasons.error) throw result.error||lossReasons.error;
       res.setHeader('Cache-Control','no-store, private');
-      return res.json({success:true,data:result.data});
+      return res.json({success:true,data:{...result.data,lossReasons:lossReasons.data||[]}});
     } catch { return boardError(res,'Inteligência comercial indisponível.'); }
   });
 
