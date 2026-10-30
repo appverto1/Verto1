@@ -31,6 +31,7 @@ const contexts=new Map<string,any>([
   ['a',{userId:'user-a',clinicId:'clinic-a',membershipId:'membership-a',role:'director',capabilities:new Set(caps),modules:new Set(modules)}],
   ['b',{userId:'user-b',clinicId:'clinic-a',membershipId:'membership-b',role:'director',capabilities:new Set(caps),modules:new Set(modules)}],
   ['other-clinic',{userId:'user-a',clinicId:'clinic-b',membershipId:'membership-c',role:'director',capabilities:new Set(caps),modules:new Set(modules)}],
+  ['therapist-min',{userId:'user-therapist',clinicId:'clinic-a',membershipId:'membership-therapist',role:'therapist',capabilities:new Set(['calendar.own.view','patient.list']),modules:new Set(['clinical_core'])}],
 ]);
 const rows=new Map<string,any>();let fail=false,dbDenied=false,rpcCalls=0;let number='+55 11 99999-0000';
 const supabase:any={
@@ -54,6 +55,11 @@ registerHelpCenterRoutes(app,{supabase,supportNumber:()=>number,
   noStoreDynamicResponse:(_req:any,res:any,next:any)=>{res.setHeader('Cache-Control','private, no-store');next();},
   checkAuth:(req:any,res:any,next:any)=>{const ctx=contexts.get(req.get('x-test-session'));if(!ctx)return res.sendStatus(401);req.session={user:{id:ctx.userId,clinicId:ctx.clinicId}};next();},
   requireClinicCapability:cap=>(req:any,res:any,next:any)=>{const ctx=contexts.get(req.get('x-test-session'));if(!ctx?.capabilities.has(cap))return res.sendStatus(403);req.authorizationContext=ctx;next();},
+  requireAnyClinicCapability:(...keys:string[])=>(req:any,res:any,next:any)=>{
+    const ctx=contexts.get(req.get('x-test-session'));
+    if(!ctx||!keys.some(key=>ctx.capabilities.has(key)))return res.sendStatus(403);
+    req.authorizationContext=ctx;next();
+  },
   currentClinicId:user=>user?.clinicId||null
 });
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');const address=server.address() as any;const base=`http://127.0.0.1:${address.port}`;
@@ -64,6 +70,7 @@ const call=async(path:string,session='a',body?:any,headers:any={})=>{
 try{
   assert.equal((await call('/api/help/catalog','invalid')).status,401);
   const catalog=await call('/api/help/catalog');assert.equal(catalog.status,200);assert.ok(!catalog.text.includes(number));
+  assert.equal((await call('/api/help/catalog','therapist-min')).status,200,'therapist without clinic.view can open tutorial');
   const topic=catalog.body().articles.find((a:any)=>a.articleId==='agenda-confirmar');
   const body={articleId:topic.articleId,contentRevision:topic.contentRevision,contextKey:catalog.body().contextKey};
   let response=await call('/api/help/support','a',body);assert.equal(response.status,200);assert.equal(response.body().completed,false);assert.ok(!response.text.includes(number));

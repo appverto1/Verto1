@@ -10164,14 +10164,14 @@ export const dataService = {
         ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {})
       };
 
-      const [clinicStateResponse, clinicTemplateResponse, patientsResponse] = await Promise.all([
+      // Workspace bootstrap must not request protected anamnesis data.
+      // Clinical screens fetch their template on demand with proper access.
+      const [clinicStateResponse, patientsResponse] = await Promise.all([
         fetch('/api/clinic/state', { headers: headersWithWorkspace, credentials: 'include' }),
-        fetch('/api/clinic/anamnesis-template', { headers: headersWithWorkspace, credentials: 'include' }),
         fetch(endpointWithLimit('/api/patients', 200), { headers: headersWithWorkspace, credentials: 'include' })
       ]);
 
       const clinicStateRes = await safeJson(clinicStateResponse);
-      const clinicTemplateRes = await safeJson(clinicTemplateResponse);
       const patientsRes = await safeJson(patientsResponse);
       const patientList = normalizePatientListResponse(patientsRes);
 
@@ -10346,7 +10346,7 @@ export const dataService = {
         patientListCanonical: true,
         data: {
           clinicState: clinicStateWithProtocolFallback,
-          clinicAnamnesisTemplate: clinicTemplateRes?.data || {},
+          clinicAnamnesisTemplate: {},
           patients,
           notes: [],
           history: [],

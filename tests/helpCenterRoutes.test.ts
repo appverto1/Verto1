@@ -7,12 +7,14 @@ const app:any={get:(path:string,...handlers:Handler[])=>routes.set(path,handlers
 const pass:Handler=(_req,_res,next)=>next?.();
 const checkAuth:Handler=(req,res,next)=>req.session?.user?next?.():res.status(401).json({error:'AUTH_REQUIRED'});
 const requireClinicCapability=(_cap:string):Handler=>(req,res,next)=>req.authorizationContext?.capabilities?.has('clinic.view')?next?.():res.status(403).json({error:'FORBIDDEN'});
+const requireAnyClinicCapability=(...caps:string[]):Handler=>(req,res,next)=>
+  caps.some(c=>req.authorizationContext?.capabilities?.has(c))?next?.():res.status(403).json({error:'FORBIDDEN'});
 const media={mediaId:'restricted-video-v1',status:'published' as const,classification:'restricted_operational' as const,kind:'video' as const,objectKey:'v1/restricted-video.mp4',mimeType:'video/mp4' as const,bytes:1024,width:1280,height:720,durationSeconds:8,codec:'h264' as const,container:'mp4' as const};
 const article={articleId:'restricted-v1',slug:'ops/restricted',status:'published' as const,title:'Operação restrita',theme:'Operação',summary:'Restrito',keywords:[],steps:['Faça com autorização.'],audiences:['biller'],requiredCapabilities:['help.restricted.view'],requiredModules:[],mediaIds:[media.mediaId]};
 let signed=0;
 registerHelpCenterRoutes(app,{
  supabase:{storage:{from:()=>({createSignedUrl:async()=>{signed++;return {data:{signedUrl:'https://signed.invalid/object'},error:null};}})}},
- noStoreDynamicResponse:pass,checkAuth,requireClinicCapability,
+ noStoreDynamicResponse:pass,checkAuth,requireClinicCapability,requireAnyClinicCapability,
  currentClinicId:(user:any)=>user?.clinicId==='clinic-a'?'clinic-a':null,
  projectArticles:(audience:string,capabilities:readonly string[])=>audience==='biller'&&capabilities.includes('help.restricted.view')?[article]:[],
  resolveMedia:(id:string)=>id===media.mediaId?media:null
@@ -21,10 +23,19 @@ const invoke=async(path:string,req:any)=>{
  let status=200,body:any,headers:any={}; const res:any={status:(v:number)=>{status=v;return res;},json:(v:any)=>{body=v;return res;},setHeader:(k:string,v:string)=>{headers[k]=v;},end:()=>res};
  const stack=routes.get(path)!; let index=-1; const next=async()=>{index++; if(index<stack.length)await stack[index](req,res,next);}; await next(); return {status,body,headers};
 };
-const baseReq={params:{mediaId:media.mediaId},headers:{},session:{user:{role:'biller',clinicId:'clinic-a',activeAccessContext:{clinicName:'Clínica A'}}},authorizationContext:{role:'biller',clinicName:'Clínica A',capabilities:new Set(['clinic.view','help.restricted.view']),modules:new Set()}};
+const baseReq={params:{mediaId:media.mediaId},headers:{},session:{user:{id:'user-a',role:'biller',clinicId:'clinic-a',activeAccessContext:{clinicName:'Clínica A'}}},authorizationContext:{userId:'user-a',membershipId:'membership-a',clinicId:'clinic-a',role:'biller',clinicName:'Clínica A',capabilities:new Set(['billing.sessions.view','help.restricted.view']),modules:new Set()}};
 assert.equal((await invoke('/api/help/media/:mediaId',{...baseReq,session:{}})).status,401,'no session denied');
 assert.equal((await invoke('/api/help/media/:mediaId',{...baseReq,session:{user:{role:'biller',clinicId:'clinic-b'}}})).status,403,'cross-clinic context denied');
-assert.equal((await invoke('/api/help/media/:mediaId',{...baseReq,authorizationContext:{role:'biller',capabilities:new Set(['clinic.view']),modules:new Set()}})).status,404,'restricted media hidden without article capability');
+assert.equal((await invoke('/api/help/media/:mediaId',{...baseReq,authorizationContext:{...baseReq.authorizationContext,capabilities:new Set(['billing.sessions.view'])}})).status,404,'restricted media hidden without article capability');
+assert.equal((await invoke('/api/help/catalog',{...baseReq,authorizationContext:{...baseReq.authorizationContext,capabilities:new Set(['billing.sessions.view'])}})).status,200,'help opens without clinic.view for biller');
+for(const [role,capability] of [['therapist','calendar.own.view'],['receptionist','patient.list'],['supervisor','clinical.record.view'],['coordinator','patient.list'],['director','team.view']]){
+  const response=await invoke('/api/help/catalog',{...baseReq,session:{user:{id:'user-a',clinicId:'clinic-a',role}},
+    authorizationContext:{...baseReq.authorizationContext,role,capabilities:new Set([capability])}});
+  assert.equal(response.status,200,role+' tutorials must not require clinic.view');
+}
+assert.equal((await invoke('/api/help/catalog',{...baseReq,authorizationContext:{...baseReq.authorizationContext,membershipId:''}})).status,403,'inactive/unknown membership fails closed');
+assert.equal((await invoke('/api/help/catalog',{...baseReq,authorizationContext:{...baseReq.authorizationContext,clinicId:'clinic-b'}})).status,403,'clinic context mismatch denied');
+assert.equal((await invoke('/api/help/catalog',{...baseReq,authorizationContext:{...baseReq.authorizationContext,capabilities:new Set()}})).status,403,'missing verified capability context denied');
 const catalog=await invoke('/api/help/catalog',baseReq);
 assert.equal(catalog.status,200); assert.equal(catalog.body.clinicId,'clinic-a'); assert.equal(catalog.body.clinicName,'Clínica A');
 const allowed=await invoke('/api/help/media/:mediaId',baseReq);
@@ -33,3 +44,38 @@ const ranged=await invoke('/api/help/media/:mediaId',{...baseReq,headers:{range:
 assert.equal(ranged.status,307,'Range request redirects preserving GET/Range semantics'); assert.equal(ranged.headers.Location,'https://signed.invalid/object'); assert.equal(ranged.headers['Accept-Ranges'],'bytes'); assert.equal(ranged.headers['Cache-Control'],'private, no-store'); assert.equal(signed,2);
 assert.equal((await invoke('/api/help/media/:mediaId',{...baseReq,params:{mediaId:'../secret'}})).status,404,'arbitrary path denied');
 console.log('helpCenterRoutes.test: PASS');
+
+
+const legacyRoutes=new Map<string,Handler[]>();
+const legacyApp:any={
+ get:(path:string,...handlers:Handler[])=>legacyRoutes.set(path,handlers),
+ post:(path:string,...handlers:Handler[])=>legacyRoutes.set(path,handlers)
+};
+registerHelpCenterRoutes(legacyApp,{
+ supabase:{storage:{from:()=>({createSignedUrl:async()=>({data:null,error:null})})}},
+ noStoreDynamicResponse:pass,checkAuth,
+ requireClinicCapability:(capability:string):Handler=>(req,res,next)=>{
+   if(req.authorizationContext?.capabilities?.has(capability))return next?.();
+   return res.status(403).json({error:'CLINIC_CAPABILITY_DENIED'});
+ },
+ currentClinicId:(user:any)=>user?.clinicId==='clinic-a'?'clinic-a':null,
+ projectArticles:()=>[]
+} as any);
+let legacyStatus=200;
+const legacyReq={
+ ...baseReq,
+ authorizationContext:{...baseReq.authorizationContext,
+   role:'therapist',capabilities:new Set(['patient.list'])}
+};
+const legacyResponse:any={
+ status:(code:number)=>{legacyStatus=code;return legacyResponse;},
+ json:()=>legacyResponse
+};
+const legacyStack=legacyRoutes.get('/api/help/catalog')||[];
+let legacyIndex=-1;
+const legacyNext=async()=>{
+ legacyIndex++;
+ if(legacyIndex<legacyStack.length)await legacyStack[legacyIndex](legacyReq,legacyResponse,legacyNext);
+};
+await legacyNext();
+assert.equal(legacyStatus,200,'legacy server mount works for therapist without clinic.view');
