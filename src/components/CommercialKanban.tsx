@@ -20,6 +20,10 @@ type Lead = {
   status: SalesLeadStatus; lostAt?: string | null; lossReasonId?:string|null; updatedAt?: string; createdAt?: string;
   legacyReadOnly?: boolean;
 };
+type DuplicateMatch = {
+  normalizedPhone:string|null; invalid:boolean; inBatch:boolean;
+  existing:{id:string;name:string|null;phone:string|null;status:string}|null;
+};
 type Column = {
   id: string; slug: string; kind: string; title: string; color: string;
   position: number; is_system: boolean;
@@ -153,6 +157,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   },[]);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
+  const [duplicateCheck,setDuplicateCheck] = useState<{draft:string;matches:DuplicateMatch[];error?:string}|null>(null);
+  const [duplicateCheckRetry,setDuplicateCheckRetry] = useState(0);
   const [bulkSelectedRows,setBulkSelectedRows]=useState<number[]>([]);
   const [bulkChannelsToApply,setBulkChannelsToApply]=useState<string[]>([]);
   const [bulkChannelsByRow,setBulkChannelsByRow]=useState<Record<number,string[]>>({});
@@ -382,6 +388,26 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   }, [visibleLeads,search]);
   const selected = visibleLeads.find(x=>x.id === selectedId) || null;
   const bulkPhones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+  const checkedDuplicates=duplicateCheck?.draft===phonesDraft&&!duplicateCheck.error?duplicateCheck.matches:null;
+  const blockedByDuplicate=Boolean(checkedDuplicates?.some(item=>item.invalid||item.inBatch||item.existing));
+  useEffect(()=>{
+    if(!creatingOpen||!bulkPhones.length||bulkPhones.length>100){
+      setDuplicateCheck(null);return;
+    }
+    let active=true;
+    setDuplicateCheck(null);
+    const timer=window.setTimeout(()=>{
+      void request('/api/owner/sales/kanban/opportunities/duplicates',{
+        method:'POST',body:JSON.stringify({phones:phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean)}),
+      }).then(json=>{
+        if(active)setDuplicateCheck({draft:phonesDraft,matches:json.matches||[]});
+      }).catch((e:Error)=>{
+        if(active)setDuplicateCheck({draft:phonesDraft,matches:[],error:e.message||'Verificação indisponível.'});
+      });
+    },350);
+    return()=>{active=false;window.clearTimeout(timer);};
+  },[creatingOpen,phonesDraft,duplicateCheckRetry]);
+
   const feedbackFor=(leadId:string)=>cardFeedback?.leadId===leadId?cardFeedback:null;
   const cardInfo=(leadId:string,info:string)=>setCardFeedback({leadId,info});
   const cardError=(leadId:string,error:string)=>setCardFeedback({leadId,error});
@@ -477,6 +503,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const createOpportunities = async () => {
     const phones=bulkPhones;
     if(!phones.length||phones.length>100){setError('Informe de 1 a 100 números, separados por linha, vírgula ou ponto e vírgula.');return;}
+    if(!checkedDuplicates||checkedDuplicates.length!==phones.length||blockedByDuplicate){
+      setError('Revise os números destacados antes de salvar. Nenhum registro será sobrescrito.');return;
+    }
     const channelsByPhone=phones.map((_,index)=>bulkChannelsByRow[index]||[]);
     if(acquisitionCatalogUnavailable&&channelsByPhone.some(ids=>ids.length)){
       setError('Canais indisponíveis. Atualize antes de classificar o lote.');return;
@@ -499,7 +528,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
       setGlobalFollowupFilter('all');setColumnFollowupFilters({});
       setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
       setInfo((json.leads||[]).length+' oportunidade(s) cadastrada(s) com as origens selecionadas.');
-    }catch(e:any){setError(e.message||'Não foi possível cadastrar oportunidades.');}
+    }catch(e:any){
+      setError(e.message||'Não foi possível cadastrar oportunidades.');
+      // Another owner session may have registered a phone after our preview.
+      if(/repetido|cadastrado/i.test(String(e.message||'')))setDuplicateCheckRetry(v=>v+1);
+    }
     finally{setCreatingBusy(false);}
   };
   const saveLeadDetails = async () => {
@@ -1404,7 +1437,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                 placeholder={'11 99999-9999\n21 98888-8888'}
                 className="mt-2 w-full rounded-lg border border-slate-200 p-3 font-mono text-sm focus:border-violet-500"/>
             </label>
-            <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. Duplicados não criam registros parciais.</p>
+            <p className="mt-1 text-xs text-slate-500">Separe por linha, vírgula ou ponto e vírgula. A verificação consulta todo o cadastro, não apenas os cards carregados.</p>
+            {bulkPhones.length>0&&<div role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950">
+              {bulkPhones.length>100?'Máximo de 100 telefones por cadastro.':
+                duplicateCheck?.draft===phonesDraft&&duplicateCheck.error?
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>Não foi possível verificar duplicidades: {duplicateCheck.error}</span>
+                  <button type="button" onClick={()=>setDuplicateCheckRetry(v=>v+1)} className="font-bold underline">Tentar novamente</button>
+                </div>:
+                !checkedDuplicates?'Verificando telefones existentes…':
+                blockedByDuplicate?
+                  <strong>{checkedDuplicates.filter(item=>item.invalid||item.inBatch||item.existing).length} número(s) exigem revisão. Corrija ou remova os repetidos para salvar.</strong>:
+                  <span className="font-semibold text-emerald-800">Nenhum telefone repetido encontrado no cadastro ou neste lote.</span>}
+            </div>}
             {bulkPhones.length>0&&<div className="mt-4 rounded-xl border border-indigo-200 bg-indigo-50/50 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <strong className="text-xs text-indigo-950">{bulkPhones.length} contato(s) · {bulkSelectedRows.length} selecionado(s)</strong>
@@ -1447,10 +1492,19 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
                         [...old,index]:old.filter(i=>i!==index))}
                       className="h-4 w-4 accent-indigo-700"/>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">{index+1}. {phone}</span>
+                    {checkedDuplicates?.[index]?.invalid&&<span className="text-[11px] font-bold text-red-700">Inválido</span>}
+                    {checkedDuplicates?.[index]?.inBatch&&<span className="text-[11px] font-bold text-amber-700">Repetido no lote</span>}
+                    {checkedDuplicates?.[index]?.existing&&<span className="text-[11px] font-bold text-red-700">Já cadastrado</span>}
                     <span className="max-w-[48%] truncate text-[11px] text-indigo-700">
                       {(bulkChannelsByRow[index]||[]).map(id=>acquisitionChannels.find(c=>c.id===id)?.name||'Canal histórico').join(', ')||'Sem canal'}
                     </span>
                   </div>
+                  {checkedDuplicates?.[index]?.existing&&<p className="mt-1 pl-6 text-[11px] text-red-800">
+                    Cadastro existente: {checkedDuplicates[index].existing?.name||'Sem nome'} · {checkedDuplicates[index].existing?.phone||phone} ·
+                    {' '+(SALES_LEAD_STATUS_LABELS[checkedDuplicates[index].existing!.status as SalesLeadStatus]||checkedDuplicates[index].existing?.status)}
+                    {leads.some(lead=>lead.id===checkedDuplicates[index].existing?.id)&&<button type="button" className="ml-2 font-bold underline"
+                      onClick={()=>{const existingId=checkedDuplicates[index].existing!.id;setCreatingOpen(false);openCard(existingId);}}>Abrir card</button>}
+                  </p>}
                   <details className="mt-1 pl-6 text-xs">
                     <summary className="cursor-pointer font-semibold text-violet-700">Editar canais deste contato</summary>
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
@@ -1476,7 +1530,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           </div>
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} className="rounded-lg border px-4 py-2 text-sm">Cancelar</button>
-            <button type="button" disabled={creatingBusy||!phonesDraft.trim()} onClick={()=>void createOpportunities()}
+            <button type="button" disabled={creatingBusy||!phonesDraft.trim()||!checkedDuplicates||checkedDuplicates.length!==bulkPhones.length||blockedByDuplicate} onClick={()=>void createOpportunities()}
               className="flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50"><Check size={15}/> {creatingBusy?'Salvando...':'Salvar oportunidades'}</button>
           </div>
         </div>
