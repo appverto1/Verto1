@@ -19,7 +19,11 @@ test('sales migration uses balanced PL/pgSQL bodies with a transactional wrapper
 test('sales attempts stay private behind server authority and MFA middleware', () => {
   assert.match(routes, /checkAuth, checkPlatformAdmin/);
   assert.match(routes, /record_sales_prospecting_attempt_v1/);
-  assert.match(routes, /mark_sales_prospecting_lead_lost_v1/);
+  // Existing manual-loss route now requires a chosen reason and uses one atomic
+  // server-side RPC; the older function remains only for legacy compatibility.
+  assert.match(routes, /mark_sales_lead_lost_with_reason_v1/);
+  assert.match(routes, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
+  assert.match(routes, /target\.data\?\.kind==='lost'/);
   assert.match(sql, /revoke all on public\.sales_prospecting_attempts from public, anon, authenticated;/);
   assert.match(sql, /grant execute on function public\.record_sales_prospecting_attempt_v1\([^;]+to service_role;/s);
   assert.doesNotMatch(sql, /to authenticated;/i);
