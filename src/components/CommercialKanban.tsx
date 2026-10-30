@@ -119,6 +119,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
   const [lossReasons,setLossReasons]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
   const [lossDialog,setLossDialog]=useState<{leadId:string}|null>(null);
   const [lossReasonDraft,setLossReasonDraft]=useState('');
+  const [inlineLossName,setInlineLossName]=useState('');
+  const [inlineLossBusy,setInlineLossBusy]=useState(false);
+  const [inlineLossError,setInlineLossError]=useState<string|null>(null);
   const [lossCatalogUnavailable,setLossCatalogUnavailable]=useState(false);
   const [lossSettingsOpen,setLossSettingsOpen]=useState(false);
   const [lossSettingsBusy,setLossSettingsBusy]=useState(false);
@@ -782,7 +785,28 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
     setLossDialog({leadId:lead.id});
     setError(null);
   };
+  useEffect(()=>{
+    setInlineLossName('');
+    setInlineLossError(null);
+  },[lossDialog?.leadId]);
+  const createInlineLossReason=async()=>{
+    const name=inlineLossName.trim();
+    if(inlineLossBusy||busyLead||name.length<2||name.length>100)return;
+    setInlineLossBusy(true);setInlineLossError(null);
+    try{
+      const json=await request('/api/owner/sales/loss-reasons',{
+        method:'POST',body:JSON.stringify({name}),
+      });
+      setLossReasons(old=>[...old.filter(reason=>reason.id!==json.reason.id),json.reason].sort((a,b)=>
+        Number(b.is_active)-Number(a.is_active)||a.name.localeCompare(b.name,'pt-BR')));
+      setLossReasonDraft(json.reason.id);
+      setInlineLossName('');
+      // Catalog creation is persisted separately; the lead stays unchanged until Save loss.
+    }catch(e:any){setInlineLossError(e.message||'Não foi possível cadastrar o motivo.');}
+    finally{setInlineLossBusy(false);}
+  };
   const saveLoss=async()=>{
+    if(inlineLossBusy)return;
     const id=lossDialog?.leadId;
     if(!id||!lossReasonDraft||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active))return;
     const keyName='lost:'+id+':'+lossReasonDraft;
@@ -1395,7 +1419,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
 
       {lossDialog&&<div className="fixed inset-0 z-[195] flex items-center justify-center bg-slate-950/60 p-4"
         role="dialog" aria-modal="true" aria-label="Selecionar motivo da perda">
-        <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-2xl">
+        <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl">
           <h3 className="text-base font-black">Por que a oportunidade foi perdida?</h3>
           <p className="mt-1 text-xs text-slate-600">O motivo é obrigatório. Só o botão Salvar confirma a perda ou altera a justificativa.</p>
           <select aria-label="Motivo da perda" value={lossReasonDraft} onChange={e=>setLossReasonDraft(e.target.value)}
@@ -1403,14 +1427,30 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             <option value="">Selecione um motivo</option>
             {lossReasons.filter(r=>r.is_active).map(r=><option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
-          {lossCatalogUnavailable&&<p role="alert" className="mt-2 text-xs text-red-700">Não foi possível carregar os motivos. Feche e abra o catálogo para tentar novamente.</p>}
-          {!lossReasons.some(r=>r.is_active)&&!lossCatalogUnavailable&&<p className="mt-2 text-xs text-amber-700">Cadastre primeiro um motivo no botão Motivos de perda.</p>}
+          <div className="mt-4 rounded-lg border border-violet-200 bg-violet-50/50 p-3">
+            <label className="block text-xs font-bold text-violet-900">
+              Não encontrou o motivo? Cadastre aqui
+              <input type="text" maxLength={100} value={inlineLossName} disabled={inlineLossBusy||Boolean(busyLead)}
+                onChange={e=>{setInlineLossName(e.target.value);setInlineLossError(null);}}
+                placeholder="Ex.: Sem orçamento disponível"
+                className="mt-2 block w-full rounded-lg border border-violet-200 bg-white p-2.5 text-sm font-normal"/>
+            </label>
+            <button type="button" disabled={inlineLossBusy||Boolean(busyLead)||inlineLossName.trim().length<2}
+              onClick={()=>void createInlineLossReason()}
+              className="mt-2 rounded-lg bg-violet-700 px-3 py-2 text-xs font-bold text-white disabled:opacity-40">
+              {inlineLossBusy?'Cadastrando…':'Cadastrar motivo e selecionar'}
+            </button>
+            <p className="mt-2 text-[11px] text-slate-600">O motivo será incluído no catálogo e selecionado automaticamente. A oportunidade só será marcada como perdida ao clicar em Salvar perda.</p>
+            {inlineLossError&&<p role="alert" className="mt-2 text-xs text-red-700">{inlineLossError}</p>}
+          </div>
+          {lossCatalogUnavailable&&<p role="alert" className="mt-2 text-xs text-red-700">Não foi possível carregar os motivos existentes. Você pode tentar cadastrar um novo motivo.</p>}
+          {!lossReasons.some(r=>r.is_active)&&!lossCatalogUnavailable&&<p className="mt-2 text-xs text-amber-700">Nenhum motivo cadastrado. Crie o primeiro motivo acima.</p>}
           {error&&<p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
           <div className="mt-5 flex justify-end gap-2">
-            <button type="button" onClick={()=>{setLossDialog(null);setError(null);}} disabled={Boolean(busyLead)}
+            <button type="button" onClick={()=>{setLossDialog(null);setError(null);}} disabled={Boolean(busyLead)||inlineLossBusy}
               className="rounded-lg border px-4 py-2 text-xs font-bold">Cancelar</button>
             <button type="button" onClick={()=>void saveLoss()}
-              disabled={Boolean(busyLead)||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active)}
+              disabled={Boolean(busyLead)||inlineLossBusy||!lossReasons.some(r=>r.id===lossReasonDraft&&r.is_active)}
               className="rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">
               {busyLead?'Salvando…':'Salvar perda'}
             </button>
