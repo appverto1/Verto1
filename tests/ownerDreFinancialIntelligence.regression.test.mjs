@@ -44,7 +44,7 @@ test('gráficos comerciais estão exclusivamente na aba de inteligência do Come
 
 test('DRE apresenta visão financeira, evolução, planos/clínicas e custos sem novas consultas', () => {
   for(const mode of ['overview','evolution','customers','costs']){
-    assert.match(dashboard,new RegExp("view=\\""+mode+"\\""));
+    assert.ok(dashboard.includes('view="' + mode + '"'), 'DRE view missing: ' + mode);
   }
   assert.match(dashboard,/aria-label="Seções do DRE"/);
   assert.match(intelligence,/Demonstrativo de resultados por mês/);
