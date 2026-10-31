@@ -1160,13 +1160,13 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               <MetricCard title="Receita bruta" value={formatCurrency(summary.revenueGross)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
               <MetricCard title="Custos variáveis" value={formatCurrency(summary.variableCosts)} icon={<BarChart3 size={20}/>} color="bg-amber-500"/>
               <MetricCard title="Custos fixos" value={formatCurrency(summary.fixedCosts)} icon={<BarChart3 size={20}/>} color="bg-indigo-500"/>
-              <MetricCard title="Margem de contribuição" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
-              <MetricCard title="EBITDA" value={formatCurrency(summary.ebitda)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
+              <MetricCard title="Margem de contribuição (custos cadastrados)" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
+              <MetricCard title="EBITDA gerencial" value={formatCurrency(summary.ebitda)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
               <MetricCard title="Despesas abaixo do EBITDA" value={formatCurrency(summary.belowEbitdaCosts)} icon={<BarChart3 size={20}/>} color="bg-violet-500"/>
               <MetricCard title="Resultado após custos" value={formatCurrency(summary.netResult)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
               <MetricCard title="Fluxo de caixa estimado" value={formatCurrency(summary.cashFlowEstimated)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
             </div>
-            <p className="text-xs text-slate-500">Receita = faturas pagas pelo valor integral. Os custos refletem as regras cadastradas e o resultado não representa caixa conciliado. Margem de contribuição = (receita − custos variáveis operacionais) / receita; margem EBITDA = (receita − custos variáveis − custos fixos operacionais) / receita.</p>
+            <p className="text-xs text-slate-500">Receita = faturas pagas pelo valor integral. Apenas custos de ferramentas e serviços cadastrados e salvos neste DRE entram no cálculo; as simulações de módulos comerciais não entram. Os resultados são gerenciais e não representam caixa conciliado. Margem de contribuição = (receita − custos variáveis operacionais) / receita; margem EBITDA = (receita − custos variáveis − custos fixos operacionais) / receita.</p>
             {dreView==='overview' && <OwnerDreIntelligence financial={financial} view="overview"/>}
             {dreView==='evolution' && <div className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
