@@ -66,7 +66,12 @@ test('Salvar custo mantém autoridade da persistência e atualização sem F5', 
   assert.match(costPanel,/await request\(editing\?/);
   assert.match(costPanel,/await onChanged\(\)/);
   assert.match(costPanel,/setNotice\('Custo salvo\. DRE e gráficos atualizados sem F5\.'\)/);
-  assert.match(intelligence,/custos efetivamente cadastrados/);
+  assert.match(intelligence,/cadastrados e salvos manualmente por você no DRE/);
+  assert.match(intelligence,/Custos estimados de módulos do simulador comercial nunca entram/);
+  assert.match(costPanel,/Custos calculados para avaliar vendas de módulos não entram neste DRE/);
+  assert.match(readModel,/calculateOwnerDreCosts\(rules,perClinic,m\.periodMonth\)/);
+  assert.match(readModel,/\.from\('platform_dre_cost_rules'\)/);
+  assert.doesNotMatch(readModel,/sales_offer_simulations|sales_financial_assumption_sets|sales_modular_cost_drivers/);
 });
 
 console.log('ownerDreFinancialIntelligence.regression: PASS');
