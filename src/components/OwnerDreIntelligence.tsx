@@ -36,8 +36,8 @@ const axes = (
     <YAxis tick={{ fontSize: 11, fill: '#64748B' }} axisLine={false} tickLine={false} width={65} />
   </>
 );
-const moneyTooltip = (value: unknown, name: unknown) => [currency(value), String(name)];
-const pctTooltip = (value: unknown, name: unknown) => [percentage(value), String(name)];
+const moneyTooltip = (value: unknown, name: unknown): [string, string] => [currency(value), String(name)];
+const pctTooltip = (value: unknown, name: unknown): [string, string] => [percentage(value), String(name)];
 
 function Panel({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
   return <section className="min-w-0 rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
@@ -128,10 +128,10 @@ export function OwnerDreIntelligence({ financial, view }: Props) {
   if (view === 'overview') return <div className="space-y-5">
     <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
       <strong>Leitura da saúde financeira:</strong> receita realizada = faturas Stripe pagas pelo valor bruto;
-      margens e resultado consideram somente os custos efetivamente cadastrados no DRE.
+      margens e resultado consideram exclusivamente os custos das ferramentas e serviços cadastrados e salvos manualmente por você no DRE. Custos estimados de módulos do simulador comercial nunca entram nesta conta.
       EBITDA não é saldo bancário e o fluxo de caixa é uma estimativa, sem conciliação de repasses.
       {!ledger && <span className="block mt-1 font-semibold">Base de faturas reais ainda indisponível: não interprete valores zerados como ausência de atividade.</span>}
-      {ledger && !(financial.costRules || []).length && <span className="block mt-1 font-semibold">Nenhum custo cadastrado: as margens podem estar superestimadas.</span>}
+      {ledger && !(financial.costRules || []).length && <span className="block mt-1 font-semibold">Nenhum custo de ferramenta cadastrado: as margens podem estar superestimadas.</span>}
     </div>
     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
       {([
