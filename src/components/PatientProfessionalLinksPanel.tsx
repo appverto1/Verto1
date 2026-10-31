@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, ChevronRight, Plus, UserRoundCheck, UserRoundX, UsersRound, X } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import {
@@ -382,8 +383,8 @@ export const PatientProfessionalLinksPanel = ({
         {error ? <p role="alert" className="mt-2 text-[11px] leading-4 text-rose-600">{error}</p> : null}
       </div>
 
-      {showManager ? (
-        <div className="fixed inset-0 z-[150]" role="presentation">
+      {showManager && typeof document !== 'undefined' ? createPortal(
+        <div className="fixed inset-0 z-[200]" role="presentation">
           <button type="button" aria-label="Fechar gerenciamento da equipe" onClick={() => { setShowManager(false); setShowForm(false); }} className="absolute inset-0 bg-slate-950/45" />
           <aside
             role="dialog"
@@ -622,12 +623,12 @@ export const PatientProfessionalLinksPanel = ({
               ) : null}
             </div>
           </aside>
-        </div>
+        </div>, document.body
       ) : null}
 
-      {pendingEndLink ? (
-        <div className="fixed inset-0 z-[160] flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="end-patient-professional-link-title">
-          <div className={`w-full max-w-md rounded-3xl border p-5 shadow-2xl ${dark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
+      {pendingEndLink && typeof document !== 'undefined' ? createPortal(
+        <div className="fixed inset-0 z-[210] flex items-center justify-center bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="end-patient-professional-link-title">
+          <div className={`max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto overscroll-contain rounded-3xl border p-5 shadow-2xl ${dark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}>
             <h3 id="end-patient-professional-link-title" className="text-lg font-semibold">Encerrar vínculo com {pendingEndLink.professional?.name || professionalById.get(String(pendingEndLink.professional_id || '').trim())?.name || 'este profissional'}?</h3>
             <p className={`mt-2 text-sm leading-6 ${dark ? 'text-slate-300' : 'text-slate-600'}`}>
               O profissional deixará de fazer parte da equipe ativa deste paciente. O histórico clínico e o vínculo encerrado serão preservados.
@@ -647,7 +648,7 @@ export const PatientProfessionalLinksPanel = ({
               </button>
             </div>
           </div>
-        </div>
+        </div>, document.body
       ) : null}
     </section>
   );
