@@ -1042,7 +1042,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   : activeTab === 'customers'
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
-                      ? (commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'Kanban comercial' : 'Leads e propostas')
+                      ? (commercialView === 'analytics' ? 'Inteligência comercial' : commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'Kanban comercial' : 'Leads e propostas')
                       : activeTab === 'simulation-settings'
                         ? 'Configurações financeiras'
                       : activeTab === 'demos'
