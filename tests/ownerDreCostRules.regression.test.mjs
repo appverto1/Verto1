@@ -55,4 +55,12 @@ assert.match(sql,/'aal2'/);
 assert.match(sql,/on conflict\(request_id\) do nothing/);
 assert.match(sql,/DRE_CLOSED_PERIOD_IMMUTABLE/);
 assert.match(gate,/tests\/ownerDreCostRules\.regression\.test\.mjs/);
+
+// DRE hover labels are public-facing pt-BR; calculations and field keys stay unchanged.
+const dreChart = dashboard.split('Composicao do DRE Mensal</h3>')[1]?.split('Inadimplencia por Mes</h3>')[0];
+assert.ok(dreChart, 'Gráfico DRE mensal deve estar presente.');
+assert.match(dreChart, /<Bar dataKey="revenueGross" name="Receita bruta"/);
+assert.match(dreChart, /<Bar dataKey="variableCosts" name="Custos variáveis"/);
+assert.match(dreChart, /<Bar dataKey="fixedCosts" name="Custos fixos"/);
+assert.match(dreChart, /<Tooltip formatter=\{\(value: any\) => formatCurrency\(Number\(value\)\)\} \/>/);
 console.log('ownerDreCostRules.regression: PASS');

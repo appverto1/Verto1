@@ -1173,9 +1173,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(value: any) => formatCurrency(Number(value))} />
-                      <Bar dataKey="revenueGross" fill="#0EA5E9" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="variableCosts" fill="#F59E0B" radius={[8, 8, 0, 0]} />
-                      <Bar dataKey="fixedCosts" fill="#6366F1" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="revenueGross" name="Receita bruta" fill="#0EA5E9" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="variableCosts" name="Custos variáveis" fill="#F59E0B" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="fixedCosts" name="Custos fixos" fill="#6366F1" radius={[8, 8, 0, 0]} />
                     </BarChart>
                   </SafeResponsiveContainer>
                 </div>
