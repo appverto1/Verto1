@@ -29,21 +29,21 @@ export function OwnerDreCostsPanel({rules,onChanged}:{
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const requestIdRef=useRef<string|null>(null);
-  const update=(patch:Partial<ReturnType<typeof newDraft>>)=>setDraft(d=>({...d,...patch}));
+  const update=(patch:Partial<ReturnType<typeof newDraft>>)=>{requestIdRef.current=null;setDraft(d=>({...d,...patch}));};
   const reset=()=>{setEditing(null);setDraft(newDraft());requestIdRef.current=null;};
-  const request=async(_url:string,_method:'POST'|'PATCH',body:Record<string,unknown>)=>{
+  const request=async(url:string,method:'POST'|'PATCH',body:Record<string,unknown>)=>{
     const supabase=await getSupabase();
     const {data:{session}}=await supabase.auth.getSession();
-    if(!session?.access_token) throw new Error('Entre novamente na sua conta para salvar.');
-    const {data,error}=await supabase.rpc('save_owner_dre_cost_rule_v1',{
-      p_action:body.action || 'create',
-      p_payload:body,
-      p_rule_id:body.ruleId || null
+    if(!session?.access_token)throw new Error('Entre novamente na sua conta para salvar.');
+    const response=await fetch(url,{
+      method,credentials:'include',
+      headers:{'Content-Type':'application/json',Authorization:'Bearer '+session.access_token},
+      body:JSON.stringify(body),
     });
-    if(error) throw new Error(error.code==='42501'?'Confirme o segundo fator de autenticação para cadastrar custos.':
-      error.message.includes('DRE_CLOSED_PERIOD_IMMUTABLE')?'Para preservar meses encerrados, encerre o custo e crie outra vigência.':
-      'Não foi possível salvar o custo.');
-    return {success:true,id:data};
+    const result=await response.json().catch(()=>({}));
+    if(!response.ok || result.success!==true)
+      throw new Error(result.error||'Não foi possível salvar o custo.');
+    return result;
   };
   const save=async(e:React.FormEvent)=>{
     e.preventDefault();
@@ -63,7 +63,7 @@ export function OwnerDreCostsPanel({rules,onChanged}:{
       const body={name:draft.name.trim(),costType:draft.costType,category:draft.category,
         amountCents,rateBasisPoints,startsMonth:draft.startsMonth,requestId:requestIdRef.current};
       await request(editing?'/api/owner/dre/costs/'+encodeURIComponent(editing):'/api/owner/dre/costs',
-        editing?'PATCH':'POST',editing?{...body,action:'update',ruleId:editing}:body);
+        editing?'PATCH':'POST',editing?{...body,action:'update'}:body);
       await onChanged();
       reset();
       setNotice('Custo salvo. DRE e gráficos atualizados sem F5.');
@@ -75,7 +75,7 @@ export function OwnerDreCostsPanel({rules,onChanged}:{
     if(!window.confirm('Encerrar '+rule.name+' a partir deste mês? Os meses anteriores serão preservados.'))return;
     setSaving(true);setError('');setNotice('');
     try{
-      await request('/api/owner/dre/costs/'+encodeURIComponent(rule.id),'PATCH',{action:'stop',ruleId:rule.id});
+      await request('/api/owner/dre/costs/'+encodeURIComponent(rule.id),'PATCH',{action:'stop'});
       await onChanged();
       if(editing===rule.id)reset();
       setNotice('Custo encerrado para o mês atual e os próximos.');
