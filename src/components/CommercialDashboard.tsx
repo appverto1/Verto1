@@ -185,7 +185,7 @@ export const CommercialDashboard = () => {
   return (
     <div className="space-y-6" aria-label="Inteligência e gráficos comerciais">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-[#141C34] p-5 text-white">
-        <div><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-300">Business intelligence · Verto</p>
+        <div><p className="text-xs font-bold uppercase tracking-[.16em] text-violet-300">Inteligência comercial · Verto</p>
           <h2 className="mt-1 text-2xl font-black">Inteligência comercial</h2>
           <p className="mt-1 text-xs text-slate-300">Indicadores das oportunidades visíveis no Kanban, sem limitação de paginação.</p></div>
         <div className="flex items-center gap-2">
