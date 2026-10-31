@@ -1054,7 +1054,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
           {activeTab !== 'aba-v3-rollout' && activeTab !== 'leads' && (
             <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
-              Fonte: {hasRealFinancialLedger ? 'Stripe + contratos reais' : 'sem dados fictícios'}
+              Fonte: {hasRealFinancialLedger ? (activeTab==='financial' ? 'Receitas Stripe · custos manuais' : 'Stripe + contratos reais') : 'sem dados fictícios'}
             </div>
           )}
         </div>
@@ -1196,7 +1196,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(value: any) => formatCurrency(Number(value))} />
-                      <Bar dataKey="delinquencyAmount" radius={[8, 8, 0, 0]}>
+                      <Bar dataKey="delinquencyAmount" name="Inadimplência" radius={[8, 8, 0, 0]}>
                         {monthlyData.map((_: any, index: number) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
