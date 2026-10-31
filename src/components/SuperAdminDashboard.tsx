@@ -41,6 +41,7 @@ import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel
 import { CommercialKanban } from './CommercialKanban';
 import { CommercialDashboard } from './CommercialDashboard';
 import { OwnerDreCostsPanel } from './OwnerDreCostsPanel';
+import { OwnerDreIntelligence } from './OwnerDreIntelligence';
 import { AbaV3RolloutControlCenter } from './AbaV3RolloutControlCenter';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
@@ -143,7 +144,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [allCustomers, setAllCustomers] = useState<any[]>([]);
   const [leadRecoveryItems, setLeadRecoveryItems] = useState<any[]>([]);
   const [leadSearch, setLeadSearch] = useState('');
-  const [commercialView, setCommercialView] = useState<'kanban'|'list'>('kanban');
+  const [commercialView, setCommercialView] = useState<'kanban'|'list'|'analytics'>('kanban');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const mobileMenuCloseRef = useRef<HTMLButtonElement | null>(null);
   const mobileMenuTriggerRef = useRef<HTMLButtonElement | null>(null);
@@ -167,7 +168,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     setActiveTab(tab);
     if (mobileMenuOpen) closeMobileMenu();
   };
-  const [financialView, setFinancialView] = useState<'dre'|'sales'>('dre');
+  const [dreView, setDreView] = useState<'overview'|'evolution'|'customers'|'costs'>('overview');
   const [leadNextPage, setLeadNextPage] = useState(2);
   const [leadTotal, setLeadTotal] = useState(0);
   const [loadingMoreLeads, setLoadingMoreLeads] = useState(false);
@@ -1041,7 +1042,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                   : activeTab === 'customers'
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
-                      ? (commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'Kanban comercial' : 'Leads e propostas')
+                      ? (commercialView === 'analytics' ? 'Inteligência comercial' : commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' ? 'Kanban comercial' : 'Leads e propostas')
                       : activeTab === 'simulation-settings'
                         ? 'Configurações financeiras'
                       : activeTab === 'demos'
@@ -1053,7 +1054,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
           {activeTab !== 'aba-v3-rollout' && activeTab !== 'leads' && (
             <div className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold">
-              Fonte: {hasRealFinancialLedger ? 'Stripe + contratos reais' : 'sem dados fictícios'}
+              Fonte: {hasRealFinancialLedger ? (activeTab==='financial' ? 'Receitas Stripe · custos manuais' : 'Stripe + contratos reais') : 'sem dados fictícios'}
             </div>
           )}
         </div>
@@ -1142,27 +1143,32 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         )}
 
         {activeTab === 'financial' && (
-          <div className="mb-5 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2">
-            <button onClick={()=>setFinancialView('dre')} className={'rounded-lg px-4 py-2 text-sm font-bold '+(financialView==='dre'?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}>DRE e EBITDA</button>
-            <button onClick={()=>setFinancialView('sales')} className={'flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold '+(financialView==='sales'?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}><BarChart3 size={15}/> Inteligência comercial · Gráficos</button>
-          </div>
-        )}
-        {activeTab === 'financial' && financialView === 'sales' && <CommercialDashboard />}
-        {activeTab === 'financial' && financialView === 'dre' && (
-          <div className="space-y-7">
+          <div className="space-y-5">
+            <nav aria-label="Seções do DRE" className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2">
+              {([
+                ['overview','Visão financeira'],
+                ['evolution','Evolução e demonstrativo'],
+                ['customers','Planos e clínicas'],
+                ['costs','Custos e regras'],
+              ] as const).map(([id,label])=>
+                <button key={id} type="button" aria-current={dreView===id?'page':undefined}
+                  onClick={()=>setDreView(id)}
+                  className={'rounded-lg px-4 py-2.5 text-sm font-bold transition '+(dreView===id?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}>{label}</button>
+              )}
+            </nav>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <MetricCard title="Receita bruta" value={formatCurrency(summary.revenueGross)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
               <MetricCard title="Custos variáveis" value={formatCurrency(summary.variableCosts)} icon={<BarChart3 size={20}/>} color="bg-amber-500"/>
               <MetricCard title="Custos fixos" value={formatCurrency(summary.fixedCosts)} icon={<BarChart3 size={20}/>} color="bg-indigo-500"/>
-              <MetricCard title="Margem de contribuição" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
-              <MetricCard title="EBITDA" value={formatCurrency(summary.ebitda)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
+              <MetricCard title="Margem de contribuição (custos cadastrados)" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
+              <MetricCard title="EBITDA gerencial" value={formatCurrency(summary.ebitda)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
               <MetricCard title="Despesas abaixo do EBITDA" value={formatCurrency(summary.belowEbitdaCosts)} icon={<BarChart3 size={20}/>} color="bg-violet-500"/>
               <MetricCard title="Resultado após custos" value={formatCurrency(summary.netResult)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
               <MetricCard title="Fluxo de caixa estimado" value={formatCurrency(summary.cashFlowEstimated)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
             </div>
-            <p className="text-xs text-slate-500">Receita = faturas pagas pelo valor integral. Fluxo de caixa estimado considera os custos cadastrados; não substitui conciliação bancária ou extrato de repasses Stripe.</p>
-            <OwnerDreCostsPanel rules={financial.costRules||[]} onChanged={refreshOwnerDre}/>
-
+            <p className="text-xs text-slate-500">Receita = faturas pagas pelo valor integral. Apenas custos de ferramentas e serviços cadastrados e salvos neste DRE entram no cálculo; as simulações de módulos comerciais não entram. Os resultados são gerenciais e não representam caixa conciliado. Margem de contribuição = (receita − custos variáveis operacionais) / receita; margem EBITDA = (receita − custos variáveis − custos fixos operacionais) / receita.</p>
+            {dreView==='overview' && <OwnerDreIntelligence financial={financial} view="overview"/>}
+            {dreView==='evolution' && <div className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Composicao do DRE Mensal</h3>
@@ -1190,7 +1196,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(value: any) => formatCurrency(Number(value))} />
-                      <Bar dataKey="delinquencyAmount" radius={[8, 8, 0, 0]}>
+                      <Bar dataKey="delinquencyAmount" name="Inadimplência" radius={[8, 8, 0, 0]}>
                         {monthlyData.map((_: any, index: number) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
@@ -1200,9 +1206,12 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                 </div>
               </div>
             </div>
-
+              <OwnerDreIntelligence financial={financial} view="evolution"/>
+            </div>}
+            {dreView==='customers' && <div className="space-y-6">
+              <OwnerDreIntelligence financial={financial} view="customers"/>
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
-              <h3 className="text-lg font-black mb-4">Top Clientes com Maior Prejuizo</h3>
+              <h3 className="text-lg font-black mb-4">Dez clínicas com menor resultado</h3>
               <div className="overflow-x-auto">
                 <table className="w-full text-left">
                   <thead>
@@ -1233,6 +1242,11 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                 </table>
               </div>
             </div>
+            </div>}
+            {dreView==='costs' && <div className="space-y-6">
+              <OwnerDreCostsPanel rules={financial.costRules||[]} onChanged={refreshOwnerDre}/>
+              <OwnerDreIntelligence financial={financial} view="costs"/>
+            </div>}
           </div>
         )}
 
@@ -1622,6 +1636,20 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           </div>
         )}
 
+        {activeTab === 'leads' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' && (
+          <nav aria-label="Abas comerciais" className="mb-4 flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-2">
+            {([
+              ['kanban','Kanban comercial'],
+              ['analytics','Inteligência comercial'],
+              ['list','Leads e propostas'],
+            ] as const).map(([id,label])=>
+              <button key={id} type="button" onClick={()=>setCommercialView(id)}
+                aria-current={commercialView===id?'page':undefined}
+                className={'rounded-lg px-4 py-2.5 text-sm font-bold '+(commercialView===id?'bg-[#10192D] text-white':'text-slate-600 hover:bg-slate-50')}>{label}</button>
+            )}
+          </nav>
+        )}
+        {activeTab === 'leads' && commercialView === 'analytics' && <CommercialDashboard />}
         {activeTab === 'leads' && commercialView === 'kanban' && import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true' && (
           <CommercialKanban
             leads={leadRecoveryItems}
@@ -1640,7 +1668,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             }}
             onOpenLead={lead=>{setLeadSearch(lead.name||'');setLeadStatusFilter('all');setCommercialView('list');}}
             onRefresh={refreshKanbanLeads}
-            onMetrics={()=>{setFinancialView('sales');setActiveTab('financial');}}
+            onMetrics={()=>setCommercialView('analytics')}
             onLoadMore={loadMoreLeads}
             remaining={Math.max(0,leadTotal-leadRecoveryItems.filter(item=>!item.legacyReadOnly).length)}
             loadingMore={loadingMoreLeads}

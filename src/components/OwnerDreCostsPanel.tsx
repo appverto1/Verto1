@@ -93,7 +93,7 @@ export function OwnerDreCostsPanel({rules,onChanged}:{
   return <section className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm sm:p-6" aria-label="Cadastro de custos do DRE">
     <div className="mb-5">
       <h3 className="text-lg font-black">Cadastro de custos do DRE</h3>
-      <p className="mt-1 text-sm text-slate-600">Receitas pagas entram pelo valor bruto. Os custos só entram após o seu cadastro e clique em <strong>Salvar custo</strong>. Nenhuma taxa é descontada automaticamente por premissas do simulador.</p>
+      <p className="mt-1 text-sm text-slate-600">Receitas pagas entram pelo valor bruto. Os custos só entram após o seu cadastro e clique em <strong>Salvar custo</strong>. Custos calculados para avaliar vendas de módulos não entram neste DRE. Nenhuma taxa é descontada automaticamente por premissas do simulador.</p>
       <p className="mt-2 text-xs text-slate-500">Exemplo: taxa Stripe de 3,99% + R$ 0,39 → custo variável por fatura. Em uma venda bruta de R$ 600,00: taxa R$ 24,33, caixa estimado após essa taxa R$ 575,67. Cadastre a taxa apenas se ela realmente se aplicar à sua cobrança.</p>
     </div>
     <form onSubmit={save} className="grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-3">

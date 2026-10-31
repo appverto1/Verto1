@@ -30,10 +30,10 @@ export async function applyOwnerDreCostsToOverview(overview:any):Promise<any>{
     api.from('platform_billing_invoice_ledger')
       .select('stripe_invoice_id,organization_id,amount_paid_cents,paid_at')
       .not('paid_at','is',null)
-      .gte('created_at',first+'-01T00:00:00.000Z')
+      .gte('paid_at',first+'-01T00:00:00.000Z')
       .gt('amount_paid_cents',0)
       .eq('currency','brl')
-      .order('created_at',{ascending:true}).limit(1000),
+      .order('paid_at',{ascending:true}).limit(1000),
   ]);
   if(costsResult.error)throw costsResult.error;
   if(invoicesResult.error)throw invoicesResult.error;
