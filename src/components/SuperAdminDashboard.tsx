@@ -40,6 +40,7 @@ import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
 import { CommercialKanban } from './CommercialKanban';
 import { CommercialDashboard } from './CommercialDashboard';
+import { OwnerDreCostsPanel } from './OwnerDreCostsPanel';
 import { AbaV3RolloutControlCenter } from './AbaV3RolloutControlCenter';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
@@ -587,6 +588,18 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     setLeadNextPage(2);
   };
 
+  const refreshOwnerDre = async () => {
+    const supabase = await getSupabase();
+    const { data: { session } } = await supabase.auth.getSession();
+    if(!session?.access_token) throw new Error('Sessão expirada. Entre novamente.');
+    const response = await fetch('/api/owner/financial-overview',{
+      credentials:'include',headers:{Authorization:'Bearer '+session.access_token}
+    });
+    const payload = await response.json().catch(()=>({}));
+    if(!response.ok || !payload.success) throw new Error('Não foi possível atualizar o DRE.');
+    setFinancial(payload.data);
+  };
+
   const loadMoreLeads = async () => {
     if (loadingMoreLeads) return;
     setLoadingMoreLeads(true);
@@ -1070,7 +1083,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         {activeTab === 'overview' && (
           <div className="space-y-7">
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-5">
-              <MetricCard title="Receita Liquida" value={formatCurrency(summary.revenueNet)} icon={<DollarSign size={20} />} color="bg-sky-500" />
+              <MetricCard title="Receita bruta realizada" value={formatCurrency(summary.revenueGross)} icon={<DollarSign size={20} />} color="bg-sky-500" />
               <MetricCard title="Margem Contribuicao" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20} />} color="bg-emerald-500" />
               <MetricCard title="EBITDA" value={formatCurrency(summary.ebitda)} icon={<BarChart3 size={20} />} color="bg-indigo-500" />
               <MetricCard title="Inadimplencia" value={formatCurrency(summary.delinquencyAmount)} icon={<AlertCircle size={20} />} color="bg-rose-500" />
@@ -1097,7 +1110,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(value: any) => formatCurrency(Number(value))} />
-                      <Area type="monotone" dataKey="revenueNet" stroke="#0EA5E9" strokeWidth={3} fill="url(#ownerRevenue)" />
+                      <Area type="monotone" dataKey="revenueGross" stroke="#0EA5E9" strokeWidth={3} fill="url(#ownerRevenue)" />
                       <Area type="monotone" dataKey="ebitda" stroke="#10B981" strokeWidth={3} fill="url(#ownerEbitda)" />
                     </AreaChart>
                   </SafeResponsiveContainer>
@@ -1137,6 +1150,19 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
         {activeTab === 'financial' && financialView === 'sales' && <CommercialDashboard />}
         {activeTab === 'financial' && financialView === 'dre' && (
           <div className="space-y-7">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <MetricCard title="Receita bruta" value={formatCurrency(summary.revenueGross)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
+              <MetricCard title="Custos variáveis" value={formatCurrency(summary.variableCosts)} icon={<BarChart3 size={20}/>} color="bg-amber-500"/>
+              <MetricCard title="Custos fixos" value={formatCurrency(summary.fixedCosts)} icon={<BarChart3 size={20}/>} color="bg-indigo-500"/>
+              <MetricCard title="Margem de contribuição" value={formatPercent(summary.contributionMarginPct)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
+              <MetricCard title="EBITDA" value={formatCurrency(summary.ebitda)} icon={<TrendingUp size={20}/>} color="bg-emerald-500"/>
+              <MetricCard title="Despesas abaixo do EBITDA" value={formatCurrency(summary.belowEbitdaCosts)} icon={<BarChart3 size={20}/>} color="bg-violet-500"/>
+              <MetricCard title="Resultado após custos" value={formatCurrency(summary.netResult)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
+              <MetricCard title="Fluxo de caixa estimado" value={formatCurrency(summary.cashFlowEstimated)} icon={<DollarSign size={20}/>} color="bg-sky-500"/>
+            </div>
+            <p className="text-xs text-slate-500">Receita = faturas pagas pelo valor integral. Fluxo de caixa estimado considera os custos cadastrados; não substitui conciliação bancária ou extrato de repasses Stripe.</p>
+            <OwnerDreCostsPanel rules={financial.costRules||[]} onChanged={refreshOwnerDre}/>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Composicao do DRE Mensal</h3>
@@ -1147,7 +1173,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                       <XAxis dataKey="monthLabel" tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#64748B', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip formatter={(value: any) => formatCurrency(Number(value))} />
-                      <Bar dataKey="revenueNet" fill="#0EA5E9" radius={[8, 8, 0, 0]} />
+                      <Bar dataKey="revenueGross" fill="#0EA5E9" radius={[8, 8, 0, 0]} />
                       <Bar dataKey="variableCosts" fill="#F59E0B" radius={[8, 8, 0, 0]} />
                       <Bar dataKey="fixedCosts" fill="#6366F1" radius={[8, 8, 0, 0]} />
                     </BarChart>

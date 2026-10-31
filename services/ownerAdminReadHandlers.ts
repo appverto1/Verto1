@@ -1,3 +1,4 @@
+import { applyOwnerDreCostsToOverview } from './ownerDreReadModel';
 // GET /api/owner/stats
 export function createOwnerStatsHandler(getDeps: () => any) {
   return async (req: any, res: any) => {
@@ -74,7 +75,8 @@ export function createOwnerFinancialOverviewHandler(getDeps: () => any) {
           },
         });
       }
-      return res.json({ success: true, data: overview });
+      const withOwnerCosts = await applyOwnerDreCostsToOverview(overview);
+      return res.json({ success: true, data: withOwnerCosts });
     } catch (error: any) {
       console.error('[Owner Finance] overview failed', { message: sanitizeString(error?.message || String(error), 240) });
       return res.status(500).json({ error: 'Erro interno do servidor.' });
