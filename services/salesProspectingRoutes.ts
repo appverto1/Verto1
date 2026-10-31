@@ -1,6 +1,7 @@
 import { registerSalesAcquisitionRoutes } from './salesAcquisitionRoutes';
 import { registerSalesScriptRoutes } from './salesScriptRoutes';
 import { registerSalesLossReasonsRoutes } from './salesLossReasonsRoutes';
+import { registerOwnerDreCostRoutes } from './ownerDreCostRoutes';
 // Verto CRM prospecting endpoints. Backend permission checks are mandatory.
 // The optional provided platform guard is server.ts's canonical MFA guard. In the
 // small-module bridge, use the same DB-backed active-platform-admin + TOTP checks.
@@ -50,6 +51,8 @@ export function registerSalesProspectingRoutes(
   registerSalesScriptRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
   registerSalesAcquisitionRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
   registerSalesLossReasonsRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid});
+  // Owner financial endpoint uses the existing canonical platform-admin + TOTP guard.
+  registerOwnerDreCostRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid});
 
   app.get('/api/owner/sales/prospecting/attempts', checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
     const leadIds = [...new Set(String(req.query?.leadIds || '').split(',').filter(Boolean))];
