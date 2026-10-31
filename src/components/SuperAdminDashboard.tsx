@@ -576,18 +576,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     ]);
   };
 
-  // Kanban's manual refresh must not reload financials, customers, surveys or demo data.
-  const refreshKanbanLeads = async () => {
-    const supabase = await getSupabase();
-    const { data: { session } } = await supabase.auth.getSession();
-    const headers = { Authorization: session?.access_token ? 'Bearer ' + session.access_token : '' };
-    const result = await fetchJsonSoft('/api/owner/sales/leads?page=1&pageSize=100', headers, 'Leads comerciais');
-    if (!result?.success) return;
-    setLeadRecoveryItems(result.data || []);
-    setLeadTotal(Number(result.pagination?.total || 0));
-    setLeadNextPage(2);
-  };
-
   const refreshOwnerDre = async () => {
     const supabase = await getSupabase();
     const { data: { session } } = await supabase.auth.getSession();
@@ -598,6 +586,18 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     const payload = await response.json().catch(()=>({}));
     if(!response.ok || !payload.success) throw new Error('Não foi possível atualizar o DRE.');
     setFinancial(payload.data);
+  };
+
+  // Kanban's manual refresh must not reload financials, customers, surveys or demo data.
+  const refreshKanbanLeads = async () => {
+    const supabase = await getSupabase();
+    const { data: { session } } = await supabase.auth.getSession();
+    const headers = { Authorization: session?.access_token ? 'Bearer ' + session.access_token : '' };
+    const result = await fetchJsonSoft('/api/owner/sales/leads?page=1&pageSize=100', headers, 'Leads comerciais');
+    if (!result?.success) return;
+    setLeadRecoveryItems(result.data || []);
+    setLeadTotal(Number(result.pagination?.total || 0));
+    setLeadNextPage(2);
   };
 
   const loadMoreLeads = async () => {
