@@ -1170,11 +1170,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             {dreView==='overview' && <OwnerDreIntelligence financial={financial} view="overview"/>}
             {dreView==='evolution' && <div className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <OwnerDreIntelligence financial={financial} view="evolution"/>
-            </div>}
-            {dreView==='customers' && <div className="space-y-6">
-              <OwnerDreIntelligence financial={financial} view="customers"/>
-            <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
+              <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
                 <h3 className="text-lg font-black mb-4">Composicao do DRE Mensal</h3>
                 <div className="h-80 min-h-[300px]">
                   <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
@@ -1210,7 +1206,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                 </div>
               </div>
             </div>
-
+              <OwnerDreIntelligence financial={financial} view="evolution"/>
+            </div>}
+            {dreView==='customers' && <div className="space-y-6">
+              <OwnerDreIntelligence financial={financial} view="customers"/>
             <div className="bg-white rounded-[28px] p-6 border border-slate-100 shadow-sm">
               <h3 className="text-lg font-black mb-4">Dez clínicas com menor resultado</h3>
               <div className="overflow-x-auto">
