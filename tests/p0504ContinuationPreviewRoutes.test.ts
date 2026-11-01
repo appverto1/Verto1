@@ -122,6 +122,9 @@ try {
   engine='AT_SESSION';price=null;r=await call();
   assert.equal(r.body.data.financialPreviewAvailable,false,'no canonical snapshot must fail closed');
   price=180;
+  appointment={...canonicalAppointment,source_payload:{sessionModality:'GROUP'}};
+  r=await call();assert.equal(r.status,409,'group sessions need explicit governance');
+  appointment=structuredClone(canonicalAppointment);
   r=await call({'x-clinic':otherClinic});
   assert.equal(r.status,409,'clinic isolation');
   r=await call({'x-actor':U(30)});
