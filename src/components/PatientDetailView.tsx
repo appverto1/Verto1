@@ -70,7 +70,7 @@ import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
-import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
+import { isConfirmedAbaSessionAppointmentLink, scheduledAbaSessionScopeMismatch } from '../utils/sessionAutoFinalization';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
@@ -2121,6 +2121,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       return;
     }
     if (activeSession) {
+      if (scheduledSessionForPatient) {
+        const scopeProblem = scheduledAbaSessionScopeMismatch(activeSession, {
+          ...scheduledSessionForPatient,
+          clinicId: scheduledSessionForPatient.clinicId || scheduledSessionForPatient.clinic_id
+            || resolvedClinicContext?.clinicId || clinicContext?.clinicId,
+        }, {
+          patientId: String(patient?.id || ''),
+          clinicId: String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || ''),
+        });
+        if (scopeProblem) {
+          alert('Já existe uma sessão ativa cujo vínculo com este agendamento não pode ser confirmado. Seus registros foram preservados. Revise a sessão anterior antes de iniciar outro atendimento.');
+          return;
+        }
+      }
       setIsSessionModeOpen(true);
       return;
     }
@@ -2818,6 +2832,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         scheduledSessionForPatient?.id ||
         null;
       const sessionAppointmentId = sessionToOpen?.appointment_id || sessionToOpen?.appointmentId || null;
+      const scopeProblem = scheduledAbaSessionScopeMismatch(sessionToOpen, {
+        ...scheduledSessionForPatient,
+        clinicId: scheduledSessionForPatient.clinicId || scheduledSessionForPatient.clinic_id
+          || resolvedClinicContext?.clinicId || clinicContext?.clinicId,
+      }, {
+        patientId: String(patient.id),
+        clinicId: String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || ''),
+      });
+      if (scopeProblem) {
+        // Never rebind an unscoped legacy session or reuse a Fono session for TO.
+        // Clinical writes and the previous session remain intact for explicit review.
+        alert('O atendimento solicitado não corresponde à sessão ativa, ou seu vínculo não pôde ser confirmado. Nenhum registro foi alterado. Revise o atendimento anterior antes de continuar.');
+        return;
+      }
       if (scheduledAppointmentId && !sessionAppointmentId) {
         const linkedSession = {
           ...sessionToOpen,
