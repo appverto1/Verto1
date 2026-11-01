@@ -32,7 +32,7 @@ try{
   await client.query([
     'create role anon;create role authenticated;create role service_role;',
     'create schema auth;create function auth.uid() returns uuid language sql stable as $uid$select null::uuid$uid$;',
-    'create table public.aba_sessions(id text primary key,clinic_id text,organization_id text,patient_id uuid,therapist_id text,appointment_id uuid,status text,started_at timestamptz,actual_start_at timestamptz,effective_end_at timestamptz,updated_at timestamptz);',
+    'create table public.aba_sessions(id text primary key,clinic_id text,organization_id text,patient_id uuid,therapist_id text,appointment_id uuid,service_type text,status text,started_at timestamptz,actual_start_at timestamptz,effective_end_at timestamptz,updated_at timestamptz);',
     'create table public.appointments(id uuid primary key,clinic_id uuid,organization_id uuid,patient_id uuid,therapist_id uuid,active_aba_session_id text,deleted_at timestamptz,is_active boolean,status text,source_payload jsonb,service_type text,scheduled_at timestamptz,scheduled_start_at timestamptz,scheduled_end_at timestamptz,scheduled_duration_minutes int,duration_minutes int,actual_start_at timestamptz,room_id text);',
     'create table public.test_roles(actor_id uuid,clinic_id uuid,role text,primary key(actor_id,clinic_id));',
     'create function public.verto_clinic_actor_role_v1(p_actor uuid,p_clinic uuid) returns text language sql stable as $role$select role from public.test_roles where actor_id=p_actor and clinic_id=p_clinic$role$;',
@@ -44,7 +44,7 @@ try{
   await client.query('grant select,update(effective_end_at) on public.aba_sessions to authenticated');
   await client.query('insert into public.test_roles(actor_id,clinic_id,role) values ($1,$2,$3),($4,$5,$6)',
     [professional,clinic,'therapist',otherProfessional,clinic,'therapist']);
-  await client.query("insert into public.aba_sessions(id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,started_at,actual_start_at) values($1,$2,$2,$3,$4,$5,'in_progress',$6,$6)",
+  await client.query("insert into public.aba_sessions(id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,service_type,status,started_at,actual_start_at) values($1,$2,$2,$3,$4,$5,'Fonoaudiologia','in_progress',$6,$6)",
     [sessionId,clinic,patient,professional,original,startIso]);
   await deny(async()=>{
     await client.query('SET LOCAL ROLE authenticated');
