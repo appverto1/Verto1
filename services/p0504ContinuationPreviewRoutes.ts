@@ -12,6 +12,8 @@ type Dependencies = {
   supabase: any;
   noStoreDynamicResponse: any;
   checkAuth: any;
+  portalActionLimiter: any;
+  enforcePayloadLimit: (req: any, res: any, maxBytes: number, label: string) => boolean;
   requireClinicCapability: (capability: string) => any;
   sanitizeString: (value: any, max?: number) => string;
   currentClinicId: (user: any) => string | null;
@@ -40,8 +42,8 @@ const safeCents = (value: unknown) => {
 // cancel, bill, extend or close a session. The eventual write RPC must recheck
 // everything inside ONE transaction and own its own idempotency record.
 export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Dependencies) {
-  const {supabase, noStoreDynamicResponse, checkAuth, requireClinicCapability,
-    sanitizeString, currentClinicId} = deps;
+  const {supabase, noStoreDynamicResponse, checkAuth, portalActionLimiter,
+    enforcePayloadLimit, requireClinicCapability, sanitizeString, currentClinicId} = deps;
 
   app.get('/api/clinic/sessions/:sessionId/continuation-preview',
     noStoreDynamicResponse, checkAuth, requireClinicCapability('session.finish'),
@@ -53,7 +55,7 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
         return res.status(403).json({success:false,code:'SESSION_CONTINUATION_ACCESS_DENIED'});
       try {
         const {data:session,error:sessionError} = await supabase.from('aba_sessions')
-          .select('id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,service_type,specialty_snapshot,therapeutic_plan_id,started_at,actual_start_at')
+          .select('id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,service_type,specialty_snapshot,therapeutic_plan_id,started_at,actual_start_at,effective_end_at')
           .eq('id',sessionId).eq('clinic_id',clinicId).limit(1).maybeSingle();
         if (sessionError) throw sessionError;
         if (!session?.id || !uuid(session.appointment_id) ||
@@ -102,6 +104,7 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
           scheduledEndAt: String(appointment.scheduled_end_at || ''),
           actualStartedAt: String(started || ''),
           scheduledBaseDurationMinutes:duration,
+          persistedEffectiveEndAt:session.effective_end_at || null,
         };
         const effectiveEnd = resolveCanonicalSessionEnd(input);
         if (!effectiveEnd) return res.status(409).json({success:false,code:'SESSION_CONTINUATION_TIME_UNVERIFIED'});
@@ -203,4 +206,45 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
         return res.status(503).json({success:false,code:'SESSION_CONTINUATION_PREVIEW_UNAVAILABLE'});
       }
     });
+  // Explicit persistence authority. Never save from a preview, timer or cache.
+  app.post('/api/clinic/sessions/:sessionId/short-extension',
+    portalActionLimiter, noStoreDynamicResponse, checkAuth,
+    requireClinicCapability('session.finish'),
+    async (req:any,res:any) => {
+      if (!enforcePayloadLimit(req,res,2048,'Extensão curta da sessão')) return;
+      const actorId=sanitizeString(req.session?.user?.id,120);
+      const clinicId=sanitizeString(currentClinicId(req.session?.user),120);
+      const sessionId=sanitizeString(req.params.sessionId,180);
+      const minutes=req.body?.additionalMinutes;
+      const key=sanitizeString(req.body?.idempotencyKey,128);
+      if (!uuid(actorId) || !uuid(clinicId) || !sessionId || sessionId.length>180)
+        return res.status(403).json({success:false,code:'P0504_SHORT_EXTENSION_ACCESS_DENIED'});
+      if (typeof minutes!=='number' || ![5,10,15].includes(minutes) ||
+          typeof req.body?.idempotencyKey!=='string' || key.length<8)
+        return res.status(422).json({success:false,code:'P0504_SHORT_EXTENSION_INPUT_INVALID'});
+      try {
+        const result=await supabase.rpc('extend_aba_session_short_v1',{
+          p_clinic_id:clinicId,p_actor_id:actorId,p_session_id:sessionId,
+          p_additional_minutes:minutes,p_idempotency_key:key
+        });
+        if (result.error) {
+          const code=String(result.error?.message || result.error?.code || '');
+          if (/P0504_SHORT_EXTENSION_(?:ACCESS_DENIED|ACTOR_MISMATCH)/.test(code))
+            return res.status(403).json({success:false,code:'P0504_SHORT_EXTENSION_ACCESS_DENIED'});
+          if (/P0504_SHORT_EXTENSION_(?:CONFLICT|IDEMPOTENCY_CONFLICT|SESSION_NOT_ACTIVE|APPOINTMENT_INVALID|GROUP_NOT_SUPPORTED|SPECIALTY_UNVERIFIED|WINDOW_INVALID|TIME_UNVERIFIED|INTERVAL_INVALID)/.test(code))
+            return res.status(409).json({success:false,code:'P0504_SHORT_EXTENSION_BLOCKED'});
+          if (/P0504_SHORT_EXTENSION_INVALID_INPUT/.test(code))
+            return res.status(422).json({success:false,code:'P0504_SHORT_EXTENSION_INPUT_INVALID'});
+          throw result.error;
+        }
+        if (result.data?.success!==true || result.data?.billableUnitsCreated!==0 ||
+            result.data?.calendarReservationConfirmed!==false)
+          return res.status(503).json({success:false,code:'P0504_SHORT_EXTENSION_RESULT_INVALID'});
+        return res.json(result.data);
+      } catch(error:any) {
+        console.warn('[P0-504] short extension unavailable',{code:sanitizeString(error?.code,70)});
+        return res.status(503).json({success:false,code:'P0504_SHORT_EXTENSION_UNAVAILABLE'});
+      }
+    });
+
 }
