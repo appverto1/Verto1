@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { scheduledAbaSessionScopeMismatch } from '../src/utils/sessionAutoFinalization';
+import { scheduledAbaSessionScopeMismatch } from '../src/utils/scheduledAbaSessionScope';
 import {
   clinicalSpecialtiesMatch,
   clinicalSpecialtyScopeKey,
