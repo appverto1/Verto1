@@ -71,6 +71,12 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
             String(session.organization_id || session.clinic_id) !== clinicId)
           return res.status(409).json({success:false,code:'SESSION_CONTINUATION_SCOPE_INVALID'});
 
+        const modality = String(appointment.source_payload?.sessionModality ||
+          appointment.source_payload?.session_modality || '').toUpperCase();
+        if (modality === 'GROUP' || appointment.source_payload?.sessionGroupId ||
+            appointment.source_payload?.session_group_id)
+          return res.status(409).json({success:false,code:'SESSION_CONTINUATION_GROUP_REQUIRES_REVIEW'});
+
         const role = String(req.authorizationContext?.role || req.effectiveClinicRole ||
           req.session?.user?.clinicRole || req.session?.user?.role || '').toLowerCase();
         if (!['owner','admin','director','coordinator','supervisor'].includes(role) &&
