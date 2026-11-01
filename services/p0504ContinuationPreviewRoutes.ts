@@ -53,7 +53,7 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
         return res.status(403).json({success:false,code:'SESSION_CONTINUATION_ACCESS_DENIED'});
       try {
         const {data:session,error:sessionError} = await supabase.from('aba_sessions')
-          .select('id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,service_type,therapeutic_plan_id,started_at,actual_start_at')
+          .select('id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,service_type,specialty_snapshot,therapeutic_plan_id,started_at,actual_start_at')
           .eq('id',sessionId).eq('clinic_id',clinicId).limit(1).maybeSingle();
         if (sessionError) throw sessionError;
         if (!session?.id || !uuid(session.appointment_id) ||
@@ -77,8 +77,11 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
           return res.status(403).json({success:false,code:'SESSION_CONTINUATION_PROFESSIONAL_DENIED'});
 
         const specialty = appointmentClinicalSpecialtyKey(appointment);
-        const sessionSpecialty = stableService(session.service_type);
-        if (!specialty || !sessionSpecialty || specialty !== sessionSpecialty)
+        const declaredSpecialty = stableService(session.service_type);
+        const snapshotSpecialty = stableService(session.specialty_snapshot);
+        const sessionSpecialty = declaredSpecialty || snapshotSpecialty;
+        if (!specialty || !sessionSpecialty || specialty !== sessionSpecialty ||
+            (snapshotSpecialty && snapshotSpecialty !== specialty))
           return res.status(409).json({success:false,code:'SESSION_CONTINUATION_SPECIALTY_UNVERIFIED'});
 
         const planFromAppointment = String(appointment.source_payload?.therapeuticPlanId ||
@@ -102,13 +105,25 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
         // Deliberately bounded clinic read and bounded time horizon. If too many
         // appointments match, fail closed rather than silently miss conflicts.
         const earliest = new Date(Date.parse(effectiveEnd) - 240 * 60_000).toISOString();
-        const {data:nearby,error:conflictError} = await supabase.from('appointments')
-          .select('id,clinic_id,patient_id,therapist_id,room_id,scheduled_at,scheduled_start_at,scheduled_end_at,duration_minutes,scheduled_duration_minutes,status,is_active,deleted_at')
-          .eq('clinic_id',clinicId).gte('scheduled_at',earliest)
-          .lt('scheduled_at',maximumEnd).limit(201);
-        if (conflictError) throw conflictError;
-        if (!Array.isArray(nearby) || nearby.length > 200)
+        const conflictColumns = 'id,clinic_id,patient_id,therapist_id,room_id,scheduled_at,scheduled_start_at,scheduled_end_at,duration_minutes,scheduled_duration_minutes,status,is_active,deleted_at';
+        // Some legacy appointments use scheduled_at, while newer writes also
+        // carry scheduled_start_at. An OR assembled from user strings would be
+        // unsafe; use two bounded indexed reads and deduplicate by persisted ID.
+        const [legacyWindow,canonicalWindow] = await Promise.all([
+          supabase.from('appointments').select(conflictColumns)
+            .eq('clinic_id',clinicId).gte('scheduled_at',earliest)
+            .lt('scheduled_at',maximumEnd).limit(201),
+          supabase.from('appointments').select(conflictColumns)
+            .eq('clinic_id',clinicId).gte('scheduled_start_at',earliest)
+            .lt('scheduled_start_at',maximumEnd).limit(201)
+        ]);
+        if (legacyWindow.error || canonicalWindow.error)
+          throw legacyWindow.error || canonicalWindow.error;
+        if (!Array.isArray(legacyWindow.data) || !Array.isArray(canonicalWindow.data) ||
+            legacyWindow.data.length > 200 || canonicalWindow.data.length > 200)
           return res.status(409).json({success:false,code:'SESSION_CONTINUATION_CONFLICT_SCAN_INCOMPLETE'});
+        const nearby = [...new Map([...legacyWindow.data,...canonicalWindow.data]
+          .map((row:any)=>[String(row.id),row])).values()];
 
         const choices: ContinuationChoice[] = [5,10,15,'FULL'];
         const choicePreviews = choices.map(choice => {
