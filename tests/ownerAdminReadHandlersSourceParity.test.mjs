@@ -38,7 +38,7 @@ for(const item of m.routes){
    // The whole handler is one TryStatement in the AST; remove only the
    // additive cost call line, never the enclosing try/catch.
    const normalized=newStatements.map(s=>s
-     .replace(/^[ \\t]*const withOwnerCosts = await applyOwnerDreCostsToOverview\\(overview\\);\\r?\\n/m,'')
+     .replace(/^[ \t]*const withOwnerCosts = await applyOwnerDreCostsToOverview\(overview\);\r?\n/m,'')
      .replace('return res.json({ success: true, data: withOwnerCosts });',
        'return res.json({ success: true, data: overview });'));
    assert.deepEqual(normalized,originalStatements,'owner DRE intentional additive cost delta only');
