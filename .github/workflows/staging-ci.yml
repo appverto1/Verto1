@@ -168,6 +168,7 @@ jobs:
           node --import tsx tests/p0504SessionContinuationPolicy.test.ts
           node --import tsx tests/p0504ContinuationPreviewRoutes.test.ts
           node tests/p0504AbaSessionAppointmentGuardPostgres.test.mjs
+          node tests/p0504ShortContinuationPostgres.test.mjs
 
       - name: Financial plans by active professional regression
         run: |
