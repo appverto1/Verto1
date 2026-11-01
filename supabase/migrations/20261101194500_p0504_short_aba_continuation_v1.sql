@@ -18,9 +18,7 @@ begin
       raise exception 'P0504_EFFECTIVE_END_BACKEND_ONLY';
     end if;
   elsif new.effective_end_at is distinct from old.effective_end_at then
-    if session_user not in ('postgres','service_role','supabase_admin')
-      and current_setting('request.jwt.claim.role',true) is distinct from 'service_role'
-    then
+    if current_user not in ('postgres','service_role','supabase_admin') then
       raise exception 'P0504_EFFECTIVE_END_BACKEND_ONLY';
     end if;
   end if;
