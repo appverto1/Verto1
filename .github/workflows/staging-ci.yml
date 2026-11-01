@@ -155,6 +155,11 @@ jobs:
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
 
+      - name: P0-504 clinical session scope and continuation safety
+        run: |
+          node --import tsx tests/sessionSpecialtyIsolation.test.ts
+          node --import tsx tests/p0504SessionContinuationPolicy.test.ts
+
       - name: Financial plans by active professional regression
         run: |
           node --import tsx tests/patientFinancialSpecialtyClinicGate.test.ts
