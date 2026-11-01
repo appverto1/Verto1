@@ -70,7 +70,8 @@ import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
-import { isConfirmedAbaSessionAppointmentLink, scheduledAbaSessionScopeMismatch } from '../utils/sessionAutoFinalization';
+import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
+import { scheduledAbaSessionScopeMismatch } from '../utils/scheduledAbaSessionScope';
 
 const getApprovedVertoCanonicalProtocol = (request: any) => {
   const source = `${request?.canonicalKey || ''} ${request?.canonicalName || ''} ${request?.protocolName || ''}`.toLowerCase();
