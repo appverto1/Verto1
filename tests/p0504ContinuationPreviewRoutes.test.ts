@@ -77,7 +77,7 @@ registerP0504ContinuationPreviewRoutes(app,{
 const server=app.listen(0,'127.0.0.1');await once(server,'listening');
 const address=server.address();assert.ok(address&&typeof address!=='string');
 const endpoint='http://127.0.0.1:'+address.port+'/api/clinic/sessions/'+sessionId+'/continuation-preview';
-const call=async(headers:any={})=>{const res=await fetch(endpoint,{headers});return {status:res.status,body:await res.json(),headers:res.headers};};
+const call=async(headers:any={})=>{const res=await fetch(endpoint,{headers});const text=await res.text();let body:any;try{body=JSON.parse(text);}catch{body={message:text};}return {status:res.status,body,headers:res.headers};};
 try {
   let r=await call();
   assert.equal(r.status,200);
