@@ -166,7 +166,9 @@ try {
       body:JSON.stringify({additionalMinutes:mins,idempotencyKey:'extension-test-1',
         actorId:U(30),clinicId:otherClinic,patientId:otherPatient})
     });
-    const body=await response.json();
+    const raw=await response.text();
+    let body:any;
+    try {body=JSON.parse(raw);} catch {body={message:raw};}
     return {status:response.status,body};
   };
   let saved=await save(10);
