@@ -169,6 +169,7 @@ deny({...scopedFonoSession,professionalId:null},scheduledFono,'SESSION_PROFESSIO
 deny({...scopedFonoSession,serviceType:'Terapia Ocupacional'},scheduledFono,'SESSION_SPECIALTY_MISMATCH');
 deny({...scopedFonoSession,therapeuticPlanSpecialty:'Terapia Ocupacional'},scheduledFono,'SESSION_SPECIALTY_MISMATCH');
 deny({...scopedFonoSession,serviceType:null,therapeuticPlanSpecialty:null},scheduledFono,'SESSION_SPECIALTY_UNVERIFIED');
+deny(scopedFonoSession,{...scheduledFono,serviceType:'ABA'},'SESSION_SPECIALTY_UNVERIFIED');
 deny({...scopedFonoSession,status:'completed'},scheduledFono,'SESSION_NOT_ACTIVE');
 deny({...scopedFonoSession,therapeuticPlanId:'to-plan'},
   {...scheduledFono,therapeuticPlanId:'fono-plan'},'SESSION_THERAPEUTIC_PLAN_MISMATCH');
