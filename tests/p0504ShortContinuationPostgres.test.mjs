@@ -42,14 +42,14 @@ try{
     .replace(/^begin;\s*/m,'').replace(/\s*commit;\s*$/,'');
   await client.query(migration);
   await client.query('grant select,update(effective_end_at) on public.aba_sessions to authenticated');
-  await deny(async()=>{
-    await client.query('SET LOCAL ROLE authenticated');
-    await client.query("update public.aba_sessions set effective_end_at=now() where id='missing'");
-  },'P0504_EFFECTIVE_END_BACKEND_ONLY');
   await client.query('insert into public.test_roles(actor_id,clinic_id,role) values ($1,$2,$3),($4,$5,$6)',
     [professional,clinic,'therapist',otherProfessional,clinic,'therapist']);
   await client.query("insert into public.aba_sessions(id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,started_at,actual_start_at) values($1,$2,$2,$3,$4,$5,'in_progress',$6,$6)",
     [sessionId,clinic,patient,professional,original,startIso]);
+  await deny(async()=>{
+    await client.query('SET LOCAL ROLE authenticated');
+    await client.query("update public.aba_sessions set effective_end_at=now() where id='p0504-synthetic-session'");
+  },'P0504_EFFECTIVE_END_BACKEND_ONLY');
   await client.query("insert into public.appointments(id,clinic_id,organization_id,patient_id,therapist_id,active_aba_session_id,is_active,status,source_payload,service_type,scheduled_at,scheduled_start_at,scheduled_end_at,scheduled_duration_minutes,duration_minutes,room_id) values($1,$2,$2,$3,$4,$5,true,'in_progress','{}'::jsonb,'Fonoaudiologia',$6,$6,$7,50,50,'Room A')",
     [original,clinic,patient,professional,sessionId,startIso,endIso]);
   const first=await call(sessionId,5,'synthetic-key-1');
