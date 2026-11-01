@@ -67,7 +67,8 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
         if (!appointment?.id || !activeAppointment(appointment) ||
             String(appointment.patient_id) !== String(session.patient_id) ||
             String(appointment.therapist_id) !== String(session.therapist_id) ||
-            String(appointment.organization_id || appointment.clinic_id) !== String(session.organization_id || session.clinic_id))
+            String(appointment.organization_id || appointment.clinic_id) !== clinicId ||
+            String(session.organization_id || session.clinic_id) !== clinicId)
           return res.status(409).json({success:false,code:'SESSION_CONTINUATION_SCOPE_INVALID'});
 
         const role = String(req.authorizationContext?.role || req.effectiveClinicRole ||
@@ -149,7 +150,8 @@ export function registerP0504ContinuationPreviewRoutes(app: Express, deps: Depen
             ...preview,
             conflictCount: conflicts.length,
             hasStartedConflict: conflicts.some((a: any) => ['in_progress','active','started'].includes(String(a.status || '').toLowerCase())),
-            canCommitWithoutConflict: conflicts.length === 0,
+            clinicConflictFree: conflicts.length === 0,
+            canCommitWithoutConflict: false, // Cross-clinic and concurrent reservations require a locked transactional check.
             canCancelConflicts: false, // Only the future transaction may authorize this.
             conflictingStartsAt: conflicts.slice(0,10).map((a: any) =>
               String(a.scheduled_start_at || a.scheduled_at)),
