@@ -35,9 +35,11 @@ for(const item of m.routes){
    // costs to the existing ledger overview. All other statements keep parity.
    assert.ok(newStatements.some(s=>s.includes('await applyOwnerDreCostsToOverview(overview)')),
      'manual owner DRE costs must remain in the handler');
-   const normalized=newStatements
-     .filter(s=>!s.includes('const withOwnerCosts = await applyOwnerDreCostsToOverview(overview)'))
-     .map(s=>s.replace('return res.json({ success: true, data: withOwnerCosts });',
+   // The whole handler is one TryStatement in the AST; remove only the
+   // additive cost call line, never the enclosing try/catch.
+   const normalized=newStatements.map(s=>s
+     .replace(/^[ \\t]*const withOwnerCosts = await applyOwnerDreCostsToOverview\\(overview\\);\\r?\\n/m,'')
+     .replace('return res.json({ success: true, data: withOwnerCosts });',
        'return res.json({ success: true, data: overview });'));
    assert.deepEqual(normalized,originalStatements,'owner DRE intentional additive cost delta only');
  } else {
