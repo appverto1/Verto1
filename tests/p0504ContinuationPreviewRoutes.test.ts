@@ -9,7 +9,7 @@ const clinic=U(1), otherClinic=U(2), patient=U(3), otherPatient=U(4),
 const canonicalSession:any={
   id:sessionId,clinic_id:clinic,organization_id:clinic,patient_id:patient,
   therapist_id:actor,appointment_id:appointmentId,status:'in_progress',
-  service_type:'Fonoaudiologia',therapeutic_plan_id:U(7),
+  service_type:'Fonoaudiologia',specialty_snapshot:'Fonoaudiólogo',therapeutic_plan_id:U(7),
   actual_start_at:'2026-11-02T18:00:00Z',started_at:'2026-11-02T18:00:00Z'
 };
 const canonicalAppointment:any={
@@ -33,8 +33,8 @@ const supabase:any={
   from:(table:string)=>{
     const filters:any={},range:any={},q:any={};
     q.select=()=>q;q.eq=(k:string,v:any)=>{filters[k]=v;return q;};
-    q.gte=(k:string,v:any)=>{range.min=v;return q;};
-    q.lt=(k:string,v:any)=>{range.max=v;return q;};
+    q.gte=(k:string,v:any)=>{range.key=k;range.min=v;return q;};
+    q.lt=(k:string,v:any)=>{assert.equal(k,range.key);range.max=v;return q;};
     q.limit=()=>q;q.order=()=>q;
     const resolve=()=>{
       readCount++;
@@ -44,7 +44,8 @@ const supabase:any={
         return {data:appointment && appointment.id===filters.id && appointment.clinic_id===filters.clinic_id?appointment:null,error:null};
       if(table==='appointments')
         return {data:nearby.filter(a=>a.clinic_id===filters.clinic_id&&
-          a.scheduled_at>=range.min&&a.scheduled_at<range.max),error:null};
+          typeof a[range.key]==='string' &&
+          a[range.key]>=range.min&&a[range.key]<range.max),error:null};
       if(table==='appointment_private_financial_snapshots')
         return {data:price===null?null:{final_amount:price},error:null};
       throw Error('Unexpected table '+table);
@@ -100,6 +101,14 @@ try {
   assert.ok(!JSON.stringify(r.body).includes(otherPatient),'do not leak third-party identity');
   assert.ok(!JSON.stringify(r.body).includes(conflictB.id),'do not leak third-party appointment ID');
 
+  // The same B must only count once across the two clock representations.
+  assert.equal(r.body.data.choices[3].conflictCount,1);
+  nearby=[{...conflictB,scheduled_at:'2026-11-01T10:00:00Z'}];
+  r=await call();assert.equal(r.body.data.choices[3].conflictCount,1,
+    'canonical start must detect conflict even when legacy timestamp is stale');
+  nearby=[{...conflictB,scheduled_start_at:null}];
+  r=await call();assert.equal(r.body.data.choices[3].conflictCount,1,
+    'legacy scheduled_at must remain a conflict source');
   nearby=[{...conflictB,clinic_id:otherClinic}];
   r=await call();assert.equal(r.body.data.choices[3].conflictCount,0);
   nearby=[{...conflictB,therapist_id:U(21),room_id:'room-1'}];
@@ -121,6 +130,8 @@ try {
   r=await call({'x-auth':'no'});assert.equal(r.status,401);
   session={...session,service_type:'Terapia Ocupacional'};
   r=await call();assert.equal(r.status,409,'specialty isolation');
+  session={...canonicalSession,specialty_snapshot:'Terapeuta Ocupacional'};
+  r=await call();assert.equal(r.status,409,'specialty snapshot isolation');
   session=structuredClone(canonicalSession);
   session.appointment_id=null;r=await call();assert.equal(r.status,409,'legacy unlinked rejected');
   session=structuredClone(canonicalSession);
