@@ -51,7 +51,9 @@ for(const role of ['director','coordinator','therapist','supervisor','receptioni
 }
 assert.equal(publishedTutorialHelpProjection('patient',caps,modules).length,0);
 assert.equal(publishedTutorialHelpProjection('receptionist',caps,modules).some(a=>a.articleId==='atendimento-evolucao'),false);
-assert.equal(publishedTutorialHelpProjection('director',caps,[]).some(a=>a.articleId==='recebimento-registrar'),false);
+// The tutorial catalog is informational and now visible independently of paid modules.
+// The actual financial API permission remains enforced by backend capabilities.
+assert.equal(publishedTutorialHelpProjection('director',caps,[]).some(a=>a.articleId==='recebimento-registrar'),true);
 const director=publishedTutorialHelpProjection('director',caps,modules);
 assert.equal(findSupportTopics(director,'quero aprender a registrar pagamento parcial','Módulo financeiro')[0].articleId,'recebimento-parcial');
 assert.equal(pausedSupportQuery('quero fazer agendamentos recorrentes'),true);
