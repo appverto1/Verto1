@@ -48,8 +48,8 @@ declare
   v_conflict boolean := false;
 begin
   if p_clinic_id is null or p_actor_id is null
-     or p_session_id is null or length(trim(p_session_id)) not between 1 and 120
-     or p_additional_minutes not in (5, 10, 15)
+     or p_session_id is null or length(trim(p_session_id)) not between 1 and 180
+     or p_additional_minutes is null or p_additional_minutes not in (5, 10, 15)
      or p_idempotency_key is null or length(trim(p_idempotency_key)) not between 8 and 128
   then
     raise exception 'P0504_SHORT_EXTENSION_INVALID_INPUT';
@@ -59,7 +59,7 @@ begin
   end if;
 
   v_role := public.verto_clinic_actor_role_v1(p_actor_id,p_clinic_id);
-  if v_role not in ('owner','admin','director','coordinator','supervisor','therapist') then
+  if v_role is null or v_role not in ('owner','admin','director','coordinator','supervisor','therapist') then
     raise exception 'P0504_SHORT_EXTENSION_ACCESS_DENIED';
   end if;
 
@@ -106,7 +106,7 @@ begin
   if not found or v_appointment.therapist_id is null
       or v_appointment.therapist_id::text is distinct from v_session.therapist_id
       or v_appointment.active_aba_session_id is distinct from v_session.id
-      or v_appointment.deleted_at is not null or v_appointment.is_active is false
+      or v_appointment.deleted_at is not null or coalesce(v_appointment.is_active,true) is false
       or lower(coalesce(v_appointment.status,'')) not in
         ('scheduled','pending','pending_confirmation','confirmed',
          'rescheduled','in_progress','active','started') then
@@ -116,6 +116,10 @@ begin
     or v_appointment.source_payload ? 'sessionGroupId' then
     raise exception 'P0504_SHORT_EXTENSION_GROUP_NOT_SUPPORTED';
   end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended('p0504:professional:' || v_appointment.therapist_id::text,0)
+  );
 
   if public.clinical_specialty_scope_key_v1(v_appointment.service_type) is null
     or public.clinical_specialty_scope_key_v1(v_session.service_type) is distinct
@@ -127,7 +131,7 @@ begin
   v_scheduled_start:=coalesce(v_appointment.scheduled_start_at,v_appointment.scheduled_at);
   v_duration:=coalesce(v_appointment.scheduled_duration_minutes,v_appointment.duration_minutes);
   v_started:=coalesce(v_session.actual_start_at,v_session.started_at,v_appointment.actual_start_at);
-  if v_scheduled_start is null or v_duration not between 5 and 240
+  if v_scheduled_start is null or v_duration is null or v_duration not between 5 and 240
     or v_started is null or v_started < v_scheduled_start - interval '12 hours'
     or v_started > now()+interval '5 minutes' then
     raise exception 'P0504_SHORT_EXTENSION_TIME_UNVERIFIED';
