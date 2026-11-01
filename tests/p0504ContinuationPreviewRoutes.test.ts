@@ -29,6 +29,7 @@ const conflictB:any={
 };
 let session:any=structuredClone(canonicalSession), appointment:any=structuredClone(canonicalAppointment);
 let nearby:any[]=[],engine='AT_SESSION',price:any=180,writeCount=0,readCount=0;
+let rpcWriteCount=0, forcedRpcError:string|null=null;
 const supabase:any={
   from:(table:string)=>{
     const filters:any={},range:any={},q:any={};
@@ -56,6 +57,18 @@ const supabase:any={
     return q;
   },
   rpc:async(name:string,args:any)=>{
+    if (name==='extend_aba_session_short_v1') {
+      rpcWriteCount++;
+      assert.equal(args.p_clinic_id,clinic);
+      assert.equal(args.p_actor_id,actor);
+      assert.equal(args.p_session_id,sessionId);
+      assert.ok([5,10,15].includes(args.p_additional_minutes));
+      assert.equal(args.p_idempotency_key,'extension-test-1');
+      if (forcedRpcError) return {data:null,error:{message:forcedRpcError}};
+      return {data:{success:true,idempotentReplay:false,sessionId,
+        effectiveEndAt:'2026-11-02T19:00:00Z',additionalMinutes:10,
+        billableUnitsCreated:0,calendarReservationConfirmed:false},error:null};
+    }
     assert.equal(name,'resolve_appointment_financial_engine_v1');
     assert.equal(args.p_organization_id,clinic);
     assert.equal(args.p_appointment_id,appointmentId);
@@ -63,8 +76,11 @@ const supabase:any={
   }
 };
 const app=express();
+app.use(express.json());
 registerP0504ContinuationPreviewRoutes(app,{
   supabase,noStoreDynamicResponse:(_req:any,res:any,next:any)=>{res.setHeader('Cache-Control','private, no-store');next();},
+  portalActionLimiter:(_req:any,_res:any,next:any)=>next(),
+  enforcePayloadLimit:()=>true,
   checkAuth:(req:any,res:any,next:any)=>{if(req.get('x-auth')==='no')return res.sendStatus(401);
     req.session={user:{id:req.get('x-actor')||actor,clinicId:req.get('x-clinic')||clinic,role:'therapist'}};next();},
   requireClinicCapability:()=> (req:any,res:any,next:any)=>{
@@ -141,5 +157,33 @@ try {
   appointment={...appointment,source_payload:{therapeuticPlanId:U(30),specialty:'Fonoaudiologia'}};
   r=await call();assert.equal(r.status,409,'plan isolation');
   assert.equal(writeCount,0,'read-only preflight never writes');
-  console.log('P0-504 continuation read-only preflight: PASS');
+  assert.equal(rpcWriteCount,0,'GET never calls a write RPC');
+
+  const saveEndpoint=endpoint.replace('/continuation-preview','/short-extension');
+  const save=async(mins:any,headers:any={})=>{
+    const response=await fetch(saveEndpoint,{
+      method:'POST',headers:{'Content-Type':'application/json',...headers},
+      body:JSON.stringify({additionalMinutes:mins,idempotencyKey:'extension-test-1',
+        actorId:U(30),clinicId:otherClinic,patientId:otherPatient})
+    });
+    const body=await response.json();
+    return {status:response.status,body};
+  };
+  let saved=await save(10);
+  assert.equal(saved.status,200);
+  assert.equal(saved.body.billableUnitsCreated,0);
+  assert.equal(saved.body.calendarReservationConfirmed,false);
+  assert.equal(rpcWriteCount,1,'explicit POST invokes exactly one RPC');
+  assert.equal((await save('FULL')).status,422,'never invoke short RPC for full billable session');
+  assert.equal((await save(0)).status,422);
+  assert.equal((await save(5,{'x-auth':'no'})).status,401);
+  assert.equal((await save(5,{'x-capability':'no'})).status,403);
+  assert.equal(rpcWriteCount,1,'invalid/unauthorized POST never calls RPC');
+  forcedRpcError='P0504_SHORT_EXTENSION_CONFLICT_REQUIRES_REVIEW';
+  saved=await save(10);
+  assert.equal(saved.status,409,'clinical conflict cannot be committed');
+  forcedRpcError=null;
+  assert.equal(rpcWriteCount,2);
+  assert.equal(writeCount,0,'no direct table writes from HTTP handler');
+  console.log('P0-504 continuation read-only preview and explicit save route: PASS');
 } finally {await new Promise<void>((resolve,reject)=>server.close(err=>err?reject(err):resolve()));}
