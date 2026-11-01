@@ -6,6 +6,36 @@ begin;
 alter table public.aba_sessions
   add column if not exists effective_end_at timestamptz;
 
+-- Existing ABA RLS permits general row UPDATE to authenticated users. The new
+-- column must NOT inherit permission to change the server-authoritative end.
+create or replace function public.guard_p0504_effective_end_server_only_v1()
+returns trigger language plpgsql
+set search_path to pg_catalog, public
+as $guard$
+begin
+  if tg_op='INSERT' then
+    if new.effective_end_at is not null then
+      raise exception 'P0504_EFFECTIVE_END_BACKEND_ONLY';
+    end if;
+  elsif new.effective_end_at is distinct from old.effective_end_at then
+    if session_user not in ('postgres','service_role','supabase_admin')
+      and current_setting('request.jwt.claim.role',true) is distinct from 'service_role'
+    then
+      raise exception 'P0504_EFFECTIVE_END_BACKEND_ONLY';
+    end if;
+  end if;
+  return new;
+end;
+$guard$;
+
+revoke all on function public.guard_p0504_effective_end_server_only_v1()
+  from public,anon,authenticated;
+drop trigger if exists trg_p0504_effective_end_server_only on public.aba_sessions;
+create trigger trg_p0504_effective_end_server_only
+before insert or update of effective_end_at
+on public.aba_sessions for each row
+execute function public.guard_p0504_effective_end_server_only_v1();
+
 create table if not exists public.aba_session_continuation_operations_v1 (
   clinic_id uuid not null,
   idempotency_key text not null check (length(idempotency_key) between 8 and 128),
