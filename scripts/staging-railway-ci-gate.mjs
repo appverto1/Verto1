@@ -10,6 +10,7 @@ const tests = [
   'tests/conventionalSessionLifecycle.regression.test.mjs',
   'tests/monthlySessionPatientBilling.regression.test.mjs',
   'tests/sessionSpecialtyIsolation.test.ts',
+  'tests/p0504SessionContinuationPolicy.test.ts',
   'tests/appointmentCancellationReasons.test.ts',
   'tests/groupSessionFinanceAtomicSql.test.ts',
   'tests/groupSessionAtomicReservation.test.mjs',
