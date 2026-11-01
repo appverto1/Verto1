@@ -31,7 +31,7 @@ const instant = (value: unknown): number | null => {
   return Number.isFinite(ms) ? ms : null;
 };
 const baseMinutes = (value: unknown): number | null => (
-  Number.isInteger(value) && Number(value) >= 5 && Number(value) <= 240 ? Number(value) : null
+  typeof value === 'number' && Number.isInteger(value) && value >= 5 && value <= 240 ? value : null
 );
 
 export function resolveCanonicalSessionEnd(input: ContinuationTime): string | null {
@@ -70,7 +70,7 @@ export function previewSessionContinuation(input: ContinuationTime, choice: Cont
 export function financialContinuationPreview(
   unitPriceCents: unknown, choice: ContinuationChoice, unitsAlreadyCommitted: number,
 ) {
-  if (!Number.isSafeInteger(unitPriceCents) || Number(unitPriceCents) < 0 ||
+  if (typeof unitPriceCents !== 'number' || !Number.isSafeInteger(unitPriceCents) || unitPriceCents < 0 ||
       !Number.isSafeInteger(unitsAlreadyCommitted) || unitsAlreadyCommitted < 1 ||
       unitsAlreadyCommitted > 1000) return null;
   const price = Number(unitPriceCents);
