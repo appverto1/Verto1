@@ -118,8 +118,8 @@ revoke all on function public.guard_p0504_aba_session_appointment_scope_v1()
 grant execute on function public.guard_p0504_aba_session_appointment_scope_v1()
   to service_role;
 
-drop trigger if exists trg_p0504_aba_session_appointment_scope on public.aba_sessions;
-create trigger trg_p0504_aba_session_appointment_scope
+drop trigger if exists a_p0504_aba_session_appointment_scope on public.aba_sessions;
+create trigger a_p0504_aba_session_appointment_scope
 before insert or update of appointment_id, patient_id, clinic_id,
   organization_id, therapist_id, service_type, scheduled_start_at,
   scheduled_end_at, scheduled_duration_minutes, room_id
