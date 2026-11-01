@@ -42,6 +42,8 @@ export function scheduledAbaSessionScopeMismatch(
   const appointmentSpecialty = appointmentClinicalSpecialtyKey(appointment);
   const sessionSpecialty = clinicalSpecialtyScopeKey(existing.serviceType || existing.service_type);
   const sessionPlanSpecialty = clinicalSpecialtyScopeKey(existing.therapeuticPlanSpecialty || existing.therapeutic_plan_specialty);
+  if (!appointmentSpecialty && (sessionSpecialty || sessionPlanSpecialty))
+    return 'SESSION_SPECIALTY_UNVERIFIED';
   if (appointmentSpecialty && !sessionSpecialty && !sessionPlanSpecialty)
     return 'SESSION_SPECIALTY_UNVERIFIED';
   if (appointmentSpecialty && (
