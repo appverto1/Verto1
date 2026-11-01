@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { scheduledAbaSessionScopeMismatch } from '../src/utils/sessionAutoFinalization';
 import {
   clinicalSpecialtiesMatch,
   clinicalSpecialtyScopeKey,
@@ -141,5 +142,43 @@ assert.match(
   /getPatientTherapeuticPlan\(String\(patient\?\.id \|\| ''\), \{ force: true \}\)/,
   'início de sessão deve validar estado atualizado do plano e não confiar em cache pausado',
 );
+
+
+// P0-504: no cached/legacy session may become another scheduled encounter.
+const scheduledFono = {
+  id: 'appointment-fono', patientId: 'patient-1', clinicId: 'clinic-a',
+  professionalId: 'professional-1', serviceType: 'Fonoaudiologia',
+};
+const scopedFonoSession = {
+  id: 'session-fono', patientId: 'patient-1', clinicId: 'clinic-a',
+  appointmentId: 'appointment-fono', professionalId: 'professional-1',
+  serviceType: 'Fonoaudiologia', therapeuticPlanSpecialty: 'Fonoaudiologia',
+  status: 'active',
+};
+const owner = { patientId: 'patient-1', clinicId: 'clinic-a' };
+assert.equal(scheduledAbaSessionScopeMismatch(scopedFonoSession,scheduledFono,owner),null);
+const deny = (session:any, appointment:any, reason:string) =>
+  assert.equal(scheduledAbaSessionScopeMismatch(session,appointment,owner),reason);
+deny(scopedFonoSession,{...scheduledFono,id:'appointment-to',serviceType:'Terapia Ocupacional'},'SESSION_APPOINTMENT_MISMATCH');
+deny({...scopedFonoSession,appointmentId:null},scheduledFono,'SESSION_LEGACY_LINK_REVIEW_REQUIRED');
+deny({...scopedFonoSession,clinicId:'clinic-b'},scheduledFono,'SESSION_PATIENT_CLINIC_MISMATCH');
+deny(scopedFonoSession,{...scheduledFono,clinicId:'clinic-b'},'SESSION_PATIENT_CLINIC_MISMATCH');
+deny({...scopedFonoSession,patientId:'patient-2'},scheduledFono,'SESSION_PATIENT_CLINIC_MISMATCH');
+deny({...scopedFonoSession,professionalId:'professional-2'},scheduledFono,'SESSION_PROFESSIONAL_MISMATCH');
+deny({...scopedFonoSession,professionalId:null},scheduledFono,'SESSION_PROFESSIONAL_UNVERIFIED');
+deny({...scopedFonoSession,serviceType:'Terapia Ocupacional'},scheduledFono,'SESSION_SPECIALTY_MISMATCH');
+deny({...scopedFonoSession,therapeuticPlanSpecialty:'Terapia Ocupacional'},scheduledFono,'SESSION_SPECIALTY_MISMATCH');
+deny({...scopedFonoSession,serviceType:null,therapeuticPlanSpecialty:null},scheduledFono,'SESSION_SPECIALTY_UNVERIFIED');
+deny({...scopedFonoSession,status:'completed'},scheduledFono,'SESSION_NOT_ACTIVE');
+deny({...scopedFonoSession,therapeuticPlanId:'to-plan'},
+  {...scheduledFono,therapeuticPlanId:'fono-plan'},'SESSION_THERAPEUTIC_PLAN_MISMATCH');
+assert.match(patientDetail,/if \(activeSession\) \{[\s\S]{0,500}scheduledAbaSessionScopeMismatch\(/,
+  'manual session reopening also guards explicit Agenda scope');
+const guardedEffect = patientDetail.split('const sessionAppointmentId = sessionToOpen?.appointment_id')[1];
+assert.ok(guardedEffect,'Agenda recovery branch must be present');
+assert.ok(guardedEffect.indexOf('scheduledAbaSessionScopeMismatch(')>=0);
+assert.ok(guardedEffect.indexOf('scheduledAbaSessionScopeMismatch(') <
+  guardedEffect.indexOf('if (scheduledAppointmentId && !sessionAppointmentId)'),
+  'refuse unsafe reuse and legacy relinking before any optimistic session mutation');
 
 console.log('sessionSpecialtyIsolation.test.ts: ok');
