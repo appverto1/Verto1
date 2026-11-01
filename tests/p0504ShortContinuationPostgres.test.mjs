@@ -41,6 +41,11 @@ try{
   const migration=fs.readFileSync('supabase/migrations/20261101194500_p0504_short_aba_continuation_v1.sql','utf8')
     .replace(/^begin;\s*/m,'').replace(/\s*commit;\s*$/,'');
   await client.query(migration);
+  await client.query('grant select,update(effective_end_at) on public.aba_sessions to authenticated');
+  await deny(async()=>{
+    await client.query('SET LOCAL ROLE authenticated');
+    await client.query("update public.aba_sessions set effective_end_at=now() where id='missing'");
+  },'P0504_EFFECTIVE_END_BACKEND_ONLY');
   await client.query('insert into public.test_roles(actor_id,clinic_id,role) values ($1,$2,$3),($4,$5,$6)',
     [professional,clinic,'therapist',otherProfessional,clinic,'therapist']);
   await client.query("insert into public.aba_sessions(id,clinic_id,organization_id,patient_id,therapist_id,appointment_id,status,started_at,actual_start_at) values($1,$2,$2,$3,$4,$5,'in_progress',$6,$6)",
@@ -51,7 +56,7 @@ try{
   assert.equal(first.success,true);assert.equal(first.billableUnitsCreated,0);
   assert.equal(first.calendarReservationConfirmed,false);
   assert.equal(first.idempotentReplay,false);
-  assert.equal(first.effectiveEndAt,new Date(end.getTime()+5*60_000).toISOString());
+  assert.equal(Date.parse(first.effectiveEndAt),end.getTime()+5*60_000);
   const same=await call(sessionId,5,'synthetic-key-1');
   assert.equal(same.idempotentReplay,true);
   assert.equal(same.effectiveEndAt,first.effectiveEndAt);
@@ -70,7 +75,7 @@ try{
   assert.equal((await client.query('select status from public.appointments where id=$1',[b])).rows[0].status,'scheduled','B must never be cancelled');
   await client.query('delete from public.appointments where id=$1',[b]);
   const second=await call(sessionId,10,'synthetic-key-2');
-  assert.equal(second.effectiveEndAt,new Date(end.getTime()+15*60_000).toISOString());
+  assert.equal(Date.parse(second.effectiveEndAt),end.getTime()+15*60_000);
   assert.equal(second.billableUnitsCreated,0);
   assert.equal((await client.query('select count(*)::integer n from public.appointments')).rows[0].n,1);
   assert.equal((await client.query('select count(*)::integer n from public.aba_session_continuation_operations_v1')).rows[0].n,2);
