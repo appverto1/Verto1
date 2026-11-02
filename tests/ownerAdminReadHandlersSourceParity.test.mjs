@@ -28,7 +28,23 @@ for(const item of m.routes){
  const returned=fn.body.statements.find(ts.isReturnStatement)?.expression;
  assert.ok(ts.isArrowFunction(returned)&&ts.isBlock(returned.body));
  assert.ok(returned.body.statements[0].getText(file).includes('getDeps()'));
- assert.deepEqual(returned.body.statements.slice(1).map(x=>clean(x.getText(file))),originalHandler.body.statements.map(x=>clean(x.getText(old))),'original exact statements '+item.path);
+ const newStatements=returned.body.statements.slice(1).map(x=>clean(x.getText(file)));
+ const originalStatements=originalHandler.body.statements.map(x=>clean(x.getText(old)));
+ if (item.path === '/api/owner/financial-overview') {
+   // The owner DRE now deliberately applies the manually saved operational
+   // costs to the existing ledger overview. All other statements keep parity.
+   assert.ok(newStatements.some(s=>s.includes('await applyOwnerDreCostsToOverview(overview)')),
+     'manual owner DRE costs must remain in the handler');
+   // The whole handler is one TryStatement in the AST; remove only the
+   // additive cost call line, never the enclosing try/catch.
+   const normalized=newStatements.map(s=>s
+     .replace(/^[ \t]*const withOwnerCosts = await applyOwnerDreCostsToOverview\(overview\);\r?\n/m,'')
+     .replace('return res.json({ success: true, data: withOwnerCosts });',
+       'return res.json({ success: true, data: overview });'));
+   assert.deepEqual(normalized,originalStatements,'owner DRE intentional additive cost delta only');
+ } else {
+   assert.deepEqual(newStatements,originalStatements,'original exact statements '+item.path);
+ }
 }
 assert.equal(m.routes.length,9);
 assert.equal(m.originalLines - m.expectedServerLines, 281, 'historical owner/admin extraction delta must remain documented');

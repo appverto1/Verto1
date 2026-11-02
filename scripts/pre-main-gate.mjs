@@ -199,6 +199,8 @@ const criticalTests = [
   'tests/therapeuticPlanCaseProfessionalCapability.regression.test.ts',
   'tests/therapeuticPlanSessionContext.regression.test.mjs',
   'tests/sessionSpecialtyIsolation.test.ts',
+  'tests/p0504SessionContinuationPolicy.test.ts',
+  'tests/p0504ContinuationPreviewRoutes.test.ts',
   'tests/clinicSchedulingActiveMembership.regression.test.mjs',
   'tests/calendarPatientIdentitySharedRoom.regression.test.ts',
   'tests/abaMeasurementV3CollectionUi.test.mjs',

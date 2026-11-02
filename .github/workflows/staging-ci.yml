@@ -155,6 +155,21 @@ jobs:
       - name: Group sessions and financial persistence regressions
         run: node scripts/group-sessions-regressions.mjs
 
+      - name: P0-504 clinical session scope and continuation safety
+        env:
+          VERTO_GROUP_POSTGRES_TEST: "1"
+          PGHOST: "127.0.0.1"
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: group_session_ci_only
+          PGDATABASE: verto_group_regression
+        run: |
+          node --import tsx tests/sessionSpecialtyIsolation.test.ts
+          node --import tsx tests/p0504SessionContinuationPolicy.test.ts
+          node --import tsx tests/p0504ContinuationPreviewRoutes.test.ts
+          node tests/p0504AbaSessionAppointmentGuardPostgres.test.mjs
+          node tests/p0504ShortContinuationPostgres.test.mjs
+
       - name: Financial plans by active professional regression
         run: |
           node --import tsx tests/patientFinancialSpecialtyClinicGate.test.ts
