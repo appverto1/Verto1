@@ -28,7 +28,7 @@ const ts = (value: unknown) => {
 const activeAppointment = (a: any) => {
   const status = String(a?.status || '').toLowerCase();
   return a && a.is_active !== false && !a.deleted_at &&
-    !['cancelled', 'canceled', 'deleted', 'no_show', 'missed', 'completed', 'cancelado'].includes(status);
+    !['cancelled', 'canceled', 'cancelada', 'cancelado', 'cancelled_by_clinic', 'cancelado_pela_clinica', 'deleted', 'no_show', 'missed', 'completed'].includes(status);
 };
 const stableService = (service: unknown) => clinicalSpecialtyScopeKey(String(service || ''));
 const safeCents = (value: unknown) => {
