@@ -152,7 +152,7 @@ begin
     or length(trim(coalesce(p_verto_address, ''))) not between 8 and 400
     or length(trim(coalesce(p_clinic_legal_name, ''))) not between 3 and 200
     or length(trim(coalesce(p_clinic_address, ''))) not between 8 and 400
-    or regexp_replace(coalesce(p_verto_cnpj, ''), '[^0-9]', '', 'g') !~ '^[0-9]{14}$'    or regexp_replace(coalesce(p_clinic_cnpj, ''), '[^0-9]', '', 'g') !~ '^[0-9]{14}$'    or length(trim(coalesce(p_benefit_description, ''))) not between 10 and 500
+    or upper(regexp_replace(coalesce(p_verto_cnpj, ''), '[^0-9A-Za-z]', '', 'g')) !~ '^[A-Z0-9]{12}[0-9]{2}$'    or upper(regexp_replace(coalesce(p_clinic_cnpj, ''), '[^0-9A-Za-z]', '', 'g')) !~ '^[A-Z0-9]{12}[0-9]{2}$'    or length(trim(coalesce(p_benefit_description, ''))) not between 10 and 500
     or length(trim(coalesce(p_benefit_conditions, ''))) not between 10 and 1000
     or p_benefit_value_cents is null or p_benefit_value_cents <= 0
     or p_monthly_reference_cents is null or p_monthly_reference_cents <= 0
@@ -181,10 +181,10 @@ begin
 
   update public.organization_loyalty_drafts set
     verto_legal_name = trim(p_verto_legal_name),
-    verto_cnpj = regexp_replace(p_verto_cnpj, '[^0-9]', '', 'g'),
+    verto_cnpj = upper(regexp_replace(p_verto_cnpj, '[^0-9A-Za-z]', '', 'g')),
     verto_address = trim(p_verto_address),
     clinic_legal_name = trim(p_clinic_legal_name),
-    clinic_cnpj = regexp_replace(p_clinic_cnpj, '[^0-9]', '', 'g'),
+    clinic_cnpj = upper(regexp_replace(p_clinic_cnpj, '[^0-9A-Za-z]', '', 'g')),
     clinic_address = trim(p_clinic_address),
     benefit_description = trim(p_benefit_description),
     benefit_value_cents = p_benefit_value_cents,
