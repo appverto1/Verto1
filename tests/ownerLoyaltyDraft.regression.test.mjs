@@ -32,7 +32,8 @@ test('tenant and subscription chosen by database and draft writes are idempotent
 test('owner MFA and Supabase permissions fail closed', () => {
   assert.match(routes, /const guard = \[checkAuth, checkPlatformAdmin, stagingOnly\]/);
   assert.match(routes, /VERTO_LOYALTY_STAGING_ENABLED/);
-  assert.match(routes, /RAILWAY_ENVIRONMENT_NAME/);
+  assert.match(routes, /VERTO_DEPLOYMENT_ENV !== 'staging'/);
+  assert.match(routes, /SUPABASE_EXPECTED_PROJECT_REF !== 'irspungjhapqdbgqroyc'/);
   assert.match(routes, /Object\.keys\(body\)\.length !== 1/);
   assert.match(bridge, /registerOwnerLoyaltyDraftRoutes\(app,\{supabase,checkAuth,checkPlatformAdmin,isUuid\}\)/);
   assert.match(migration, /enable row level security/);
