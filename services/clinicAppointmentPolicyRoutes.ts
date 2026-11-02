@@ -9,6 +9,7 @@ import { registerGroupSessionPricePreviewRoute } from './groupSessions/groupSess
 import { registerGroupSessionBookingPreviewRoute } from './groupSessions/groupSessionBookingPreviewRoute';
 import { registerGroupSessionFinancialRateRoutes } from './groupSessions/groupSessionFinancialRateRoutes';
 import { registerP0504ContinuationPreviewRoutes } from './p0504ContinuationPreviewRoutes';
+import { registerClinicLoyaltyReviewRoutes } from './clinicLoyaltyReviewRoutes';
 
 type ClinicAppointmentPolicyRouteDeps = {
   supabase: any;
@@ -32,6 +33,7 @@ export function registerClinicAppointmentPolicyRoutes(
   registerClinicSchedulingSpecialtyRoute(app, deps);
   registerPatientSharedChartRoutes(app, deps);
   registerP0504ContinuationPreviewRoutes(app, deps);
+  registerClinicLoyaltyReviewRoutes(app, deps);
   if (deps.serializeGroupAppointment) registerGroupSessionRoutes(app, deps);
 
   const {
