@@ -1,43 +1,39 @@
-# Fidelidade Verto — MVP de staging (02/11/2026)
+# Fidelidade Verto — termo aprovado e aceite eletrônico (staging)
 
-## Contrato de produto aprovado
-- Prazo: **12 meses**, por clínica/organização, sem retroatividade.
-- Rescisão antecipada: **multa proporcional somente após parecer jurídico**.
-- Clientes já pagantes: elegíveis **sem novo Checkout e sem substituir a assinatura existente**.
-- Nada em staging altera cobranças, renovações, Stripe, clínicas, pacientes, prontuários, permissões ou dados de produção.
-- A regra **não** bloqueia cancelamento e **não** suspende acesso; o mecanismo existente de billing continua autoritativo.
+## Escopo
+- Prazo fixo de **12 meses**, sem retroagir à assinatura existente e sem nova fidelidade automática.
+- Teto inicial de **duas mensalidades de referência**, proporcional a dias restantes/dias totais, conforme o documento aprovado pelo responsável da Verto.
+- A eventual cobrança está **fora do escopo**: não há criação de invoice, alteração de Stripe, suspensão/cancelamento técnico ou débito de multa.
+- Benefício comercial concreto, valor econômico, condições, partes e datas devem ser preenchidos antes da oferta.
+- Abrange clientes já pagantes, identificados pelo ledger servidor da Stripe e vinculados à clínica.
+- O termo comercial é uma proposta de adesão voluntária; sua validade/exigibilidade jurídica deve ser avaliada por profissional habilitado.
 
-## Entrega deste PR (MVP 1: minuta não vinculante)
-- Super Admin > Clientes e Lucro: quadro de clínicas com assinatura ativa **e pagamento confirmado no ledger**; botão "Preparar minuta".
-- Backend autenticado + autorização de Super Admin e MFA, incluindo barreira explícita de staging.
-- Postgres: `organization_loyalty_drafts` isolada, somente **draft**, 12 meses, revisão jurídica pendente, uma minuta por organização e vínculo à assinatura identificada no servidor.
-- RPC única atômica, idempotente e service-role-only; sem update em `organization_billing_contracts`, `organization_billing_access_state`, `clinics` ou objetos Stripe.
-- Sem aceite, data de vigência, multa calculada, fatura ou obrigação contratual emitida nesta etapa.
+## Estrutura e trilha de consentimento
+1. Super Admin/MFA acessa "Clientes e Lucro" e clica "Preparar contrato".
+2. Super Admin preenche identificação contratual das partes, CNPJs numéricos ou alfanuméricos, endereço, benefício, valor econômico, condições, mensalidade de referência e data de início; somente **Salvar e disponibilizar** faz o registro da oferta (não há autosave).
+3. Backend deriva o ID da assinatura ativa e paga do ledger; gera documento completo baseado no template de versão 1.0; banco grava texto integral com SHA-256, datas e status **offered**. Oferta publicada é imutável por rotas.
+4. Diretor autenticado da clínica abre **Menu da conta > Contrato de fidelidade**, vê o texto completo e pode salvar cópia.
+5. Caixa "Li e aceito..." inicia desmarcada. Clique separado em **Confirmar aceite** chama POST protegido.
+6. Backend usa clínica ativa validada, identidade do diretor, capability não delegável e RPC restrita. Banco valida `clinic_memberships` ativo/diretor, estado paid+active vinculado, hash exato, janela de início e grava `accepted_at`, `accepted_by`, nome e e-mail do representante. Reenvio idêntico é idempotente; aceite concorrente diferente não sobrescreve o primeiro.
+7. Documento aceito permanece disponível para leitura e cópia mesmo que o status da cobrança mude posteriormente.
+8. Nenhuma atualização clínica, financeira, de usuários, módulos, acessos ou de assinaturas Stripe.
 
-## Barras de segurança de ambiente
-Servidor precisa simultaneamente:
-- `VERTO_LOYALTY_STAGING_ENABLED=true`
-- `VERTO_DEPLOYMENT_ENV=staging`
-- `SUPABASE_EXPECTED_PROJECT_REF=irspungjhapqdbgqroyc` (projeto Verto-Staging validado)
-Build frontend: `VITE_FEATURE_LOYALTY_STAGING=true`.
-Qualquer outra combinação => endpoints respondem 404. Em produção os flags permanecem desabilitados.
+## Segurança / isolamento
+- Banco de staging: projeto **irspungjhapqdbgqroyc**.
+- Backend só habilita com `VERTO_LOYALTY_STAGING_ENABLED=true`, `VERTO_DEPLOYMENT_ENV=staging` e `SUPABASE_EXPECTED_PROJECT_REF=irspungjhapqdbgqroyc`.
+- Frontend de staging só mostra painéis com `VITE_FEATURE_LOYALTY_STAGING=true`.
+- Em produção esses flags devem permanecer desabilitados; APIs retornam 404.
+- RLS com acesso apenas a service-role e RPCs sob backend autenticado. Contrato sempre vinculado a `organization_id`; frontend não envia Stripe ID, papel, clínica, valor ou data no aceite.
+- Operações atômicas com lock e controle de duplicação; sem Realtime, cron, polling ou leituras clínicas.
+- Após aceite o texto e seu hash permanecem congelados; ausência de mudança de termos sem novo procedimento.
 
-## Não incluído / gates futuros
-1. Jurídico deve definir o percentual ou base da penalidade, fórmula proporcional, eventos que excluem multa, forma de notificação, prazo de arrependimento quando aplicável, tratamento de mudanças de plano e redação do termo aditivo.
-2. Implementar aceite **pelo representante autorizado da própria clínica**, com versão e hash do texto, evidências de consentimento e data de entrada em vigor; nunca registrar aceite por simples seleção do Super Admin.
-3. Somente após gates 1 e 2 permitir status ativo e computar intervalo de 12 meses a partir da data de aceite/eficácia.
-4. Simulação financeira informativa; nunca criar cobrança automática na Stripe sem outro escopo e autorização.
-5. Validar comportamento de cancelamento antecipado sem interferir no mecanismo atual de suspensão de assinaturas.
+## Homologação obrigatória antes do merge
+- Testes estruturais e SQL transacional com rollback em staging (dados não persistidos).
+- Executar suíte Node/TypeScript, build e revisão de diff do PR.
+- Verificar 401/403/404 em contas sem acesso, IDs manipulados, POST sem checkbox, hash errado e múltiplos aceites.
+- Conferir persistência após recarregamento; atualizações no mesmo fluxo sem F5.
+- Deploy somente para staging, sem nova infraestrutura nem custo adicional intencional.
+- Após validação, smoke humano um passo por vez.
 
-## Critérios de teste em staging
-1. Super Admin com MFA abre Clientes e Lucro; clínicas elegíveis aparecem sem pacientes/PII.
-2. Criar minuta para clínica pagante de teste; botão muda imediatamente para "Minuta salva"; atualizar página e confirmar persistência.
-3. Repetir POST sequencial e simultâneo: mesmo registro, nenhum duplicado.
-4. Acesso sem login/sem MFA/não Super Admin: 401/403; produção ou flag ausente: 404 (após autorização).
-5. ID de outra clínica, UUID malformado, campos inesperados e assinatura cancelada/sem pagamento: recusar criação.
-6. Confirmar `draft`, `pending_review` e 12 meses no banco; nenhuma alteração de status de assinatura, de acesso, de módulos ou de faturamento.
-7. Verificar que não há novos processos/cron, polling, Realtime, requisições clínicas ou chamadas Stripe.
-
-## Rollout
-Branch -> PR para staging -> review/diff/testes -> migração apenas Verto-Staging -> build/deploy staging **somente quando seguro e autorizado pelo fluxo** -> smoke humano, um passo de cada vez.
-Produção fica intocada; este PR **não é um contrato de fidelidade ativado**.
+## Juridico e condicoes comerciais
+A "versão aprovada" nesta entrega representa aprovação do texto pelo responsável do produto. **Não representa parecer jurídico emitido por advogado**. Antes de oferecer a um cliente real, confirmar a adequação da multa proporcional, a contrapartida real, eventuais direitos do consumidor e os dados completos de cada instrumento. Nenhuma multa é lançada automaticamente.
