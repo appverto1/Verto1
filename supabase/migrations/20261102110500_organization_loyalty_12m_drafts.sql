@@ -183,7 +183,7 @@ commit;
     or v_current_subscription is distinct from v_draft.stripe_subscription_id
   then raise exception 'LOYALTY_SUBSCRIPTION_INELIGIBLE'; end if;
 
-  v_hash := encode(public.digest(convert_to(p_terms_text, 'UTF8'), 'sha256'), 'hex');
+  v_hash := encode(extensions.digest(convert_to(p_terms_text, 'UTF8'), 'sha256'), 'hex');
   if v_draft.status = 'offered' and v_draft.terms_sha256 = v_hash then return v_draft; end if;
   if v_draft.status <> 'draft' then raise exception 'LOYALTY_OFFER_ALREADY_FINALIZED'; end if;
 
@@ -243,7 +243,7 @@ begin
      and v_row.terms_sha256 = p_terms_sha256 then return v_row; end if;
   if v_row.status <> 'offered' or v_row.legal_review_status <> 'owner_approved'
      or v_row.terms_sha256 is distinct from p_terms_sha256
-     or encode(public.digest(convert_to(v_row.terms_text, 'UTF8'), 'sha256'), 'hex') <> v_row.terms_sha256
+     or encode(extensions.digest(convert_to(v_row.terms_text, 'UTF8'), 'sha256'), 'hex') <> v_row.terms_sha256
      or v_row.effective_start_date < v_today
   then raise exception 'LOYALTY_OFFER_STALE_OR_NOT_APPROVED'; end if;
   if not exists (
