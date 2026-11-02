@@ -55,7 +55,7 @@ declare
 begin
   if new.deleted_at is not null or not coalesce(new.is_active,true)
      or lower(coalesce(new.status,'')) in
-       ('cancelled','canceled','cancelado','deleted','no_show','missed') then
+       ('cancelled','canceled','cancelada','cancelado','cancelled_by_clinic','cancelado_pela_clinica','deleted','no_show','missed') then
     return new;
   end if;
   v_start := coalesce(new.scheduled_start_at,new.scheduled_at);
@@ -285,7 +285,7 @@ begin
     where b.id<>v_appointment.id
       and b.deleted_at is null and coalesce(b.is_active,true)
       and lower(coalesce(b.status,'scheduled')) not in
-        ('cancelled','canceled','cancelado','deleted','no_show','missed')
+        ('cancelled','canceled','cancelada','cancelado','cancelled_by_clinic','cancelado_pela_clinica','deleted','no_show','missed')
       and (
         b.therapist_id=v_appointment.therapist_id
         or b.patient_id=v_appointment.patient_id
