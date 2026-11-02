@@ -1403,7 +1403,7 @@ export const AnamnesisModal = ({
             onKeyDown={(event) => {
               if (event.key === 'Escape') event.preventDefault();
               if (event.key !== 'Tab') return;
-              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not([disabled])'));
+              const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll('button:not([disabled])')) as HTMLButtonElement[];
               const first = buttons[0];
               const last = buttons[buttons.length - 1];
               if (!first || !last) return;
