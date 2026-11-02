@@ -38,7 +38,7 @@ try{
     'create function public.verto_clinic_actor_role_v1(p_actor uuid,p_clinic uuid) returns text language sql stable as $role$select role from public.test_roles where actor_id=p_actor and clinic_id=p_clinic$role$;',
     "create function public.clinical_specialty_scope_key_v1(value text) returns text language sql immutable as $spec$select case when lower(coalesce(value,'')) like 'fono%' then 'speech_therapy' when lower(coalesce(value,'')) like 'terapia ocupacional%' then 'occupational_therapy' else null end$spec$;"
   ].join('\n'));
-  const migration=fs.readFileSync('supabase/migrations/20261101194500_p0504_short_aba_continuation_v1.sql','utf8')
+  const migration=fs.readFileSync('supabase/migrations/20261102012150_p0504_short_aba_continuation_v1.sql','utf8')
     .replace(/^begin;\s*/m,'').replace(/\s*commit;\s*$/,'');
   await client.query(migration);
   await client.query('grant select,update(effective_end_at) on public.aba_sessions to authenticated');

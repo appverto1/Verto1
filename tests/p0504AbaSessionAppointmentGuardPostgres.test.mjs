@@ -25,7 +25,7 @@ try {
     'create table public.aba_sessions(id text primary key,appointment_id uuid,patient_id uuid,clinic_id text,organization_id text,therapist_id text,service_type text,scheduled_start_at timestamptz,scheduled_end_at timestamptz,scheduled_duration_minutes integer,room_id text,status text);',
     "create function public.clinical_specialty_scope_key_v1(value text) returns text language sql immutable as $fn$select case when lower(coalesce(value,'')) like 'fono%' then 'speech_therapy' when lower(coalesce(value,'')) like 'terapia ocupacional%' or lower(coalesce(value,''))='to' then 'occupational_therapy' else null end$fn$;"
   ].join('\n'));
-  const migration=fs.readFileSync('supabase/migrations/20261101184000_p0504_aba_session_canonical_appointment_guard_v1.sql','utf8').replace(/^begin;\s*/m,'').replace(/\s*commit;\s*$/,'');
+  const migration=fs.readFileSync('supabase/migrations/20261102012140_p0504_aba_session_canonical_appointment_guard_v1.sql','utf8').replace(/^begin;\s*/m,'').replace(/\s*commit;\s*$/,'');
   await client.query(migration);
   await client.query("insert into public.appointments(id,patient_id,clinic_id,organization_id,therapist_id,scheduled_at,scheduled_start_at,scheduled_end_at,duration_minutes,scheduled_duration_minutes,room_id,service_type,source_payload,status,is_active) values ($1,$2,$3,$3,$4,'2026-11-02T18:00:00Z','2026-11-02T18:00:00Z','2026-11-02T18:50:00Z',50,50,'room-server','Fonoaudiologia','{\"specialty\":\"Fonoaudiologia\"}'::jsonb,'in_progress',true)",[appointment,patient,clinic,therapist]);
   await client.query('insert into public.clinics(id,session_duration_minutes) values ($1,45)',[clinic]);
