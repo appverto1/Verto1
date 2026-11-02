@@ -595,6 +595,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [commercialConsent, setCommercialConsent] = useState(false);
   const [acceptedAt, setAcceptedAt] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [offerUnavailable, setOfferUnavailable] = useState(false);
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
   const [paymentStatusRefreshKey, setPaymentStatusRefreshKey] = useState(0);
   const [directorOpening, setDirectorOpening] = useState(false);
@@ -824,11 +825,18 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     };
 
     const loadOffer = async () => {
+      setOfferUnavailable(false);
       try {
         const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}`, {
           credentials: 'omit',
         });
         const data = await response.json().catch(() => ({}));
+        if (response.status === 404 && data?.error === 'OFFER_UNAVAILABLE') {
+          // An opaque public link may be expired, revoked, or already paid.
+          // A 404 cannot prove which. Never retry checkout or claim payment here.
+          if (!cancelled) { setOfferUnavailable(true); setError(''); }
+          return;
+        }
         if (!response.ok || data?.success === false) {
           throw new Error(data?.message || data?.error || 'Oferta indisponível.');
         }
@@ -992,6 +1000,24 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
           ) : loading ? (
             <div className="flex min-h-72 items-center justify-center gap-3 text-sm text-slate-600">
               <Loader2 className="animate-spin" size={20} /> Carregando proposta...
+            </div>
+          ) : offerUnavailable ? (
+            <div className="flex min-h-60 flex-col items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 px-5 py-8 text-center">
+              <AlertCircle className="mb-4 text-amber-600" size={30} />
+              <h1 className="text-lg font-semibold text-slate-900">Proposta não disponível para nova contratação</h1>
+              <p className="mt-3 max-w-md text-sm leading-6 text-slate-600">
+                Este link pode ter sido concluído, revogado ou expirado. Se você já pagou,
+                não faça outro pagamento: use o e-mail de ativação comercial enviado
+                após a contratação para definir sua senha e entrar na clínica.
+              </p>
+              <p className="mt-2 max-w-md text-xs leading-5 text-slate-500">
+                Caso já tenha ativado sua conta, entre normalmente. Se perdeu o e-mail,
+                acesse a tela de login e escolha Esqueci minha senha. Caso não tenha
+                contratado, solicite uma nova proposta à Verto.
+              </p>
+              <a href="/" className="mt-5 inline-flex min-h-11 items-center rounded-xl border border-violet-200 bg-white px-5 text-sm font-semibold text-violet-700 hover:bg-violet-50">
+                Ir para a tela de acesso
+              </a>
             </div>
           ) : error && !offer ? (
             <div className="rounded-2xl border border-rose-100 bg-rose-50 p-5 text-center">
