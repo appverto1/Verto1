@@ -219,6 +219,7 @@ declare
   v_row public.organization_loyalty_drafts;
   v_actor_name text;
   v_actor_email text;
+  v_paid_subscription text;
   v_today date := (now() at time zone 'America/Sao_Paulo')::date;
 begin
   if p_confirmed is distinct from true or p_actor_user_id is null
@@ -239,13 +240,16 @@ begin
      or encode(extensions.digest(convert_to(v_row.terms_text, 'UTF8'), 'sha256'), 'hex') <> v_row.terms_sha256
      or v_row.effective_start_date < v_today
   then raise exception 'LOYALTY_OFFER_STALE_OR_NOT_APPROVED'; end if;
-  if not exists (
-    select 1 from public.platform_subscription_financial_state state
-    where state.organization_id = p_organization_id
-      and state.stripe_subscription_id = v_row.stripe_subscription_id
-      and state.stripe_status = 'active'
-      and (state.first_paid_at is not null or state.last_paid_at is not null)
-  ) then raise exception 'LOYALTY_SUBSCRIPTION_INELIGIBLE'; end if;
+  -- Serialize the final paid-state check with concurrent Stripe webhook writes.
+  select state.stripe_subscription_id into v_paid_subscription
+  from public.platform_subscription_financial_state state
+  where state.organization_id = p_organization_id
+    and state.stripe_subscription_id = v_row.stripe_subscription_id
+    and state.stripe_status = 'active'
+    and (state.first_paid_at is not null or state.last_paid_at is not null)
+  limit 1 for share;
+  if v_paid_subscription is null
+    then raise exception 'LOYALTY_SUBSCRIPTION_INELIGIBLE'; end if;
 
   select u.name, u.email into v_actor_name, v_actor_email
   from public.users u where u.id = p_actor_user_id;
