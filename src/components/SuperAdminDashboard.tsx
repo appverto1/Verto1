@@ -41,6 +41,7 @@ import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel
 import { CommercialKanban } from './CommercialKanban';
 import { CommercialDashboard } from './CommercialDashboard';
 import { OwnerDreCostsPanel } from './OwnerDreCostsPanel';
+import { OwnerLoyaltyDraftPanel } from './OwnerLoyaltyDraftPanel';
 import { AbaV3RolloutControlCenter } from './AbaV3RolloutControlCenter';
 import { TechnicalDetails } from './TechnicalDetails';
 import { sanitizeDescriptionForDisplay } from '../utils/mediaSecurity';
@@ -1238,6 +1239,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
 
         {activeTab === 'customers' && (
           <div className="space-y-6">
+            {import.meta.env.VITE_FEATURE_LOYALTY_STAGING === 'true' && <OwnerLoyaltyDraftPanel />}
             <div className="bg-white rounded-[28px] border border-emerald-100 p-6 shadow-sm">
               <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
                 <div>
