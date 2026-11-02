@@ -67,6 +67,14 @@ try{
   const count=(await client.query('select count(*)::integer as n from public.aba_session_continuation_operations_v1')).rows[0].n;
   assert.equal(count,1,'one immutable audit entry per successful request');
   const b=uid(8);
+  await deny(()=>client.query(
+    "insert into public.appointments(id,clinic_id,organization_id,patient_id,therapist_id,is_active,status,source_payload,service_type,scheduled_at,scheduled_start_at,scheduled_end_at,scheduled_duration_minutes,duration_minutes,room_id) values($1,$2,$2,$3,$4,true,'scheduled','{}'::jsonb,'Fonoaudiologia',$5,$5,$6,50,50,'Room B')",
+    [b,otherClinic,otherPatient,professional,
+      new Date(end.getTime()+2*60_000).toISOString(),
+      new Date(end.getTime()+52*60_000).toISOString()]
+  ),'P0504_APPOINTMENT_OVERLAPS_ACTIVE_EXTENSION');
+  assert.equal((await client.query('select count(*)::integer n from public.appointments')).rows[0].n,1,
+    'future booking conflict must not create a B appointment');
   await client.query("insert into public.appointments(id,clinic_id,organization_id,patient_id,therapist_id,is_active,status,source_payload,service_type,scheduled_at,scheduled_start_at,scheduled_end_at,scheduled_duration_minutes,duration_minutes,room_id) values($1,$2,$2,$3,$4,true,'scheduled','{}'::jsonb,'Fonoaudiologia',$5,$5,$6,50,50,'Room B')",
     [b,otherClinic,otherPatient,professional,
       new Date(end.getTime()+12*60_000).toISOString(),
