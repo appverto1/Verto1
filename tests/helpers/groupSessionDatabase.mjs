@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { shiftGroupFixtureDates } from './groupSessionFixtureDates.mjs';
 import {PGlite} from '@electric-sql/pglite';
 
 export async function createGroupSessionTestDatabase(){
@@ -6,7 +7,7 @@ export async function createGroupSessionTestDatabase(){
   const id=n=>`40000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
   const clinic=id(1),actor=id(2),therapist=id(3),secondary=id(4),room=id(5);
   const patients=[id(10),id(11),id(12),id(13)];
-  const query=async(sql,args=[]) => (await db.query(sql,args)).rows;
+  const query=async(sql,args=[]) => (await db.query(shiftGroupFixtureDates(sql),args.map(shiftGroupFixtureDates))).rows;
   const scalar=async(sql,args=[]) => Object.values((await query(sql,args))[0])[0];
   await db.exec("create role anon;create role authenticated;create role service_role;create schema auth;create function auth.role() returns text language sql stable as $$select 'service_role'::text$$;");
   for(const file of ['staging-schema.sql','staging-clinic-state.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql'])await db.exec(fs.readFileSync('tests/fixtures/groupSessions/'+file,'utf8'));
