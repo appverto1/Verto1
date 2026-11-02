@@ -211,17 +211,19 @@ export function registerOwnerLoyaltyDraftRoutes(app: any, deps: Dependencies) {
 }
 
 function validCnpj(value: string): boolean {
-  const digits = String(value).replace(/\D/g,'');
-  if (!/^\d{14}$/.test(digits) || /^(\d)\1{13}$/.test(digits)) return false;
+  // Receita Federal (2026): first 12 positions may be alphanumeric; last 2
+  // are numeric check digits, computed from each char's ASCII code minus 48.
+  const id = String(value).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  if (!/^[A-Z0-9]{12}[0-9]{2}$/.test(id) || /^(.)\1{13}$/.test(id)) return false;
   const check = (length: number) => {
     let weight = length - 7;
     let total = 0;
-    for(let i=0;i<length;i++) {
-      total += Number(digits[i]) * weight--;
+    for (let i = 0; i < length; i++) {
+      total += (id.charCodeAt(i) - 48) * weight--;
       if (weight < 2) weight = 9;
     }
-    const mod = total % 11;
-    return (mod < 2 ? 0 : 11 - mod) === Number(digits[length]);
+    const rest = total % 11;
+    return (rest < 2 ? 0 : 11 - rest) === Number(id[length]);
   };
   return check(12) && check(13);
 }
