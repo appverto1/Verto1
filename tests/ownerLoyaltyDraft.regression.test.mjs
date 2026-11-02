@@ -4,47 +4,79 @@ import { test } from 'node:test';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const migration = read('supabase/migrations/20261102110500_organization_loyalty_12m_drafts.sql');
-const routes = read('services/ownerLoyaltyDraftRoutes.ts');
-const bridge = read('services/salesProspectingRoutes.ts');
+const owner = read('services/ownerLoyaltyDraftRoutes.ts');
+const clinic = read('services/clinicLoyaltyReviewRoutes.ts');
+const ownerBridge = read('services/salesProspectingRoutes.ts');
+const clinicBridge = read('services/clinicAppointmentPolicyRoutes.ts');
 const dashboard = read('src/components/SuperAdminDashboard.tsx');
-const panel = read('src/components/OwnerLoyaltyDraftPanel.tsx');
+const settings = read('src/components/SettingsMenu.tsx');
+const adminUi = read('src/components/OwnerLoyaltyDraftPanel.tsx');
+const clinicUi = read('src/components/ClinicLoyaltyTermsPreview.tsx');
+const terms = read('src/constants/loyaltyTermsDraft.ts');
 
-test('loyalty is a non-binding fixed 12-month draft, never automatic billing', () => {
+test('12-month contractual period and proportional ceiling are fixed in immutable template', () => {
   assert.match(migration, /duration_months smallint not null default 12 check \(duration_months = 12\)/);
-  assert.match(migration, /penalty_policy = 'proportional_pending_legal_review'/);
-  assert.match(migration, /status text not null default 'draft' check \(status = 'draft'\)/);
-  assert.match(migration, /legal_review_status = 'pending_review'/);
-  assert.doesNotMatch(routes, /stripe\.(subscriptions|invoices|paymentIntents)/i);
-  assert.doesNotMatch(routes, /\.from\(['"](?:clinics|patients|organization_billing_access_state|organization_billing_contracts)['"]\)\.update/);
+  assert.match(migration, /status in \('draft', 'offered', 'accepted'\)/);
+  assert.match(terms, /6\.3\. A multa terá como teto inicial o equivalente a 2 \(duas\) mensalidades/);
+  assert.match(terms, /dias restantes de fidelidade ÷ dias totais do período de fidelidade/);
+  assert.match(terms, /3\.2\. O prazo não será contado retroativamente/);
+  assert.match(terms, /4\.3\. Na ausência de contrapartida válida e demonstrável/);
+  assert.match(terms, /9\.1\. A CONTRATANTE poderá aderir a este termo/);
+  assert.match(terms, /DECLARAÇÃO DE ACEITE/);
 });
 
-test('tenant and subscription chosen by database and draft writes are idempotent', () => {
+test('paid subscription and clinic are always server owned, with idempotent transitions', () => {
   assert.match(migration, /unique \(organization_id\)/);
   assert.match(migration, /on conflict \(organization_id\) do nothing/);
   assert.match(migration, /state\.organization_id = p_organization_id/);
   assert.match(migration, /state\.stripe_status = 'active'/);
-  assert.match(migration, /state\.first_paid_at is not null or state\.last_paid_at is not null/);
   assert.match(migration, /v_row\.stripe_subscription_id is distinct from v_subscription_id/);
-  assert.match(migration, /p_actor_user_id and pa\.active is true/);
-  assert.doesNotMatch(routes, /p_stripe_subscription_id/);
+  assert.match(migration, /for update/);
+  assert.match(migration, /p_terms_sha256/);
+  assert.match(migration, /accepted_by = p_actor_user_id/);
+  assert.match(migration, /effective_end_date = \(p_effective_start_date \+ interval '12 months'/);
+  assert.doesNotMatch(owner, /p_stripe_subscription_id/);
+  assert.match(owner, /renderLoyaltyTermsV1/);
 });
 
-test('owner MFA and Supabase permissions fail closed', () => {
-  assert.match(routes, /const guard = \[checkAuth, checkPlatformAdmin, stagingOnly\]/);
-  assert.match(routes, /VERTO_LOYALTY_STAGING_ENABLED/);
-  assert.match(routes, /VERTO_DEPLOYMENT_ENV !== 'staging'/);
-  assert.match(routes, /SUPABASE_EXPECTED_PROJECT_REF !== 'irspungjhapqdbgqroyc'/);
-  assert.match(routes, /Object\.keys\(body\)\.length !== 1/);
-  assert.match(bridge, /registerOwnerLoyaltyDraftRoutes\(app,\{supabase,checkAuth,checkPlatformAdmin,isUuid\}\)/);
-  assert.match(migration, /enable row level security/);
-  assert.match(migration, /revoke all on table public\.organization_loyalty_drafts from public, anon, authenticated/);
-  assert.match(migration, /grant execute on function public\.create_organization_loyalty_draft_v1\(uuid, uuid\)\s+to service_role/);
+test('owner-only publish and director-only explicit consent are independent', () => {
+  assert.match(owner, /const guard = \[checkAuth, checkPlatformAdmin, stagingOnly\]/);
+  assert.match(owner, /Object\.keys\(body\)\.length !== fields\.length/);
+  assert.match(ownerBridge, /registerOwnerLoyaltyDraftRoutes\(app,\{supabase,checkAuth,checkPlatformAdmin,isUuid\}\)/);
+  assert.match(clinic, /requireClinicCapability\('clinic\.settings\.edit'\)/);
+  assert.match(clinic, /role !== 'director'/);
+  assert.match(clinic, /body\.acceptTerms !== true/);
+  assert.match(migration, /cm\.clinic_id = p_organization_id and cm\.user_id = p_actor_user_id/);
+  assert.match(migration, /cm\.role = 'director' and cm\.status = 'active'/);
+  assert.match(clinicBridge, /registerClinicLoyaltyReviewRoutes\(app, deps\)/);
 });
 
-test('new owner UI is isolated behind a staging build feature and updates without reload', () => {
+test('both endpoints and UI fail closed outside staging project', () => {
+  for (const source of [owner,clinic]) {
+    assert.match(source, /VERTO_LOYALTY_STAGING_ENABLED/);
+    assert.match(source, /VERTO_DEPLOYMENT_ENV !== 'staging'/);
+    assert.match(source, /SUPABASE_EXPECTED_PROJECT_REF !== 'irspungjhapqdbgqroyc'/);
+    assert.doesNotMatch(source, /stripe\.(subscriptions|invoices|paymentIntents)/i);
+  }
   assert.match(dashboard, /VITE_FEATURE_LOYALTY_STAGING === 'true' && <OwnerLoyaltyDraftPanel \/>/);
-  assert.match(panel, /setRows\(\(current\) => current\.map/);
-  assert.match(panel, /Preparar minuta/);
-  assert.match(panel, /Nenhum aceite, cobrança|nenhum aceite, cobrança/);
-  assert.doesNotMatch(panel, /window\.location\.reload\(/);
+  assert.match(settings, /VITE_FEATURE_LOYALTY_STAGING === 'true'/);
+});
+
+test('RLS, service role RPC grants, and no mutation of clinical or billing state', () => {
+  assert.match(migration, /alter table public\.organization_loyalty_drafts enable row level security/);
+  assert.match(migration, /revoke all on table public\.organization_loyalty_drafts from public, anon, authenticated/);
+  assert.match(migration, /grant execute on function public\.accept_organization_loyalty_offer_v1\(uuid,uuid,text,boolean\)/);
+  assert.doesNotMatch(owner + clinic, /\.from\(['"](?:patients|organization_billing_access_state|organization_billing_contracts)['"]\)\.update/);
+});
+
+test('Save is the owner of persistence, checkbox is unchecked and requires click to accept', () => {
+  assert.match(adminUi, /Salvar e disponibilizar ao diretor/);
+  assert.match(adminUi, /setRows\(\(current\) => current\.map/);
+  assert.match(clinicUi, /useState\(false\)/);
+  assert.match(clinicUi, /checked=\{checked\}/);
+  assert.match(clinicUi, /disabled=\{!review\.canAccept \|\| !checked \|\| saving\}/);
+  assert.match(clinicUi, /Confirmar aceite/);
+  assert.match(clinicUi, /acceptTerms:true, termsSha256:review\.termsSha256/);
+  assert.match(clinicUi, /Salvar cópia/);
+  assert.doesNotMatch(clinicUi + adminUi, /window\.location\.reload\(/);
 });
