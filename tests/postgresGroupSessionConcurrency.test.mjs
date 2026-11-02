@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import pg from 'pg';
+import { shiftGroupFixtureDates } from './helpers/groupSessionFixtureDates.mjs';
 
 // This test requires the disposable PostgreSQL 17 CI service, never Supabase.
 assert.equal(process.env.VERTO_GROUP_POSTGRES_TEST,'1','requires the isolated CI PostgreSQL service');
@@ -10,7 +11,7 @@ const pool=new pg.Pool({max:8,application_name:'verto_group_concurrency',stateme
 const id=n=>`30000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const clinic=id(1),actor=id(2),primary=id(3),secondary=id(4),room=id(5);
 const patients=[id(10),id(11),id(12),id(13)];
-const scalar=async(client,sql,args=[])=>Object.values((await client.query(sql,args)).rows[0])[0];
+const scalar=async(client,sql,args=[])=>Object.values((await client.query(shiftGroupFixtureDates(sql),args.map(shiftGroupFixtureDates))).rows[0])[0];
 const create=(client,key,date,selected=patients.slice(0,2))=>scalar(client,
   'select reserve_group_sessions_v1($1,$2,$3::uuid[],$4::uuid[],$5,$6,$7::jsonb,50,$8)',
   [clinic,actor,selected,[primary,secondary],'Fonoaudiólogo',room,JSON.stringify([{date,time:'10:00'}]),key]);
@@ -51,10 +52,10 @@ try{
   await waitForLock();await finish(a);assert.match((await competing).error?.message||'',/GROUP_BOOKING_(SLOT|PROFESSIONAL|ROOM)_BUSY/);
   // GROUP commits before an individual insert that was waiting on its lock.
   a=await transactionClient();await create(a,'concurrent-group-v-individual','2026-11-04');
-  competing=pool.query("insert into appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,service_type,approach,room_id,care_setting) values($1,$1,$2,$3,'2026-11-04T13:00:00Z','Fonoaudiólogo','Fonoaudiólogo',$4,'CLINIC')",[clinic,patients[2],secondary,room]).then(value=>({value}),error=>({error}));
+  competing=pool.query(shiftGroupFixtureDates("insert into appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,service_type,approach,room_id,care_setting) values($1,$1,$2,$3,'2026-11-04T13:00:00Z','Fonoaudiólogo','Fonoaudiólogo',$4,'CLINIC')"),[clinic,patients[2],secondary,room]).then(value=>({value}),error=>({error}));
   await waitForLock();await finish(a);assert.match((await competing).error?.message||'',/GROUP_BOOKING_SLOT_BUSY/);
   // Individual commits first; the GROUP transaction must see it after waiting.
-  a=await transactionClient();await a.query("insert into appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,service_type,approach,room_id,care_setting) values($1,$1,$2,$3,'2026-11-05T13:00:00Z','Fonoaudiólogo','Fonoaudiólogo',$4,'CLINIC')",[clinic,patients[2],secondary,room]);
+  a=await transactionClient();await a.query(shiftGroupFixtureDates("insert into appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,service_type,approach,room_id,care_setting) values($1,$1,$2,$3,'2026-11-05T13:00:00Z','Fonoaudiólogo','Fonoaudiólogo',$4,'CLINIC')"),[clinic,patients[2],secondary,room]);
   competing=create(pool,'concurrent-individual-v-group','2026-11-05').then(value=>({value}),error=>({error}));
   await waitForLock();await finish(a);assert.match((await competing).error?.message||'',/GROUP_BOOKING_(PROFESSIONAL|ROOM)_BUSY/);
   // Only one of two concurrent joins can consume the final room place.

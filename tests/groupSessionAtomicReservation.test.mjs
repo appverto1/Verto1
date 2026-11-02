@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { shiftGroupFixtureDates } from './helpers/groupSessionFixtureDates.mjs';
 import fs from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 
@@ -6,7 +7,7 @@ const db=new PGlite();
 const id=n=>`20000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const clinic=id(1),actor=id(2),therapist=id(3),secondary=id(4),room=id(5);
 const patients=[id(10),id(11),id(12),id(13)];
-const query=async(sql,args=[]) => (await db.query(sql,args)).rows;
+const query=async(sql,args=[]) => (await db.query(shiftGroupFixtureDates(sql),args.map(shiftGroupFixtureDates))).rows;
 const scalar=async(sql,args=[]) => Object.values((await query(sql,args))[0])[0];
 let step='bootstrap';
 try{
@@ -37,7 +38,7 @@ try{
   assert.equal(first.success,true);assert.equal(first.bookings.length,1);assert.equal(first.appointments.length,2);
   assert.deepEqual((await query('select unit_amount from payment_appointment_items order by patient_id')).map(r=>Number(r.unit_amount)),[80,70]);
   assert.deepEqual((await query('select final_amount from appointment_private_financial_snapshots order by patient_id')).map(r=>Number(r.final_amount)),[80,70]);
-  assert.equal(first.bookings[0].scheduled_start_at,'2026-11-02T13:00:00+00:00','clinic timezone is authoritative');
+  assert.equal(first.bookings[0].scheduled_start_at,shiftGroupFixtureDates('2026-11-02T13:00:00+00:00'),'clinic timezone is authoritative');
   const initialCounts=await counts();
   assert.equal((await book('atomic-reservation-first')).idempotent,true);assert.deepEqual(await counts(),initialCounts);
   await assert.rejects(()=>book('atomic-reservation-first','2026-11-03'),/GROUP_IDEMPOTENCY_CONFLICT/);

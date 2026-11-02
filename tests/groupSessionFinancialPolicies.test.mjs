@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createGroupSessionTestDatabase} from './helpers/groupSessionDatabase.mjs';
 
-const{db,clinic,actor,patients,query,scalar,book}=await createGroupSessionTestDatabase();
+const{db,clinic,actor,patients,query,scalar,book}=await createGroupSessionTestDatabase({ futureDates: false });
 const cancel=(booking,key,policy={})=>scalar("select cancel_group_session_v1($1,$2,$3,null,'Solicitação com política congelada',$4::jsonb,'single',$5)",[clinic,actor,booking,JSON.stringify(policy),key]);
 const amounts=async booking=>(await query('select payment.amount from group_session_participants participant join payment_appointment_items item on item.appointment_id=participant.appointment_id join payments payment on payment.id=item.payment_id where participant.booking_id=$1 order by participant.patient_id',[booking])).map(x=>Number(x.amount));
 let step='late cancellation';

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { shiftGroupFixtureDates } from './helpers/groupSessionFixtureDates.mjs';
 import fs from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 
@@ -7,7 +8,7 @@ import { PGlite } from '@electric-sql/pglite';
 const db = new PGlite();
 const id = n => `10000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
 const clinic=id(1), otherClinic=id(2), actor=id(3), therapist=id(4), patient=id(5), room=id(6);
-const query = async (sql, args=[]) => (await db.query(sql,args)).rows;
+const query = async (sql, args=[]) => (await db.query(shiftGroupFixtureDates(sql),args.map(shiftGroupFixtureDates))).rows;
 const scalar = async (sql,args=[]) => Object.values((await query(sql,args))[0])[0];
 try {
   await db.exec('create role anon; create role authenticated; create role service_role;');

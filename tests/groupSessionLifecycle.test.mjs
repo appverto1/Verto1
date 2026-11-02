@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { shiftGroupFixtureDates } from './helpers/groupSessionFixtureDates.mjs';
 import {createGroupSessionTestDatabase} from './helpers/groupSessionDatabase.mjs';
 
 const{db,clinic,actor,therapist,secondary,room,patients,query,scalar,book}=await createGroupSessionTestDatabase();
@@ -10,13 +11,13 @@ try{
   const firstIds=first.appointments.map(a=>a.id).sort();
   const moved=await move(booking,'2026-11-03','lifecycle-reschedule-first');
   assert.deepEqual(moved.appointments.map(a=>a.id).sort(),firstIds,'rescheduling retains patient appointment identities');
-  assert.equal(moved.bookings[0].scheduled_start_at,'2026-11-03T14:00:00+00:00');
+  assert.equal(moved.bookings[0].scheduled_start_at,shiftGroupFixtureDates('2026-11-03T14:00:00+00:00'));
   assert.equal(await scalar('select count(*)::int from payments'),2,'rescheduling does not duplicate charges');
   assert.deepEqual((await query('select final_amount from appointment_private_financial_snapshots where snapshot_event=\'RESCHEDULED\' order by patient_id')).map(x=>Number(x.final_amount)),[80,70]);
   assert.equal((await move(booking,'2026-11-03','lifecycle-reschedule-first')).idempotent,true);
   const blocked=await book('lifecycle-reserved-target','2026-11-06',patients.slice(2),'11:00');
   await assert.rejects(()=>move(booking,'2026-11-06','lifecycle-reschedule-conflict'),/GROUP_BOOKING_(SLOT|PROFESSIONAL|ROOM)_BUSY/);
-  assert.equal(await scalar('select scheduled_start_at::text from group_session_bookings where id=$1',[booking]),'2026-11-03 14:00:00+00');
+  assert.equal(await scalar('select scheduled_start_at::text from group_session_bookings where id=$1',[booking]),shiftGroupFixtureDates('2026-11-03 14:00:00+00'));
   await assert.rejects(()=>query("update appointments set scheduled_at=scheduled_at+interval '1 day' where id=$1",[firstIds[0]]),/GROUP_USE_GROUP_RESCHEDULE/);
   step='partial cancellation';
   const partial=await cancel(booking,[patients[0]],'lifecycle-partial-cancel');
