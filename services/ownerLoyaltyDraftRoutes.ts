@@ -27,30 +27,35 @@ export function registerOwnerLoyaltyDraftRoutes(app: any, deps: Dependencies) {
     res.setHeader('Cache-Control', 'private, no-store');
     try {
       // One bounded view of active subscriptions; never list patients or invoices.
-      const subscriptions = await supabase
-        .from('platform_subscription_financial_state')
-        .select('organization_id,first_paid_at,last_paid_at,clinics!platform_subscription_financial_state_organization_id_fkey(name)')
-        .eq('stripe_status', 'active')
-        .not('organization_id', 'is', null)
-        .order('updated_at', { ascending: false })
-        .limit(100);
-      if (subscriptions.error) throw subscriptions.error;
-
+      const [subscriptions,drafts] = await Promise.all([
+        supabase.from('platform_subscription_financial_state')
+          .select('organization_id,first_paid_at,last_paid_at,clinics!platform_subscription_financial_state_organization_id_fkey(name)')
+          .eq('stripe_status','active').not('organization_id','is',null)
+          .order('updated_at',{ascending:false}).limit(100),
+        supabase.from('organization_loyalty_drafts')
+          .select('id,organization_id,duration_months,legal_review_status,status,terms_version,created_at,effective_start_date,effective_end_date,accepted_at,clinics!organization_loyalty_drafts_organization_id_fkey(name)')
+          .order('created_at',{ascending:false}).limit(100),
+      ]);
+      if (subscriptions.error || drafts.error) throw subscriptions.error || drafts.error;
       const eligible = (subscriptions.data || []).filter((row: any) =>
         row.organization_id && (row.first_paid_at || row.last_paid_at));
-      if (!eligible.length) return res.json({ success: true, data: [] });
-
-      const ids = [...new Set(eligible.map((row: any) => String(row.organization_id)))];
-      const drafts = await supabase.from('organization_loyalty_drafts')
-        .select('id,organization_id,duration_months,penalty_policy,legal_review_status,status,terms_version,created_at,effective_start_date,effective_end_date,accepted_at')
-        .in('organization_id', ids).limit(100);
-      if (drafts.error) throw drafts.error;
-      const draftByOrg = new Map((drafts.data || []).map((draft: any) => [String(draft.organization_id), draft]));
+      const draftRows: any[] = drafts.data || [];
+      const draftByOrg = new Map(draftRows.map((draft: any) =>
+        [String(draft.organization_id), draft]));
       const data = eligible.map((row: any) => ({
         organizationId: row.organization_id,
         clinicName: (Array.isArray(row.clinics) ? row.clinics[0]?.name : row.clinics?.name) || 'Clínica',
         draft: draftByOrg.get(String(row.organization_id)) || null,
       }));
+      const known = new Set(data.map((row: any) => String(row.organizationId)));
+      for (const draft of draftRows) {
+        if (known.has(String(draft.organization_id))) continue;
+        data.push({
+          organizationId: draft.organization_id,
+          clinicName: (Array.isArray(draft.clinics) ? draft.clinics[0]?.name : draft.clinics?.name) || 'Clínica',
+          draft,
+        });
+      }
       return res.json({ success: true, data });
     } catch {
       return res.status(503).json({ success: false, error: 'LOYALTY_DRAFTS_UNAVAILABLE' });
