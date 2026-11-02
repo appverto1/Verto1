@@ -44,10 +44,12 @@ export function registerClinicLoyaltyReviewRoutes(app: any, deps: Deps) {
       if (!d || d.status === 'draft') {
         return res.json({ success:true, data:{ available:false, canAccept:false } });
       }
-      const inWindow = d.effective_start_date
-        && d.effective_start_date >= new Intl.DateTimeFormat('en-CA', {
-          timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit',
-        }).format(new Date());
+      const dateParts = new Intl.DateTimeFormat('en-US', {
+        timeZone:'America/Sao_Paulo', year:'numeric',month:'2-digit',day:'2-digit',
+      }).formatToParts(new Date());
+      const part = (type: string) => dateParts.find((item) => item.type === type)?.value || '';
+      const localToday = [part('year'),part('month'),part('day')].join('-');
+      const inWindow = Boolean(d.effective_start_date && d.effective_start_date >= localToday);
       return res.json({ success:true, data:{
         available:true, status:d.status, durationMonths:d.duration_months,
         legalReviewStatus:d.legal_review_status,
