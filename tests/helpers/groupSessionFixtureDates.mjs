@@ -8,7 +8,7 @@ const shiftMs = shiftWeeks * 7 * DAY_MS;
 
 export function shiftGroupFixtureDates(value) {
   if (typeof value !== 'string') return value;
-  return value.replace(/\b2026-(?:11|12)-\d{2}\b/g, (day) => {
+  return value.replace(/\b2026-(?:11|12)-\d{2}(?=T|\b)/g, (day) => {
     const parsed = Date.parse(day + 'T00:00:00Z');
     return Number.isFinite(parsed)
       ? new Date(parsed + shiftMs).toISOString().slice(0, 10)
