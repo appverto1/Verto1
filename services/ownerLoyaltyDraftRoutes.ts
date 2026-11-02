@@ -14,7 +14,8 @@ export function registerOwnerLoyaltyDraftRoutes(app: any, deps: Dependencies) {
   const stagingOnly = (_req: any, res: any, next: any) => {
     // Both flags are server-side. Never enable this preview in production.
     if (process.env.VERTO_LOYALTY_STAGING_ENABLED !== 'true'
-      || !/staging/i.test(String(process.env.RAILWAY_ENVIRONMENT_NAME || ''))) {
+      || process.env.VERTO_DEPLOYMENT_ENV !== 'staging'
+      || process.env.SUPABASE_EXPECTED_PROJECT_REF !== 'irspungjhapqdbgqroyc') {
       return res.status(404).json({ success: false, error: 'NOT_FOUND' });
     }
     return next();
