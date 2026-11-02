@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const source = readFileSync('src/components/Anamnesis.tsx', 'utf8');
+const draftEffectStart = source.indexOf("if (!isOpen || !canEditTemplate || view !== 'template' || templateDirtyRef.current) return;");
+const resolverStart = source.indexOf('const resolveDraftRestore = (restore: boolean) => {');
+const autosaveStart = source.indexOf("localStorage.setItem(", resolverStart);
+assert.ok(draftEffectStart > 0 && resolverStart > draftEffectStart && autosaveStart > resolverStart, 'fluxo de recuperação e autosave preservados');
+const draftEffect = source.slice(draftEffectStart, resolverStart);
+const resolver = source.slice(resolverStart, autosaveStart);
+assert.doesNotMatch(draftEffect, /\bconfirm\s*\(/, 'rascunho não deve abrir confirmação nativa');
+assert.match(draftEffect, /localStorage\.getItem\(templateDraftStorageKey\)/, 'consulta apenas rascunho da ficha atual');
+assert.match(draftEffect, /setDraftRestoreCandidate\(\{ storageKey: templateDraftStorageKey, payload: parsed \}\)/, 'exibe decisão visual antes de restaurar');
+assert.match(resolver, /storageKey !== templateDraftStorageKey/, 'não aplicar rascunho de outra ficha');
+assert.match(resolver, /if \(!restore\) \{[\s\S]*?localStorage\.removeItem\(storageKey\)/, 'descarte explícito remove apenas o rascunho escolhido');
+assert.match(resolver, /setTemplateState\(parsed\.template as AnamnesisTemplate\)/, 'restauração apenas em memória');
+assert.match(resolver, /parsed\?\.draftQuestion/, 'compatibilidade com rascunho legado preservada');
+assert.match(resolver, /markTemplateDirty\(true\)/, 'restaurar exige Salvar para persistência');
+assert.match(source, /role="alertdialog"[\s\S]*?aria-modal="true"[\s\S]*?aria-labelledby="anamnesis-draft-restore-title"/, 'modal acessível');
+assert.match(source, /onClick=\{\(\) => resolveDraftRestore\(false\)\}/, 'botão descartar');
+assert.match(source, /autoFocus onClick=\{\(\) => resolveDraftRestore\(true\)\}/, 'restauração acessível por teclado');
+assert.match(source, /onClick=\{saveTemplate\}/, 'Salvar mudanças permanece autoridade de persistência');
+assert.match(source, /return createPortal\(modalContent, document\.body\)/, 'modal permanece no portal existente');
+console.log('p3AnamnesisDraftRestoreModal.regression.test.mjs: OK');
