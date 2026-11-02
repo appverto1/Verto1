@@ -407,6 +407,31 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
     return null;
   };
 
+  const requestExistingAccountRecovery = async () => {
+    const recoveryEmail = String(identifiedEmail || email).trim().toLowerCase();
+    if (!recoveryEmail) { setError('Informe o e-mail do convite.'); return; }
+    setLoading(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch('/api/auth/password/recovery/email/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: recoveryEmail })
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok && payload?.success !== true) {
+        throw new Error('Não foi possível solicitar a recuperação agora.');
+      }
+      setMessage('Se o e-mail estiver cadastrado, você receberá um link para definir sua senha.');
+    } catch {
+      setError('Não foi possível solicitar a recuperação. Tente novamente pela tela inicial.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSetPassword = async () => {
     setLoading(true);
     setError('');
@@ -776,7 +801,17 @@ export const ActivationAccess = ({ onLogin }: ActivationAccessProps) => {
                 {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
               </button>
             </div>
-            {!isExistingAccountInvite ? <p className="text-xs text-slate-400">{passwordHint}</p> : null}
+            {!isExistingAccountInvite ? <p className="text-xs text-slate-400">{passwordHint}</p> : (
+              <div className="rounded-xl bg-violet-50 px-3 py-3 text-xs leading-5 text-violet-800">
+                <p>Se sua conta foi criada após uma contratação, use o e-mail de ativação
+                comercial para definir sua senha. A senha de um convite anterior pode
+                não funcionar. Você também pode solicitar uma recuperação segura.</p>
+                <button type="button" onClick={requestExistingAccountRecovery} disabled={loading}
+                  className="mt-2 font-semibold underline underline-offset-2 disabled:opacity-50">
+                  Enviar link de recuperação de senha
+                </button>
+              </div>
+            )}
             <button
               onClick={handleSetPassword}
               disabled={loading}
