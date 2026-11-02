@@ -217,7 +217,8 @@ set search_path = ''
 as $function$
 declare
   v_row public.organization_loyalty_drafts;
-  v_actor public.users;
+  v_actor_name text;
+  v_actor_email text;
   v_today date := (now() at time zone 'America/Sao_Paulo')::date;
 begin
   if p_confirmed is distinct from true or p_actor_user_id is null
@@ -246,16 +247,17 @@ begin
       and (state.first_paid_at is not null or state.last_paid_at is not null)
   ) then raise exception 'LOYALTY_SUBSCRIPTION_INELIGIBLE'; end if;
 
-  select * into v_actor from public.users where id = p_actor_user_id;
-  if v_actor.id is null or length(trim(coalesce(v_actor.name, ''))) < 2
-    or length(trim(coalesce(v_actor.email, ''))) < 5
+  select u.name, u.email into v_actor_name, v_actor_email
+  from public.users u where u.id = p_actor_user_id;
+  if length(trim(coalesce(v_actor_name, ''))) < 2
+    or length(trim(coalesce(v_actor_email, ''))) < 5
   then raise exception 'LOYALTY_ACTOR_IDENTITY_INCOMPLETE'; end if;
 
   update public.organization_loyalty_drafts
   set status = 'accepted', accepted_at = now(),
       accepted_by = p_actor_user_id,
-      accepted_by_name = trim(v_actor.name),
-      accepted_by_email = lower(trim(v_actor.email))
+      accepted_by_name = trim(v_actor_name),
+      accepted_by_email = lower(trim(v_actor_email))
   where id = v_row.id
   returning * into v_row;
   return v_row;
