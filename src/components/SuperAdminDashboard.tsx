@@ -1629,6 +1629,23 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             leads={leadRecoveryItems}
             onLeadPatch={(leadId, patch)=>setLeadRecoveryItems(current=>
               current.map(item=>item.id===leadId?{...item,...patch}:item))}
+            onPriorityLeadsLoaded={items=>setLeadRecoveryItems(current=>{
+              const known=new Set(current.map(item=>item.id));
+              const siteById=new Map(items.map(item=>[item.id,item]));
+              let changed=false;
+              const updated=current.map(item=>{
+                const site=siteById.get(item.id);
+                if(site&&item.siteInterestAt!==site.siteInterestAt){
+                  changed=true;
+                  return {...item,siteInterestAt:site.siteInterestAt};
+                }
+                return item;
+              });
+              for(const site of items){
+                if(!known.has(site.id)) {updated.push(site);changed=true;}
+              }
+              return changed?updated:current;
+            })}
             onLeadsCreated={items=>{
               setLeadRecoveryItems(current=>{
                 const known=new Set(current.map(item=>item.id));

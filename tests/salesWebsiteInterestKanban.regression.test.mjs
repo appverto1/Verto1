@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {compareSiteInterestProspecting} from '../src/utils/siteInterestPriority.mjs';
+const sql=readFileSync('supabase/migrations/20261103130000_sales_website_interest_priority_v1.sql','utf8');
+const routes=readFileSync('services/salesProspectingRoutes.ts','utf8');
+const ui=readFileSync('src/components/CommercialKanban.tsx','utf8');
+const parent=readFileSync('src/components/SuperAdminDashboard.tsx','utf8');
+const form=readFileSync('src/components/SalesInterestForm.tsx','utf8');
+
+const old={id:'manual',createdAt:'2026-11-03T10:00:00Z'};
+const siteOld={id:'siteOld',createdAt:'2026-10-01T10:00:00Z',siteInterestAt:'2026-10-01T10:00:00Z'};
+const siteNew={id:'siteNew',createdAt:'2026-09-01T10:00:00Z',siteInterestAt:'2026-11-03T11:00:00Z'};
+assert.deepEqual([old,siteOld,siteNew].sort(compareSiteInterestProspecting).map(v=>v.id),['siteNew','siteOld','manual']);
+assert.equal(compareSiteInterestProspecting({id:'a'},{id:'b'}),0,'non-site ordering unchanged');
+assert.ok(compareSiteInterestProspecting(siteOld,siteNew)>0);
+assert.equal(compareSiteInterestProspecting({id:'invalid',siteInterestAt:'bad'},old),0);
+
+assert.match(form,/fetch\("\/api\/public\/sales-leads"/,'existing validated public endpoint retained');
+assert.match(sql,/values \('Cadastro no site'\)/,'source seeded');
+assert.match(sql,/after insert on public\.sales_lead_events/,'same transaction as idempotent lead creation');
+assert.match(sql,/new\.idempotency_key not like 'public-sales:%'/,'only public signup events');
+assert.match(sql,/on conflict\(lead_id,channel_id\) do nothing/,'no duplicate source links');
+assert.match(sql,/site_interest_at=greatest/,'repeat signup safely refreshes priority');
+assert.match(sql,/website_events[\s\S]*?update public\.sales_leads/,'legacy public leads backfilled');
+assert.match(sql,/not exists \([\s\S]*?hidden_at is not null/,'hidden cards excluded');
+assert.match(sql,/c\.slug<>'prospecting'/,'manual column changes preserved');
+assert.match(sql,/grant execute on function public\.site_interest_prospecting_priority_v1\(\)[\s\S]*?to service_role/,'private read-only priority RPC');
+assert.match(routes,/site_interest_prospecting_priority_v1/,'owner board requests indexed priority once');
+assert.match(ui,/onPriorityLeadsLoaded/,'parent receives priority IDs without loading full CRM');
+assert.match(ui,/compareSiteInterestProspecting/,'priority ordering enforced within prospecting');
+assert.match(parent,/onPriorityLeadsLoaded=/,'existing first page augmented without N+1');
+console.log('salesWebsiteInterestKanban: PASS');
