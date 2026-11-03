@@ -1,3 +1,4 @@
+export function digitsOnly(value: string): string;
 export function formatDocument(value: string, type: 'CPF' | 'CNPJ' | 'OTHER'): string;
 export function formatCep(value: string): string;
 export function formatPhone(value: string): string;

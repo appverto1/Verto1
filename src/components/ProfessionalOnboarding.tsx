@@ -13,6 +13,7 @@ import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import {
+  digitsOnly,
   formatDocument,
   formatCep,
   formatPhone,

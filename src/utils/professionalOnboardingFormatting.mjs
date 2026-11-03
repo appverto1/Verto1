@@ -1,5 +1,5 @@
 // Presentation-only formatters. Role, identity and clinic authorization remain server-authoritative.
-const digitsOnly = (value) => value.replace(/\D/g, '');
+export const digitsOnly = (value) => value.replace(/\D/g, '');
 
 const formatCpf = (value) => {
   const digits = digitsOnly(value).slice(0, 11);

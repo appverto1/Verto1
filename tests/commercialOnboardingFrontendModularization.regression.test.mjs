@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolveSalesPostPaymentState, resolveSalesPostPaymentRetryDelayMs } from '../src/utils/salesPostPaymentState.mjs';
-import { formatDocument, formatCep, formatPhone, formatCountryCode, formatDateForDisplay, formatDateForApi } from '../src/utils/professionalOnboardingFormatting.mjs';
+import { digitsOnly, formatDocument, formatCep, formatPhone, formatCountryCode, formatDateForDisplay, formatDateForApi } from '../src/utils/professionalOnboardingFormatting.mjs';
 
 for (const [data, expected] of [
   [{ state: 'review_required', sessionClaimed: true }, 'review_required'],
@@ -22,6 +22,7 @@ for (const [header, payload, fallback, expected] of [
   ['1', {}, 100, 1500],
   ['1000', {}, 1800, 30000],
 ]) assert.equal(resolveSalesPostPaymentRetryDelayMs(header, payload, fallback), expected);
+assert.equal(digitsOnly('CPF 123.456.789-01'), '12345678901');
 assert.equal(formatDocument('12345678901','CPF'),'123.456.789-01');
 assert.equal(formatDocument('12345678000199','CNPJ'),'12.345.678/0001-99');
 assert.equal(formatDocument('ABC-123','OTHER'),'ABC-123');
