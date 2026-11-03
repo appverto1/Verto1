@@ -8,7 +8,6 @@ import {
 } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { ModularOfferDetails } from './ModularPublicOfferDetails';
-export { ModularOfferDetails };
 import { getSupabase } from '../lib/supabase';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
@@ -162,6 +161,8 @@ type PaymentReturnState =
   | 'account_activated'
   | 'review_required'
   | 'unavailable';
+
+export { ModularOfferDetails };
 
 export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offer, setOffer] = useState<PublicOffer | null>(null);
