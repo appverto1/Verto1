@@ -1592,6 +1592,23 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <CommercialKanban
             leads={leadRecoveryItems}
             onLeadPatch={(leadId,patch)=>setLeadRecoveryItems(current=>current.map(item=>item.id===leadId?{...item,...patch}:item))}
+            onPriorityLeadsLoaded={items=>setLeadRecoveryItems(current=>{
+              const known=new Set(current.map(item=>item.id));
+              const siteById=new Map(items.map(item=>[item.id,item]));
+              let changed=false;
+              const updated=current.map(item=>{
+                const site=siteById.get(item.id);
+                if(site&&item.siteInterestAt!==site.siteInterestAt){
+                  changed=true;
+                  return {...item,siteInterestAt:site.siteInterestAt};
+                }
+                return item;
+              });
+              for(const site of items){
+                if(!known.has(site.id)) {updated.push(site);changed=true;}
+              }
+              return changed?updated:current;
+            })}
             onLeadsCreated={items=>{setLeadRecoveryItems(current=>{const known=new Set(current.map(item=>item.id));return [...items.filter(item=>!known.has(item.id)),...current];});setLeadTotal(t=>t+items.length);}}
             onLeadDeleted={id=>{setLeadRecoveryItems(current=>current.filter(item=>item.id!==id));setLeadTotal(t=>Math.max(0,t-1));}}
             onOpenLead={lead=>{setLeadSearch(lead.name||'');setLeadStatusFilter('all');setCommercialView('list');}}

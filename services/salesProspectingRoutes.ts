@@ -287,7 +287,20 @@ export function registerSalesProspectingRoutes(
         placements = found.data || [];
         overrides = edited.data || [];
       }
-      return res.json({success: true, columns: columns.data || [], placements, overrides});
+      let priorityLeads: any[] = [];
+      if (req.query?.sitePriority === '1') {
+        // Read-only, indexed and capped; owner authorization is enforced above.
+        // This also covers website registrations beyond the first 100 CRM leads.
+        const priority = await supabase.rpc('site_interest_prospecting_priority_v1');
+        if (priority.error) throw priority.error;
+        priorityLeads = (priority.data || []).map((lead: any) => ({
+          id: lead.id, name: lead.name, email: lead.email, phone: lead.phone,
+          clinicName: lead.clinic_name, status: lead.status,
+          createdAt: lead.created_at, updatedAt: lead.updated_at,
+          siteInterestAt: lead.site_interest_at,
+        }));
+      }
+      return res.json({success: true, columns: columns.data || [], placements, overrides, priorityLeads});
     } catch { return boardError(res, 'Configuração do Kanban indisponível.'); }
   });
 
