@@ -12,6 +12,14 @@ import {
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
+import {
+  formatDocument,
+  formatCep,
+  formatPhone,
+  formatCountryCode,
+  formatDateForDisplay,
+  formatDateForApi
+} from '../utils/professionalOnboardingFormatting.mjs';
 
 type OnboardingContext = {
   onboardingMode: 'invited_professional' | 'clinic_member' | 'clinic_owner' | 'standard' | 'invalid';
@@ -65,68 +73,6 @@ const roleLabel = (role: string) => {
   return 'Profissional de atendimento';
 };
 
-
-const digitsOnly = (value: string) => value.replace(/\D/g, '');
-
-const formatCpf = (value: string) => {
-  const digits = digitsOnly(value).slice(0, 11);
-  return digits
-    .replace(/(\d{3})(\d)/, '$1.$2')
-    .replace(/(\d{3})(\d)/, '$1.$2')
-    .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
-};
-
-const formatCnpj = (value: string) => {
-  const digits = digitsOnly(value).slice(0, 14);
-  return digits
-    .replace(/(\d{2})(\d)/, '$1.$2')
-    .replace(/(\d{3})(\d)/, '$1.$2')
-    .replace(/(\d{3})(\d)/, '$1/$2')
-    .replace(/(\d{4})(\d{1,2})$/, '$1-$2');
-};
-
-const formatDocument = (value: string, type: 'CPF' | 'CNPJ' | 'OTHER') =>
-  type === 'CNPJ' ? formatCnpj(value) : type === 'CPF' ? formatCpf(value) : value.slice(0, 40);
-
-const formatCep = (value: string) => {
-  const digits = digitsOnly(value).slice(0, 8);
-  return digits.replace(/(\d{5})(\d{1,3})$/, '$1-$2');
-};
-
-const formatPhone = (value: string) => {
-  const digits = digitsOnly(value).slice(0, 11);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
-  if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
-  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`;
-};
-
-const formatCountryCode = (value: string) => {
-  const digits = digitsOnly(value).slice(0, 3);
-  return digits ? `+${digits}` : '+';
-};
-
-const formatDateForDisplay = (value: string) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    const [year, month, day] = raw.split('-');
-    return `${day}/${month}/${year}`;
-  }
-  const digits = digitsOnly(raw).slice(0, 8);
-  if (digits.length <= 2) return digits;
-  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`;
-  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`;
-};
-
-const formatDateForApi = (value: string) => {
-  const digits = digitsOnly(value).slice(0, 8);
-  if (digits.length !== 8) return '';
-  const day = digits.slice(0, 2);
-  const month = digits.slice(2, 4);
-  const year = digits.slice(4, 8);
-  return `${year}-${month}-${day}`;
-};
 
 export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
   const initialContext = (user?.onboardingContext || null) as OnboardingContext | null;
