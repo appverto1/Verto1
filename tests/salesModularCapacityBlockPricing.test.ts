@@ -1043,8 +1043,12 @@ const publicSource = readFileSync(
   'src/components/PublicSalesOffer.tsx',
   'utf8'
 );
+const modularDetailsSource = readFileSync(
+  'src/components/ModularPublicOfferDetails.tsx',
+  'utf8'
+);
 assert.match(
-  publicSource,
+  modularDetailsSource,
   /mantendo os mesmos módulos contratados e os preços por paciente/
 );
 assert.doesNotMatch(
