@@ -10,6 +10,7 @@ const catalogPanel = read('src/components/SalesPricingCatalogPanel.tsx');
 const tissEngine = read('src/services/tissPreGuideEngine.ts');
 const billingSettings = read('src/components/BillingTissSettingsPanel.tsx');
 const publicOffer = read('src/components/PublicSalesOffer.tsx');
+const publicOfferDetails = read('src/components/ModularPublicOfferDetails.tsx');
 
 assert.match(builder, /Usar faixa recomendada/);
 assert.match(builder, /Seleção automática/);
@@ -66,7 +67,7 @@ assert.match(
   'o valor persistido permanece consulta e o rótulo visível vira Sessão'
 );
 assert.match(publicOffer, /Continuar para cadastro do cartão/);
-assert.match(publicOffer, /dias gratuitos/);
+assert.match(publicOfferDetails, /dias gratuitos/);
 
 const visibleFiles = [
   'src/components/Calendar.tsx',
