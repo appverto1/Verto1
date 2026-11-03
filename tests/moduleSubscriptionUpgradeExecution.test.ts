@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const execution = fs.readFileSync('services/moduleSubscriptionUpgradeStripe.ts', 'utf8');
+const contract = fs.readFileSync('services/moduleSubscriptionUpgradeContract.ts', 'utf8');
+const invoiceEvidence = fs.readFileSync('services/moduleSubscriptionUpgradeInvoiceEvidence.ts', 'utf8');
 const executionRoutes = fs.readFileSync('services/moduleSubscriptionUpgradeExecutionRoutes.ts', 'utf8');
 const wiring = fs.readFileSync('services/modulePurchaseEligibilityRoutes.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260919110400_module_subscription_upgrade_intents_v1.sql', 'utf8');
@@ -16,7 +18,11 @@ assert.match(execution, /settled\.states\.every\(\(state\) => state\.status === 
 assert.match(execution, /entitlementGranted: true/);
 assert.match(execution, /MODULE_UPGRADE_SCHEDULE_BOUNDARY_MISMATCH/);
 assert.match(execution, /MODULE_UPGRADE_STRIPE_ITEM_IDENTITY_STALE/);
-assert.match(execution, /buildFrozenStripeCheckoutPlan/);
+assert.match(execution, /import \{ parseCheckoutPlan, exactScheduleBoundaries \} from '\.\/moduleSubscriptionUpgradeContract'/);
+assert.match(contract, /buildFrozenStripeCheckoutPlan/);
+assert.match(contract, /MODULE_UPGRADE_OFFER_PHASES_MISSING/);
+assert.match(execution, /import \{ lineIdentity, invoiceIdList \} from '\.\/moduleSubscriptionUpgradeInvoiceEvidence'/);
+assert.match(invoiceEvidence, /vertoUpgradeOneTimeInvoiceId/);
 assert.match(execution, /modular_snapshot/);
 assert.doesNotMatch(execution, /subscriptions\.create\(/);
 assert.doesNotMatch(execution, /checkout\.sessions\.create\(/);
