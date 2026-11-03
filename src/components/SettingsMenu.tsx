@@ -18,6 +18,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { createPortal } from 'react-dom';
 import { SecureImage } from './SecureMedia';
 import { ModuleDiscoveryInterstitial } from './ModuleDiscoveryInterstitial';
+import { ClinicLoyaltyTermsPreview } from './ClinicLoyaltyTermsPreview';
 import { HelpButton } from './HelpButton';
 
 interface SettingsMenuProps {
@@ -190,6 +191,7 @@ export function SettingsMenu({
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState('');
   const [moduleDiscoveryOpen, setModuleDiscoveryOpen] = useState(false);
+  const [loyaltyPreviewOpen, setLoyaltyPreviewOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const firstActionRef = useRef<HTMLButtonElement>(null);
@@ -370,6 +372,19 @@ export function SettingsMenu({
                 </button>
               )}
 
+              {import.meta.env.VITE_FEATURE_LOYALTY_STAGING === 'true'
+                && String(user?.role || '').trim().toLowerCase() === 'director' && (
+                <button type="button" role="menuitem"
+                  onClick={() => { setIsOpen(false); onAction?.(); setLoyaltyPreviewOpen(true); }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group">
+                  <div className="flex items-center gap-3">
+                    <BookOpenCheck size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Contrato de fidelidade</span>
+                  </div>
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+                </button>
+              )}
+
               {canSeeBilling && (
                 <button
                   type="button"
@@ -487,6 +502,10 @@ export function SettingsMenu({
           document.body,
         )
       : <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />}
+    {typeof document !== 'undefined' && createPortal(
+      <ClinicLoyaltyTermsPreview open={loyaltyPreviewOpen} onClose={() => setLoyaltyPreviewOpen(false)} />,
+      document.body
+    )}
 
     </>
   );
