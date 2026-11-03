@@ -8,6 +8,7 @@ import type { CommercialAttempt } from './CommercialDashboard';
 import { CommercialScriptsPanel } from './CommercialScriptsPanel';
 import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
+import { compareSiteInterestProspecting } from '../utils/siteInterestPriority.mjs';
 import {
   agendaMatches,compareAgendaPriority,resolveAgendaMoment,
   brazilDateKey,followupBucket,followupFilters,matchesFollowup,isCallDueToday,progressColor,progressWidth,
@@ -18,7 +19,7 @@ import { SALES_LEAD_STATUS_LABELS, type SalesLeadStatus } from '../constants/sal
 type Lead = {
   id: string; name?: string; email?: string; phone?: string; clinicName?: string; notes?: string;
   status: SalesLeadStatus; lostAt?: string | null; lossReasonId?:string|null; updatedAt?: string; createdAt?: string;
-  legacyReadOnly?: boolean;
+  legacyReadOnly?: boolean; siteInterestAt?: string | null;
 };
 type DuplicateMatch = {
   normalizedPhone:string|null; invalid:boolean; inBatch:boolean;
@@ -32,6 +33,7 @@ type Props = {
   leads: Lead[];
   onLeadPatch: (id: string, patch: Record<string, unknown>) => void;
   onLeadsCreated: (leads: Lead[]) => void;
+  onPriorityLeadsLoaded: (leads: Lead[]) => void;
   onLeadDeleted: (id: string) => void;
   onOpenLead: (lead: Lead) => void;
   onRefresh: () => Promise<void>;
@@ -75,7 +77,7 @@ const stageFromStatus = (status: string) => {
   return 'proposals';
 };
 
-export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDeleted, onOpenLead, onRefresh, onMetrics, onLoadMore, remaining, loadingMore }: Props) => {
+export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorityLeadsLoaded, onLeadDeleted, onOpenLead, onRefresh, onMetrics, onLoadMore, remaining, loadingMore }: Props) => {
   const [columns, setColumns] = useState<Column[]>([]);
   const [placements, setPlacements] = useState<Record<string,string>>({});
   const [overrides, setOverrides] = useState<Record<string,{details:Partial<Lead>;hidden:boolean}>>({});
@@ -287,10 +289,10 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           .then(data=>({data,failed:false}))
           .catch(()=>({data:{versions:[]},failed:true}));
         // In batches, support large lead volumes without a hard 100-ID request failure.
-        const pages = await Promise.all(chunks.map(async chunk => {
+        const pages = await Promise.all(chunks.map(async (chunk, pageIndex) => {
           const q = encodeURIComponent(chunk.join(','));
           const [board,history,acquisitionResult] = await Promise.all([
-            request('/api/owner/sales/kanban/board?leadIds='+q),
+            request('/api/owner/sales/kanban/board?leadIds='+q+(pageIndex===0?'&sitePriority=1':'')),
             chunk.length ? request('/api/owner/sales/prospecting/attempts?leadIds='+q) : Promise.resolve({data:[],leads:[]}),
             request('/api/owner/sales/acquisition/board?leadIds='+q)
               .then(data=>({data,failed:false}))
@@ -312,6 +314,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
           return active.length===1?active[0].id:'';
         });
         setColumns(pages[0].board.columns || []);
+        if (pages[0].board.priorityLeads?.length) onPriorityLeadsLoaded(pages[0].board.priorityLeads);
         const nextPlacements: Record<string,string> = {};
         const nextOverrides: Record<string,{details:Partial<Lead>;hidden:boolean}> = {};
         const dedup = new Map<string,CommercialAttempt>();
@@ -1173,9 +1176,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onLeadDel
             const columnFilter=effectiveReturnFilter(col.id);
             const allCards=filtered.filter(l=>columnFor(l)===col.id);
             const cards=filterAgendaAndSort(allCards.filter(l=>matchReturnFilter(l,columnFilter)&&callFilterPass(l)))
-              .sort((a,b)=>agendaActive||columnFilter==='all'||columnFilter==='none'?0:
-                Date.parse(followups[a.id]?.contact_due_at||'')-
-                Date.parse(followups[b.id]?.contact_due_at||''));
+              .sort((a,b)=>{
+                if(col.slug==='prospecting'){
+                  const siteOrder=compareSiteInterestProspecting(a,b);
+                  if(siteOrder!==0)return siteOrder;
+                }
+                return agendaActive||columnFilter==='all'||columnFilter==='none'?0:
+                  Date.parse(followups[a.id]?.contact_due_at||'')-
+                  Date.parse(followups[b.id]?.contact_due_at||'');
+              });
             return <div key={col.id} className="flex w-[315px] min-w-[315px] flex-col overflow-hidden rounded-xl border shadow-sm"
               style={{backgroundColor:col.color+'0D',borderColor:col.color+'44'}}
               onDragOver={e=>{if(e.dataTransfer.types.includes('application/x-verto-kanban-column')||col.kind!=='customers')e.preventDefault();}}

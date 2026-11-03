@@ -175,6 +175,7 @@ if (secretHits.length === 0) pass('nenhum secret óbvio versionado');
 else fail('nenhum secret óbvio versionado', secretHits.join('; '));
 
 const criticalTests = [
+  'tests/salesWebsiteInterestKanban.regression.test.mjs',
   'tests/productionPaidOfferAccessRecovery.regression.test.mjs',
   'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/factoryAuthorizedTarget.regression.test.mjs',
