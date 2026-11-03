@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { resolveSalesPostPaymentState, resolveSalesPostPaymentRetryDelayMs } from '../utils/salesPostPaymentState.mjs';
 import {
   AlertCircle,
   Check,
@@ -673,40 +674,13 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     const legacyPaymentReturnWithoutContext = returnedFromPayment && token.toLowerCase() === 'pagamento';
 
     const applyStatusPayload = (data: any) => {
-      if (data?.state === 'review_required' || data?.reviewRequired === true) {
-        setPaymentReturnState('review_required');
-        return 'review_required';
-      }
-      if (data?.state === 'account_activated' || data?.sessionClaimed === true) {
-        setPaymentReturnState('account_activated');
-        return 'account_activated';
-      }
-      if (data?.state === 'director_ready' || data?.directorSessionReady === true) {
-        setPaymentReturnState('director_ready');
-        return 'director_ready';
-      }
-      if (data?.state === 'provisioning' || data?.accountProvisioned === true) {
-        setPaymentReturnState('provisioning');
-        return 'provisioning';
-      }
-      if (data?.state === 'payment_confirmed' || data?.paymentConfirmed === true) {
-        setPaymentReturnState('payment_confirmed');
-        return 'payment_confirmed';
-      }
-      setPaymentReturnState('confirming');
-      return 'payment_pending';
+      const state = resolveSalesPostPaymentState(data);
+      setPaymentReturnState(state === 'payment_pending' ? 'confirming' : state);
+      return state;
     };
 
-    const paymentRetryDelayMs = (response: Response | null, data: any, fallbackMs: number) => {
-      const headerSeconds = Number(response?.headers?.get('retry-after') || 0);
-      const payloadMs = Number(data?.retryAfterMs || 0);
-      const requestedMs = headerSeconds > 0
-        ? headerSeconds * 1000
-        : payloadMs > 0
-          ? payloadMs
-          : fallbackMs;
-      return Math.max(1500, Math.min(30000, Math.round(requestedMs)));
-    };
+    const paymentRetryDelayMs = (response: Response | null, data: any, fallbackMs: number) =>
+      resolveSalesPostPaymentRetryDelayMs(response?.headers?.get('retry-after'), data, fallbackMs);
 
     const reconcileDirectorProvisioning = async () => {
       const response = await fetch(
