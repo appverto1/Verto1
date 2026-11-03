@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import Stripe from 'stripe';
 import { parseCheckoutPlan, exactScheduleBoundaries } from './moduleSubscriptionUpgradeContract';
+import { lineIdentity, invoiceIdList } from './moduleSubscriptionUpgradeInvoiceEvidence';
 import { resolveValidatedStripeEnvironment } from './stripeEnvironment';
 
 const STRIPE_API_VERSION: Stripe.LatestApiVersion = '2026-03-25.dahlia';
@@ -23,12 +24,6 @@ export type ModuleUpgradeExecutionResult = {
 const stripeClient = () => {
   const { secret } = resolveValidatedStripeEnvironment();
   return new Stripe(secret, { apiVersion: STRIPE_API_VERSION });
-};
-
-const lineIdentity = (item: any) => {
-  const product = item?.price?.product;
-  const productMetadata = product && typeof product === 'object' ? product.metadata : null;
-  return text(item?.metadata?.revenue_line || item?.price?.metadata?.revenue_line || productMetadata?.revenue_line, 100);
 };
 
 async function createFrozenPrice(stripe: Stripe, offerId: string, line: any, currency: string, recurring: boolean) {
@@ -103,12 +98,6 @@ async function loadContext(supabase: SupabaseLike, organizationId: string, inten
   offer = await acceptOfferIfNeeded(supabase, offer, intent, actorUserId, acceptTerms);
   return { intent, offer };
 }
-
-const invoiceIdList = (subscription: any) => Array.from(new Set([
-  text(subscription?.metadata?.vertoUpgradeProrationInvoiceId, 120),
-  text(subscription?.metadata?.vertoUpgradeOneTimeInvoiceId, 120),
-  typeof subscription?.latest_invoice === 'string' ? text(subscription.latest_invoice, 120) : text(subscription?.latest_invoice?.id, 120),
-].filter(Boolean)));
 
 async function retrieveInvoice(stripe: Stripe, invoiceId: string) {
   return stripe.invoices.retrieve(invoiceId, { expand: ['payment_intent'] } as any);
