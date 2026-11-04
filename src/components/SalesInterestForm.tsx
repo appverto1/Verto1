@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { CheckCircle2, Loader2 } from "lucide-react";
+import { submitSalesInterest } from "../services/salesInterestSubmission";
 import {
   SALES_INTEREST_SUCCESS_MESSAGE,
   SALES_INTEREST_SUCCESS_TITLE,
@@ -63,32 +64,15 @@ export const SalesInterestForm = ({
     setLoading(true);
     let persisted = false;
     try {
-      const response = await fetch("/api/public/sales-leads", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Idempotency-Key": idempotencyKeyRef.current,
-        },
-        credentials: "include",
-        body: JSON.stringify({
-          name: normalizedName,
-          phone,
-          clinicName: clinicName.trim(),
-          acquisitionChannel:
-            initialAcquisitionChannel.trim() || "public_landing",
-          source: "public_landing",
-          website,
-          formStartedAt: startedAtRef.current,
-        }),
+      await submitSalesInterest({
+        normalizedName,
+        phone,
+        clinicName,
+        initialAcquisitionChannel,
+        website,
+        startedAt: startedAtRef.current,
+        idempotencyKey: idempotencyKeyRef.current,
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false) {
-        throw new Error(
-          data?.message ||
-            data?.error ||
-            "Não foi possível registrar seu interesse.",
-        );
-      }
       persisted = true;
       setSubmitted(true);
       onSubmitted?.({ name: normalizedName });

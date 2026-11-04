@@ -6,6 +6,7 @@ const routes=readFileSync('services/salesProspectingRoutes.ts','utf8');
 const ui=readFileSync('src/components/CommercialKanban.tsx','utf8');
 const parent=readFileSync('src/components/SuperAdminDashboard.tsx','utf8');
 const form=readFileSync('src/components/SalesInterestForm.tsx','utf8');
+const submission=readFileSync('src/services/salesInterestSubmission.ts','utf8');
 
 const old={id:'manual',createdAt:'2026-11-03T10:00:00Z'};
 const siteOld={id:'siteOld',createdAt:'2026-10-01T10:00:00Z',siteInterestAt:'2026-10-01T10:00:00Z'};
@@ -15,7 +16,8 @@ assert.equal(compareSiteInterestProspecting({id:'a'},{id:'b'}),0,'non-site order
 assert.ok(compareSiteInterestProspecting(siteOld,siteNew)>0);
 assert.equal(compareSiteInterestProspecting({id:'invalid',siteInterestAt:'bad'},old),0);
 
-assert.match(form,/fetch\("\/api\/public\/sales-leads"/,'existing validated public endpoint retained');
+assert.match(submission,/fetch\("\/api\/public\/sales-leads"/,'existing validated public endpoint retained in its transport module');
+assert.match(form,/await submitSalesInterest\(/,'form must submit through the isolated transport, before acknowledging persistence');
 assert.match(sql,/values \('Cadastro no site'\)/,'source seeded');
 assert.match(sql,/after insert on public\.sales_lead_events/,'same transaction as idempotent lead creation');
 assert.match(sql,/new\.idempotency_key not like 'public-sales:%'/,'only public signup events');
