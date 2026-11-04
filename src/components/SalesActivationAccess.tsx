@@ -186,6 +186,9 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     setSubmitting(true);
     setError('');
     setMessage('');
+    // React state updates only on the next render. Remember a password persisted
+    // by this request when reporting a subsequent login/provisioning failure.
+    let passwordPersisted = passwordSaved;
     try {
       const passwordValidationError = validateActivationPassword(password);
       if (passwordValidationError) throw new Error(passwordValidationError);
@@ -210,6 +213,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
         // rejected and never force a second password creation against a used
         // activation link. The server explicitly tells us when Auth persisted.
         if (payload?.passwordSaved === true) {
+          passwordPersisted = true;
           setPasswordSaved(true);
         }
         if (!response.ok || payload?.success === false) {
@@ -218,6 +222,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
           }
           setMessage('Senha registrada. Concluindo a preparação da sua clínica...');
         } else {
+          passwordPersisted = true;
           setPasswordSaved(true);
           setMessage('Senha registrada. Concluindo seu acesso...');
         }
@@ -228,7 +233,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       setMessage('Acesso ativado com sucesso. Abrindo sua clínica...');
     } catch (activationError: any) {
       setError(
-        passwordSaved
+        passwordPersisted
           ? activationError?.message ||
               'Sua senha foi salva. Tente novamente para concluir a entrada.'
           : activationError?.message || 'Não foi possível concluir a ativação.',
