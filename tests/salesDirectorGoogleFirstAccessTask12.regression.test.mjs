@@ -37,7 +37,7 @@ test('OAuth start failure clears only this attempt, preventing stale Director hi
 
 test('OAuth callback requires matching offer token, existing session and backend identity binding', () => {
   assert.match(oauthReturn, /!session\?\.access_token/);
-  assert.match(oauthReturn, /\/\^\\\/ativacao-comercial/);
+  assert.match(oauthReturn, /window\.location\.pathname\.match\(/);
   assert.match(oauthReturn, /pendingToken !== routeToken \|\| !activationEmail/);
   assert.match(oauthReturn, /salesActivationOAuthLoginRef\.current\?\.accessToken === accessToken/);
   assert.match(oauthReturn, /handleLoginSuccess\(session, 'director', undefined, \{/);
