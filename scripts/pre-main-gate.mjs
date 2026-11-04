@@ -176,6 +176,10 @@ else fail('nenhum secret óbvio versionado', secretHits.join('; '));
 
 const criticalTests = [
   'tests/salesWebsiteInterestKanban.regression.test.mjs',
+  'tests/salesInterestSubmission.contract.test.mjs',
+  'tests/salesInterestSubmission.behavior.test.ts',
+  'tests/publicSalesLeadRouteExtraction.regression.test.mjs',
+  'tests/publicSalesLeadRouteBehavior.test.ts',
   'tests/productionPaidOfferAccessRecovery.regression.test.mjs',
   'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/factoryAuthorizedTarget.regression.test.mjs',
