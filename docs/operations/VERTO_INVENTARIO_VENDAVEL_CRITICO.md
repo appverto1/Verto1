@@ -16,7 +16,7 @@
 | 07 | Cartão Stripe em teste, confirmar pagamento | **PR #588 MERGEADA EM STAGING**; confirmar deploy no SHA a30415fa; pagamento de teste não executado; modo Stripe test permanece não confirmado |
 | 08 | Boleto Stripe em teste, confirmar pagamento assíncrono | **PR #590 MERGEADA E DEPLOYADA EM STAGING** (SHA 0976f308); smoke Stripe TEST e ativação assíncrona pendentes |
 | 09 | Webhooks/assinatura: idempotência, módulos, zero cobrança duplicada | **CORREÇÃO EM CI**: PR #592 mergeada e aplicada em staging; PR complementar com filtro atômico no webhook para lead convertido e remoção do trigger baseado em cabeçalhos (evita interferência no CRUD manual). CI, merge/deploy e smoke Stripe TEST pendentes |
-| 10 | Pagamento → onboarding diretamente, sem checkout repetido | PENDENTE DE COMANDO |
+| 10 | Pagamento → onboarding diretamente, sem checkout repetido | **CONTRATO JÁ IMPLEMENTADO; REGRESSÃO REFORÇADA EM PR STAGING**: retorno Stripe com reconciliação server-side, sessão de Diretor autenticada, onboarding de clínica já paga sem novo checkout. CI, merge/deploy e smoke Stripe TEST do Bloco A ainda exigem confirmação; sem alteração funcional ou cobrança. |
 | 11 | Primeiro acesso do diretor por e-mail e senha | PENDENTE DE COMANDO |
 | 12 | Primeiro acesso do diretor com Google | PENDENTE DE COMANDO |
 | 13 | Cadastro/configurações da clínica, Salvar, persistir e mostrar sem F5 | PENDENTE DE COMANDO |
