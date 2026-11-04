@@ -180,6 +180,7 @@ const criticalTests = [
   'tests/salesKanbanOpportunityCreationRoutes.test.ts',
   'tests/salesKanbanOpportunityCreationTransport.test.ts',
   'tests/salesProspectingActivityExtraction.regression.test.mjs',
+  'tests/salesProspectingKanban.regression.test.mjs',
   'tests/salesKanbanMovementBehavior.test.ts',
   'tests/salesProspectingActivityBehavior.test.ts',
   'tests/salesKanbanActivityTransport.test.ts',

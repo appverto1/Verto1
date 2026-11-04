@@ -110,7 +110,7 @@ test('full-width Kanban supports custom titles, colors, ordering, deletion, draw
   assert.match(kanban,/onDrop/);
   assert.match(kanban,/onOpenLead/);
   assert.match(kanban,/Carregar mais /);
-  assert.match(kanban,/\/kanban\/leads\//);
+  assert.match(activityTransport,/\/kanban\/leads\//);
   assert.match(routes,/salesGuard = \[checkAuth, checkPlatformAdmin\]/);
   assert.match(routes,/sales_kanban_columns/);
   assert.match(routes,/order_sales_kanban_columns_v1/);
