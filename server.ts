@@ -22001,7 +22001,9 @@ async function startServer() {
           .from("sales_leads")
           .update({ status: "payment_pending", updated_at: now })
           .eq("id", leadId)
-          .is("deleted_at", null),
+          .is("deleted_at", null)
+          // Old unpaid webhook must not demote an already converted clinic.
+          .neq("status", "converted"),
         supabase.from("sales_lead_events").upsert(
           [
             {
