@@ -9,6 +9,7 @@ import { CommercialScriptsPanel } from './CommercialScriptsPanel';
 import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { compareSiteInterestProspecting } from '../utils/siteInterestPriority.mjs';
+import { splitOpportunityPhones, previewOpportunityDuplicates, createManualOpportunities } from '../services/salesKanbanOpportunityCreation';
 import {
   agendaMatches,compareAgendaPriority,resolveAgendaMoment,
   brazilDateKey,followupBucket,followupFilters,matchesFollowup,isCallDueToday,progressColor,progressWidth,
@@ -399,7 +400,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       (!q || [lead.name,lead.clinicName,lead.email,lead.phone].some(v=>String(v||'').toLocaleLowerCase('pt-BR').includes(q))));
   }, [visibleLeads,search]);
   const selected = visibleLeads.find(x=>x.id === selectedId) || null;
-  const bulkPhones=phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean);
+  const bulkPhones=splitOpportunityPhones(phonesDraft);
   const checkedDuplicates=duplicateCheck?.draft===phonesDraft&&!duplicateCheck.error?duplicateCheck.matches:null;
   const blockedByDuplicate=Boolean(checkedDuplicates?.some(item=>item.invalid||item.inBatch||item.existing));
   useEffect(()=>{
@@ -409,9 +410,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
     let active=true;
     setDuplicateCheck(null);
     const timer=window.setTimeout(()=>{
-      void request('/api/owner/sales/kanban/opportunities/duplicates',{
-        method:'POST',body:JSON.stringify({phones:phonesDraft.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean)}),
-      }).then(json=>{
+      void previewOpportunityDuplicates(request,phonesDraft).then(json=>{
         if(active)setDuplicateCheck({draft:phonesDraft,matches:json.matches||[]});
       }).catch((e:Error)=>{
         if(active)setDuplicateCheck({draft:phonesDraft,matches:[],error:e.message||'Verificação indisponível.'});
@@ -525,9 +524,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
     setCreatingBusy(true);setError(null);
     const key=keysRef.current.create||crypto.randomUUID();keysRef.current.create=key;
     try {
-      const json=await request('/api/owner/sales/kanban/opportunities',{
-        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones,channelsByPhone}),
-      });
+      const json=await createManualOpportunities(request,phones,channelsByPhone,key);
       delete keysRef.current.create;
       onLeadsCreated(json.leads||[]);
       setAcquisitionByLead(old=>{

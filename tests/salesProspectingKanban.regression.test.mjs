@@ -4,6 +4,8 @@ import { test } from 'node:test';
 
 const sql = readFileSync('supabase/migrations/20261027143000_sales_prospecting_attempts_v1.sql', 'utf8');
 const routes = readFileSync('services/salesProspectingRoutes.ts', 'utf8');
+const creationRoutes = readFileSync('services/salesKanbanOpportunityCreationRoutes.ts', 'utf8');
+const creationTransport = readFileSync('src/services/salesKanbanOpportunityCreation.ts', 'utf8');
 const kanban = readFileSync('src/components/CommercialKanban.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CommercialDashboard.tsx', 'utf8');
 const superAdmin = readFileSync('src/components/SuperAdminDashboard.tsx', 'utf8');
@@ -127,7 +129,7 @@ test('DRE contains a separate, rich analytical dashboard with database aggregate
 });
 
 test('owner-only opportunity batch/CRUD uses server authority and atomic DB functions',()=>{
-  assert.match(routes,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities', \.\.\.salesGuard/);
+  assert.match(creationRoutes,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities', \.\.\.salesGuard/);
   assert.match(routes,/app\.patch\('\/api\/owner\/sales\/kanban\/opportunities\/:leadId', \.\.\.salesGuard/);
   assert.match(routes,/app\.delete\('\/api\/owner\/sales\/kanban\/opportunities\/:leadId', \.\.\.salesGuard/);
   assert.match(crudSql,/public\.create_sales_kanban_opportunities_v1/);
@@ -735,10 +737,10 @@ test('bulk lead import preselects any subset and assigns different active acquis
   assert.match(kanban,/Aplicar canais aos \{bulkSelectedRows\.length\} selecionados/);
   assert.match(kanban,/Editar canais deste contato/);
   assert.match(kanban,/phones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
-  assert.match(kanban,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
+  assert.match(creationTransport,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
   assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
-  assert.match(routes,/create_sales_kanban_opportunities_v2/);
-  assert.match(routes,/channelsByPhone\.length!==phones\.length/);
+  assert.match(creationRoutes,/create_sales_kanban_opportunities_v2/);
+  assert.match(creationRoutes,/channelsByPhone\.length!==phones\.length/);
   assert.match(bulkCreationSql,/create_sales_kanban_opportunities_v1\(p_phones,p_actor_id,p_action_key\)/);
   assert.match(bulkCreationSql,/sales_lead_acquisition_channels\(lead_id,channel_id,assigned_by\)/);
   assert.match(bulkCreationSql,/IDEMPOTENCY_CONFLICT/);

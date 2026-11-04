@@ -7,8 +7,8 @@
 ## Bloco A — Aquisição e ativação da clínica (01–14)
 | Nº | Entrega contratada | Situação deste roteiro |
 |---|---|---|
-| 01 | Cadastro no site → CRM Prospecção "Cadastro no site", sem F5; modularizar caminho | CÓDIGO EXTRAÍDO: transporte frontend + rota backend; gates finais, merge/deploy staging e smoke humano ainda pendentes |
-| 02 | Cadastro manual e em lote de oportunidades | PENDENTE DE COMANDO |
+| 01 | Cadastro no site → CRM Prospecção "Cadastro no site", sem F5; modularizar caminho | **IMPLEMENTADO, MERGEADO E DEPLOYADO EM STAGING (PR #581)**; smoke humano pendente para o bloco A |
+| 02 | Cadastro manual e em lote de oportunidades | **EM IMPLEMENTAÇÃO**: extração de frontend/backend; regressões, PR, merge/deploy staging obrigatórios; smoke humano pendente |
 | 03 | CRM: movimentação de etapas, tentativas, canais, histórico | PENDENTE DE COMANDO |
 | 04 | Construtor de proposta: módulos, preços, condições, snapshot | PENDENTE DE COMANDO |
 | 05 | Link comercial: criar/copiar/preservar propostas anteriores | PENDENTE DE COMANDO |
