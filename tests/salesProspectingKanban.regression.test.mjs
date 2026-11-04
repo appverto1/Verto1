@@ -6,6 +6,9 @@ const sql = readFileSync('supabase/migrations/20261027143000_sales_prospecting_a
 const routes = readFileSync('services/salesProspectingRoutes.ts', 'utf8');
 const creationRoutes = readFileSync('services/salesKanbanOpportunityCreationRoutes.ts', 'utf8');
 const creationTransport = readFileSync('src/services/salesKanbanOpportunityCreation.ts', 'utf8');
+const activityRoutes = readFileSync('services/salesProspectingActivityRoutes.ts', 'utf8');
+const movementRoutes = readFileSync('services/salesKanbanMovementRoutes.ts', 'utf8');
+const activityTransport = readFileSync('src/services/salesKanbanActivity.ts', 'utf8');
 const kanban = readFileSync('src/components/CommercialKanban.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CommercialDashboard.tsx', 'utf8');
 const superAdmin = readFileSync('src/components/SuperAdminDashboard.tsx', 'utf8');
@@ -20,12 +23,12 @@ test('sales migration uses balanced PL/pgSQL bodies with a transactional wrapper
 
 test('sales attempts stay private behind server authority and MFA middleware', () => {
   assert.match(routes, /checkAuth, checkPlatformAdmin/);
-  assert.match(routes, /record_sales_prospecting_attempt_v1/);
+  assert.match(activityRoutes, /record_sales_prospecting_attempt_v1/);
   // Existing manual-loss route now requires a chosen reason and uses one atomic
   // server-side RPC; the older function remains only for legacy compatibility.
-  assert.match(routes, /mark_sales_lead_lost_with_reason_v1/);
-  assert.match(routes, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
-  assert.match(routes, /target\.data\?\.kind==='lost'/);
+  assert.match(activityRoutes, /mark_sales_lead_lost_with_reason_v1/);
+  assert.match(activityRoutes, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
+  assert.match(movementRoutes, /target\.data\?\.kind==='lost'/);
   assert.match(sql, /revoke all on public\.sales_prospecting_attempts from public, anon, authenticated;/);
   assert.match(sql, /grant execute on function public\.record_sales_prospecting_attempt_v1\([^;]+to service_role;/s);
   assert.doesNotMatch(sql, /to authenticated;/i);
@@ -47,8 +50,8 @@ test('each channel remains capped at five; manual loss stays protected', () => {
 
 
 test('clicking a prospecting button persists before updating UI and supports manual lost', () => {
-  assert.match(kanban, /\/prospecting-attempt-time/);
-  assert.match(kanban, /\/mark-lost/);
+  assert.match(activityTransport, /\/prospecting-attempt-time/);
+  assert.match(activityTransport, /\/mark-lost/);
   assert.match(kanban, /crypto\.randomUUID\(\)/);
   assert.match(kanban, /onLeadPatch\(lead\.id,\{status:json\.data\.status/);
   assert.match(kanban, /overflow-x-auto/);
@@ -175,7 +178,7 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(guardSql,/time '17:30'/);
   assert.match(guardSql,/PROSPECTING_ALREADY_TODAY/);
   assert.match(guardSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
-  assert.match(routes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
+  assert.match(activityRoutes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
   assert.match(kanban,/nextSalesCadenceSlots/);
   assert.match(kanban,/setAttemptDialog/);
 });
@@ -224,8 +227,8 @@ test('conversation success uses explicitly saved Brazilian date/time instead of 
   assert.match(kanban,/Salvar alteração/);
   assert.match(kanban,/setAttempts\(old=>attempt/);
   assert.match(kanban,/onLeadPatch\(lead\.id,\{status:json\.data\.status/);
-  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/decisor-contact'/);
-  assert.match(routes,/save_sales_decisor_contact_v2/);
+  assert.match(activityRoutes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/decisor-contact'/);
+  assert.match(activityRoutes,/save_sales_decisor_contact_v2/);
 });
 
 test('conversation edit is locked, audited, idempotent and protected from manipulation',()=>{
@@ -247,8 +250,8 @@ test('return date/time is stored as owner CRM metadata without notifications',()
   assert.match(kanban,/Próximo retorno de contato/);
   assert.match(kanban,/Salvar retorno/);
   assert.match(kanban,/Cancelar retorno/);
-  assert.match(routes,/save_sales_contact_followup_v1/);
-  assert.match(routes,/eq\('actor_user_id',actorId\)/);
+  assert.match(activityRoutes,/save_sales_contact_followup_v1/);
+  assert.match(activityRoutes,/eq\('actor_user_id',actorId\)/);
   assert.match(contactSql,/unique\(lead_id,actor_user_id\)/);
   assert.match(contactSql,/sales_contact_followups enable row level security/);
   assert.match(contactSql,/followup_canceled/);
@@ -269,8 +272,8 @@ test('WhatsApp text has an explicit selectable channel and persists only through
   assert.match(kanban,/a.channel==='whatsapp_call'\?'Ligação WhatsApp':'Mensagem WhatsApp'/);
   assert.match(kanban,/Decisor por mensagem/);
   assert.match(kanban,/setAttempts\(old=>attempt/);
-  assert.match(routes,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
-  assert.match(routes,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
+  assert.match(activityRoutes,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
+  assert.match(activityRoutes,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
 });
 
 test('text contact never increments phone or WhatsApp call counters and preserves future follow-ups',()=>{
@@ -327,8 +330,8 @@ test('all call attempt buttons open the editable timestamp dialog and only Save 
 test('historical failed calls can be corrected, not re-counted or reclassified',()=>{
   assert.match(kanban,/attemptId:a\.id,localAt:brazilLocalInput\(a\.occurred_at\)/);
   assert.match(kanban,/setAttempts\(old=>draft\.attemptId/);
-  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
-  assert.match(routes,/save_sales_prospecting_attempt_time_v2/);
+  assert.match(activityRoutes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
+  assert.match(activityRoutes,/save_sales_prospecting_attempt_time_v2/);
   assert.match(attemptTimeSql,/outcome='no_decisor' for update/);
   assert.match(attemptTimeSql,/update public\.sales_prospecting_attempts set occurred_at=p_occurred_at/);
   assert.match(attemptTimeSql,/attempt_time_corrected/);
@@ -378,8 +381,8 @@ test('only Save attributes a script and decision-maker interest; edits preserve 
   assert.match(kanban,/Demonstrou interesse/);
   assert.match(kanban,/Não demonstrou interesse/);
   assert.match(kanban,/scriptLabel\(a\.script_version_id\)/);
-  assert.match(routes,/save_sales_prospecting_attempt_time_v2/);
-  assert.match(routes,/save_sales_decisor_contact_v2/);
+  assert.match(activityRoutes,/save_sales_prospecting_attempt_time_v2/);
+  assert.match(activityRoutes,/save_sales_decisor_contact_v2/);
   assert.match(scriptsSql,/SCRIPT_ATTRIBUTION_IMMUTABLE/);
   assert.match(scriptsSql,/script_version_id uuid references public\.sales_script_versions\(id\)/);
   assert.match(compatSql,/new\.contact_result:='no_answer'/);
@@ -717,11 +720,11 @@ test('call/save UI now labels cadence as advisory and reports only real remainin
   assert.match(kanban,/A cadência é apenas sugestão/);
   assert.match(kanban,/Horários sugeridos não bloqueiam registros reais/);
   assert.doesNotMatch(kanban,/É permitida uma ligação por dia/);
-  assert.match(routes,/Oportunidade removida ou com preferência explícita de não receber contatos/);
-  assert.match(routes,/Esta tentativa já foi salva com outros dados/);
-  assert.match(routes,/Este contato já foi salvo com outros dados/);
-  const attemptRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"));
-  const contactRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/followup'"));
+  assert.match(activityRoutes,/Oportunidade removida ou com preferência explícita de não receber contatos/);
+  assert.match(activityRoutes,/Esta tentativa já foi salva com outros dados/);
+  assert.match(activityRoutes,/Este contato já foi salvo com outros dados/);
+  const attemptRoute=activityRoutes.slice(activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'"),activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"));
+  const contactRoute=activityRoutes.slice(activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"),activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/followup'"));
   assert.doesNotMatch(attemptRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
   assert.doesNotMatch(contactRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
 });
