@@ -140,9 +140,19 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       if (oauthError) throw oauthError;
     } catch (oauthError: any) {
       try {
-        localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
+        // Clear only this attempt's temporary context. A failed OAuth start must
+        // not leave a Director role hint or contractual email for a later login.
+        if (localStorage.getItem(SALES_ACTIVATION_OAUTH_PENDING_KEY) === token) {
+          localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
+          if (localStorage.getItem('verto_intended_role') === 'director') {
+            localStorage.removeItem('verto_intended_role');
+          }
+          if (localStorage.getItem('verto_activation_email') === activation.email.toLowerCase()) {
+            localStorage.removeItem('verto_activation_email');
+          }
+        }
       } catch {
-        // Storage is optional.
+        // Storage is optional; the backend always validates Director identity.
       }
       setError(oauthError?.message || 'Não foi possível iniciar o acesso com Google.');
       setSubmitting(false);
