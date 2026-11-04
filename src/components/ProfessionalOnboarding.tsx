@@ -123,7 +123,12 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [clinicName, setClinicName] = useState(user?.clinicSettings?.clinicName || '');
   const [clinicPhone, setClinicPhone] = useState(user?.clinicSettings?.clinicPhone || '');
   const [clinicLogoUrl, setClinicLogoUrl] = useState<string | null>(user?.clinicSettings?.clinicLogoUrl || null);
-  const [clinicOperationType, setClinicOperationType] = useState<'private' | 'insurance' | 'mixed'>('mixed');
+  const [clinicOperationType, setClinicOperationType] = useState<'private' | 'insurance' | 'mixed'>(() => {
+    const saved = String(user?.clinicSettings?.clinicOperationType || '').toLowerCase();
+    return ['private', 'insurance', 'mixed'].includes(saved)
+      ? saved as 'private' | 'insurance' | 'mixed'
+      : 'mixed';
+  });
 
   const isManagedMember = Boolean(
     context?.clinic?.id &&
@@ -233,6 +238,14 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
         setClinicName(authoritativeContext.clinic?.name || user?.clinicSettings?.clinicName || '');
         setClinicPhone(authoritativeContext.clinic?.phone || authoritativeContext.clinic?.whatsapp || user?.clinicSettings?.clinicPhone || '');
         setClinicLogoUrl(authoritativeContext.clinic?.logoUrl || user?.clinicSettings?.clinicLogoUrl || null);
+        if (authoritativeContext.onboardingMode === 'clinic_owner') {
+          const savedOperationType = String(
+            draft.clinicOperationType || metadata?.clinicOperationType || user?.clinicSettings?.clinicOperationType || '',
+          ).toLowerCase();
+          if (['private', 'insurance', 'mixed'].includes(savedOperationType)) {
+            setClinicOperationType(savedOperationType as 'private' | 'insurance' | 'mixed');
+          }
+        }
       } catch (error: any) {
         if (active) setContextError(error?.message || 'Não foi possível carregar seu vínculo com a clínica.');
       } finally {
@@ -404,6 +417,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
               clinicPhone,
               clinicLogoUrl: clinicLogoUpload.url,
               clinicOperationType,
+              ...(result.user?.clinicSettings || {}),
             },
       });
     } catch (error: any) {
