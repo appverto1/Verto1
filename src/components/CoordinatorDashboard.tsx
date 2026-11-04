@@ -9283,13 +9283,20 @@ export function CoordinatorDashboard({
         }
       }
     } else {
-      onUpdateProfile({
+      const clinicSaveResult = await onUpdateProfile({
         profileSaveScope: "clinic",
         clinicSettings: {
           ...clinicSettings,
           clinicLogoUrl: clinicLogoDataUrl || undefined,
         },
       });
+      if (clinicSaveResult?.success !== true || clinicSaveResult?.pending || clinicSaveResult?.queued) {
+        showToast(
+          clinicSaveResult?.message || clinicSaveResult?.error || "O servidor não confirmou o salvamento das configurações da clínica.",
+          "error",
+        );
+        return;
+      }
     }
 
     onAddActivityLog(
