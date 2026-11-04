@@ -676,8 +676,10 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     const returnedFromPayment = query.get('payment') === 'success' && Boolean(checkoutSessionId);
     const legacyPaymentReturnWithoutContext = returnedFromPayment && token.toLowerCase() === 'pagamento';
 
+    let lastObservedPaymentState: PaymentReturnState | null = null;
     const applyStatusPayload = (data: any) => {
       const state = resolveSalesPostPaymentState(data);
+      lastObservedPaymentState = state;
       setPaymentReturnState(state === 'payment_pending' ? 'confirming' : state);
       return state;
     };
@@ -798,9 +800,12 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
           }
         }
       }
-      // Boleto can remain unpaid after Checkout. Exhausting bounded polls never
-      // proves payment or permission to begin provisioning.
-      if (!cancelled) setPaymentReturnState('payment_pending');
+      // A bounded poll timeout is never evidence of payment or provisioning.
+      // Only the authoritative backend can say whether it is still unpaid.
+      if (!cancelled && lastObservedPaymentState === 'payment_pending')
+        setPaymentReturnState('payment_pending');
+      else if (!cancelled && lastObservedPaymentState === null)
+        setPaymentReturnState('unavailable');
     };
 
     const loadOffer = async () => {
