@@ -17,7 +17,7 @@
 | 08 | Boleto Stripe em teste, confirmar pagamento assíncrono | **PR #590 MERGEADA E DEPLOYADA EM STAGING** (SHA 0976f308); smoke Stripe TEST e ativação assíncrona pendentes |
 | 09 | Webhooks/assinatura: idempotência, módulos, zero cobrança duplicada | **CORREÇÃO EM CI**: PR #592 mergeada e aplicada em staging; PR complementar com filtro atômico no webhook para lead convertido e remoção do trigger baseado em cabeçalhos (evita interferência no CRUD manual). CI, merge/deploy e smoke Stripe TEST pendentes |
 | 10 | Pagamento → onboarding diretamente, sem checkout repetido | **CONTRATO JÁ IMPLEMENTADO; REGRESSÃO REFORÇADA EM PR STAGING**: retorno Stripe com reconciliação server-side, sessão de Diretor autenticada, onboarding de clínica já paga sem novo checkout. CI, merge/deploy e smoke Stripe TEST do Bloco A ainda exigem confirmação; sem alteração funcional ou cobrança. |
-| 11 | Primeiro acesso do diretor por e-mail e senha | PENDENTE DE COMANDO |
+| 11 | Primeiro acesso do diretor por e-mail e senha | **CORREÇÃO PONTUAL EM REVISÃO STAGING**: ativação com senha forte, autenticação backend do Diretor e retomada de perfil parcial já existentes; corrigido feedback quando senha é persistida mas login falha antes de novo render React. Testes do fluxo, domínios de e-mail e segurança adicionados ao gate; CI, merge/deploy e smoke autenticado do Bloco A pendentes. Sem alteração de banco, Auth, cobrança ou permissões. |
 | 12 | Primeiro acesso do diretor com Google | PENDENTE DE COMANDO |
 | 13 | Cadastro/configurações da clínica, Salvar, persistir e mostrar sem F5 | PENDENTE DE COMANDO |
 | 14 | Tutorial inicial guiado e persistência por papel, inclusive novo login | PENDENTE DE COMANDO |
