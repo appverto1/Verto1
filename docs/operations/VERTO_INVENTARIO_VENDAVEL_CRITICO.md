@@ -15,7 +15,7 @@
 | 06 | Link público: abrir sem login e apresentar proposta correta | **PR #587 MERGEADA EM STAGING**; deploy/saúde ainda aguardam confirmação no SHA; smoke do Bloco A pendente |
 | 07 | Cartão Stripe em teste, confirmar pagamento | **PR #588 MERGEADA EM STAGING**; confirmar deploy no SHA a30415fa; pagamento de teste não executado; modo Stripe test permanece não confirmado |
 | 08 | Boleto Stripe em teste, confirmar pagamento assíncrono | **PR #590 MERGEADA E DEPLOYADA EM STAGING** (SHA 0976f308); smoke Stripe TEST e ativação assíncrona pendentes |
-| 09 | Webhooks/assinatura: idempotência, módulos, zero cobrança duplicada | **IMPLEMENTAÇÃO EM REVISÃO**: defesa no banco para status convertido/Checkout terminal contra eventos Stripe atrasados; CI/merge/deploy e smoke TEST pendentes; sem alterações no server.ts (limite de envio GitHub) |
+| 09 | Webhooks/assinatura: idempotência, módulos, zero cobrança duplicada | **PARCIAL EM REVISÃO**: guarda atômica de links de Checkout terminais contra evento pendente atrasado. Correção no lead convertido ainda pendente (server.ts excede envio GitHub); preservar edição manual do CRM. CI/merge/deploy e smoke Stripe TEST pendentes |
 | 10 | Pagamento → onboarding diretamente, sem checkout repetido | PENDENTE DE COMANDO |
 | 11 | Primeiro acesso do diretor por e-mail e senha | PENDENTE DE COMANDO |
 | 12 | Primeiro acesso do diretor com Google | PENDENTE DE COMANDO |

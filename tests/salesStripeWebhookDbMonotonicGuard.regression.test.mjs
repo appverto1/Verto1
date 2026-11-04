@@ -7,13 +7,10 @@ const server=readFileSync('server.ts','utf8');
 const lead=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_converted_pending_v1\(\)[\s\S]*?\$lead_guard\$;/)?.[0] || '';
 const link=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_checkout_terminal_pending_v1\(\)[\s\S]*?\$link_guard\$;/)?.[0] || '';
 
-test('late pending Stripe event cannot demote a converted lead in the database',()=>{
-  assert.match(lead,/OLD\.status::text = 'converted' AND NEW\.status::text = 'payment_pending'/);
-  assert.match(lead,/RETURN NULL;/);
-  assert.match(lead,/RETURN NEW;/);
-  assert.match(sql,/BEFORE UPDATE OF status ON public\.sales_leads/);
-  assert.match(server,/if \(!paymentConfirmed\) \{/);
-  assert.match(server,/\.update\(\{ status: "payment_pending", updated_at: now \}\)/);
+test('database guard does not intercept any legitimate manual CRM lead status edits',()=>{
+  assert.doesNotMatch(sql,/public\\.sales_leads|guard_sales_converted_pending_v1/);
+  assert.match(server,/app\\.patch\\(\\s*"\\/api\\/owner\\/sales\\/leads\\/:leadId"/);
+  assert.match(server,/const patch: Record<string, any> = \\{ status, updated_at: now \\}/);
 });
 
 test('out-of-order unpaid checkout cannot erase completed, failed or expired Stripe link',()=>{
@@ -32,9 +29,9 @@ test('migration is transactional, tightly scoped, security-invoker and read-free
   assert.match(sql,/COMMIT;\s*$/);
   assert.match(sql,/SET LOCAL lock_timeout = '5s'/);
   assert.match(sql,/SECURITY INVOKER/g);
-  assert.equal((sql.match(/SECURITY INVOKER/g)||[]).length,2);
-  assert.equal((sql.match(/CREATE TRIGGER/g)||[]).length,2);
-  assert.equal((sql.match(/RETURN NULL;/g)||[]).length,2);
+  assert.equal((sql.match(/SECURITY INVOKER/g)||[]).length,1);
+  assert.equal((sql.match(/CREATE TRIGGER/g)||[]).length,1);
+  assert.equal((sql.match(/RETURN NULL;/g)||[]).length,1);
   assert.doesNotMatch(sql,/\bALTER TABLE\b|\bUPDATE public\.|\bINSERT INTO\b|\bDELETE FROM\b|\bSELECT\b|\bGRANT\b|SECURITY DEFINER|pg_sleep/i);
 });
 
