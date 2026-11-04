@@ -10,6 +10,7 @@ import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { compareSiteInterestProspecting } from '../utils/siteInterestPriority.mjs';
 import { splitOpportunityPhones, previewOpportunityDuplicates, createManualOpportunities } from '../services/salesKanbanOpportunityCreation';
+import { loadSalesProspectingHistory, moveSalesKanbanLead, persistSalesAttemptTime, persistSalesDecisorContact, persistSalesFollowup, persistSalesLoss } from '../services/salesKanbanActivity';
 import {
   agendaMatches,compareAgendaPriority,resolveAgendaMoment,
   brazilDateKey,followupBucket,followupFilters,matchesFollowup,isCallDueToday,progressColor,progressWidth,
@@ -294,7 +295,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
           const q = encodeURIComponent(chunk.join(','));
           const [board,history,acquisitionResult] = await Promise.all([
             request('/api/owner/sales/kanban/board?leadIds='+q+(pageIndex===0?'&sitePriority=1':'')),
-            chunk.length ? request('/api/owner/sales/prospecting/attempts?leadIds='+q) : Promise.resolve({data:[],leads:[]}),
+            chunk.length ? loadSalesProspectingHistory(request,q) : Promise.resolve({data:[],leads:[]}),
             request('/api/owner/sales/acquisition/board?leadIds='+q)
               .then(data=>({data,failed:false}))
               .catch(()=>({data:{channels:[],links:[]},failed:true})),
@@ -675,9 +676,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
     setBusyLead(lead.id);setError(null);
     void (async()=>{
       try {
-        const json=await request('/api/owner/sales/kanban/leads/'+lead.id+'/move',{
-          method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({columnId:column.id}),
-        });
+        const json=await moveSalesKanbanLead(request,lead.id,column.id,key);
         delete keysRef.current[keyName];
         setPlacements(old=>{
           const next={...old};if(column.kind==='custom')next[lead.id]=column.id;else delete next[lead.id];return next;
@@ -713,10 +712,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setBusyLead(draft.leadId);setError(null);
-      const json=await request('/api/owner/sales/leads/'+draft.leadId+'/prospecting-attempt-time',{
-        method:'PUT',headers:{'X-Idempotency-Key':key},
-        body:JSON.stringify({attemptId:draft.attemptId||null,channel:draft.channel,occurredAt,scriptVersionId}),
-      });
+      const json=await persistSalesAttemptTime(request,draft.leadId,key,{attemptId:draft.attemptId||null,channel:draft.channel,occurredAt,scriptVersionId});
       delete keysRef.current[keyName];
       setAttempts(old=>draft.attemptId
         ? old.map(item=>item.id===draft.attemptId?{...item,occurred_at:json.data.occurredAt}:item)
@@ -750,11 +746,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setBusyLead(lead.id);setError(null);
-      const json=await request('/api/owner/sales/leads/'+lead.id+'/decisor-contact',{
-        method:'PUT',headers:{'X-Idempotency-Key':key},
-        body:JSON.stringify({channel:attempt?.channel||spokenChannel,
-          attemptId:attempt?.id||null,occurredAt,scriptVersionId,contactResult:resolvedResult}),
-      });
+      const json=await persistSalesDecisorContact(request,lead.id,key,{channel:attempt?.channel||spokenChannel,
+        attemptId:attempt?.id||null,occurredAt,scriptVersionId,contactResult:resolvedResult});
       delete keysRef.current[keyName];
       setAttempts(old=>attempt
         ? old.map(item=>item.id===attempt.id?{...item,occurred_at:json.data.occurredAt}:item)
@@ -776,9 +769,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setSavingFollowup(true);setError(null);
-      const json=await request('/api/owner/sales/leads/'+lead.id+'/followup',{
-        method:'PUT',headers:{'X-Idempotency-Key':key},body:JSON.stringify({contactDueAt}),
-      });
+      const json=await persistSalesFollowup(request,lead.id,key,contactDueAt);
       delete keysRef.current[keyName];
       setFollowups(old=>({...old,[lead.id]:json.followup}));
       cardInfo(lead.id,cancel?'Retorno cancelado.':'Data e hora do retorno salvas (sem notificações).');
@@ -819,9 +810,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
     const key=keysRef.current[keyName]||crypto.randomUUID();keysRef.current[keyName]=key;
     setBusyLead(id);setError(null);
     try{
-      const json=await request('/api/owner/sales/leads/'+id+'/mark-lost',{
-        method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({reasonId:lossReasonDraft})
-      });
+      const json=await persistSalesLoss(request,id,key,lossReasonDraft);
       delete keysRef.current[keyName];
       setPlacements(old=>{const next={...old};delete next[id];return next;});
       onLeadPatch(id,{status:json.data.status,lostAt:json.data.lostAt,updatedAt:json.data.updatedAt,lossReasonId:json.data.lossReasonId});

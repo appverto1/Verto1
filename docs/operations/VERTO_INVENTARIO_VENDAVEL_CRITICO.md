@@ -8,8 +8,8 @@
 | Nº | Entrega contratada | Situação deste roteiro |
 |---|---|---|
 | 01 | Cadastro no site → CRM Prospecção "Cadastro no site", sem F5; modularizar caminho | **IMPLEMENTADO, MERGEADO E DEPLOYADO EM STAGING (PR #581)**; smoke humano pendente para o bloco A |
-| 02 | Cadastro manual e em lote de oportunidades | **EM IMPLEMENTAÇÃO**: extração de frontend/backend; regressões, PR, merge/deploy staging obrigatórios; smoke humano pendente |
-| 03 | CRM: movimentação de etapas, tentativas, canais, histórico | PENDENTE DE COMANDO |
+| 02 | Cadastro manual e em lote de oportunidades | **MERGE E DEPLOY STAGING CONFIRMADOS (PR #582)**; smoke humano do bloco A pendente |
+| 03 | CRM: movimentação de etapas, tentativas, canais, histórico | **Execução autorizada**: movimento e atividade/histórico separados em backend e transporte frontend; status do CI/deploy no PR; smoke humano do bloco A pendente |
 | 04 | Construtor de proposta: módulos, preços, condições, snapshot | PENDENTE DE COMANDO |
 | 05 | Link comercial: criar/copiar/preservar propostas anteriores | PENDENTE DE COMANDO |
 | 06 | Link público: abrir sem login e apresentar proposta correta | PENDENTE DE COMANDO |

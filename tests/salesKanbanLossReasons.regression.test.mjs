@@ -3,6 +3,8 @@ import fs from 'node:fs';
 const sql=fs.readFileSync(new URL('../supabase/migrations/20261030163000_sales_kanban_loss_reasons_v1.sql',import.meta.url),'utf8');
 const routes=fs.readFileSync(new URL('../services/salesProspectingRoutes.ts',import.meta.url),'utf8');
 const catalog=fs.readFileSync(new URL('../services/salesLossReasonsRoutes.ts',import.meta.url),'utf8');
+const activity=fs.readFileSync(new URL('../services/salesProspectingActivityRoutes.ts',import.meta.url),'utf8');
+const movement=fs.readFileSync(new URL('../services/salesKanbanMovementRoutes.ts',import.meta.url),'utf8');
 const board=fs.readFileSync(new URL('../src/components/CommercialKanban.tsx',import.meta.url),'utf8');
 const dashboard=fs.readFileSync(new URL('../src/components/CommercialDashboard.tsx',import.meta.url),'utf8');
 
@@ -25,8 +27,8 @@ assert.match(sql,/and hidden\.hidden_at is not null/i,'hidden Kanban leads must 
 assert.match(sql,/l\.loss_reason_id is not distinct from p_reason_id/i); // replaced below: verifies NULL bucket predicate
 assert.match(sql,/p_offset<0 or p_offset>100000/i,'drilldown must be capped');
 assert.match(routes,/registerSalesLossReasonsRoutes\(app/);
-assert.match(routes,/mark_sales_lead_lost_with_reason_v1/);
-assert.match(routes,/target\.data\?\.kind==='lost'/,'direct move without reason blocked');
+assert.match(activity,/mark_sales_lead_lost_with_reason_v1/);
+assert.match(movement,/target\.data\?\.kind==='lost'/,'direct move without reason blocked');
 assert.match(routes,/sales_loss_reasons_analytics_v1/);
 assert.match(routes,/sales_loss_reason_drilldown_v1/);
 assert.match(catalog,/\.\.\.guard/);
