@@ -11,6 +11,7 @@ import {
 import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
 import { loadPublicSalesOfferResponse } from '../services/publicSalesOfferTransport';
+import { requestPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -845,17 +846,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     setContinuing(true);
     setError('');
     try {
-      const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}/checkout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'omit',
-        body: JSON.stringify({ acceptTerms: true })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false) {
-        throw new Error(data?.message || data?.error || 'Não foi possível continuar.');
-      }
-      if (!data?.url) throw new Error('Checkout indisponível.');
+      const data = await requestPublicSalesCardCheckout(token);
       window.location.assign(data.url);
     } catch (checkoutError: any) {
       setError(checkoutError?.message || 'Não foi possível continuar.');
