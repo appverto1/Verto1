@@ -41,7 +41,9 @@ test('migration is transactional, tightly scoped, security-invoker and read-free
   assert.equal((sql.match(/SECURITY INVOKER/g)||[]).length,2);
   assert.equal((sql.match(/CREATE TRIGGER/g)||[]).length,2);
   assert.equal((sql.match(/RETURN NULL;/g)||[]).length,2);
-  assert.doesNotMatch(sql,/\bALTER TABLE\b|\bUPDATE public\.|\bINSERT INTO\b|\bDELETE FROM\b|\bSELECT\b|\bGRANT\b|SECURITY DEFINER|pg_sleep/i);
+  // Comments document the existing .select() call; check executable SQL only.
+  const executableSql = sql.split('\n').filter(line => !line.trim().startsWith('--')).join('\n');
+  assert.doesNotMatch(executableSql,/\bALTER TABLE\b|\bUPDATE public\.|\bINSERT INTO\b|\bDELETE FROM\b|\bSELECT\b|\bGRANT\b|SECURITY DEFINER|pg_sleep/i);
 });
 
 test('existing Stripe signature, event-id deduplication, payment RPC, module isolation and idempotency remain unchanged',()=>{
