@@ -11,8 +11,8 @@
 | 02 | Cadastro manual e em lote de oportunidades | **MERGE E DEPLOY STAGING CONFIRMADOS (PR #582)**; smoke humano do bloco A pendente |
 | 03 | CRM: movimentação de etapas, tentativas, canais, histórico | **IMPLEMENTADO, MERGEADO E DEPLOYADO EM STAGING (PRs #583 e #584)**; smoke humano do bloco A pendente |
 | 04 | Construtor de proposta: módulos, preços, condições, snapshot | **PR #585 MERGEADA EM STAGING**; deploy/saúde precisam ser conferidos no SHA; smoke humano do Bloco A pendente |
-| 05 | Link comercial: criar/copiar/preservar propostas anteriores | **IMPLEMENTAÇÃO EM REVISÃO**: transporte de criação/recuperação de proposta pública, copiar URL e separar estado de propostas anteriores; CI, merge e deploy pendentes; smoke humano do Bloco A pendente |
-| 06 | Link público: abrir sem login e apresentar proposta correta | PENDENTE DE COMANDO |
+| 05 | Link comercial: criar/copiar/preservar propostas anteriores | **PR #586 MERGEADA EM STAGING**; deploy/saúde do SHA precisam ser confirmados antes de concluir entrega técnica; smoke humano do Bloco A pendente |
+| 06 | Link público: abrir sem login e apresentar proposta correta | **IMPLEMENTAÇÃO EM REVISÃO**: extração de leitura pública anônima (token e snapshot do backend) e limpeza da proposta anterior ao trocar token; CI, merge e deploy pendentes; smoke humano do Bloco A pendente |
 | 07 | Cartão Stripe em teste, confirmar pagamento | PENDENTE DE COMANDO |
 | 08 | Boleto Stripe em teste, confirmar pagamento assíncrono | PENDENTE DE COMANDO |
 | 09 | Webhooks/assinatura: idempotência, módulos, zero cobrança duplicada | PENDENTE DE COMANDO |
