@@ -9068,11 +9068,12 @@ export default function App() {
                     },
                   };
 
-                  if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
-                  if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
-                  setUser(nextUser);
-
                   const profileSaveScope = data?.profileSaveScope === 'clinic' ? 'clinic' : 'professional';
+                  if (profileSaveScope !== 'clinic') {
+                    if (nextUser.profilePicture !== undefined) setProfilePicture(nextUser.profilePicture);
+                    if (nextUser.crp !== undefined) setCrp(formatProfessionalRegistry(nextUser.crp));
+                    setUser(nextUser);
+                  }
                   const persistencePayload = profileSaveScope === 'clinic'
                     ? {
                         profileSaveScope,
@@ -9098,8 +9099,24 @@ export default function App() {
                         professionalProfile: nextUser.professionalProfile,
                         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
                       };
-                  return await dataService.saveUserProfile(user.id, persistencePayload);
+                  const saveResult = await dataService.saveUserProfile(user.id, persistencePayload);
+                  if (profileSaveScope === 'clinic' && saveResult?.success === true && !saveResult?.pending && !saveResult?.queued) {
+                    // The server-acknowledged user is authoritative. Update the
+                    // visible clinic context only after Save, without a refresh.
+                    setUser((previous: any) => ({
+                      ...previous,
+                      ...(saveResult.user || {}),
+                      clinicSettings: {
+                        ...(previous?.clinicSettings || {}),
+                        ...(saveResult.user?.clinicSettings || nextUser.clinicSettings),
+                      },
+                    }));
+                  }
+                  return saveResult;
                 } catch (error) {
+                  if (data?.profileSaveScope === 'clinic') {
+                    return { success: false, error: 'Não foi possível confirmar o salvamento das configurações da clínica.' };
+                  }
                   console.error('Profile asset upload error:', error);
                   if (baseUser.profilePicture !== undefined) setProfilePicture(baseUser.profilePicture);
                   if (baseUser.crp !== undefined) setCrp(formatProfessionalRegistry(baseUser.crp));
