@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { getSupabase } from '../lib/supabase';
+import { loadPublicSalesOfferResponse } from '../services/publicSalesOfferTransport';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -799,12 +800,15 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     };
 
     const loadOffer = async () => {
+      // A token change must not continue displaying a previous clinic's proposal.
+      setOffer(null);
+      setAcceptedAt(null);
+      setCommercialConsent(false);
+      setLoading(true);
+      setError('');
       setOfferUnavailable(false);
       try {
-        const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}`, {
-          credentials: 'omit',
-        });
-        const data = await response.json().catch(() => ({}));
+        const { response, data } = await loadPublicSalesOfferResponse(token);
         if (response.status === 404 && data?.error === 'OFFER_UNAVAILABLE') {
           // An opaque public link may be expired, revoked, or already paid.
           // A 404 cannot prove which. Never retry checkout or claim payment here.
