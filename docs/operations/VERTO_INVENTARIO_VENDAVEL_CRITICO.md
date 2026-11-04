@@ -9,8 +9,8 @@
 |---|---|---|
 | 01 | Cadastro no site → CRM Prospecção "Cadastro no site", sem F5; modularizar caminho | **IMPLEMENTADO, MERGEADO E DEPLOYADO EM STAGING (PR #581)**; smoke humano pendente para o bloco A |
 | 02 | Cadastro manual e em lote de oportunidades | **MERGE E DEPLOY STAGING CONFIRMADOS (PR #582)**; smoke humano do bloco A pendente |
-| 03 | CRM: movimentação de etapas, tentativas, canais, histórico | **Execução autorizada**: movimento e atividade/histórico separados em backend e transporte frontend; status do CI/deploy no PR; smoke humano do bloco A pendente |
-| 04 | Construtor de proposta: módulos, preços, condições, snapshot | PENDENTE DE COMANDO |
+| 03 | CRM: movimentação de etapas, tentativas, canais, histórico | **IMPLEMENTADO, MERGEADO E DEPLOYADO EM STAGING (PRs #583 e #584)**; smoke humano do bloco A pendente |
+| 04 | Construtor de proposta: módulos, preços, condições, snapshot | **IMPLEMENTAÇÃO EM REVISÃO**: transporte de carregar/Salvar/selecionar/renomear/arquivar isolado, snapshots canônicos preservados; CI, merge e deploy staging pendentes; smoke do bloco A pendente |
 | 05 | Link comercial: criar/copiar/preservar propostas anteriores | PENDENTE DE COMANDO |
 | 06 | Link público: abrir sem login e apresentar proposta correta | PENDENTE DE COMANDO |
 | 07 | Cartão Stripe em teste, confirmar pagamento | PENDENTE DE COMANDO |

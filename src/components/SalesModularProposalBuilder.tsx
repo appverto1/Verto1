@@ -18,6 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
+import { loadSalesModularProposalData, saveSalesModularScenario, selectSalesModularScenario, renameSalesModularScenario, archiveSalesModularScenario } from '../services/salesModularProposalPersistence';
 import {
   applySalesPackageTierSelection,
   calculateSalesModularProposal,
@@ -674,13 +675,8 @@ export const SalesModularProposalBuilder = ({
       setLoading(true);
       setError('');
       try {
-        const [catalogData, assumptionData, simulationData] = await Promise.all([
-          authenticatedFetch('/api/owner/sales/pricing-catalogs?compact=1'),
-          authenticatedFetch('/api/owner/sales/profitability-assumptions?context=new_proposal'),
-          authenticatedFetch(
-            `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations?page=1&pageSize=50`
-          )
-        ]);
+        const [catalogData, assumptionData, simulationData] =
+          await loadSalesModularProposalData(authenticatedFetch, lead.id);
         if (cancelled) return;
         const activeCatalog =
           catalogData.catalog as SalesPricingCatalogSnapshot;
@@ -1619,12 +1615,8 @@ export const SalesModularProposalBuilder = ({
     setError('');
     setNotice('');
     try {
-      const data = await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations`,
-        {
-          method: 'POST',
-          headers: { 'X-Idempotency-Key': requestKey('modular-simulation') },
-          body: JSON.stringify({
+      const data = await saveSalesModularScenario(
+        authenticatedFetch, lead.id, requestKey('modular-simulation'), {
             proposalMode: 'modular',
             catalogVersionId: catalog.id,
             assumptionSetId: assumptions.id,
@@ -1636,8 +1628,7 @@ export const SalesModularProposalBuilder = ({
             commercialExceptionType,
             internalNotes,
             publicNotes
-          })
-        }
+          }
       );
       const stored = {
         ...data.simulation,
@@ -1666,10 +1657,7 @@ export const SalesModularProposalBuilder = ({
     setBusy(`select:${simulation.id}`);
     setError('');
     try {
-      await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/simulations/${encodeURIComponent(simulation.id)}/select`,
-        { method: 'POST', body: JSON.stringify({}) }
-      );
+      await selectSalesModularScenario(authenticatedFetch, lead.id, simulation.id);
       setSelectedSimulationId(simulation.id);
       if (simulation.offer?.contract_email) {
         setContractEmail(normalizeContractEmail(simulation.offer.contract_email));
@@ -1697,16 +1685,7 @@ export const SalesModularProposalBuilder = ({
     if (editingScenarioName.trim().length < 2) return;
     setBusy(`rename:${simulationId}`);
     try {
-      const data = await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations/${encodeURIComponent(simulationId)}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({
-            action: 'rename',
-            scenarioName: editingScenarioName
-          })
-        }
-      );
+      const data = await renameSalesModularScenario(authenticatedFetch, lead.id, simulationId, editingScenarioName);
       setSimulations((current) =>
         current.map((simulation) =>
           simulation.id === simulationId ? data.simulation : simulation
@@ -1724,13 +1703,7 @@ export const SalesModularProposalBuilder = ({
   const archiveSimulation = async (simulationId: string) => {
     setBusy(`archive:${simulationId}`);
     try {
-      await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations/${encodeURIComponent(simulationId)}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({ action: 'archive' })
-        }
-      );
+      await archiveSalesModularScenario(authenticatedFetch, lead.id, simulationId);
       setSimulations((current) =>
         current.map((simulation) =>
           simulation.id === simulationId
