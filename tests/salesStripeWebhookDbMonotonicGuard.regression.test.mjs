@@ -4,13 +4,12 @@ import {test} from 'node:test';
 
 const sql=readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
 const server=readFileSync('server.ts','utf8');
-const lead=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_converted_pending_v1\(\)[\s\S]*?\$lead_guard\$;/)?.[0] || '';
 const link=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_checkout_terminal_pending_v1\(\)[\s\S]*?\$link_guard\$;/)?.[0] || '';
 
 test('database guard does not intercept any legitimate manual CRM lead status edits',()=>{
-  assert.doesNotMatch(sql,/public\\.sales_leads|guard_sales_converted_pending_v1/);
-  assert.match(server,/app\\.patch\\(\\s*"\\/api\\/owner\\/sales\\/leads\\/:leadId"/);
-  assert.match(server,/const patch: Record<string, any> = \\{ status, updated_at: now \\}/);
+  assert.doesNotMatch(sql,/public\.sales_leads|guard_sales_converted_pending_v1/);
+  assert.match(server,/app\.patch\(\s*"\/api\/owner\/sales\/leads\/:leadId"/);
+  assert.match(server,/const patch: Record<string, any> = \{ status, updated_at: now \}/);
 });
 
 test('out-of-order unpaid checkout cannot erase completed, failed or expired Stripe link',()=>{
