@@ -159,6 +159,7 @@ type PublicOffer = LegacyPublicOffer | ModularPublicOffer;
 type PaymentReturnState =
   | 'idle'
   | 'confirming'
+  | 'payment_pending'
   | 'payment_confirmed'
   | 'provisioning'
   | 'director_ready'
@@ -797,7 +798,9 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
           }
         }
       }
-      if (!cancelled) setPaymentReturnState('provisioning');
+      // Boleto can remain unpaid after Checkout. Exhausting bounded polls never
+      // proves payment or permission to begin provisioning.
+      if (!cancelled) setPaymentReturnState('payment_pending');
     };
 
     const loadOffer = async () => {
@@ -901,7 +904,9 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 {directorOpening
                   ? 'Abrindo sua Verto'
                   : paymentReturnState === 'confirming'
-                    ? 'Confirmando seu pagamento'
+                    ? 'Verificando o pagamento'
+                    : paymentReturnState === 'payment_pending'
+                      ? 'Pagamento aguardando confirmação'
                     : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
                       ? 'Preparando sua clínica'
                       : paymentReturnState === 'director_ready'
@@ -915,7 +920,11 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
               <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
                 {directorOpening
                   ? 'Seu pagamento já foi confirmado. Estamos abrindo a sessão segura do Diretor e levando você para a configuração inicial da clínica.'
-                  : paymentReturnState === 'director_ready'
+                  : paymentReturnState === 'payment_pending'
+                    ? 'Se você escolheu Boleto, pague o documento na Stripe e aguarde a compensação. A emissão do boleto não confirma a quitação. Sua clínica só será liberada após confirmação do pagamento pela Stripe. Não inicie outro Checkout; use Atualizar status para consultar novamente.'
+                    : paymentReturnState === 'confirming'
+                      ? 'A Stripe ainda está verificando o resultado da transação. Não inicie outro Checkout enquanto a confirmação estiver pendente.'
+                    : paymentReturnState === 'director_ready'
                     ? 'A Stripe confirmou o pagamento. A Verto já criou o acesso de Diretor e liberou exatamente os módulos contratados. Você pode seguir direto para o onboarding.'
                     : paymentReturnState === 'account_activated'
                       ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
@@ -926,7 +935,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                           : 'A Stripe confirmou a transação e a Verto está concluindo automaticamente a criação da conta, da clínica e dos módulos contratados.'}
               </p>
 
-              {paymentReturnState !== 'confirming' && paymentReturnState !== 'unavailable' ? (
+              {paymentReturnState !== 'confirming' && paymentReturnState !== 'payment_pending' && paymentReturnState !== 'unavailable' ? (
                 <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
                   {[
                     { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
@@ -954,7 +963,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 </button>
               ) : null}
 
-              {['payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) && !directorOpening ? (
+              {['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) && !directorOpening ? (
                 <button
                   type="button"
                   onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}

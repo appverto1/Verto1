@@ -13,8 +13,8 @@
 | 04 | Construtor de proposta: módulos, preços, condições, snapshot | **PR #585 MERGEADA EM STAGING**; deploy/saúde precisam ser conferidos no SHA; smoke humano do Bloco A pendente |
 | 05 | Link comercial: criar/copiar/preservar propostas anteriores | **PR #586 MERGEADA EM STAGING**; deploy/saúde do SHA precisam ser confirmados antes de concluir entrega técnica; smoke humano do Bloco A pendente |
 | 06 | Link público: abrir sem login e apresentar proposta correta | **PR #587 MERGEADA EM STAGING**; deploy/saúde ainda aguardam confirmação no SHA; smoke do Bloco A pendente |
-| 07 | Cartão Stripe em teste, confirmar pagamento | **CÓDIGO EM REVISÃO**: extrair POST público de Checkout e reforçar regressões de autorização, idempotência e retorno; nenhum pagamento executado; modo Stripe test não legível no Railway, confirmar antes de smoke após o Bloco A; CI, merge e deploy pendentes |
-| 08 | Boleto Stripe em teste, confirmar pagamento assíncrono | PENDENTE DE COMANDO |
+| 07 | Cartão Stripe em teste, confirmar pagamento | **PR #588 MERGEADA EM STAGING**; confirmar deploy no SHA a30415fa; pagamento de teste não executado; modo Stripe test permanece não confirmado |
+| 08 | Boleto Stripe em teste, confirmar pagamento assíncrono | **PR EM PREPARAÇÃO**: apresentação segura de pagamento pendente após checagem limitada, sem falsa confirmação nem novo Checkout; Boleto requer habilitação no Stripe TEST e smoke assíncrono por webhook antes de marcar concluído |
 | 09 | Webhooks/assinatura: idempotência, módulos, zero cobrança duplicada | PENDENTE DE COMANDO |
 | 10 | Pagamento → onboarding diretamente, sem checkout repetido | PENDENTE DE COMANDO |
 | 11 | Primeiro acesso do diretor por e-mail e senha | PENDENTE DE COMANDO |
