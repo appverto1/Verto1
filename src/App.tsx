@@ -1626,11 +1626,22 @@ export default function App() {
       // Do not trust app_metadata.provider here. When Google is linked to an
       // existing e-mail account Supabase can keep "email" as the primary
       // provider even though this exact authentication attempt came from Google.
-      const loginResult = await handleLoginSuccess(session, 'director', undefined, {
-        provider: 'google',
-        activationFlow: true,
-        activationEmail,
-      });
+      // A transient auth/network exception must return to the paid activation
+      // screen with an actionable error, not silently abandon OAuth completion.
+      // Keep the pending marker for a safe retry; the backend still owns access.
+      let loginResult: any;
+      try {
+        loginResult = await handleLoginSuccess(session, 'director', undefined, {
+          provider: 'google',
+          activationFlow: true,
+          activationEmail,
+        });
+      } catch {
+        loginResult = {
+          success: false,
+          error: 'Não foi possível concluir o acesso com Google agora. Tente novamente.',
+        };
+      }
 
       if (!loginResult?.success) {
         if (loginResult?.code === 'SALES_ACTIVATION_EMAIL_MISMATCH') {
