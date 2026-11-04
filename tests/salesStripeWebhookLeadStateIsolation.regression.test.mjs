@@ -22,7 +22,10 @@ test('manual CRM lead status remains editable, without global converted lead tri
   assert.match(leadPatch,/const patch: Record<string, any> = \{ status, updated_at: now \}/);
   assert.match(leadPatch,/\.from\("sales_leads"\)[\s\S]*?\.update\(patch\)[\s\S]*?\.eq\("id", leadId\)/);
   assert.doesNotMatch(leadPatch,/\.neq\("status", "converted"\)/);
-  assert.doesNotMatch(migration,/ON public\.sales_leads|guard_sales_converted_pending_v1/);
+  const cleanup = readFileSync('supabase/migrations/20261104210000_sales_remove_header_dependent_lead_guard.sql','utf8');
+  assert.match(cleanup,/DROP TRIGGER IF EXISTS guard_sales_converted_webhook_pending_v1 ON public\.sales_leads/);
+  assert.match(cleanup,/DROP FUNCTION IF EXISTS public\.guard_sales_converted_webhook_pending_v1\(\)/);
+  assert.doesNotMatch(cleanup,/DROP TRIGGER.*sales_checkout_links|DROP FUNCTION.*guard_sales_checkout_terminal_pending_v1/);
 });
 
 test('out-of-order unpaid session cannot erase terminal Checkout link or payment timestamp', () => {
