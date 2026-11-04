@@ -25,14 +25,14 @@ jobs:
           from pathlib import Path
           source=Path('server.ts')
           original=source.read_text()
-          old='\\n'.join([
+          old='\n'.join([
             '        supabase',
             '          .from("sales_leads")',
             '          .update({ status: "payment_pending", updated_at: now })',
             '          .eq("id", leadId)',
             '          .is("deleted_at", null),',
           ])
-          new='\\n'.join([
+          new='\n'.join([
             '        supabase',
             '          .from("sales_leads")',
             '          .update({ status: "payment_pending", updated_at: now })',
