@@ -18,6 +18,7 @@ import {
   X
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
+import { prepareSalesPublicOffer, copySalesPublicOfferUrl } from '../services/salesPublicOfferLinks';
 import { loadSalesModularProposalData, saveSalesModularScenario, selectSalesModularScenario, renameSalesModularScenario, archiveSalesModularScenario } from '../services/salesModularProposalPersistence';
 import {
   applySalesPackageTierSelection,
@@ -1658,6 +1659,11 @@ export const SalesModularProposalBuilder = ({
     setError('');
     try {
       await selectSalesModularScenario(authenticatedFetch, lead.id, simulation.id);
+      if (simulation.id !== selectedSimulationId) {
+        setPreparedOffer(null);
+        setCheckoutLink(null);
+        setOfferAccepted(false);
+      }
       setSelectedSimulationId(simulation.id);
       if (simulation.offer?.contract_email) {
         setContractEmail(normalizeContractEmail(simulation.offer.contract_email));
@@ -1716,6 +1722,9 @@ export const SalesModularProposalBuilder = ({
       );
       if (selectedSimulationId === simulationId) {
         setSelectedSimulationId('');
+        setPreparedOffer(null);
+        setCheckoutLink(null);
+        setOfferAccepted(false);
       }
     } catch (archiveError: any) {
       setError(archiveError?.message || 'Não foi possível arquivar.');
@@ -1844,15 +1853,15 @@ export const SalesModularProposalBuilder = ({
     setBusy('offer');
     setError('');
     try {
-      const data = await authenticatedFetch('/api/owner/sales/offers', {
-        method: 'POST',
-        headers: { 'X-Idempotency-Key': requestKey('modular-offer') },
-        body: JSON.stringify({
+      const data = await prepareSalesPublicOffer(
+        authenticatedFetch,
+        {
           leadId: lead.id,
           simulationId: selectedSimulation.id,
           contractEmail: frozenContractEmail
-        })
-      });
+        },
+        requestKey('modular-offer')
+      );
       setPreparedOffer(data);
       if (data?.offer?.contract_email) {
         setContractEmail(normalizeContractEmail(data.offer.contract_email));
@@ -1995,6 +2004,17 @@ export const SalesModularProposalBuilder = ({
       setError(emailError?.message || 'Não foi possível enviar o link.');
     } finally {
       setBusy('');
+    }
+  };
+
+  const copyPublicOfferLink = async () => {
+    const url = preparedOffer?.publicUrl;
+    if (!url) return;
+    try {
+      await copySalesPublicOfferUrl(url, (value) => navigator.clipboard.writeText(value));
+      setNotice('Link da proposta pública copiado.');
+    } catch {
+      setError('Não foi possível copiar automaticamente. Abra a proposta pública e copie o endereço do navegador.');
     }
   };
 
@@ -5787,6 +5807,12 @@ export const SalesModularProposalBuilder = ({
                 >
                   <ExternalLink size={16} /> Abrir proposta pública
                 </a>
+              ) : null}
+              {preparedOffer?.publicUrl ? (
+                <button type="button" onClick={() => void copyPublicOfferLink()}
+                  className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 text-sm font-medium text-violet-700">
+                  <Copy size={16} /> Copiar link da proposta pública
+                </button>
               ) : null}
               {activeOfferId ? (
                 <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
