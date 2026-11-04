@@ -9097,6 +9097,31 @@ export const dataService = {
   async saveUserProfile(userId: string, profile: any) {
     const data = { ...profile, updated_at: profile.updated_at || new Date().toISOString() };
     const endpoint = `/api/profile/${userId}`;
+
+    // Clinic settings must never be acknowledged as saved from an offline
+    // outbox entry. Only the authenticated server response confirms the Save.
+    // Keep the existing durable offline-first path for personal profiles.
+    if (profile?.profileSaveScope === 'clinic') {
+      try {
+        const response = await fetchWithAuthRetry(endpoint, {
+          method: 'POST',
+          credentials: 'include',
+          headers: await getAuthHeaders(),
+          body: JSON.stringify(data),
+        });
+        const result = await safeJson(response);
+        if (!response.ok || result?.success !== true) {
+          return {
+            success: false,
+            error: result?.message || result?.error || 'Não foi possível confirmar o salvamento das configurações da clínica.',
+          };
+        }
+        return result;
+      } catch {
+        return { success: false, error: 'Não foi possível confirmar o salvamento das configurações da clínica.' };
+      }
+    }
+
     const result = await saveOfflineFirst(`profile:${userId}`, data, 'profile', endpoint, 'POST');
     return result?.pending === true ? { ...result, queued: true } : result;
   },
