@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpenCheck } from 'lucide-react';
 import { TutorialOverlay } from './Tutorial';
+import { portalGuidedTutorialKey, readPortalGuidedTutorial, persistPortalGuidedTutorial } from '../utils/portalGuidedTutorialProgress.mjs';
 
 type Portal = 'biller' | 'patient';
 
@@ -23,25 +24,12 @@ export function PortalFirstAccessTutorial({ user, portal, targetId, patientId: p
     ? String(portalPatientId || user?.patientId || user?.patient_id || 'self').trim()
     : '';
 
-  const progressKey = [
-    'verto:guided-tutorial:portal-v1',
-    userId,
-    clinicId,
-    portal,
-    patientId,
-  ].join(':');
+  const progressKey = portalGuidedTutorialKey({ userId, clinicId, portal, patientId });
 
   useEffect(() => {
     if (!userId || initializedKeyRef.current === progressKey) return;
     initializedKeyRef.current = progressKey;
-    let status = '';
-    try {
-      const stored = window.localStorage.getItem(progressKey);
-      const progress = stored ? JSON.parse(stored) : null;
-      status = progress?.revision === 'portal-v1' ? String(progress?.status || '') : '';
-    } catch {
-      // The tutorial is usable even when browser storage is disabled.
-    }
+    const status = readPortalGuidedTutorial(window.localStorage, progressKey);
     setIsActive(status !== 'completed' && status !== 'skipped');
   }, [progressKey, userId]);
 
@@ -56,15 +44,7 @@ export function PortalFirstAccessTutorial({ user, portal, targetId, patientId: p
 
   const persist = (status: 'active' | 'completed' | 'skipped') => {
     if (!userId) return;
-    try {
-      window.localStorage.setItem(progressKey, JSON.stringify({
-        revision: 'portal-v1',
-        status,
-        step: 0,
-      }));
-    } catch {
-      // Best-effort local tutorial progress; no server writes or polling.
-    }
+    persistPortalGuidedTutorial(window.localStorage, progressKey, status);
   };
 
   const restart = () => {
