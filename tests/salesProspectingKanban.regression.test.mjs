@@ -8,6 +8,7 @@ const creationRoutes = readFileSync('services/salesKanbanOpportunityCreationRout
 const creationInput = readFileSync('services/salesKanbanOpportunityCreationInput.ts', 'utf8');
 const creationTransport = readFileSync('src/services/salesKanbanOpportunityCreation.ts', 'utf8');
 const activityRoutes = readFileSync('services/salesProspectingActivityRoutes.ts', 'utf8');
+const activityInput = readFileSync('services/salesKanbanActivityInput.ts', 'utf8');
 const movementRoutes = readFileSync('services/salesKanbanMovementRoutes.ts', 'utf8');
 const activityTransport = readFileSync('src/services/salesKanbanActivity.ts', 'utf8');
 const kanban = readFileSync('src/components/CommercialKanban.tsx', 'utf8');
@@ -28,7 +29,7 @@ test('sales attempts stay private behind server authority and MFA middleware', (
   // Existing manual-loss route now requires a chosen reason and uses one atomic
   // server-side RPC; the older function remains only for legacy compatibility.
   assert.match(activityRoutes, /mark_sales_lead_lost_with_reason_v1/);
-  assert.match(activityRoutes, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
+  assert.match(activityInput, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
   assert.match(movementRoutes, /target\.data\?\.kind==='lost'/);
   assert.match(sql, /revoke all on public\.sales_prospecting_attempts from public, anon, authenticated;/);
   assert.match(sql, /grant execute on function public\.record_sales_prospecting_attempt_v1\([^;]+to service_role;/s);
@@ -273,8 +274,8 @@ test('WhatsApp text has an explicit selectable channel and persists only through
   assert.match(kanban,/a.channel==='whatsapp_call'\?'Ligação WhatsApp':'Mensagem WhatsApp'/);
   assert.match(kanban,/Decisor por mensagem/);
   assert.match(kanban,/setAttempts\(old=>attempt/);
-  assert.match(activityRoutes,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
-  assert.match(activityRoutes,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
+  assert.match(activityInput,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
+  assert.match(activityInput,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
 });
 
 test('text contact never increments phone or WhatsApp call counters and preserves future follow-ups',()=>{

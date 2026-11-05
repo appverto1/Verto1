@@ -1,3 +1,4 @@
+import {parseSalesHistoryLeadIds,parseSalesProspectingAttemptInput,parseSalesProspectingAttemptTimeInput,parseSalesDecisorContactInput,parseSalesFollowupInput,parseSalesMarkLostInput} from './salesKanbanActivityInput';
 // Super Admin CRM attempts, decision-maker contacts, follow-ups and history.
 // Exact extraction: original session/TOTP guards and SQL RPCs remain authoritative.
 type Deps = {
@@ -12,10 +13,9 @@ export function registerSalesProspectingActivityRoutes(
   {supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString}:Deps,
 ):void{
   app.get('/api/owner/sales/prospecting/attempts', checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
-    const leadIds = [...new Set(String(req.query?.leadIds || '').split(',').filter(Boolean))];
-    if (leadIds.length === 0 || leadIds.length > 100 || leadIds.some((id) => !isUuid(id))) {
-      return res.status(400).json({ success: false, error: 'Lista de leads inválida.' });
-    }
+    const input = parseSalesHistoryLeadIds(req.query?.leadIds, isUuid);
+    if (!input.ok) return res.status(400).json({ success: false, error: input.error });
+    const {leadIds} = input;
     try {
       const actorId=sanitizeString(req.session?.user?.id,120);
       const [attempts, leads, followups] = await Promise.all([
@@ -39,17 +39,9 @@ export function registerSalesProspectingActivityRoutes(
 
   app.post('/api/owner/sales/leads/:leadId/prospecting-attempts',
     checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
-      const leadId = sanitizeString(req.params?.leadId, 120);
-      const channel = sanitizeString(req.body?.channel, 32);
-      const outcome = sanitizeString(req.body?.outcome, 32);
-      const key = sanitizeString(req.headers?.['x-idempotency-key'], 120);
-      const actorId = sanitizeString(req.session?.user?.id, 120);
-      if (!isUuid(leadId) || !isUuid(actorId)
-        || !['phone', 'whatsapp_call'].includes(channel)
-        || !['no_decisor', 'decisor_spoken'].includes(outcome)
-        || key.length < 12 || key.length > 120) {
-        return res.status(400).json({ success: false, error: 'Tentativa inválida.' });
-      }
+      const input = parseSalesProspectingAttemptInput(req,{isUuid,sanitizeString});
+      if (!input.ok) return res.status(400).json({success:false,error:input.error});
+      const {leadId,channel,outcome,key,actorId} = input;
       try {
         const { data, error } = await supabase.rpc('record_sales_prospecting_attempt_v1', {
           p_lead_id: leadId, p_channel: channel, p_outcome: outcome,
@@ -80,19 +72,9 @@ export function registerSalesProspectingActivityRoutes(
   // Save actual call time; legacy instant-attempt endpoint remains unchanged for compatibility.
   app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time',
     checkAuth,checkPlatformAdmin,async(req:any,res:any)=>{
-      const leadId=sanitizeString(req.params?.leadId,120);
-      const actorId=sanitizeString(req.session?.user?.id,120);
-      const attemptId=sanitizeString(req.body?.attemptId,120);
-      const channel=sanitizeString(req.body?.channel,32);
-      const occurredAt=req.body?.occurredAt;
-      const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
-      const scriptVersionId=req.body?.scriptVersionId??null;
-      if((scriptVersionId!==null&&!isUuid(scriptVersionId))||!isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
-        ||!['phone','whatsapp_call'].includes(channel)
-        ||typeof occurredAt!=='string'||occurredAt.length>40
-        ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
-        ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
-        return res.status(400).json({success:false,error:'Data, horário ou canal inválidos.'});
+      const input = parseSalesProspectingAttemptTimeInput(req,{isUuid,sanitizeString});
+      if (!input.ok) return res.status(400).json({success:false,error:input.error});
+      const {leadId,actorId,attemptId,channel,occurredAt,key,scriptVersionId} = input;
       try{
         const {data,error}=await supabase.rpc('save_sales_prospecting_attempt_time_v2',{
           p_lead_id:leadId,p_attempt_id:attemptId||null,p_channel:channel,
@@ -120,22 +102,9 @@ export function registerSalesProspectingActivityRoutes(
   // again by the database. A successful button press is the only write.
   app.put('/api/owner/sales/leads/:leadId/decisor-contact',
     checkAuth,checkPlatformAdmin,async (req:any,res:any)=>{
-      const leadId=sanitizeString(req.params?.leadId,120);
-      const actorId=sanitizeString(req.session?.user?.id,120);
-      const channel=sanitizeString(req.body?.channel,32);
-      const attemptId=sanitizeString(req.body?.attemptId,120);
-      const occurredAt=req.body?.occurredAt;
-      const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
-      const scriptVersionId=req.body?.scriptVersionId??null;
-      const contactResult=req.body?.contactResult??null;
-      if((scriptVersionId!==null&&!isUuid(scriptVersionId))||
-         (contactResult!==null&&!['interested','not_interested'].includes(contactResult))||
-         !isUuid(leadId)||!isUuid(actorId)||(attemptId&&!isUuid(attemptId))
-         ||!['phone','whatsapp_call','whatsapp_message'].includes(channel)
-         ||typeof occurredAt!=='string'||occurredAt.length>40
-         ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(occurredAt)
-         ||!Number.isFinite(Date.parse(occurredAt))||key.length<12||key.length>120)
-        return res.status(400).json({success:false,error:'Data, hora ou canal inválidos.'});
+      const input = parseSalesDecisorContactInput(req,{isUuid,sanitizeString});
+      if (!input.ok) return res.status(400).json({success:false,error:input.error});
+      const {leadId,actorId,channel,attemptId,occurredAt,key,scriptVersionId,contactResult} = input;
       try{
         const {data,error}=await supabase.rpc('save_sales_decisor_contact_v2',{
           p_lead_id:leadId,p_attempt_id:attemptId||null,p_channel:channel,
@@ -162,15 +131,9 @@ export function registerSalesProspectingActivityRoutes(
 
   app.put('/api/owner/sales/leads/:leadId/followup',
     checkAuth,checkPlatformAdmin,async (req:any,res:any)=>{
-      const leadId=sanitizeString(req.params?.leadId,120);
-      const actorId=sanitizeString(req.session?.user?.id,120);
-      const key=sanitizeString(req.headers?.['x-idempotency-key'],120);
-      const due=req.body?.contactDueAt;
-      if(!isUuid(leadId)||!isUuid(actorId)||key.length<12||key.length>120
-         ||(due!==null&&(typeof due!=='string'||due.length>40
-           ||!/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(due)
-           ||!Number.isFinite(Date.parse(due)))))
-        return res.status(400).json({success:false,error:'Data ou horário de retorno inválidos.'});
+      const input = parseSalesFollowupInput(req,{isUuid,sanitizeString});
+      if (!input.ok) return res.status(400).json({success:false,error:input.error});
+      const {leadId,actorId,key,due} = input;
       try{
         const {data,error}=await supabase.rpc('save_sales_contact_followup_v1',{
           p_lead_id:leadId,p_actor_user_id:actorId,
@@ -190,14 +153,9 @@ export function registerSalesProspectingActivityRoutes(
 
   app.post('/api/owner/sales/leads/:leadId/mark-lost',
     checkAuth, checkPlatformAdmin, async (req: any, res: any) => {
-      const leadId = sanitizeString(req.params?.leadId, 120);
-      const key = sanitizeString(req.headers?.['x-idempotency-key'], 120);
-      const actorId = sanitizeString(req.session?.user?.id, 120);
-      const reasonId = sanitizeString(req.body?.reasonId,120);
-      if (!isUuid(leadId) || !isUuid(actorId) || !isUuid(reasonId) ||
-          key.length < 12 || key.length > 120) {
-        return res.status(400).json({ success: false, error: 'Selecione um motivo de perda antes de salvar.' });
-      }
+      const input = parseSalesMarkLostInput(req,{isUuid,sanitizeString});
+      if (!input.ok) return res.status(400).json({success:false,error:input.error});
+      const {leadId,key,actorId,reasonId} = input;
       try {
         const { data, error } = await supabase.rpc('mark_sales_lead_lost_with_reason_v1', {
           p_lead_id: leadId, p_reason_id: reasonId, p_action_key: key, p_actor_user_id: actorId,

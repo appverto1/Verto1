@@ -1,3 +1,4 @@
+import {parseSalesKanbanMovementInput} from './salesKanbanActivityInput';
 // Super Admin CRM Kanban card movement: exact extraction.
 // SQL RPC retains row lock, idempotency, audit and conversion protection.
 type Deps = {
@@ -12,12 +13,9 @@ export function registerSalesKanbanMovementRoutes(
   {supabase,salesGuard,isUuid,sanitizeString,boardError}:Deps,
 ):void{
   app.post('/api/owner/sales/kanban/leads/:leadId/move', ...salesGuard, async (req: any, res: any) => {
-    const leadId = sanitizeString(req.params?.leadId,120);
-    const columnId = sanitizeString(req.body?.columnId,120);
-    const actorId = sanitizeString(req.session?.user?.id,120);
-    const key = sanitizeString(req.headers?.['x-idempotency-key'],120);
-    if (![leadId,columnId,actorId].every(isUuid) || key.length < 12)
-      return res.status(400).json({success:false,error:'Movimentação inválida.'});
+    const input = parseSalesKanbanMovementInput(req,{isUuid,sanitizeString});
+    if (!input.ok) return res.status(400).json({success:false,error:input.error});
+    const {leadId,columnId,actorId,key} = input;
     try {
       const target = await supabase.from('sales_kanban_columns').select('kind').eq('id',columnId).maybeSingle();
       if(target.error)throw target.error;
