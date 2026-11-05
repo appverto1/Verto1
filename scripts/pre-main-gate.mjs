@@ -202,6 +202,8 @@ const criticalTests = [
   'tests/salesDirectorEmailPasswordFirstAccessTask11.regression.test.mjs',
   'tests/salesDirectorGoogleFirstAccessTask12.regression.test.mjs',
   'tests/clinicSettingsConfirmedSaveTask13.regression.test.mjs',
+  'tests/guidedFirstAccessRolePersistenceTask14.regression.test.mjs',
+  'tests/contextualGuidedTutorialP0.regression.test.mjs',
   'tests/googleOauthActivationUi.regression.test.mjs',
   'tests/authStateChangeDeadlockRegression.test.mjs',
   'tests/salesStripeWebhookDbMonotonicGuard.behavior.test.mjs',
