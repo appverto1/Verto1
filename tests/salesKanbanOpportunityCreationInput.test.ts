@@ -47,7 +47,7 @@ test('Save rejects injected fields, controls, duplicate emails and oversize cont
   for(const detailsByPhone of [
     [{name:'x',role:'director'}],
     [{name:'X'}],
-    [{name:'Contato\\nInvalido'}],
+    [{name:'Contato'+String.fromCharCode(10)+'Invalido'}],
     [{email:'invalid-email'}],
     [{name:'a'.repeat(181)}],
     [{clinicName:'b'.repeat(181)}],
