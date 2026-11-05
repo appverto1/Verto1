@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 const ui = readFileSync('src/components/CommercialKanban.tsx','utf8');
 const route = readFileSync('services/salesKanbanOpportunityCreationRoutes.ts','utf8');
+const input = readFileSync('services/salesKanbanOpportunityCreationInput.ts','utf8');
 const transport = readFileSync('src/services/salesKanbanOpportunityCreation.ts','utf8');
 const migration = readFileSync('supabase/migrations/20261105101500_sales_kanban_creation_details_atomic_v3.sql','utf8');
 
@@ -62,11 +63,11 @@ test('new v3 is atomic, idempotent, scoped to platform admin and denies browser 
 });
 
 test('server rejects injected and duplicate contact information before touching the RPC',()=>{
-  assert.match(route,/Object\.keys\(row\)\.some\(k=>!\['name','clinicName','email'\]\.includes\(k\)\)/);
-  assert.match(route,/Object\.values\(row\)\.some\(v=>v!==null && typeof v!=='string'\)/);
-  assert.match(route,/detailsByPhone\.length!==phones\.length/);
-  assert.match(route,/emails\.has\(email\)/);
-  assert.match(route,/new Set<string>\(\)/);
+  assert.match(input,/Object\.keys\(row\)\.some\(k=>!\['name','clinicName','email'\]\.includes\(k\)\)/);
+  assert.match(input,/Object\.values\(row\)\.some\(v=>v!==null && typeof v!=='string'\)/);
+  assert.match(input,/detailsByPhone\.length!==phones\.length/);
+  assert.match(input,/emails\.has\(email\)/);
+  assert.match(input,/new Set<string>\(\)/);
   assert.match(route,/p_phones:phones,p_actor_id:actorId,p_action_key:key,p_channels:channelsByPhone/);
   assert.match(route,/withDetails \? \{p_details:detailsByPhone\} : \{\}/);
   assert.match(migration,/exists \(select 1 from jsonb_object_keys\(v_entry\)/);
