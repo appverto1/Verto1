@@ -56,6 +56,8 @@ export function registerSalesKanbanOpportunityCreationRoutes(
   app.post('/api/owner/sales/kanban/opportunities', ...salesGuard, async (req: any, res: any) => {
     const phones = req.body?.phones;
     const channelsByPhone = req.body?.channelsByPhone;
+    const detailsByPhone = req.body?.detailsByPhone;
+    const withDetails = detailsByPhone !== undefined;
     const actorId = sanitizeString(req.session?.user?.id, 120);
     const key = sanitizeString(req.headers?.['x-idempotency-key'], 120);
     if (!isUuid(actorId) || key.length < 12 || key.length > 120 ||
@@ -67,17 +69,44 @@ export function registerSalesKanbanOpportunityCreationRoutes(
           new Set(row).size!==row.length)) {
       return res.status(400).json({ success:false,error:'Informe entre 1 e 100 telefones válidos.' });
     }
+    if (withDetails) {
+      if (!Array.isArray(detailsByPhone) || detailsByPhone.length!==phones.length ||
+          detailsByPhone.some((row:unknown)=>!row || typeof row!=='object' || Array.isArray(row) ||
+            Object.keys(row).some(k=>!['name','clinicName','email'].includes(k)) ||
+            Object.values(row).some(v=>v!==null && typeof v!=='string'))) {
+        return res.status(400).json({success:false,error:'Dados dos contatos inválidos.'});
+      }
+      const emails = new Set<string>();
+      for (const row of detailsByPhone as Array<{name?:string;clinicName?:string;email?:string}>) {
+        const name = String(row.name || '').trim();
+        const clinic = String(row.clinicName || '').trim();
+        const email = String(row.email || '').trim().toLowerCase();
+        if ((name && name.length<2) || name.length>180 || clinic.length>180 ||
+            email.length>254 || (email && (email.length<3 || !/^[^ @]+@[^ @]+[.][^ @]+$/.test(email))) ||
+            /[\x00-\x1F\x7F]/.test(name+clinic+email)) {
+          return res.status(400).json({success:false,error:'Revise nome, clínica e e-mail dos contatos.'});
+        }
+        if (email) {
+          if (emails.has(email)) return res.status(400).json({success:false,error:'E-mail repetido no lote de contatos.'});
+          emails.add(email);
+        }
+      }
+    }
     try {
-      const result = await supabase.rpc('create_sales_kanban_opportunities_v2',{
+      const result = await supabase.rpc(
+        withDetails ? 'create_sales_kanban_opportunities_v3' : 'create_sales_kanban_opportunities_v2',{
         p_phones:phones,p_actor_id:actorId,p_action_key:key,p_channels:channelsByPhone,
+        ...(withDetails ? {p_details:detailsByPhone} : {}),
       });
       if (result.error) {
-        if (/PHONE_ALREADY_EXISTS|DUPLICATE_IN_BATCH|IDEMPOTENCY_CONFLICT|23505/.test(String(result.error.message)+' '+result.error.code))
-          return res.status(409).json({success:false,error:'Número já cadastrado ou repetido. Nenhuma oportunidade foi criada.'});
+        if (/PHONE_ALREADY_EXISTS|DUPLICATE_IN_BATCH|DUPLICATE_EMAIL_IN_BATCH|IDEMPOTENCY_CONFLICT|23505/.test(String(result.error.message)+' '+result.error.code))
+          return res.status(409).json({success:false,error:'Número ou e-mail já cadastrado ou repetido. Nenhuma oportunidade foi criada.'});
         if (/ACQUISITION_CHANNEL_UNAVAILABLE|DUPLICATE_BATCH_CHANNEL/.test(String(result.error.message)))
           return res.status(409).json({success:false,error:'Canal de aquisição inválido ou desativado. Nenhuma oportunidade foi criada.'});
         if (/INVALID_BATCH_CHANNELS/.test(String(result.error.message)))
           return res.status(400).json({success:false,error:'Revise a seleção de canais dos contatos.'});
+        if (/INVALID_CREATION_DETAILS/.test(String(result.error.message)))
+          return res.status(400).json({success:false,error:'Revise nome, clínica e e-mail dos contatos.'});
         if (/INVALID_PHONE|INVALID_CREATION_KEY/.test(String(result.error.message)))
           return res.status(400).json({success:false,error:'Confira o formato dos números (DDD obrigatório).'});
         throw result.error;
