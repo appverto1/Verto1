@@ -4,8 +4,8 @@ import { parsePublicSalesLeadInput } from '../services/publicSalesLeadInput';
 
 const deps = {
   sanitizeString: (v: unknown, n: number) => String(v ?? '').trim().slice(0,n),
-  sanitizeEmail: (v: unknown) => { const s=String(v??'').trim().toLowerCase(); return s && /^[^@ ]+@[^@ ]+\\.[^@ ]+$/.test(s)?s:null; },
-  normalizeSalesPhone: (v: unknown) => { const digits=String(v??'').replace(/\\D/g,''); return digits.length===11?'55'+digits:digits.startsWith('55')&&digits.length===13?digits:null; },
+  sanitizeEmail: (v: unknown) => { const s=String(v??'').trim().toLowerCase(); return s && /^[^@ ]+@[^@ ]+\.[^@ ]+$/.test(s)?s:null; },
+  normalizeSalesPhone: (v: unknown) => { const digits=String(v??'').replace(/\D/g,''); return digits.length===11?'55'+digits:digits.startsWith('55')&&digits.length===13?digits:null; },
   normalizeSalesInteger: (v: unknown, max: number) => v===undefined||v===null||v===''?null:Number.isInteger(Number(v))&&Number(v)>=0&&Number(v)<=max?Number(v):null,
   SALES_PUBLIC_PAYLOAD_MAX_BYTES: 24*1024,
   SALES_ESTIMATED_ACTIVE_PATIENTS_MAX: 100000,
