@@ -177,6 +177,7 @@ else fail('nenhum secret óbvio versionado', secretHits.join('; '));
 const criticalTests = [
   'tests/salesWebsiteInterestKanban.regression.test.mjs',
   'tests/salesKanbanOpportunityCreationExtraction.regression.test.mjs',
+  'tests/salesKanbanManualCreationIdentitySmoke02.regression.test.mjs',
   'tests/salesKanbanOpportunityCreationRoutes.test.ts',
   'tests/salesKanbanOpportunityCreationTransport.test.ts',
   'tests/salesProspectingActivityExtraction.regression.test.mjs',
