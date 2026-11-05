@@ -99,7 +99,8 @@ test('clinical guide retains prior progress while module entitlements change', (
 test('biller and pediatric/adult patient portals have a scoped first-use guide and manual replay', () => {
   assert.match(biller, /<HelpButton \/>/);
   assert.match(biller, /<PortalFirstAccessTutorial user=\{user\} portal="biller" targetId="help-center" \/>/);
-  assert.match(patient, /<PortalFirstAccessTutorial user=\{user\} portal="patient" targetId="patient-portal-menu" patientId=\{patientPortalId\} \/>/);
+  assert.match(patient, /<PortalFirstAccessTutorial user=\{user\} portal="patient" targetId="patient-portal-menu" \/>/);
+  assert.doesNotMatch(portal, /portalPatientId/, 'async patient record resolution must not reset the tour key');
   assert.equal((patient.match(/data-tutorial-anchor="patient-portal-menu"/g) || []).length, 2, 'both child and adult menu buttons anchored');
   assert.match(portal, /aria-label=\{portal === 'patient' \? 'Rever tutorial do portal do paciente' : 'Rever tutorial do faturamento'\}/);
   assert.match(portal, /onClick=\{restart\}/);
