@@ -98,6 +98,7 @@ test('clinical guide retains prior progress while module entitlements change', (
 
 test('biller and pediatric/adult patient portals have a scoped first-use guide and manual replay', () => {
   assert.match(biller, /<HelpButton \/>/);
+  assert.match(portal, /user\?\.activeAccessContext\?\.clinicId/, 'billing guide must isolate the selected clinic workspace');
   assert.match(biller, /<PortalFirstAccessTutorial user=\{user\} portal="biller" targetId="help-center" \/>/);
   assert.match(patient, /<PortalFirstAccessTutorial user=\{user\} portal="patient" targetId="patient-portal-menu" \/>/);
   assert.doesNotMatch(portal, /portalPatientId/, 'async patient record resolution must not reset the tour key');
