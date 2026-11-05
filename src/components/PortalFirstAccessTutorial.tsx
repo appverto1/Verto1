@@ -18,7 +18,7 @@ export function PortalFirstAccessTutorial({ user, portal, targetId }: PortalFirs
   const [isActive, setIsActive] = useState(false);
   const initializedKeyRef = useRef('');
   const userId = String(user?.id || '').trim();
-  const clinicId = String(user?.activeWorkspaceId || user?.clinicId || user?.clinic_id || 'no-clinic').trim();
+  const clinicId = String(user?.activeWorkspaceId || user?.activeAccessContext?.clinicId || user?.clinicId || user?.clinic_id || 'no-clinic').trim();
   // Do not use asynchronously resolved patientPortalId: a change during
   // initial hydration would replay a completed tutorial in the same login.
   const patientId = portal === 'patient'
