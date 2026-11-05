@@ -1,0 +1,106 @@
+# VERTO — CONTROLE DE MODULARIZAÇÃO CRÍTICA (01–14)
+
+**Atualizado em:** 05/11/2026 · **Base de trabalho:** `staging` · **Natureza:** plano e trilha de evidências, não homologação.  
+**Inventário-mãe:** [VERTO_INVENTARIO_VENDAVEL_CRITICO.md](./VERTO_INVENTARIO_VENDAVEL_CRITICO.md) (38 itens, escopo funcional oficial).  
+**Missão:** modularizar o bloco A na sequência real de venda → pagamento → ativação → onboarding, **sem corrigir bugs funcionais nesta fase**. Depois executar smoke real e corrigir os defeitos encontrados, sem perder evidências nem refazer módulos já extraídos.
+
+> **Fonte de verdade e ausência de duplicidade:** este documento é o **controle operacional da modularização 01–14**, subordinado ao inventário-mãe. O inventário-mãe define **o que** deve funcionar; este controle define **quais responsabilidades devem ser separadas**, o que já foi extraído e a próxima ação. Não inventar outros inventários paralelos. Revisar este arquivo contra o GitHub a cada retomada; registros aqui não substituem inspeção do código ou resultados reais de CI/Railway.
+
+## 1. Ponto de retomada — ler primeiro em toda nova sessão
+
+- **Próximo item na sequência:** **01 — lead do site → CRM**; conferir se a extração dos dois lados cobre todo o escopo contratado. Se cobrir, registrar evidências e passar ao 02 **sem refatorar novamente**. Se não cobrir, extrair só a responsabilidade comprovadamente acoplada.
+- **Estado do bloco:** **0/14 com modularização integral comprovada nesta auditoria** (não é “0% do código modularizado”: há várias extrações reais). **14/14 têm PRs de implementação/correção**, mas isso não atesta modularização completa.
+- **Já incorporado em staging:** extrações específicas dos PRs #581–#588 (conforme tabela), utilitários do #575 e alterações do #599. As correções dos #590, #592, #594–#598 e #600 **não provam extração estrutural**.
+- **Trabalho do Codex pendente:** [#579](https://github.com/appverto1/Verto1/pull/579) (rascunho, sem merge) agrega #576, #577 e #578; **não integrar os três individualmente e depois o agregado**. Validar/reconciliar com alterações posteriores de staging antes de qualquer merge.
+- **Risco adjacente, sem correção nesta fase:** [#593](https://github.com/appverto1/Verto1/pull/593) aberto para alinhamento do histórico de migração Stripe; tratar em tarefa própria, não aproveitar modularização para reaplicar SQL.
+- **Produção:** fora de escopo. [#601](https://github.com/appverto1/Verto1/pull/601) é PR separado de promoção seletiva do Kanban para `main`; não confundir com esta trilha.
+- **Marco de atualização:** ao concluir uma extração, registrar arquivo(s), função/responsabilidade, PR, SHA, testes, merge e deploy verificado. **Nunca alterar “Concluída” só por CI verde ou porque funcionou no navegador.**
+
+### Legenda de status
+
+- **REVISAR EXTRAÇÃO:** há extração localizada comprovada no diff, mas não há auditoria conclusiva de todas as responsabilidades previstas.
+- **EXTRAÇÃO NÃO COMPROVADA:** o PR principal contém correção/teste ou código já existente; é obrigatório inspecionar código atual antes de propor nova separação.
+- **PR PENDENTE:** extração pronta em branch/PR, ainda não incorporada em `staging`.
+- **MODULARIZAÇÃO CONCLUÍDA:** escopo inspecionado, responsabilidades separadas onde necessário, testes estruturais/de regressão aplicáveis aprovados, diff revisado, commit/PR rastreados e código resultante presente na branch de staging. **Não significa smoke/homologação.**
+
+## 2. Backlog operacional dos itens 01–14
+
+| ID | Jornada / escopo contratual | Extração já identificada (não repetir) | O que ainda precisa de auditoria / eventual modularização | Estado da modularização |
+|---|---|---|---|---|
+| **01** | Formulário do site → lead no CRM “Cadastro no site” | [#581](https://github.com/appverto1/Verto1/pull/581): `src/services/salesInterestSubmission.ts` e `services/publicSalesLeadRoutes.ts` | Conferir fronteira formulário/transportes, registro da rota, validação e antifraude, RPC de persistência, notificação e inserção/visibilidade no CRM; extrair **somente** lógica residual indevidamente acoplada ao `server.ts`/componentes, se comprovada. Preservar contrato, idempotência e nenhuma consulta extra. | **REVISAR EXTRAÇÃO** — primeiro checkpoint |
+| **02** | Criar oportunidade manual e em lote, duplicidades e um único Salvar | [#582](https://github.com/appverto1/Verto1/pull/582): `salesKanbanOpportunityCreationRoutes.ts`, `salesKanbanOpportunityCreation.ts`; [#600](https://github.com/appverto1/Verto1/pull/600) corrige o formulário e Save | Auditar isolamento entre UI, serviço, route handler, detecção de duplicidade e RPC transacional; conferir quem define idempotência e atualização de estado após ACK. Não alterar v2/v3 nem a autoridade do botão Salvar. | **REVISAR EXTRAÇÃO** |
+| **03** | CRM: etapas, tentativas, canais, histórico e cadência | [#583](https://github.com/appverto1/Verto1/pull/583) e [#584](https://github.com/appverto1/Verto1/pull/584): `salesKanbanMovementRoutes.ts`, `salesProspectingActivityRoutes.ts`, `salesKanbanActivity.ts` | Auditar se todos os caminhos usados pelo card/ações passam pelas fronteiras extraídas, sem duplicação de lógica em `CommercialKanban.tsx` / rotas antigas. Preservar eventos e histórico, autorização Super Admin e consumo de dados. | **REVISAR EXTRAÇÃO** |
+| **04** | Construtor de propostas: itens, preços, condições e snapshots | [#585](https://github.com/appverto1/Verto1/pull/585): `salesModularProposalPersistence.ts` (transporte) | Verificar se cálculos de visualização, rascunho, criação/edição de cenário e geração de snapshots têm responsabilidade clara; se houver regra autoritativa misturada em UI/`server.ts`, planejar extração mínima sem mover autoridade financeira do backend. Preservar preços e snapshots históricos. | **REVISAR EXTRAÇÃO** |
+| **05** | Criar/copiar link público e preservar propostas anteriores | [#586](https://github.com/appverto1/Verto1/pull/586): `salesPublicOfferLinks.ts` | Auditar fronteiras de criação, recuperação, cópia, expiração e histórico do link no frontend/backend; conferir token, idempotência e snapshot congelado. Extrair apenas responsabilidade ainda acoplada. | **REVISAR EXTRAÇÃO** |
+| **06** | Abrir proposta pública sem login e exibir o contrato certo | [#587](https://github.com/appverto1/Verto1/pull/587): `publicSalesOfferTransport.ts`; [#577](https://github.com/appverto1/Verto1/pull/577) propõe separar `ModularPublicOfferDetails.tsx` (dentro do #579, **não mergeado**) | Antes de nova extração, reconciliar o JSX do #579 com `PublicSalesOffer.tsx` atual; depois auditar separação entre leitura por token, apresentação, aceite, estado e ação de checkout. Não mudar textos, cálculos, dados nem regra pública de acesso. | **REVISAR EXTRAÇÃO + PR PENDENTE #579** |
+| **07** | Checkout cartão Stripe TEST e confirmação autoritativa | [#588](https://github.com/appverto1/Verto1/pull/588): `publicSalesCardCheckout.ts` (transporte do frontend) | Auditar e, se necessário, extrair do `server.ts` rota pública, validação do token/oferta, preparação/reutilização da sessão Stripe, valor congelado e resposta. Manter idempotência, antifraude, segurança e número de chamadas. **Módulos de upgrade de assinatura do #579 não equivalem ao checkout inicial.** | **REVISAR EXTRAÇÃO** |
+| **08** | Boleto assíncrono: pendente até pagamento confirmado | [#590](https://github.com/appverto1/Verto1/pull/590) apenas correção/teste de mensagem; [#575](https://github.com/appverto1/Verto1/pull/575) já extrai interpretação geral de estado pós-pagamento | Mapear fronteira entre escolha/retorno de pagamento, status assíncrono, confirmação Stripe e UI de pendência. Isolar apenas o código correspondente, preservando que emissão de boleto **nunca** libere a clínica. Evitar polling e requests adicionais. | **EXTRAÇÃO DO FLUXO NÃO COMPROVADA** |
+| **09** | Stripe webhooks/assinaturas: eventos, módulos e idempotência | [#592](https://github.com/appverto1/Verto1/pull/592) e [#594](https://github.com/appverto1/Verto1/pull/594): guards/correções de estado, sem extração comprovada do handler; [#576](https://github.com/appverto1/Verto1/pull/576) propõe helpers puros **de upgrade de assinatura** (dentro #579) | Mapear rotas/handlers Stripe, assinatura do webhook, dispatch de eventos, estados monotônicos, idempotência, provisionamento e entitlement; separar fronteiras de autoridade com preservação literal. Não alterar assinaturas, triggers, migrations, cobrança ou RLS nesta fase. Tratar #593 separadamente. | **EXTRAÇÃO DO FLUXO NÃO COMPROVADA** |
+| **10** | Pagamento confirmado → Diretor autenticado → onboarding, sem novo checkout | [#595](https://github.com/appverto1/Verto1/pull/595) acrescenta regressão; [#575](https://github.com/appverto1/Verto1/pull/575) extrai helper de estados pós-pagamento | Auditar separação entre reconciliação Stripe, provisionamento idempotente do Diretor/tenant, abertura de sessão, OTP/login e navegação ao onboarding; conferir responsabilidades em `PublicSalesOffer.tsx`, `server.ts` e `ProfessionalOnboarding.tsx`. Sem criar nova cobrança/conta ou mudar o caminho. | **EXTRAÇÃO DO FLUXO NÃO COMPROVADA** |
+| **11** | Primeiro acesso do Diretor com e-mail e senha | [#596](https://github.com/appverto1/Verto1/pull/596) corrige feedback e adiciona testes; nenhum novo módulo específico comprovado | Auditar separação de UI, transporte `sales-activations`, validação de senha, consumo de token único, autenticação e papel/tenant. Backend permanece autoridade; sem duplicar fluxo de login. | **EXTRAÇÃO DO FLUXO NÃO COMPROVADA** |
+| **12** | Primeiro acesso do Diretor com Google | [#597](https://github.com/appverto1/Verto1/pull/597) corrige tratamento de erros/contexto; nenhum novo módulo específico comprovado | Auditar separação entre entrada OAuth, callback, contexto temporário da ativação, verificação server-side do e-mail contratual e encaminhamento ao portal correto. Evitar divergência com primeiro acesso por senha; manter proteção contra troca de identidade/tenant. | **EXTRAÇÃO DO FLUXO NÃO COMPROVADA** |
+| **13** | Cadastro e configurações da clínica; Salvar e persistir | [#598](https://github.com/appverto1/Verto1/pull/598) corrige persistência após confirmação da API; [#575](https://github.com/appverto1/Verto1/pull/575) extrai formatadores; [#578](https://github.com/appverto1/Verto1/pull/578) propõe agenda/rótulos (dentro #579) | Auditar limites entre formulário, validação, transporte, persistência confirmada de configurações institucionais, recuperação e atualização de estado; separar apenas responsabilidades misturadas. **Salvar continua única autoridade**, sem falso sucesso/outbox e sem quebrar atualização sem F5. | **EXTRAÇÃO DO FLUXO NÃO COMPROVADA** |
+| **14** | Tutorial inicial por papel, reabertura e persistência | [#599](https://github.com/appverto1/Verto1/pull/599): `PortalFirstAccessTutorial.tsx` e `portalGuidedTutorialProgress.mjs` | Auditar se UI compartilhada, estados/progresso e entradas dos portais estão bem separados, com chave de usuário/clínica/papel e sem ampliar permissões. Preservar persistência atual no **mesmo navegador**; não prometer sincronização entre dispositivos. | **REVISAR EXTRAÇÃO** |
+
+**Importante:** “o que ainda precisa” acima é um roteiro de inspeção **antes de editar**, não diagnóstico de que toda linha listada está mal modularizada. Um item pode encerrar-se só com auditoria e evidências se o código atual já estiver adequadamente separado.
+
+## 3. Entregas anteriores do Codex — evitar duplicidade
+
+| Referência | Escopo e evidência | Estado em 05/11/2026 | Tratamento |
+|---|---|---|---|
+| [#575](https://github.com/appverto1/Verto1/pull/575) | `salesPostPaymentState.mjs` e `professionalOnboardingFormatting.mjs`; extrações reais sem alterar persistência | **Mergeado em staging** | Preservar; reutilizar, não recriar |
+| [#576](https://github.com/appverto1/Verto1/pull/576) | Helpers de contrato congelado/fases Stripe e identificação de evidência de fatura de upgrade | **Aberto em draft** | Histórico de revisão do #579, sem merge separado |
+| [#577](https://github.com/appverto1/Verto1/pull/577) | Extração de apresentação `ModularPublicOfferDetails.tsx` | **Aberto em draft** | Histórico de revisão do #579, sem merge separado |
+| [#578](https://github.com/appverto1/Verto1/pull/578) | Agenda inicial e rótulos de papel `professionalOnboardingPresentation.ts` | **Aberto em draft** | Histórico de revisão do #579, sem merge separado |
+| [#579](https://github.com/appverto1/Verto1/pull/579) | Agrega #576–#578 em 15 arquivos, sem `server.ts` | **Aberto em draft; NÃO mergeado** | Atualizar contra staging, revisar diff e testes Node 20 antes de decidir integração única |
+
+**Limitação registrada pelo Codex:** núcleo comercial/ativação do `server.ts` (aprox. 4,35 MB) permaneceu sem extração no lote porque a escrita do blob grande pelo conector falhou. Se modificar esse arquivo for indispensável, usar caminho Git seguro e revisável; **não** marcar conclusão por ter movido apenas utilitários. Não fazer uma reestruturação geral do servidor fora do escopo 01–14.
+
+## 4. Ordem de trabalho e critérios de aceite
+
+**FASE A — modularização primeiro (itens 01 → 14):**
+1. Ler **este arquivo**, o inventário-mãe, o estado real dos PRs/branches e o último SHA de `staging`. Verificar mudanças do Codex que chegaram entre revisões.
+2. Para o **próximo item aberto**, identificar responsabilidades reais em frontend, backend, APIs, Auth/RLS e banco, contratos e dependências. Comparar com extrações já existentes.
+3. Fazer **somente extração estrutural necessária e comportamento-preservante**. Não aproveitar para corrigir bugs preexistentes, alterar UX ou redesenhar regras. Se não houver lacuna, registrar “já modularizado” com evidência e seguir.
+4. Rodar testes automatizados pertinentes **durante** a extração (incluindo segurança negativa quando a fronteira exigir); corrigir apenas regressões **introduzidas pela própria modularização**. Registrar bugs preexistentes na fila separada.
+5. Revisar diff, segurança, custo, persistência e compatibilidade; registrar branch, commit, PR, CI, merge e deploy staging **somente quando realmente confirmados**. Não disparar ações pagas nem realizar alterações em produção.
+6. Atualizar a linha do item e o **checkpoint** deste documento no **mesmo PR de documentação ou de código**, para que a próxima sessão continue corretamente. Evitar editar dois trackers concorrentes.
+
+**FASE B — somente depois do bloco modularizado:** smoke test real, um passo por vez, no fluxo lead → Kanban → proposta → link → cartão/boleto → webhook → Diretor → senha/Google → clínica → tutorial. Exercitar **Salvar**, atualização sem F5, F5, logout/login e isolamento de clínicas quando aplicáveis. Abrir correções funcionais em PRs separados, sem misturar com refactors.
+
+**Definição de “modularizado” por item:** (a) fronteiras e dependências revisadas; (b) extrações necessárias concluídas ou ausência de lacuna demonstrada; (c) comportamento, autorização, idempotência, dados e custos preservados com evidência; (d) testes e análise de diff aplicáveis aprovados; (e) código verificado em `staging` com SHA rastreável. **Deploy confirmado** e **smoke aprovado** são campos próprios, nunca inferidos do merge.
+
+### Checkpoint por item — preencher ao fechar cada etapa
+
+| Campo | Evidência que deve ficar registrada |
+|---|---|
+| ID / data / autor | Item 01–14, data e responsável |
+| Base inspecionada | Branch + SHA e arquivos/rotas/RPCs relevantes |
+| Escopo já modularizado | Módulos existentes, responsabilidades e PRs anteriores (não repetir) |
+| Lacuna real identificada | Função/handler/estado ainda acoplado; ou “nenhuma”, com prova |
+| Alteração mínima | Arquivos tocados, por que eram necessários, diff |
+| Preservação | Auth, roles, tenant/clinic, Stripe, histórico, Salvar, cache, requests, egress |
+| Testes | Comandos/ambiente/resultados; falhas e limitações explicitadas |
+| Integração | Branch, commit, PR, merge (SIM/NÃO), staging SHA/deploy (confirmado/não confirmado) |
+| Status de modularização | REVISAR EXTRAÇÃO / EXTRAÇÃO NÃO COMPROVADA / PR PENDENTE / MODULARIZAÇÃO CONCLUÍDA |
+| Smoke funcional posterior | NÃO INICIADO / PARCIAL / REPROVADO / APROVADO, com data e evidência |
+| Próximo item | Próximo ID pendente e bloqueios factuais |
+
+## 5. Regras invioláveis da trilha
+
+- Preservar os fluxos de Super Admin, CRM, oferta, Stripe/webhooks, clínica, profissionais, pacientes, convites, roles, tenant, portais e histórico. Nenhuma extração deve mudar decisões de autorização no backend/RLS.
+- Preservar toda persistência: para dados clínicos/cadastrais, **somente Salvar confirma a gravação**. Sucesso na UI apenas após confirmação autoritativa; sem depender de F5 para atualizar a tela.
+- Não adicionar N+1, `SELECT *`, polling, chamadas duplicadas, egress, logs sensíveis nem serviços/processos Railway. Não ativar GitHub Actions pago; objetivo US$ 0 em CI.
+- Não executar migrations, mutar Supabase/Stripe, migrar dados ou modificar produção só para modularizar.
+- Se surgir bug funcional anterior, registrar no backlog de correções da **FASE B**, com severidade/impacto; não declará-lo corrigido. Uma regressão **causada pela extração atual** deve ser resolvida antes de concluir o próprio PR.
+- Não confundir “PR pronto”, “merge”, “staging implantado”, “modularização encerrada” e “smoke homologado”.
+
+## 6. Registro de continuidade
+
+| Data | Etapa | Resultado real | Próxima ação |
+|---|---|---|---|
+| 05/11/2026 | Consolidação documental 01–14 | Inspecionados inventário existente, PRs #575–#579 e #581–#600. #579 continua draft; #575 e as extrações #581–#588/#599 já constam de staging. **Sem nova modularização implementada nesta consolidação.** | Item **01**: auditar fronteiras atuais e registrar conclusão ou lacuna; **não iniciar** refactor cegamente. |
+
+### Comando de retomada
+
+Quando o fundador disser **“continuar na modularização dos itens críticos”**, começar **por este arquivo no GitHub**, reconciliar com o estado mais recente de `staging` e com os PRs do Codex, apresentar em poucas linhas **item atual, o que está pronto, o que falta, evidência e próximo passo**, e executar **somente a próxima etapa autorizada**. Não reiniciar itens já concluídos, não promover para produção e não iniciar smoke/correção funcional antes de encerrar a FASE A, salvo nova instrução explícita.
