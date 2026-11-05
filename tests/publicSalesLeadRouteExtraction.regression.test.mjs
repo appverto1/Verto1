@@ -7,15 +7,15 @@ const m=readFileSync('services/publicSalesLeadRoutes.ts','utf8');
 const input=readFileSync('services/publicSalesLeadInput.ts','utf8');
 const hash=(str)=>{let h=0x811c9dc5;for(let i=0;i<str.length;i++)h=Math.imul(h^str.charCodeAt(i),0x01000193)>>>0;return h.toString(16).padStart(8,'0');};
 test('backend lead route remains extracted and its persistence handler is unchanged',()=>{
-  const begin='      try {\\n        const { data, error }';
-  const i=m.indexOf(begin),j=m.indexOf('\\n    },\\n  );',i);
+  const begin='      try {\n        const { data, error }';
+  const i=m.indexOf(begin),j=m.indexOf('\n    },\n  );',i);
   assert.ok(i>=0 && j>i);
   assert.equal(hash(m.slice(i,j)),'141a89ea','RPC, notification and responses must remain byte-identical');
-  assert.match(m,/import \\{ parsePublicSalesLeadInput \\} from '\\.\\/publicSalesLeadInput'/);
-  assert.match(m,/parsePublicSalesLeadInput\\(req, deps\\)/);
-  assert.match(s,/import \\{ registerPublicSalesLeadRoute \\} from '\\.\\/services\\/publicSalesLeadRoutes'/);
-  assert.match(s,/registerPublicSalesLeadRoute\\(app, \\{/);
-  assert.doesNotMatch(s,/app\\.post\\(\\s*"\\/api\\/public\\/sales-leads"/);
+  assert.match(m,/import \{ parsePublicSalesLeadInput \} from '\.\/publicSalesLeadInput'/);
+  assert.match(m,/parsePublicSalesLeadInput\(req, deps\)/);
+  assert.match(s,/import \{ registerPublicSalesLeadRoute \} from '\.\/services\/publicSalesLeadRoutes'/);
+  assert.match(s,/registerPublicSalesLeadRoute\(app, \{/);
+  assert.doesNotMatch(s,/app\.post\(\s*"\/api\/public\/sales-leads"/);
 });
 test('original API abuse protection, persistence and idempotency are all preserved',()=>{
   assert.match(m,/"\/api\/public\/sales-leads",\s*publicSalesLeadIpLimiter,\s*publicSalesLeadIdentityLimiter/);
