@@ -16,6 +16,7 @@ import { MonthlyConferenceCenter } from './MonthlyConferenceCenter';
 import { PayerRequirementsPanel } from './PayerRequirementsPanel';
 import { BillingCommunicationPanel } from './BillingCommunicationPanel';
 import { HelpButton } from './HelpButton';
+import { PortalFirstAccessTutorial } from './PortalFirstAccessTutorial';
 
 type BillerWorkspaceProps = {
   user: any;
@@ -121,6 +122,7 @@ export function BillerWorkspace({ user, onLogout }: BillerWorkspaceProps) {
             <span className="sr-only">{mobileNavOpen ? 'Fechar menu do faturamento' : 'Abrir menu do faturamento'}</span>
           </button>
           <HelpButton />
+          <PortalFirstAccessTutorial user={user} portal="biller" targetId="help-center" />
           {accessContextCount > 1 && (
             <button
               type="button"

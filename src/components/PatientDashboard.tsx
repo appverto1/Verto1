@@ -10,6 +10,7 @@ import { DrawingCanvas } from './DrawingCanvas';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
+import { PortalFirstAccessTutorial } from './PortalFirstAccessTutorial';
 import { AdultWellbeingTrendChart, type WellbeingPeriod } from './AdultWellbeingTrendChart';
 import { calculateDomainMastery } from '../utils/clinicalMath';
 import { ensureFreshSession } from '../lib/supabase';
@@ -3764,8 +3765,12 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                          </div>
                     </div>
 
-                    <div className="relative">
+                    <div className="relative flex items-center gap-2">
+                      <PortalFirstAccessTutorial user={user} portal="patient" targetId="patient-portal-menu" />
                       <button
+                        type="button"
+                        data-tutorial-anchor="patient-portal-menu"
+                        aria-label="Abrir menu do paciente"
                         onClick={() => setIsMenuOpen(!isMenuOpen)}
                         className="p-2.5 bg-white/80 backdrop-blur-md rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50"
                       >
@@ -4186,8 +4191,12 @@ ${interventionImages.join('\n')}` : ''
           </div>
         </div>
 
-        <div className="relative self-end sm:self-auto">
+        <div className="relative flex items-center gap-2 self-end sm:self-auto">
+          <PortalFirstAccessTutorial user={user} portal="patient" targetId="patient-portal-menu" />
           <button
+            type="button"
+            data-tutorial-anchor="patient-portal-menu"
+            aria-label="Abrir menu do paciente"
             onClick={() => setIsMenuOpen(!isMenuOpen)}
             className="p-3 bg-white rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50 relative"
           >
