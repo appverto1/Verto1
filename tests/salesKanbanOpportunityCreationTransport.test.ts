@@ -40,3 +40,24 @@ test('backend rejection still propagates to the existing Save error handler',asy
     /Número já cadastrado ou repetido/,
   );
 });
+
+
+test('Save includes per-contact names, clinic and emails in the same POST with no extra calls',async()=>{
+  const calls:any[]=[];
+  const request=async(url:string,options?:RequestInit)=>{
+    calls.push({url,options});return {success:true,leads:[{id:'new-lead',name:'Contato Teste',clinicName:'Clínica Exemplo'}]};
+  };
+  const details=[
+    {name:'Contato Teste',clinicName:'Clínica Exemplo',email:'contato@example.test'},
+    {name:'Outro Contato',clinicName:'Outra Clínica',email:''},
+  ];
+  const phones=['11 99999-9999','21 98888-8888'];
+  const response=await createManualOpportunities(request,phones,[[],[]],'new-key-123456',details);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0].url,'/api/owner/sales/kanban/opportunities');
+  assert.equal(calls[0].options.method,'POST');
+  assert.deepEqual(JSON.parse(String(calls[0].options.body)),{
+    phones,channelsByPhone:[[],[]],detailsByPhone:details,
+  });
+  assert.equal(response.leads[0].clinicName,'Clínica Exemplo');
+});
