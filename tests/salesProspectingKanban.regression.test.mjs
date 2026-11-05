@@ -5,6 +5,7 @@ import { test } from 'node:test';
 const sql = readFileSync('supabase/migrations/20261027143000_sales_prospecting_attempts_v1.sql', 'utf8');
 const routes = readFileSync('services/salesProspectingRoutes.ts', 'utf8');
 const creationRoutes = readFileSync('services/salesKanbanOpportunityCreationRoutes.ts', 'utf8');
+const creationInput = readFileSync('services/salesKanbanOpportunityCreationInput.ts', 'utf8');
 const creationTransport = readFileSync('src/services/salesKanbanOpportunityCreation.ts', 'utf8');
 const activityRoutes = readFileSync('services/salesProspectingActivityRoutes.ts', 'utf8');
 const movementRoutes = readFileSync('services/salesKanbanMovementRoutes.ts', 'utf8');
@@ -745,7 +746,7 @@ test('bulk lead import preselects any subset and assigns different active acquis
   assert.match(creationTransport,/detailsByPhone \? \{phones,channelsByPhone,detailsByPhone\} : \{phones,channelsByPhone\}/);
   assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
   assert.match(creationRoutes,/create_sales_kanban_opportunities_v2/);
-  assert.match(creationRoutes,/channelsByPhone\.length!==phones\.length/);
+  assert.match(creationInput,/channelsByPhone\.length!==phones\.length/);
   assert.match(bulkCreationSql,/create_sales_kanban_opportunities_v1\(p_phones,p_actor_id,p_action_key\)/);
   assert.match(bulkCreationSql,/sales_lead_acquisition_channels\(lead_id,channel_id,assigned_by\)/);
   assert.match(bulkCreationSql,/IDEMPOTENCY_CONFLICT/);
