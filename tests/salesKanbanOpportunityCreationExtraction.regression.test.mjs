@@ -13,7 +13,7 @@ test('both manual opportunity routes have byte-exact 04/11 staging semantics',()
   const first=routes.indexOf('  // Preview only:');
   const last=routes.lastIndexOf('\n}\n');
   assert.ok(first>=0&&last>first);
-  assert.equal(fnv(routes.slice(first,last+1)),'543f5240');
+  assert.equal(fnv(routes.slice(first,last+1)),'529de154');
   assert.match(prospecting,/import \{ registerSalesKanbanOpportunityCreationRoutes \} from '\.\/salesKanbanOpportunityCreationRoutes'/);
   assert.equal((prospecting.match(/registerSalesKanbanOpportunityCreationRoutes\(app, \{/g)||[]).length,1);
   assert.doesNotMatch(prospecting,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities(?:\/duplicates)?'/);
@@ -37,16 +37,17 @@ test('privileged writes, duplicate previews, SQL idempotency and cost envelope r
   assert.doesNotMatch(routes,/\.select\('\*'\)/);
 });
 
-test('creation is still triggered only by Save, with no F5 and no additional HTTP calls',()=>{
+test('creation remains triggered only by Save, with no F5 or extra HTTP round trips',()=>{
   assert.match(ui,/const bulkPhones=splitOpportunityPhones\(phonesDraft\)/);
   assert.match(ui,/previewOpportunityDuplicates\(request,phonesDraft\)/);
-  assert.match(ui,/const json=await createManualOpportunities\(request,phones,channelsByPhone,key\)/);
+  assert.match(ui,/const json=await createManualOpportunities\(request,phones,channelsByPhone,key,detailsByPhone\)/);
   assert.match(ui,/onClick=\{\(\)=>void createOpportunities\(\)\}/);
   assert.match(ui,/onLeadsCreated\(json.leads\|\|\[\]\)/);
   assert.match(ui,/for\(const item of json.leads\|\|\[\]\)next\[item.id\]=item.channelIds\|\|\[\]/);
   assert.match(ui,/if\(\/repetido\|cadastrado\/i\.test/);
   assert.match(transport,/request\('\/api\/owner\/sales\/kanban\/opportunities\/duplicates', \{/);
   assert.match(transport,/request\('\/api\/owner\/sales\/kanban\/opportunities', \{/);
-  assert.match(transport,/method:'POST',headers:\{'X-Idempotency-Key':key\},body:JSON.stringify\(\{phones,channelsByPhone\}\)/);
+  assert.match(transport,/method:'POST',headers:\{'X-Idempotency-Key':key\}/);
+  assert.match(transport,/detailsByPhone \? \{phones,channelsByPhone,detailsByPhone\} : \{phones,channelsByPhone\}/);
   assert.doesNotMatch(ui,/request\('\/api\/owner\/sales\/kanban\/opportunities(?:\/duplicates)?'/);
 });

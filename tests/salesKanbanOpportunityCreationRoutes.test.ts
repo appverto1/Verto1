@@ -135,3 +135,66 @@ test('unique phone conflict and channel unavailability remain atomic HTTP 409',a
   const invalid=setup({rpcResult:{data:null,error:{message:'INVALID_PHONE',code:'P0001'}}});
   assert.equal((await invalid.run(create,{phones:[phone],channelsByPhone:[[]]})).code,400);
 });
+
+
+test('Save with contact identification uses one atomic v3 RPC and no extra queries',async()=>{
+  const h=setup();
+  const details=[
+    {name:'Contato Teste',clinicName:'Clínica Exemplo',email:'contato@example.test'},
+    {name:'Outro Contato',clinicName:'Clínica Exemplo',email:''},
+  ];
+  const response=await h.run(create,{phones:[phone,'21 98888-8888'],channelsByPhone:[[channel],[]],detailsByPhone:details});
+  assert.equal(response.code,201);
+  assert.equal(h.rpcCalls.length,1);
+  assert.equal(h.rpcCalls[0].name,'create_sales_kanban_opportunities_v3');
+  assert.deepEqual(h.rpcCalls[0].args,{
+    p_phones:[phone,'21 98888-8888'],p_actor_id:owner,p_action_key:'test-key-123456',
+    p_channels:[[channel],[]],p_details:details,
+  });
+  assert.equal(h.dbCalls.length,0);
+});
+
+test('malicious, oversized, malformed and duplicate contact fields fail before any write',async()=>{
+  const h=setup();
+  const valid={phones:[phone],channelsByPhone:[[]]};
+  const invalid=[
+    null,[],
+    [{name:'A'}],
+    [{clinicName:'A'.repeat(181)}],
+    [{name:'A'.repeat(181)}],
+    [{email:'not-an-email'}],
+    [{email:'x'.repeat(255)+'@test.com'}],
+    [{name:'Valid',role:'director'}],
+    [{name:'Nave\nControl'}],
+    [42],
+    [{name:'A pessoa'},{}],
+  ];
+  for(const detailsByPhone of invalid){
+    const result=await h.run(create,{...valid,detailsByPhone});
+    assert.equal(result.code,400,'invalid shape must be rejected by server');
+  }
+  const dup=await h.run(create,{
+    phones:[phone,'21 98888-8888'],channelsByPhone:[[],[]],
+    detailsByPhone:[{email:'TEST@EXAMPLE.COM'},{email:'test@example.com'}],
+  });
+  assert.equal(dup.code,400,'duplicate emails cannot be created in one atomic batch');
+  assert.equal(h.rpcCalls.length,0);
+  assert.equal(h.dbCalls.length,0);
+});
+
+test('v3 duplicate email and replay conflicts roll back the entire Save',async()=>{
+  for(const errorCode of ['DUPLICATE_EMAIL_IN_BATCH','IDEMPOTENCY_CONFLICT','23505']){
+    const h=setup({rpcResult:{data:null,error:{code:errorCode,message:errorCode}}});
+    const r=await h.run(create,{phones:[phone],channelsByPhone:[[]],detailsByPhone:[{name:'Contato Teste'}]});
+    assert.equal(r.code,409);
+    assert.equal(h.rpcCalls.length,1);
+  }
+});
+
+test('legacy phone-only v2 caller remains unchanged',async()=>{
+  const h=setup();
+  const r=await h.run(create,{phones:[phone],channelsByPhone:[[]]});
+  assert.equal(r.code,201);
+  assert.equal(h.rpcCalls[0].name,'create_sales_kanban_opportunities_v2');
+  assert.equal('p_details' in h.rpcCalls[0].args,false);
+});

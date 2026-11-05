@@ -19,12 +19,16 @@ export const previewOpportunityDuplicates = (
     method:'POST',body:JSON.stringify({phones:splitOpportunityPhones(phonesDraft)}),
   });
 
+export type OpportunityContactDetails = { name?: string; clinicName?: string; email?: string };
+
 export const createManualOpportunities = (
   request: SalesKanbanRequest,
   phones: string[],
   channelsByPhone: string[][],
   key: string,
+  detailsByPhone?: OpportunityContactDetails[],
 ): Promise<{success: boolean; leads: any[]}> =>
   request('/api/owner/sales/kanban/opportunities', {
-    method:'POST',headers:{'X-Idempotency-Key':key},body:JSON.stringify({phones,channelsByPhone}),
+    method:'POST',headers:{'X-Idempotency-Key':key},
+    body:JSON.stringify(detailsByPhone ? {phones,channelsByPhone,detailsByPhone} : {phones,channelsByPhone}),
   });

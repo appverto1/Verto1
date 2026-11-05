@@ -740,7 +740,9 @@ test('bulk lead import preselects any subset and assigns different active acquis
   assert.match(kanban,/Aplicar canais aos \{bulkSelectedRows\.length\} selecionados/);
   assert.match(kanban,/Editar canais deste contato/);
   assert.match(kanban,/phones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
-  assert.match(creationTransport,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
+  // Existing phone-only callers retain the same exact two-field request body;
+  // the new manual form can opt into per-phone identification atomically.
+  assert.match(creationTransport,/detailsByPhone \? \{phones,channelsByPhone,detailsByPhone\} : \{phones,channelsByPhone\}/);
   assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
   assert.match(creationRoutes,/create_sales_kanban_opportunities_v2/);
   assert.match(creationRoutes,/channelsByPhone\.length!==phones\.length/);
