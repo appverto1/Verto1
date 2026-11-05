@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 
-const api=readFileSync(new URL('../services/salesProspectingRoutes.ts',import.meta.url),'utf8');
+const api=readFileSync(new URL('../services/salesKanbanOpportunityCreationRoutes.ts',import.meta.url),'utf8');
 const ui=readFileSync(new URL('../src/components/CommercialKanban.tsx',import.meta.url),'utf8');
 const lossRoutes=readFileSync(new URL('../services/salesLossReasonsRoutes.ts',import.meta.url),'utf8');
 const creation=readFileSync(new URL('../supabase/migrations/20261027193000_sales_kanban_opportunity_crud_v1.sql',import.meta.url),'utf8');
@@ -22,7 +22,7 @@ test('telephone duplicates are checked server-side, with a single scoped batch q
 });
 
 test('paste and individual creation mark duplicates without auto-deleting or saving them',()=>{
-  assert.match(ui,/request\('\/api\/owner\/sales\/kanban\/opportunities\/duplicates'/);
+  assert.match(ui,/previewOpportunityDuplicates\(request,phonesDraft\)/);
   assert.match(ui,/\},350\);/);
   assert.match(ui,/checkedDuplicates\?\.\[index\]\?\.inBatch/);
   assert.match(ui,/checkedDuplicates\?\.\[index\]\?\.existing/);

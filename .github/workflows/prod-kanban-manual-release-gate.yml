@@ -1,0 +1,88 @@
+name: Kanban manual creation production release gate
+on:
+  push:
+    branches:
+      - release/prod-kanban-manual-creation-v3-20261105
+permissions:
+  contents: read
+concurrency:
+  group: prod-kanban-manual-creation-gate
+  cancel-in-progress: true
+jobs:
+  verify-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Verify head and base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor origin/main HEAD
+          echo "candidate=$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Deterministic install
+        run: npm ci --no-audit --no-fund
+      - name: Focused Kanban behavior and security tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tests/salesKanbanManualCreationIdentitySmoke02.regression.test.mjs
+          node tests/salesKanbanOpportunityCreationExtraction.regression.test.mjs
+          node --import tsx tests/salesKanbanOpportunityCreationRoutes.test.ts
+          node --import tsx tests/salesKanbanOpportunityCreationTransport.test.ts
+          node tests/salesKanbanDuplicatePhonesAndInlineLoss.regression.test.mjs
+          node tests/salesProspectingKanban.regression.test.mjs
+      - name: Build
+        run: npm run build
+      - name: Typecheck with baseline ratchet
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          npm run typecheck > "$RUNNER_TEMP/head-ts.log" 2>&1
+          CANDIDATE_STATUS=$?
+          cat "$RUNNER_TEMP/head-ts.log"
+          if [ "$CANDIDATE_STATUS" -eq 0 ]; then exit 0; fi
+          set -e
+          git worktree add --detach "$RUNNER_TEMP/base" origin/main
+          (cd "$RUNNER_TEMP/base" && npm ci --no-audit --no-fund)
+          set +e
+          (cd "$RUNNER_TEMP/base" && npm run typecheck) > "$RUNNER_TEMP/base-ts.log" 2>&1
+          BASE_STATUS=$?
+          set -e
+          if [ "$BASE_STATUS" -eq 0 ]; then echo "Candidate typecheck regressed from clean base"; exit 1; fi
+          node scripts/typecheck-ratchet.mjs --candidate "$RUNNER_TEMP/head-ts.log" --baseline "$RUNNER_TEMP/base-ts.log" --output "$RUNNER_TEMP/ts-diff.log"
+      - name: Pre-main test gate with baseline comparison
+        shell: bash
+        run: |
+          set +e
+          set -uo pipefail
+          npm run check:pre-main > "$RUNNER_TEMP/head-gate.log" 2>&1
+          HEAD_STATUS=$?
+          cat "$RUNNER_TEMP/head-gate.log"
+          if [ "$HEAD_STATUS" -eq 0 ]; then exit 0; fi
+          set -e
+          if [ ! -d "$RUNNER_TEMP/base" ]; then
+            git worktree add --detach "$RUNNER_TEMP/base" origin/main
+            (cd "$RUNNER_TEMP/base" && npm ci --no-audit --no-fund)
+          fi
+          set +e
+          (cd "$RUNNER_TEMP/base" && npm run check:pre-main) > "$RUNNER_TEMP/base-gate.log" 2>&1
+          BASE_STATUS=$?
+          set -e
+          if [ "$BASE_STATUS" -eq 0 ]; then echo "Candidate pre-main fails while base passes"; exit 1; fi
+          grep -E '^[[:space:]]*✗[[:space:]]+' "$RUNNER_TEMP/head-gate.log" | sed -E 's/^[[:space:]]*✗[[:space:]]+//;s/[[:space:]]+—.*$//' | sort -u > "$RUNNER_TEMP/head-failures" || true
+          grep -E '^[[:space:]]*✗[[:space:]]+' "$RUNNER_TEMP/base-gate.log" | sed -E 's/^[[:space:]]*✗[[:space:]]+//;s/[[:space:]]+—.*$//' | sort -u > "$RUNNER_TEMP/base-failures" || true
+          comm -23 "$RUNNER_TEMP/head-failures" "$RUNNER_TEMP/base-failures" > "$RUNNER_TEMP/new-failures"
+          if [ -s "$RUNNER_TEMP/new-failures" ]; then cat "$RUNNER_TEMP/new-failures"; exit 1; fi
+          echo "Pre-main: no new failing tests relative to main" >> "$GITHUB_STEP_SUMMARY"
