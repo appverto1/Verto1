@@ -3766,7 +3766,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                     </div>
 
                     <div className="relative flex items-center gap-2">
-                      <PortalFirstAccessTutorial user={user} portal="patient" targetId="patient-portal-menu" patientId={patientPortalId} />
+                      <PortalFirstAccessTutorial user={user} portal="patient" targetId="patient-portal-menu" />
                       <button
                         type="button"
                         data-tutorial-anchor="patient-portal-menu"
@@ -4192,7 +4192,7 @@ ${interventionImages.join('\n')}` : ''
         </div>
 
         <div className="relative flex items-center gap-2 self-end sm:self-auto">
-          <PortalFirstAccessTutorial user={user} portal="patient" targetId="patient-portal-menu" patientId={patientPortalId} />
+          <PortalFirstAccessTutorial user={user} portal="patient" targetId="patient-portal-menu" />
           <button
             type="button"
             data-tutorial-anchor="patient-portal-menu"
