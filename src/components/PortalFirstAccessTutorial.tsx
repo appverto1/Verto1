@@ -8,17 +8,20 @@ type PortalFirstAccessTutorialProps = {
   user: any;
   portal: Portal;
   targetId: string;
+  patientId?: string;
 };
 
 // This is presentation-only. It neither writes clinical records nor changes
 // memberships, roles or portal permissions. Keep help progress isolated by
 // authenticated user, active clinic, portal and (for patients) patient context.
-export function PortalFirstAccessTutorial({ user, portal, targetId }: PortalFirstAccessTutorialProps) {
+export function PortalFirstAccessTutorial({ user, portal, targetId, patientId: portalPatientId }: PortalFirstAccessTutorialProps) {
   const [isActive, setIsActive] = useState(false);
   const initializedKeyRef = useRef('');
   const userId = String(user?.id || '').trim();
   const clinicId = String(user?.activeWorkspaceId || user?.clinicId || user?.clinic_id || 'no-clinic').trim();
-  const patientId = portal === 'patient' ? String(user?.patientId || user?.patient_id || 'self').trim() : '';
+  const patientId = portal === 'patient'
+    ? String(portalPatientId || user?.patientId || user?.patient_id || 'self').trim()
+    : '';
 
   const progressKey = [
     'verto:guided-tutorial:portal-v1',
