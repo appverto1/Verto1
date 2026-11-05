@@ -164,6 +164,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
   },[]);
   const [creatingOpen,setCreatingOpen] = useState(false);
   const [phonesDraft,setPhonesDraft] = useState('');
+  const [firstCreationContact,setFirstCreationContact] = useState({name:'',clinicName:'',email:''});
+  const [additionalCreationContacts,setAdditionalCreationContacts] = useState<Record<number,{name:string;clinicName:string;email:string}>>({});
   const [duplicateCheck,setDuplicateCheck] = useState<{draft:string;matches:DuplicateMatch[];error?:string}|null>(null);
   const [duplicateCheckRetry,setDuplicateCheckRetry] = useState(0);
   const [bulkSelectedRows,setBulkSelectedRows]=useState<number[]>([]);
@@ -519,13 +521,27 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       setError('Revise os números destacados antes de salvar. Nenhum registro será sobrescrito.');return;
     }
     const channelsByPhone=phones.map((_,index)=>bulkChannelsByRow[index]||[]);
+    const detailsByPhone=phones.map((_,index)=>index===0
+      ? firstCreationContact
+      : additionalCreationContacts[index]||{name:'',clinicName:'',email:''});
+    const emails=new Set<string>();
+    for(const contact of detailsByPhone){
+      const email=contact.email.trim().toLowerCase();
+      if((contact.name.trim()&&contact.name.trim().length<2)||
+        contact.name.trim().length>180||contact.clinicName.trim().length>180||
+        (email&&!/^[^ @]+@[^ @]+[.][^ @]+$/.test(email))||email.length>254||
+        (email&&emails.has(email))){
+        setError('Revise o nome, a clínica e o e-mail de cada contato (e-mails não podem se repetir).');return;
+      }
+      if(email)emails.add(email);
+    }
     if(acquisitionCatalogUnavailable&&channelsByPhone.some(ids=>ids.length)){
       setError('Canais indisponíveis. Atualize antes de classificar o lote.');return;
     }
     setCreatingBusy(true);setError(null);
     const key=keysRef.current.create||crypto.randomUUID();keysRef.current.create=key;
     try {
-      const json=await createManualOpportunities(request,phones,channelsByPhone,key);
+      const json=await createManualOpportunities(request,phones,channelsByPhone,key,detailsByPhone);
       delete keysRef.current.create;
       onLeadsCreated(json.leads||[]);
       setAcquisitionByLead(old=>{
@@ -533,7 +549,8 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
         for(const item of json.leads||[])next[item.id]=item.channelIds||[];
         return next;
       });
-      setPhonesDraft('');setCreatingOpen(false);setSearch('');setShowStage('all');
+      setPhonesDraft('');setFirstCreationContact({name:'',clinicName:'',email:''});setAdditionalCreationContacts({});
+      setCreatingOpen(false);setSearch('');setShowStage('all');
       setBulkChannelsByRow({});setBulkSelectedRows([]);setBulkChannelsToApply([]);
       setGlobalFollowupFilter('all');setColumnFollowupFilters({});
       setAgendaMode('all');setAgendaSource('all');setAgendaFrom('');setAgendaTo('');
@@ -1462,13 +1479,38 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
         <div className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
           <div className="flex shrink-0 items-center justify-between"><h3 className="text-lg font-black">Novas oportunidades e canais de aquisição</h3>
             <button type="button" disabled={creatingBusy} onClick={()=>setCreatingOpen(false)} aria-label="Fechar cadastro"><X size={20}/></button></div>
-          <p className="mt-2 shrink-0 text-sm text-slate-600">Cole até 100 números com DDD e escolha os canais de aquisição para todos, alguns ou cada contato.</p>
+          <p className="mt-2 shrink-0 text-sm text-slate-600">Informe os dados da primeira oportunidade e até 100 números com DDD. Para outros telefones, os dados podem ser personalizados por contato.</p>
           {error&&<p role="alert" className="mt-3 rounded-lg bg-red-50 p-3 text-xs text-red-700">{error}</p>}
           <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+            <fieldset className="mb-4 rounded-xl border border-violet-200 bg-violet-50/50 p-3">
+              <legend className="px-1 text-xs font-bold text-violet-950">Dados da primeira oportunidade</legend>
+              <p className="mb-3 text-[11px] text-slate-600">Identificação opcional do primeiro telefone. Os demais telefones podem ter dados próprios abaixo.</p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {([
+                  ['name','Nome do contato',180],['clinicName','Nome da clínica',180],['email','E-mail (opcional)',254],
+                ] as const).map(([field,title,limit])=><label key={field} className="block text-xs font-bold text-slate-700">{title}
+                  <input type={field==='email'?'email':'text'} maxLength={limit}
+                    value={firstCreationContact[field]} disabled={creatingBusy}
+                    onChange={e=>{setFirstCreationContact(old=>({...old,[field]:e.target.value}));delete keysRef.current.create;}}
+                    className="mt-1 block w-full rounded-lg border border-slate-200 bg-white p-2.5 text-sm focus:border-violet-500" />
+                </label>)}
+              </div>
+            </fieldset>
             <label className="block text-xs font-bold text-slate-700">Telefones (até 100 por cadastro)
               <textarea autoFocus rows={4} maxLength={5000} disabled={creatingBusy} value={phonesDraft}
                 onChange={e=>{
                   const text=e.target.value;
+                  const previousPhones=splitOpportunityPhones(phonesDraft);
+                  const nextPhones=splitOpportunityPhones(text);
+                  setAdditionalCreationContacts(old=>{
+                    const next:Record<number,{name:string;clinicName:string;email:string}>={};
+                    nextPhones.forEach((phone,index)=>{
+                      if(index===0)return;
+                      const previousIndex=previousPhones.findIndex((value,i)=>i>0&&value===phone);
+                      if(previousIndex>0&&old[previousIndex])next[index]=old[previousIndex];
+                    });
+                    return next;
+                  });
                   setPhonesDraft(text);
                   const count=text.split(/[\n,;]+/).map(v=>v.trim()).filter(Boolean).length;
                   setBulkSelectedRows(Array.from({length:Math.min(count,100)},(_,i)=>i));
@@ -1546,6 +1588,25 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                     {leads.some(lead=>lead.id===checkedDuplicates[index].existing?.id)&&<button type="button" className="ml-2 font-bold underline"
                       onClick={()=>{const existingId=checkedDuplicates[index].existing!.id;setCreatingOpen(false);openCard(existingId);}}>Abrir card</button>}
                   </p>}
+                  {index>0&&<details className="mt-2 pl-6 text-xs">
+                    <summary className="cursor-pointer font-semibold text-violet-700">Dados deste contato (nome, clínica e e-mail)</summary>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {([
+                        ['name','Nome do contato',180],['clinicName','Nome da clínica',180],['email','E-mail (opcional)',254],
+                      ] as const).map(([field,title,limit])=><label key={field} className="text-xs font-bold text-slate-700">{title}
+                        <input type={field==='email'?'email':'text'} maxLength={limit}
+                          value={(additionalCreationContacts[index]||{name:'',clinicName:'',email:''})[field]}
+                          disabled={creatingBusy}
+                          onChange={e=>{
+                            setAdditionalCreationContacts(old=>({
+                              ...old,[index]:{name:'',clinicName:'',email:'',...old[index],[field]:e.target.value},
+                            }));
+                            delete keysRef.current.create;
+                          }}
+                          className="mt-1 block w-full rounded-lg border border-slate-200 p-2 text-sm" />
+                      </label>)}
+                    </div>
+                  </details>}
                   <details className="mt-1 pl-6 text-xs">
                     <summary className="cursor-pointer font-semibold text-violet-700">Editar canais deste contato</summary>
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
