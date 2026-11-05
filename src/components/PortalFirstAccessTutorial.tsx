@@ -29,7 +29,12 @@ export function PortalFirstAccessTutorial({ user, portal, targetId, patientId: p
   useEffect(() => {
     if (!userId || initializedKeyRef.current === progressKey) return;
     initializedKeyRef.current = progressKey;
-    const status = readPortalGuidedTutorial(window.localStorage, progressKey);
+    let status: string | null = null;
+    try {
+      status = readPortalGuidedTutorial(window.localStorage, progressKey);
+    } catch {
+      // Some browsers prohibit access even to the localStorage property.
+    }
     setIsActive(status !== 'completed' && status !== 'skipped');
   }, [progressKey, userId]);
 
@@ -44,7 +49,11 @@ export function PortalFirstAccessTutorial({ user, portal, targetId, patientId: p
 
   const persist = (status: 'active' | 'completed' | 'skipped') => {
     if (!userId) return;
-    persistPortalGuidedTutorial(window.localStorage, progressKey, status);
+    try {
+      persistPortalGuidedTutorial(window.localStorage, progressKey, status);
+    } catch {
+      // Optional browser storage must never prevent the user closing the guide.
+    }
   };
 
   const restart = () => {
@@ -61,6 +70,7 @@ export function PortalFirstAccessTutorial({ user, portal, targetId, patientId: p
     <>
       <button
         type="button"
+        disabled={!userId}
         onClick={restart}
         className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
         aria-label={portal === 'patient' ? 'Rever tutorial do portal do paciente' : 'Rever tutorial do faturamento'}
