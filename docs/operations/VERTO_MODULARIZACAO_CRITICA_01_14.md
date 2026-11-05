@@ -86,7 +86,15 @@
 | Smoke funcional posterior | NÃO INICIADO / PARCIAL / REPROVADO / APROVADO, com data e evidência |
 | Próximo item | Próximo ID pendente e bloqueios factuais |
 
-## 5. Regras invioláveis da trilha
+## 5. Medição obrigatória de redução de `server.ts` após cada item modularizado
+
+**Obrigatório em cada entrega do inventário:** informar o número **exato** de linhas do `server.ts` no SHA-base da etapa e no SHA resultante, usando a mesma regra de contagem (ex.: `wc -l server.ts` em ambos os commits). Informar também redução absoluta (`antes − depois`) e redução percentual (`redução / antes × 100`). Quando a alteração não tocar o servidor, reportar **0 linha reduzida** somente após verificar que o blob do arquivo permaneceu idêntico; se o arquivo crescer, registrar crescimento, nunca mascarar como redução.
+
+**Formato da comunicação:** `Item NN — server.ts: ANTES linhas → DEPOIS linhas | redução: N linhas (P%) | base SHA → commit SHA`. Registrar no checkpoint do item as evidências e o comando de medição. Contar no mesmo par de SHAs (antes/depois da *alteração do item*) para não atribuir a um item mudanças externas ocorridas na branch.
+
+**Integridade:** se a API do GitHub, especialmente para `server.ts` grande, retornar conteúdo vazio/truncado, **não** interpretar como arquivo de zero linhas e **não** inventar números. Utilizar clone Git local autenticado ou outra leitura íntegra verificável e deixar a medição “pendente de verificação” até ser comprovada. A diminuição de linhas é uma métrica informativa: não forçar extrações desnecessárias só para aumentar a redução.
+
+## 6. Regras invioláveis da trilha
 
 - Preservar os fluxos de Super Admin, CRM, oferta, Stripe/webhooks, clínica, profissionais, pacientes, convites, roles, tenant, portais e histórico. Nenhuma extração deve mudar decisões de autorização no backend/RLS.
 - Preservar toda persistência: para dados clínicos/cadastrais, **somente Salvar confirma a gravação**. Sucesso na UI apenas após confirmação autoritativa; sem depender de F5 para atualizar a tela.
@@ -95,7 +103,7 @@
 - Se surgir bug funcional anterior, registrar no backlog de correções da **FASE B**, com severidade/impacto; não declará-lo corrigido. Uma regressão **causada pela extração atual** deve ser resolvida antes de concluir o próprio PR.
 - Não confundir “PR pronto”, “merge”, “staging implantado”, “modularização encerrada” e “smoke homologado”.
 
-## 6. Registro de continuidade
+## 7. Registro de continuidade
 
 | Data | Etapa | Resultado real | Próxima ação |
 |---|---|---|---|
