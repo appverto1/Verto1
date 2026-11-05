@@ -11263,6 +11263,17 @@ export function CoordinatorDashboard({
     guidedTutorialModuleSignature || "baseline",
   ].join(":");
 
+  // A completed walkthrough belongs to this user, clinic and role. Changes in
+  // contracted modules must not present the initial tour again on the next login.
+  // Keep guidedTutorialContextKey for compatibility with already saved progress.
+  const guidedTutorialRoleKey = [
+    "verto:guided-tutorial:role",
+    GUIDED_TUTORIAL_REVISION,
+    String(user?.id || "").trim(),
+    workspaceScopeKey || "global",
+    normalizedRole || "unknown",
+  ].join(":");
+
   // The onboarding tutorial points only to the help icon. Navigation between
   // modules lives in the Help Center, not in a device-dependent guided tour.
   const guidedTutorialSteps = [
@@ -11276,16 +11287,18 @@ export function CoordinatorDashboard({
 
   const persistGuidedTutorial = useCallback((status: "active" | "skipped" | "completed", step: number) => {
     try {
-      window.localStorage.setItem(guidedTutorialContextKey, JSON.stringify({
+      const progress = JSON.stringify({
         revision: GUIDED_TUTORIAL_REVISION,
         status,
         step,
         updatedAt: new Date().toISOString(),
-      }));
+      });
+      window.localStorage.setItem(guidedTutorialRoleKey, progress);
+      window.localStorage.setItem(guidedTutorialContextKey, progress);
     } catch {
       // Local persistence is best-effort; live tutorial behavior still works.
     }
-  }, [guidedTutorialContextKey]);
+  }, [guidedTutorialContextKey, guidedTutorialRoleKey]);
 
   const startGuidedTutorial = useCallback(() => {
     if (!authorizationHydrated || guidedTutorialSteps.length === 0) return;
@@ -11314,8 +11327,13 @@ export function CoordinatorDashboard({
 
     let stored: any = null;
     try {
-      const raw = window.localStorage.getItem(guidedTutorialContextKey);
-      stored = raw ? JSON.parse(raw) : null;
+      const stableRaw = window.localStorage.getItem(guidedTutorialRoleKey);
+      const legacyRaw = stableRaw ? null : window.localStorage.getItem(guidedTutorialContextKey);
+      stored = stableRaw || legacyRaw ? JSON.parse(stableRaw || legacyRaw || '{}') : null;
+      if (legacyRaw && stored?.revision === GUIDED_TUTORIAL_REVISION) {
+        // Preserve previously completed/skipped state when upgrading the key.
+        window.localStorage.setItem(guidedTutorialRoleKey, legacyRaw);
+      }
     } catch {
       stored = null;
     }
@@ -11335,6 +11353,7 @@ export function CoordinatorDashboard({
   }, [
     authorizationHydrated,
     guidedTutorialContextKey,
+    guidedTutorialRoleKey,
     guidedTutorialSteps.length,
     persistGuidedTutorial,
     user?.id,
