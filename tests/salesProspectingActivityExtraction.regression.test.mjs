@@ -4,27 +4,39 @@ import {test} from 'node:test';
 
 const backend=readFileSync('services/salesProspectingRoutes.ts','utf8');
 const activity=readFileSync('services/salesProspectingActivityRoutes.ts','utf8');
+const input=readFileSync('services/salesKanbanActivityInput.ts','utf8');
 const movement=readFileSync('services/salesKanbanMovementRoutes.ts','utf8');
 const transport=readFileSync('src/services/salesKanbanActivity.ts','utf8');
 const ui=readFileSync('src/components/CommercialKanban.tsx','utf8');
 const boardSql=readFileSync('supabase/migrations/20261027185000_sales_kanban_custom_columns_analytics_v1.sql','utf8');
 const fnv=(text)=>{let h=0x811c9dc5;for(let i=0;i<text.length;i++)h=Math.imul(h^text.charCodeAt(i),0x01000193)>>>0;return h.toString(16).padStart(8,'0');};
-const extract=(source,needle)=>{
-  const start=source.indexOf(needle);
-  const end=source.lastIndexOf('\n}\n');
-  assert.ok(start>=0&&end>start,'extracted route boundary changed');
-  return source.slice(start,end+1);
+const persistence=(source,route,nextRoute=null)=>{
+  const anchor=source.indexOf(route);
+  const start=source.indexOf('    try',anchor);
+  const end=nextRoute?source.indexOf(nextRoute,start):source.lastIndexOf('\n}');
+  assert.ok(anchor>=0&&start>anchor&&end>start,'persistence route boundary changed');
+  return source.slice(start,end);
 };
 
-test('original activity and movement handlers were extracted without changing a single source character',()=>{
-  assert.equal(fnv(extract(activity,"  app.get('/api/owner/sales/prospecting/attempts'")),'e09a3722');
-  assert.equal(fnv(extract(movement,"  app.post('/api/owner/sales/kanban/leads/:leadId/move'")),'03261a81');
+test('all seven database/RPC route bodies remain byte-identical after pure input extraction',()=>{
+  assert.equal(fnv(persistence(activity,"app.get('/api/owner/sales/prospecting/attempts'","app.post('/api/owner/sales/leads/:leadId/prospecting-attempts'")),'0cc031fa');
+  assert.equal(fnv(persistence(activity,"app.post('/api/owner/sales/leads/:leadId/prospecting-attempts'","app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'")),'4f7cd22d');
+  assert.equal(fnv(persistence(activity,"app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'","app.put('/api/owner/sales/leads/:leadId/decisor-contact'")),'9bd3eb0a');
+  assert.equal(fnv(persistence(activity,"app.put('/api/owner/sales/leads/:leadId/decisor-contact'","app.put('/api/owner/sales/leads/:leadId/followup'")),'99339f8f');
+  assert.equal(fnv(persistence(activity,"app.put('/api/owner/sales/leads/:leadId/followup'","app.post('/api/owner/sales/leads/:leadId/mark-lost'")),'1e1cc1dc');
+  assert.equal(fnv(persistence(activity,"app.post('/api/owner/sales/leads/:leadId/mark-lost'")),'f83c5110');
+  assert.equal(fnv(persistence(movement,"app.post('/api/owner/sales/kanban/leads/:leadId/move'")),'ff85306e');
   assert.doesNotMatch(backend,/app\.get\('\/api\/owner\/sales\/prospecting\/attempts'/);
   assert.doesNotMatch(backend,/app\.post\('\/api\/owner\/sales\/kanban\/leads\/:leadId\/move'/);
   assert.match(backend,/registerSalesProspectingActivityRoutes\(app,\{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString\}\)/);
   assert.match(backend,/registerSalesKanbanMovementRoutes\(app,\{supabase,salesGuard,isUuid,sanitizeString,boardError\}\)/);
   assert.equal((backend.match(/registerSalesProspectingActivityRoutes\(app,/g)||[]).length,1);
   assert.equal((backend.match(/registerSalesKanbanMovementRoutes\(app,/g)||[]).length,1);
+  assert.match(activity,/parseSalesHistoryLeadIds\(req\.query\?\.leadIds, isUuid\)/);
+  assert.match(activity,/parseSalesProspectingAttemptTimeInput\(req,\{isUuid,sanitizeString\}\)/);
+  assert.match(activity,/parseSalesDecisorContactInput\(req,\{isUuid,sanitizeString\}\)/);
+  assert.match(movement,/parseSalesKanbanMovementInput\(req,\{isUuid,sanitizeString\}\)/);
+  assert.match(input,/parseSalesMarkLostInput/);
 });
 
 test('session MFA and database remain authoritative; no write on history load or preview',()=>{
