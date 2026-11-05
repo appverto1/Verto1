@@ -47,6 +47,7 @@ jobs:
       - name: Typecheck with baseline ratchet
         shell: bash
         run: |
+          set +e
           set -uo pipefail
           npm run typecheck > "$RUNNER_TEMP/head-ts.log" 2>&1
           CANDIDATE_STATUS=$?
@@ -64,6 +65,7 @@ jobs:
       - name: Pre-main test gate with baseline comparison
         shell: bash
         run: |
+          set +e
           set -uo pipefail
           npm run check:pre-main > "$RUNNER_TEMP/head-gate.log" 2>&1
           HEAD_STATUS=$?
