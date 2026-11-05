@@ -11343,6 +11343,9 @@ export function CoordinatorDashboard({
         const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0)));
         setGuidedTutorialStep(safeStep);
         setRunGuidedTutorial(true);
+      } else {
+        // Switching role/clinic must not leave another context's popup open.
+        setRunGuidedTutorial(false);
       }
       return;
     }
