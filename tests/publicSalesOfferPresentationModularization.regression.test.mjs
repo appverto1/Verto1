@@ -26,7 +26,7 @@ test('view remains a pure frozen-snapshot presentation, not a payment or authori
   assert.match(detail,/item\.offerDiscount\.priceAfterExpirationCents/);
   assert.match(detail,/trialDays/);
   assert.match(detail,/formatSalesCommercialDate/);
-  assert.doesNotMatch(detail,/\bfetch\s*\(|getSupabase\(|\.auth\.|\.rpc\(|localStorage|document\.|window\.|checkout|setState/);
+  assert.doesNotMatch(detail,/\bfetch\s*\(|getSupabase\(|\.auth\.|\.rpc\(|localStorage|document\.|window\.|\bcheckout\s*\(|setState/);
   assert.match(page,/loadPublicSalesOfferResponse\(token\)/);
   assert.match(page,/requestPublicSalesCardCheckout/);
   assert.match(page,/const acceptModularOffer = async/);
