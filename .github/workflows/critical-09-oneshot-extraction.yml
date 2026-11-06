@@ -1,0 +1,43 @@
+name: Verto one-shot Stripe webhook extraction from server.ts
+
+on:
+  push:
+    branches:
+      - refactor/critical-09-extract-legacy-stripe-webhook-20261106
+    paths:
+      - .github/workflows/critical-09-oneshot-extraction.yml
+
+permissions:
+  contents: write
+
+jobs:
+  extract-once:
+    name: Extract only legacy webhook
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Validate source and extract unchanged webhook
+        run: python3 scripts/critical-09-oneshot-extraction.py
+      - name: Review only allowed staged changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          diff -u <(printf '%s\n' 'scripts/pre-main-gate.mjs' 'server.ts') <(git diff --name-only | sort)
+          test -f services/legacySalesActivationStripeWebhookRoute.ts
+      - name: Commit and remove one-shot workflow and script
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server.ts services/legacySalesActivationStripeWebhookRoute.ts scripts/pre-main-gate.mjs
+          git rm scripts/critical-09-oneshot-extraction.py .github/workflows/critical-09-oneshot-extraction.yml
+          git diff --cached --check
+          git commit -m 'refactor(staging): extrair webhook legado Stripe do server.ts (item 09)'
+          git push origin HEAD:refactor/critical-09-extract-legacy-stripe-webhook-20261106
