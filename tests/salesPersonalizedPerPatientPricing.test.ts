@@ -947,7 +947,8 @@ const publicOfferSource = readFileSync(
   'src/components/PublicSalesOffer.tsx',
   'utf8'
 );
-assert.match(publicOfferSource, /por paciente/);
+const publicOfferDetailsSource = readFileSync('src/components/ModularPublicOfferDetails.tsx','utf8');
+assert.match(publicOfferDetailsSource, /por paciente/);
 assert.doesNotMatch(publicOfferSource, /offerDiscount\.internalNotes/);
 
 console.log('salesPersonalizedPerPatientPricing.test.ts: OK');

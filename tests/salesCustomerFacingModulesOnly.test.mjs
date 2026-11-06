@@ -11,6 +11,7 @@ const publicOffer = readFileSync(
   'src/components/PublicSalesOffer.tsx',
   'utf8'
 );
+const offerDetails = readFileSync('src/components/ModularPublicOfferDetails.tsx','utf8');
 const migration = readFileSync(
   'supabase/migrations/20260814154500_sales_customer_facing_modules_only.sql',
   'utf8'
@@ -86,9 +87,9 @@ assert.match(
   /Historical behavior|historical behavior|Immutable historical behavior/
 );
 
-assert.match(publicOffer, /hasPlatformFoundation/);
+assert.match(offerDetails, /hasPlatformFoundation/);
 assert.match(
-  publicOffer,
+  offerDetails,
   /Comece com os módulos necessários hoje/,
   'propostas v2 devem ter texto público sem Fundação Verto'
 );
