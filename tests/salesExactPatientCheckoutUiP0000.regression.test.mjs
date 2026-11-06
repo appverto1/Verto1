@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
+const draftInput = fs.readFileSync('src/utils/salesModularProposalBuilderInput.ts', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 const calculator = fs.readFileSync('src/utils/salesModularProposal.ts', 'utf8');
 const stripePlan = fs.readFileSync('src/utils/salesCommercialEvolution.ts', 'utf8');
@@ -18,7 +19,7 @@ assert.match(builder, /input\.exactPerPatientBilling !== true && nextStandardCom
 
 // Only newly versioned exact-seat proposals use 50-patient Essencial capacity.
 // Legacy snapshots retain their original ten-patient block-selection semantics.
-assert.match(builder, /const commercialCapacityForExactDemand =/);
+assert.match(draftInput, /export const commercialCapacityForExactDemand =/);
 assert.match(builder, /const initialCapacity = commercialCapacityForExactDemand\(patientQuantity\);/);
 assert.match(builder, /input\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(safeQuantity\)/);
 assert.match(builder, /snapshotInput\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(snapshotDemand\)/);

@@ -188,6 +188,7 @@ const criticalTests = [
   'tests/salesProspectingActivityBehavior.test.ts',
   'tests/salesKanbanActivityTransport.test.ts',
   'tests/salesModularProposalPersistence.test.ts',
+  'tests/salesModularProposalBuilderInput.test.ts',
   'tests/salesModularProposalSnapshotBoundary.regression.test.mjs',
   'tests/salesPublicOfferLinks.test.ts',
   'tests/salesPublicOfferHistoryIsolation.regression.test.mjs',
