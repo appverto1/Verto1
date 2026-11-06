@@ -6,7 +6,7 @@ const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8
 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const bootstrap = server.match(/const preparePaidDirectorSessionBootstrap =[^]*?const processSalesAssistedCheckoutCompleted/)?.[0] || '';
-const statusRoute = server.match(/"\/api\/public\/sales-offers\/:token\/payment-status"[^]*?"\/api\/public\/sales-offers\/:token\/prepare-activation"/)?.[0] || '';
+const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
 const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
 const sessionRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
 

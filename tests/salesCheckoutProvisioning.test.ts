@@ -3,7 +3,7 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const checkoutRoute = server.match(
-  /app\.post\(\s*"\/api\/public\/sales-offers\/:token\/checkout"[\s\S]*?app\.get\(\s*"\/api\/public\/sales-offers\/:token\/payment-status"/
+  /app\.post\(\s*"\/api\/public\/sales-offers\/:token\/checkout"[\s\S]*?registerPublicSalesPaymentStatusRoute\(app,/
 )?.[0] || '';
 
 assert.match(checkoutRoute, /offer_type, 30\) === "modular"/);

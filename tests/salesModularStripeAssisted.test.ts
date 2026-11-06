@@ -13,7 +13,7 @@ const checkoutCore = server.match(
   /const createOrReuseModularCheckout =[\s\S]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/
 )?.[0] || '';
 const publicLegacyCheckout = server.match(
-  /app\.post\(\s*"\/api\/public\/sales-offers\/:token\/checkout"[\s\S]*?app\.get\(\s*"\/api\/public\/sales-offers\/:token\/payment-status"/
+  /app\.post\(\s*"\/api\/public\/sales-offers\/:token\/checkout"[\s\S]*?registerPublicSalesPaymentStatusRoute\(app,/
 )?.[0] || '';
 const proposalEngine = fs.readFileSync('src/utils/salesModularProposal.ts', 'utf8');
 const checkoutBuilder = fs.readFileSync('src/utils/salesCommercialEvolution.ts', 'utf8');
