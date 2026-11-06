@@ -4,6 +4,7 @@ import {test} from 'node:test';
 
 const sql=readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
 const server=readFileSync('server.ts','utf8');
+const assisted=readFileSync('services/salesAssistedStripeEventHandlers.ts','utf8');
 const link=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_checkout_terminal_pending_v1\(\)[\s\S]*?\$link_guard\$;/)?.[0] || '';
 
 test('manual owner edits keep response representation, old webhook no-return writes cannot regress converted leads',()=>{
@@ -28,9 +29,9 @@ test('out-of-order unpaid checkout cannot erase completed, failed or expired Str
   assert.match(link,/RETURN NULL;/);
   assert.match(link,/RETURN NEW;/);
   assert.match(sql,/BEFORE UPDATE OF status ON public\.sales_checkout_links/);
-  assert.match(server,/status: result\.paymentConfirmed \? "completed" : "payment_pending"/);
-  assert.match(server,/payment_completed_at: result\.paymentConfirmed \? completedAt : null/);
-  assert.match(server,/\.neq\("status", "completed"\)/);
+  assert.match(assisted,/status: result\.paymentConfirmed \? "completed" : "payment_pending"/);
+  assert.match(assisted,/payment_completed_at: result\.paymentConfirmed \? completedAt : null/);
+  assert.match(assisted,/\.neq\("status", "completed"\)/);
 });
 
 test('migration is transactional, tightly scoped, security-invoker and read-free',()=>{
@@ -52,7 +53,7 @@ test('existing Stripe signature, event-id deduplication, payment RPC, module iso
   assert.match(server,/\.from\('stripe_webhook_events'\)/);
   assert.match(server,/if \(sanitizeString\(existing\.status, 40\) === 'processed'\) return false/);
   assert.match(server,/confirm_sales_assisted_checkout_payment/);
-  assert.match(server,/checkout\.session\.async_payment_succeeded/);
+  assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
   assert.match(server,/applyModularEntitlementsForOrganization/);
   assert.match(server,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
   assert.match(server,/operationIdempotencyKey/);

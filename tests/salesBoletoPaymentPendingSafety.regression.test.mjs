@@ -5,6 +5,7 @@ import {test} from 'node:test';
 const publicPage=readFileSync('src/components/PublicSalesOffer.tsx','utf8');
 const postPaymentTransport=readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
 const server=readFileSync('server.ts','utf8');
+const assisted=readFileSync('services/salesAssistedStripeEventHandlers.ts','utf8');
 const env=readFileSync('services/stripeEnvironment.ts','utf8');
 
 test('bounded payment polling never relabels a possibly unpaid boleto as provisioning',()=>{
@@ -33,8 +34,8 @@ test('paid status and activation remain backend-authoritative and never use clie
   assert.match(server,/if \(!paymentConfirmed\) \{/);
   assert.match(server,/activationPrepared: false/);
   assert.match(server,/confirm_sales_assisted_checkout_payment/);
-  assert.match(server,/checkout\.session\.async_payment_succeeded/);
-  assert.match(server,/event\.type === "checkout\.session\.async_payment_succeeded"/);
+  assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
+  assert.match(assisted,/event\.type === "checkout\.session\.async_payment_succeeded"/);
   assert.match(server,/reserveStripeWebhookEvent/);
   assert.match(env,/resolveStripeEnvironment/);
   assert.match(env,/validateStripeSecretForEnvironment/);
