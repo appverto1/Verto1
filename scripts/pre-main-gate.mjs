@@ -359,6 +359,8 @@ const criticalTests = [
   'tests/modulePurchaseEligibility.test.ts',
   'tests/moduleSubscriptionUpgrade.test.ts',
   'tests/moduleSubscriptionUpgradeExecution.test.ts',
+  'tests/moduleSubscriptionUpgradeInvoiceEvidence.test.ts',
+  'tests/moduleSubscriptionUpgradeContract.test.ts',
   'tests/moduleUpgradeV5S1Finalization.regression.test.mjs',
   'tests/moduleUpgradeV5S1Http.test.ts',
   'tests/abaChartReadHandlers.test.ts',
