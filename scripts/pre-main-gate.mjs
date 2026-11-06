@@ -195,6 +195,7 @@ const criticalTests = [
   'tests/salesPublicOfferHistoryIsolation.regression.test.mjs',
   'tests/publicSalesOfferTransport.test.ts',
   'tests/publicSalesOfferAccessIsolation.regression.test.mjs',
+  'tests/publicSalesOfferPresentationModularization.regression.test.mjs',
   'tests/salesPublicCardCheckoutTransport.test.ts',
   'tests/salesPublicCardCheckoutSafety.regression.test.mjs',
   'tests/salesBoletoPaymentPendingSafety.regression.test.mjs',
