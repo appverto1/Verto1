@@ -4,6 +4,7 @@ import {test} from 'node:test';
 
 const page=readFileSync('src/components/PublicSalesOffer.tsx','utf8');
 const transport=readFileSync('src/services/publicSalesCardCheckout.ts','utf8');
+const postPaymentTransport=readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
 const server=readFileSync('server.ts','utf8');
 const env=readFileSync('services/stripeEnvironment.ts','utf8');
 
@@ -46,6 +47,6 @@ test('payment confirmation, Stripe session binding, recovery and onboarding rema
   assert.match(page,/const openDirectorSession = async/);
   assert.match(page,/resolveSalesPostPaymentRetryDelayMs/);
   assert.match(page,/resolveSalesPostPaymentState/);
-  assert.match(page,/session_id=\$\{encodeURIComponent\(checkoutSessionId\)\}/);
+  assert.match(postPaymentTransport,/session_id=\$\{encodeURIComponent\(checkoutSessionId\)\}/);
   assert.match(page,/token\.toLowerCase\(\) === 'pagamento'/);
 });

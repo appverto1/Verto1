@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 
 const publicPage=readFileSync('src/components/PublicSalesOffer.tsx','utf8');
+const postPaymentTransport=readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
 const server=readFileSync('server.ts','utf8');
 const env=readFileSync('services/stripeEnvironment.ts','utf8');
 
@@ -12,6 +13,9 @@ test('bounded payment polling never relabels a possibly unpaid boleto as provisi
   assert.match(action,/const maxAttempts = 10/);
   assert.match(action,/await reconcileDirectorProvisioning\(\)/);
   assert.match(action,/response\.status === 429/);
+  assert.match(action,/loadPublicSalesPaymentStatusResponse\(token, checkoutSessionId\)/);
+  assert.match(postPaymentTransport,/credentials: 'omit'/);
+  assert.match(postPaymentTransport,/cache: 'no-store'/);
   assert.match(publicPage,/lastObservedPaymentState = state/);
   assert.match(action,/lastObservedPaymentState === 'payment_pending'/);
   assert.match(action,/setPaymentReturnState\('payment_pending'\)/);

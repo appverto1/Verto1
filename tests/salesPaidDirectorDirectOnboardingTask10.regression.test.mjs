@@ -7,6 +7,7 @@ const offer = readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
 const onboarding = readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
 const checkoutTransport = readFileSync('src/services/publicSalesCardCheckout.ts','utf8');
+const postPaymentTransport = readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
 
 const openSession = offer.match(/const openDirectorSession = async \(checkoutSessionId: string\) => \{[\s\S]*?\n  \};/)?.[0] || '';
 const paymentEffect = offer.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[paymentStatusRefreshKey, token\]\);/)?.[0] || '';
@@ -17,9 +18,11 @@ const checkoutAction = offer.match(/const continueToCheckout = async \(\) => \{[
 test('paid Checkout return reconciles on the server before any optional status polling', () => {
   assert.match(paymentEffect, /query\.get\('payment'\) === 'success' && Boolean\(checkoutSessionId\)/);
   assert.match(pollPayment, /const initialReconciliation = await reconcileDirectorProvisioning\(\)/);
-  assert.match(paymentEffect, /\/prepare-activation/);
-  assert.match(paymentEffect, /body: JSON\.stringify\(\{ sessionId: checkoutSessionId \}\)/);
-  assert.match(paymentEffect, /\/payment-status\?session_id=/);
+  assert.match(paymentEffect, /requestPublicSalesPostPaymentReconciliation\(token, checkoutSessionId\)/);
+  assert.match(postPaymentTransport, /\/prepare-activation/);
+  assert.match(postPaymentTransport, /body: JSON\.stringify\(\{ sessionId: checkoutSessionId \}\)/);
+  assert.match(paymentEffect, /loadPublicSalesPaymentStatusResponse\(token, checkoutSessionId\)/);
+  assert.match(postPaymentTransport, /\/payment-status\?session_id=/);
   assert.match(pollPayment, /const maxAttempts = 10/);
   assert.match(pollPayment, /response\.status === 429/);
   assert.doesNotMatch(paymentEffect, /requestPublicSalesCardCheckout|checkout\.sessions\.create/);
