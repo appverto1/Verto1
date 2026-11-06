@@ -203,6 +203,7 @@ const criticalTests = [
   'tests/salesPublicPostPaymentTransport.test.ts',
   'tests/salesPublicPaymentStatusRoute.test.ts',
   'tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs',
+  'tests/legacySalesActivationStripeWebhookRoute.test.ts',
   'tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs',
   'tests/salesPaidDirectorDirectOnboardingTask10.regression.test.mjs',
   'tests/salesActivationPasswordFirstAccess.test.mjs',
