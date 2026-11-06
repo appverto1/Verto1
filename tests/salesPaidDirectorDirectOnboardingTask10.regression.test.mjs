@@ -6,6 +6,7 @@ import { resolveSalesPostPaymentState } from '../src/utils/salesPostPaymentState
 const offer = readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
 const onboarding = readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
+const checkoutTransport = readFileSync('src/services/publicSalesCardCheckout.ts','utf8');
 
 const openSession = offer.match(/const openDirectorSession = async \(checkoutSessionId: string\) => \{[\s\S]*?\n  \};/)?.[0] || '';
 const paymentEffect = offer.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[paymentStatusRefreshKey, token\]\);/)?.[0] || '';
@@ -44,8 +45,9 @@ test('director enters the clinic only after one-time server bootstrap and authen
 });
 
 test('only explicit acceptance/checkout action can start checkout, never payment recovery', () => {
-  assert.match(checkoutAction, /requestPublicSalesCardCheckout\(token\)/);
-  assert.match(checkoutAction, /window\.location\.assign\(data\.url\)/);
+  assert.match(checkoutAction, /await handoffPublicSalesCardCheckout\(token, \(url\) => window\.location\.assign\(url\)\)/);
+  assert.match(checkoutTransport, /await requestPublicSalesCardCheckout\(token, request\)/);
+  assert.match(checkoutTransport, /navigate\(data\.url\)/);
   assert.match(offer, /onClick=\{\(\) => void continueToCheckout\(\)\}/);
   assert.match(paymentEffect, /if \(legacyPaymentReturnWithoutContext\)[\s\S]*?else if \(returnedFromPayment\) void loadPaymentStatus\(\)/);
   assert.match(offer, /response\.status === 404 && data\?\.error === 'OFFER_UNAVAILABLE'/);
