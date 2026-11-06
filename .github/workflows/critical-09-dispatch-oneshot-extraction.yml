@@ -1,0 +1,41 @@
+name: Verto one-shot sales-assisted Stripe extraction from server.ts
+
+on:
+  push:
+    branches:
+      - refactor/critical-09-extract-sales-stripe-event-dispatch-20261106
+    paths:
+      - .github/workflows/critical-09-dispatch-oneshot-extraction.yml
+
+permissions:
+  contents: write
+
+jobs:
+  extract-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: true
+      - name: Validate byte-identical Stripe event handlers and extract
+        run: python3 scripts/critical-09-dispatch-oneshot-extraction.py
+      - name: Check only permitted source changes and whitespace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          diff -u <(printf '%s\n' 'scripts/pre-main-gate.mjs' 'server.ts') <(git diff --name-only | sort)
+          test -f services/salesAssistedStripeEventHandlers.ts
+      - name: Commit extraction and discard temporary automation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server.ts services/salesAssistedStripeEventHandlers.ts scripts/pre-main-gate.mjs
+          git rm scripts/critical-09-dispatch-oneshot-extraction.py .github/workflows/critical-09-dispatch-oneshot-extraction.yml
+          git diff --cached --check
+          git commit -m 'refactor(staging): extrair processador Stripe de venda assistida do server.ts (item 09)'
+          git push origin HEAD:refactor/critical-09-extract-sales-stripe-event-dispatch-20261106
