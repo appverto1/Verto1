@@ -31,6 +31,7 @@ import {
 } from '../utils/salesModularProposalBuilderInput';
 
 import { prepareSalesPublicOffer, copySalesPublicOfferUrl } from '../services/salesPublicOfferLinks';
+import {normalizeContractEmail,isValidContractEmail,resolveFrozenPublicOfferContractEmail} from '../utils/salesPublicOfferContractIdentity';
 import { loadSalesModularProposalData, saveSalesModularScenario, selectSalesModularScenario, renameSalesModularScenario, archiveSalesModularScenario } from '../services/salesModularProposalPersistence';
 import {
   applySalesPackageTierSelection,
@@ -124,18 +125,6 @@ const percent = (value: number | null | undefined) =>
 
 const requestKey = (prefix: string) =>
   `${prefix}:${crypto.randomUUID()}`;
-
-const normalizeContractEmail = (value: unknown) =>
-  String(value || '').trim().toLowerCase();
-
-const isValidContractEmail = (value: unknown) => {
-  const email = normalizeContractEmail(value);
-  return (
-    email.length >= 3 &&
-    email.length <= 254 &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  );
-};
 
 const ECONOMY_SIMULATOR_PATIENT_PRESETS = [150, 160, 170, 200] as const;
 
@@ -1671,10 +1660,9 @@ export const SalesModularProposalBuilder = ({
 
   const activeOfferId =
     preparedOffer?.offer?.id || selectedSimulation?.offer?.id || '';
-  const frozenOfferContractEmail = normalizeContractEmail(
-    preparedOffer?.offer?.contract_email ||
-      selectedSimulation?.offer?.contract_email ||
-      ''
+  const frozenOfferContractEmail = resolveFrozenPublicOfferContractEmail(
+    preparedOffer?.offer,
+    selectedSimulation?.offer
   );
   const contractEmailLocked = isValidContractEmail(frozenOfferContractEmail);
   const historicalOfferMissingContractIdentity = Boolean(
