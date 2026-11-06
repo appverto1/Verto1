@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 
-const sql=readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
+const sql=readFileSync('supabase/migrations/20261104202545_sales_stripe_webhook_monotonic_guard_v1.sql','utf8');
 const server=readFileSync('server.ts','utf8');
 const link=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_checkout_terminal_pending_v1\(\)[\s\S]*?\$link_guard\$;/)?.[0] || '';
 

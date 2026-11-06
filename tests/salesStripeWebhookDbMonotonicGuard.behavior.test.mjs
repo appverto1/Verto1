@@ -11,7 +11,7 @@ test('late unpaid webhooks cannot demote converted leads or terminal checkout li
       "CREATE TABLE public.sales_leads (id integer PRIMARY KEY, status text NOT NULL);"+
       "CREATE TABLE public.sales_checkout_links (id integer PRIMARY KEY, status text NOT NULL, payment_completed_at timestamptz);"
     );
-    const migration = readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
+    const migration = readFileSync('supabase/migrations/20261104202545_sales_stripe_webhook_monotonic_guard_v1.sql','utf8');
     await db.exec(migration);
     await db.exec(
       "INSERT INTO public.sales_leads VALUES (1, 'converted');"+
