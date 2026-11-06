@@ -12,6 +12,7 @@ export { ModularOfferDetails } from './ModularPublicOfferDetails';
 import { getSupabase } from '../lib/supabase';
 import { loadPublicSalesOfferResponse } from '../services/publicSalesOfferTransport';
 import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
+import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse } from '../services/publicSalesPostPaymentTransport';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -263,17 +264,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       resolveSalesPostPaymentRetryDelayMs(response?.headers?.get('retry-after'), data, fallbackMs);
 
     const reconcileDirectorProvisioning = async () => {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/prepare-activation`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          cache: 'no-store',
-          body: JSON.stringify({ sessionId: checkoutSessionId }),
-        },
-      );
-      const data = await response.json().catch(() => ({}));
+      const { response, data } = await requestPublicSalesPostPaymentReconciliation(token, checkoutSessionId);
       if (response.status === 429) {
         return {
           ...data,
@@ -333,11 +324,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         if (cancelled) return;
 
         try {
-          const response = await fetch(
-            `/api/public/sales-offers/${encodeURIComponent(token)}/payment-status?session_id=${encodeURIComponent(checkoutSessionId)}`,
-            { credentials: 'omit', cache: 'no-store' },
-          );
-          const data = await response.json().catch(() => ({}));
+          const { response, data } = await loadPublicSalesPaymentStatusResponse(token, checkoutSessionId);
           if (response.status === 429) {
             setPaymentReturnState('confirming');
             nextDelayMs = paymentRetryDelayMs(response, data, 5000);
