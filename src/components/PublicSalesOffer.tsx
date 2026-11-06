@@ -11,7 +11,7 @@ import { ModularOfferDetails } from './ModularPublicOfferDetails';
 export { ModularOfferDetails } from './ModularPublicOfferDetails';
 import { getSupabase } from '../lib/supabase';
 import { loadPublicSalesOfferResponse } from '../services/publicSalesOfferTransport';
-import { requestPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
+import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -429,8 +429,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     setContinuing(true);
     setError('');
     try {
-      const data = await requestPublicSalesCardCheckout(token);
-      window.location.assign(data.url);
+      await handoffPublicSalesCardCheckout(token, (url) => window.location.assign(url));
     } catch (checkoutError: any) {
       setError(checkoutError?.message || 'Não foi possível continuar.');
     } finally {
@@ -443,21 +442,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     setAccepting(true);
     setError('');
     try {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/accept`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          body: JSON.stringify({
-            commercialValuesConsent: true
-          })
-        }
-      );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false) {
-        throw new Error(data?.error || 'Não foi possível registrar o aceite.');
-      }
+      const data = await acceptPublicSalesModularOffer(token);
       setAcceptedAt(data.acceptedAt || new Date().toISOString());
     } catch (acceptError: any) {
       setError(acceptError?.message || 'Não foi possível registrar o aceite.');

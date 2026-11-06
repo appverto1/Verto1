@@ -10,14 +10,19 @@ const env=readFileSync('services/stripeEnvironment.ts','utf8');
 test('card checkout remains explicit and follows modular acceptance/Stripe availability',()=>{
   const action=page.split('const continueToCheckout = async () => {')[1]?.split('const acceptModularOffer = async')[0]||'';
   assert.match(action,/setContinuing\(true\)/);
-  assert.match(action,/const data = await requestPublicSalesCardCheckout\(token\)/);
-  assert.match(action,/window\.location\.assign\(data\.url\)/);
-  assert.ok(action.indexOf('await requestPublicSalesCardCheckout(token)') < action.indexOf('window.location.assign(data.url)'));
+  assert.match(action,/await handoffPublicSalesCardCheckout\(token, \(url\) => window\.location\.assign\(url\)\)/);
+  assert.match(transport,/const data = await requestPublicSalesCardCheckout\(token, request\)/);
+  assert.match(transport,/navigate\(data\.url\)/);
+  assert.ok(transport.indexOf('await requestPublicSalesCardCheckout(token, request)') < transport.indexOf('navigate(data.url)'));
   assert.match(page,/\{acceptedAt \? \(\s*<button[\s\S]*?onClick=\{\(\) => void continueToCheckout\(\)\}/);
   assert.match(page,/disabled=\{continuing \|\| !offer\.modularCheckoutEnabled \|\| !offer\.stripeReady\}/);
   assert.match(page,/Continuar para cadastro do cartão/);
   assert.match(page,/const acceptModularOffer = async/);
-  assert.match(page,/commercialValuesConsent: true/);
+  assert.match(page,/await acceptPublicSalesModularOffer\(token\)/);
+  assert.match(transport,/commercialValuesConsent: true/);
+  assert.match(transport,/credentials: 'omit'/);
+  assert.ok(page.indexOf('await acceptPublicSalesModularOffer(token)') < page.indexOf('setAcceptedAt(data.acceptedAt'));
+
 });
 test('backend alone validates test/live keys, accepted snapshot and idempotent Checkout',()=>{
   assert.match(env,/value === 'test' \|\| value === 'live'/);
