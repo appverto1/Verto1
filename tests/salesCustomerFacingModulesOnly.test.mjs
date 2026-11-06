@@ -89,7 +89,7 @@ assert.match(
 
 assert.match(offerDetails, /hasPlatformFoundation/);
 assert.match(
-  publicOffer,
+  offerDetails,
   /Comece com os módulos necessários hoje/,
   'propostas v2 devem ter texto público sem Fundação Verto'
 );
