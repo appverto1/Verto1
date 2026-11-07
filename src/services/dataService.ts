@@ -35,6 +35,7 @@ import {
 } from '../utils/patientList';
 import type { NewFeatureKey } from '../constants/featureMetadata';
 import { invalidateClinicalAnalyticsPatient } from './clinicalAnalyticsQueryCache';
+import { persistConfirmedClinicSettings } from './confirmedClinicSettingsSave';
 
 enum OperationType {
   CREATE = 'create',
@@ -9102,24 +9103,11 @@ export const dataService = {
     // outbox entry. Only the authenticated server response confirms the Save.
     // Keep the existing durable offline-first path for personal profiles.
     if (profile?.profileSaveScope === 'clinic') {
-      try {
-        const response = await fetchWithAuthRetry(endpoint, {
-          method: 'POST',
-          credentials: 'include',
-          headers: await getAuthHeaders(),
-          body: JSON.stringify(data),
-        });
-        const result = await safeJson(response);
-        if (!response.ok || result?.success !== true) {
-          return {
-            success: false,
-            error: result?.message || result?.error || 'Não foi possível confirmar o salvamento das configurações da clínica.',
-          };
-        }
-        return result;
-      } catch {
-        return { success: false, error: 'Não foi possível confirmar o salvamento das configurações da clínica.' };
-      }
+      return persistConfirmedClinicSettings(endpoint, data, {
+        request: fetchWithAuthRetry,
+        authHeaders: getAuthHeaders,
+        parseResponse: safeJson,
+      });
     }
 
     const result = await saveOfflineFirst(`profile:${userId}`, data, 'profile', endpoint, 'POST');
