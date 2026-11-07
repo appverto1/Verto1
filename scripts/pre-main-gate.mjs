@@ -208,6 +208,8 @@ const criticalTests = [
   'tests/stripeCanonicalWebhookRoute.test.ts',
   'tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs',
   'tests/salesPaidDirectorDirectOnboardingTask10.regression.test.mjs',
+  'tests/publicSalesDirectorSession.test.ts',
+  'tests/publicSalesDirectorSessionRoute.test.ts',
   'tests/salesActivationPasswordFirstAccess.test.mjs',
   'tests/salesActivationPasswordProviderAgnostic.test.mjs',
   'tests/salesActivationPartialRecovery.test.ts',

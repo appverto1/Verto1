@@ -4,7 +4,7 @@ import fs from 'node:fs';
 const server = fs.readFileSync('server.ts', 'utf8');
 
 const provision = server.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
-const reconcile = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
+const reconcile = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
 
 assert.match(provision, /createUser\(\{/);
 assert.match(provision, /normalized\.includes\("already"\)/);

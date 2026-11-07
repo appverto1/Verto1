@@ -9,7 +9,7 @@ import {
 import { LogoVerto } from './Common';
 import { ModularOfferDetails } from './ModularPublicOfferDetails';
 export { ModularOfferDetails } from './ModularPublicOfferDetails';
-import { getSupabase } from '../lib/supabase';
+import { establishPublicSalesDirectorSession } from '../services/publicSalesDirectorSession';
 import { loadPublicSalesOfferResponse } from '../services/publicSalesOfferTransport';
 import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
 import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse } from '../services/publicSalesPostPaymentTransport';
@@ -187,50 +187,11 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     setDirectorOpening(true);
     setError('');
     try {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/director-session`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          cache: 'no-store',
-          body: JSON.stringify({ sessionId: checkoutSessionId }),
-        },
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.success === false || !payload?.tokenHash) {
-        if (payload?.error === 'SALES_DIRECTOR_SESSION_ALREADY_CLAIMED') {
-          window.location.replace('/');
-          return true;
-        }
-        throw new Error(payload?.message || payload?.error || 'Não foi possível abrir sua conta agora.');
+      const result = await establishPublicSalesDirectorSession(token, checkoutSessionId);
+      if (result === 'already_claimed') {
+        window.location.replace('/');
+        return true;
       }
-
-      const supabase = await getSupabase();
-      const verified = await supabase.auth.verifyOtp({
-        token_hash: String(payload.tokenHash),
-        type: (payload.otpType || 'magiclink') as any,
-      });
-      if (verified?.error || !verified?.data?.session?.access_token) {
-        throw verified?.error || new Error('Não foi possível estabelecer a sessão do Diretor.');
-      }
-
-      const loginResponse = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          accessToken: verified.data.session.access_token,
-          intendedRole: 'director',
-          provider: 'sales_checkout',
-          activationFlow: false,
-        }),
-      });
-      const loginPayload = await loginResponse.json().catch(() => ({}));
-      if (!loginResponse.ok || loginPayload?.success === false) {
-        throw new Error(loginPayload?.message || loginPayload?.error || 'O acesso foi liberado, mas não foi possível abrir a Verto.');
-      }
-
       setPaymentReturnState('account_activated');
       window.history.replaceState({}, document.title, '/');
       window.location.replace('/');

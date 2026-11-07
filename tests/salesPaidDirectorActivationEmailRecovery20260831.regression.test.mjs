@@ -3,12 +3,13 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
+const directorSession = fs.readFileSync('src/services/publicSalesDirectorSession.ts', 'utf8');
 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const bootstrap = server.match(/const preparePaidDirectorSessionBootstrap =[^]*?const processSalesAssistedCheckoutCompleted/)?.[0] || '';
 const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
-const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
-const sessionRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
+const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
+const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 // Compatibility intent: the Director remains provisioned server-side. For delayed
 // payment methods, a payment-confirmed e-mail is an additional durable first-access path.
@@ -43,10 +44,10 @@ assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
 assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
-assert.match(publicOffer, /director-session/);
-assert.match(publicOffer, /supabase\.auth\.verifyOtp/);
-assert.match(publicOffer, /provider:\s*'sales_checkout'/);
-assert.match(publicOffer, /\/api\/auth\/login/);
+assert.match(directorSession, /director-session/);
+assert.match(directorSession, /supabase\.auth\.verifyOtp/);
+assert.match(directorSession, /provider:\s*'sales_checkout'/);
+assert.match(directorSession, /\/api\/auth\/login/);
 assert.match(publicOffer, /A Stripe confirmou o pagamento/);
 assert.doesNotMatch(publicOffer, /Reenviar e-mail|activation_ready|\/ativacao-comercial\//);
 
