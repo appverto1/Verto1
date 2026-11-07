@@ -2257,7 +2257,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         historyWriteAttempted = true;
         const saveResult = await onAddFamilyNote(portalPatientId, familyNote, persistedImage, persistedImagePath);
         if (saveResult?.success !== true) {
-          if (saveResult?.success === false) historyWriteAttempted = false;
           throw new Error(saveResult?.error || 'Não foi possível confirmar a gravação do registro no histórico.');
         }
 
