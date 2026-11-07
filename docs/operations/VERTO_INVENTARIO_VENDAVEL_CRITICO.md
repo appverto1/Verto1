@@ -58,6 +58,8 @@
 | 33 | Rede de cuidado: convite externo, painel, compartilhamento, revogação |
 | 34 | Histórico, gráficos, compartilhamento gráfico explícito no infantil, relatórios |
 
+**Checkpoint operacional 29 — 07/11/2026 (staging, subescopo de histórico de humor adulto):** o registro de humor/energia já usa endpoint canônico com autorização server-side, e a interface exige confirmação ao Salvar (item 26). Identificadas duas corridas de apresentação: uma leitura de histórico iniciada antes de um Salvar podia sobrescrever o registro recém-confirmado; e respostas assíncronas podiam reaparecer após troca de contexto paciente/usuário/clínica. A leitura agora é invalidada por versão de gravação e chave de contexto; o histórico anterior é limpo ao mudar período/contexto, sem requisições adicionais. O Salvar só fecha o modal após ACK explícito com ID persistido, descartando resposta tardia de outro contexto e preservando rascunho em falhas. Testes negativos no gate pre-main; **CI, PR, merge e deploy staging devem ser comprovados antes de liberar smoke real**. Não altera backend, RLS, Auth, SQL, Stripe, produção nem regras de acesso. O item 29 completo exige smoke autenticado de histórico, F5, logout/login e isolamento entre clínicas.
+
 ## Bloco D — Segurança e fechamento (35–38)
 | Nº | Entrega contratada |
 |---|---|
