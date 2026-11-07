@@ -190,6 +190,7 @@ const criticalTests = [
   'tests/salesKanbanAcquisitionTransport.test.ts',
   'tests/salesModularProposalPersistence.test.ts',
   'tests/salesModularProposalBuilderInput.test.ts',
+  'tests/salesModularProposalScenarioDraft.test.ts',
   'tests/salesModularProposalSnapshotBoundary.regression.test.mjs',
   'tests/salesPublicOfferLinks.test.ts',
   'tests/salesPublicOfferContractIdentity.test.ts',
