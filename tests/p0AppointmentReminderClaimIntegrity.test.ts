@@ -101,6 +101,18 @@ const followup = {
 };
 check('valid 12h followup', followup, appointment, patient, '2026-10-09T06:00:00Z', true);
 check('patient already responded, no 12h reminder', followup, { ...appointment, patient_response: 'confirmed' }, patient, '2026-10-09T06:00:00Z');
+check('canonical confirmation blocks 12h when legacy response is pending', followup,
+  { ...appointment, patient_response: 'pending', patient_confirmation_status: 'confirmed' },
+  patient, '2026-10-09T06:00:00Z');
+check('canonical reschedule blocks 12h when legacy response is pending', followup,
+  { ...appointment, patient_response: 'pending', patient_confirmation_status: 'reschedule_requested' },
+  patient, '2026-10-09T06:00:00Z');
+check('legacy confirmation blocks 12h when canonical field is empty', followup,
+  { ...appointment, patient_response: 'confirmed', patient_confirmation_status: null },
+  patient, '2026-10-09T06:00:00Z');
+check('two unresponded fields preserve a valid 12h reminder', followup,
+  { ...appointment, patient_response: 'pending', patient_confirmation_status: 'pending' },
+  patient, '2026-10-09T06:00:00Z', true);
 check('patient asked to reschedule, no 12h reminder', followup, { ...appointment, patient_confirmation_status: 'reschedule_requested' }, patient, '2026-10-09T06:00:00Z');
 check('rejected unknown kind', { ...job, notification_kind: 'INVALID' }, appointment, patient);
 check('after start time, both reminders rejected', followup, appointment, patient, '2026-10-09T18:01:00Z');
