@@ -19,7 +19,7 @@ updated=[]
 for path in sorted(Path('tests').glob('*')):
  if path.suffix not in ('.ts','.mjs','.js'):continue
  text=path.read_text(encoding='utf8')
- if "server.ts" not in text or not any(s in text for s in symbols):continue
+ if "server.ts" not in text or not (any(s in text for s in symbols) or path.name=='salesExactPerPatientBillingP0000.test.ts'):continue
  original=text
  inserts="import {readFileSync as readItem09Source} from 'node:fs';\n"
  inserts+=''.join("const "+name+" = readItem09Source('"+src+"','utf8');\n" for name,src in modules.items())
@@ -133,6 +133,32 @@ for path in sorted(Path('tests').glob('*')):
                        "assert.match(stripeWebhookEventStateSource,/if \\\\(sanitizeString\\\\(existing\\\\.status, 40\\\\) === 'processed'\\\\) return false/);")
      text=text.replace('assert.match(server,/async function reserveStripeWebhookEvent/);',
                        'assert.match(stripeWebhookEventStateSource,/async function reserveStripeWebhookEvent/);')
+ # Exact target lines retain the original expression, changing only the
+ # file they inspect. This is intentionally stricter than blanket replacements.
+ lines=text.splitlines(keepends=True)
+ moved=[]
+ for idx,line in enumerate(lines):
+   if 'assert.match(server,' in line:
+     if path.name=='salesBoletoPaymentPendingSafety.regression.test.mjs' and (
+       'paymentStatus ===' in line or 'activationPrepared: false' in line
+       or 'if \\(!paymentConfirmed\\)' in line
+     ):
+       lines[idx]=line.replace('assert.match(server,','assert.match(stripePaidProcessorSource,',1)
+       moved.append(idx)
+     if path.name in (
+       'salesStripeWebhookDbMonotonicGuard.regression.test.mjs',
+       'salesStripeWebhookLeadStateIsolation.regression.test.mjs'
+     ) and ('stripe_webhook_events' in line or 'existing' in line and "'processed'" in line):
+       lines[idx]=line.replace('assert.match(server,','assert.match(stripeWebhookEventStateSource,',1)
+       moved.append(idx)
+   if path.name=='salesExactPerPatientBillingP0000.test.ts' and line.lstrip().startswith('const checkoutBackend = server +'):
+     lines[idx]=line.rstrip().removesuffix(';')+" + '\\n' + stripeScheduleSource + '\\n' + stripePaidProcessorSource;\n"
+     moved.append(idx)
+ if moved:
+   text=''.join(lines)
+   print('ITEM09_TEST_SOURCE_RELOCATION',path.name,len(moved))
+ if path.name=='salesExactPerPatientBillingP0000.test.ts' and not moved:
+   raise RuntimeError('Exact per-patient checkout source aggregation not found')
  if text!=original:
    path.write_text(text,encoding='utf8')
    updated.append(str(path))
