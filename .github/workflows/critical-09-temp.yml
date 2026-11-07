@@ -1,4 +1,4 @@
-name: Temporary item09 Stripe extraction validation
+name: Temporary item09 Stripe lazy-initialization validation
 on:
   push:
     branches:
