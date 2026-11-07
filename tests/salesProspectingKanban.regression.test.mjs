@@ -763,7 +763,8 @@ test('existing cards can be chosen in a group with add-preserving or explicit re
   assert.match(kanban,/Selecionar até 100 visíveis/);
   assert.match(kanban,/Substituir os canais atuais \(em vez de adicionar\)/);
   assert.match(kanban,/\[\.\.\.new Set\(\[\.\.\.\(acquisitionByLead\[leadId\]\|\|\[\]\),\.\.\.bulkExistingChannels\]\)\]/);
-  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/leads\/bulk'/);
+  assert.match(kanban,/persistSalesKanbanAcquisitionBulk\(request,key,selections\)/);
+  assert.match(acquisitionTransport,/\/api\/owner\/sales\/acquisition\/leads\/bulk/);
   assert.match(kanban,/for\(const item of result\.selections\|\|\[\]\)next\[item\.leadId\]=item\.channelIds\|\|\[\]/);
   assert.match(acquisitionRoutes,/app\.put\('\/api\/owner\/sales\/acquisition\/leads\/bulk',\.\.\.guard/);
   assert.match(bulkExistingSql,/save_sales_lead_acquisition_channels_v1\(/);
