@@ -30,6 +30,12 @@ export function readPortalGuidedTutorial(storage, key) {
   }
 }
 
+// Never show an overlay for a previous authenticated user, clinic or portal
+// while React is reconciling a new context before its effect runs.
+export function portalGuidedTutorialIsVisible(state, currentKey) {
+  return Boolean(currentKey && state?.key === currentKey && state?.active === true);
+}
+
 export function persistPortalGuidedTutorial(storage, key, status) {
   if (!storage || !key || !['active', 'completed', 'skipped'].includes(status)) return false;
   try {

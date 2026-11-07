@@ -6,6 +6,7 @@ import {
   portalGuidedTutorialKey,
   readPortalGuidedTutorial,
   persistPortalGuidedTutorial,
+  portalGuidedTutorialIsVisible,
 } from '../src/utils/portalGuidedTutorialProgress.mjs';
 
 const coordinator = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
@@ -39,6 +40,26 @@ test('roles, users, clinics and patient portal contexts cannot share tutorial co
     assert.equal(readPortalGuidedTutorial(storage, key), null, 'another context must see initial tutorial');
   }
   assert.equal(storage.count, 1, 'only one local status write, no backend calls');
+});
+
+test('an active guide cannot be displayed in a different user, clinic, patient or portal context', () => {
+  const key = portalGuidedTutorialKey({ userId: 'u1', clinicId: 'clinic-a', portal: 'patient', patientId: 'p1' });
+  const active = { key, active: true };
+  assert.equal(portalGuidedTutorialIsVisible(active, key), true);
+  for (const context of [
+    { userId: 'u2', clinicId: 'clinic-a', portal: 'patient', patientId: 'p1' },
+    { userId: 'u1', clinicId: 'clinic-b', portal: 'patient', patientId: 'p1' },
+    { userId: 'u1', clinicId: 'clinic-a', portal: 'patient', patientId: 'p2' },
+    { userId: 'u1', clinicId: 'clinic-a', portal: 'biller' },
+  ]) {
+    assert.equal(portalGuidedTutorialIsVisible(active, portalGuidedTutorialKey(context)), false);
+  }
+  assert.equal(portalGuidedTutorialIsVisible(active, ''), false);
+  assert.equal(portalGuidedTutorialIsVisible({ key, active: false }, key), false);
+  assert.equal(portalGuidedTutorialIsVisible(null, key), false);
+  assert.match(portal, /const isActive = portalGuidedTutorialIsVisible\(tutorialState, progressKey\)/);
+  assert.match(portal, /setTutorialState\(\{ key: '', active: false \}\)/);
+  assert.doesNotMatch(portal, /const \[isActive, setIsActive\]/);
 });
 
 test('completion, pause and restart survive simulated refresh and logout/login', () => {
