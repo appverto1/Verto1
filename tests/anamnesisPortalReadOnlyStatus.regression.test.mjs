@@ -85,10 +85,12 @@ const portalMutations = dashboard.slice(
   dashboard.indexOf('const savePortalAnamnesisDraft = async'),
   dashboard.indexOf('const portalPlaceholderPanel ='),
 );
-for (const operation of ['savePortalAnamnesisDraft', 'submitPortalAnamnesis']) {
-  const start = portalMutations.indexOf('const ' + operation + ' = async');
-  const next = portalMutations.indexOf('const ', start + 7);
-  const body = portalMutations.slice(start, next > start ? next : undefined);
+const submitMutationStart = portalMutations.indexOf('const submitPortalAnamnesis = async');
+assert.ok(submitMutationStart > 0, 'ambas as mutações da anamnese devem existir');
+for (const [operation, body] of [
+  ['savePortalAnamnesisDraft', portalMutations.slice(0, submitMutationStart)],
+  ['submitPortalAnamnesis', portalMutations.slice(submitMutationStart)],
+]) {
   assert.match(body, /portalAnamnesisMutationRef\.current\) return;/,
     operation + ': envio duplo síncrono deve ser bloqueado');
   assert.match(body, /portalAnamnesisMutationRef\.current !== ticket \|\| portalAnamnesisContextRef\.current !== contextKey/,
