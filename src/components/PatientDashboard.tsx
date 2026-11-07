@@ -102,6 +102,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [readMessageIds, setReadMessageIds] = useState<Set<string>>(() => new Set());
   const [isMoodSaving, setIsMoodSaving] = useState(false);
   const moodSubmitInFlightRef = useRef(false);
+  const wellbeingLoadRevisionRef = useRef(0);
   const [moodSaveError, setMoodSaveError] = useState('');
   const [familyNote, setFamilyNote] = useState("");
   const [familyImage, setFamilyImage] = useState<string | null>(null);
@@ -220,16 +221,23 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   useEffect(() => {
     let active = true;
+    const revisionAtStart = wellbeingLoadRevisionRef.current;
+    setWellbeingCheckins([]);
     if (isKidsProfile || !portalPatientId) {
-      setWellbeingCheckins([]);
       return () => { active = false; };
     }
     void dataService.getPatientSelfWellbeingCheckins(wellbeingPeriod).then((result: any) => {
-      if (!active) return;
-      setWellbeingCheckins(result?.success && Array.isArray(result?.data) ? result.data : []);
+      if (!active || portalAnamnesisContextRef.current !== portalAnamnesisContextKey) return;
+      const fetched = result?.success === true && Array.isArray(result?.data) ? result.data : [];
+      setWellbeingCheckins((current) => {
+        if (revisionAtStart === wellbeingLoadRevisionRef.current) return fetched;
+        // A confirmed write landed while this read was in flight: retain it and add older history.
+        const persistedIds = new Set(current.map((row: any) => String(row?.id || '')).filter(Boolean));
+        return [...current, ...fetched.filter((row: any) => !persistedIds.has(String(row?.id || '')))];
+      });
     });
     return () => { active = false; };
-  }, [isKidsProfile, portalPatientId, wellbeingPeriod]);
+  }, [isKidsProfile, portalAnamnesisContextKey, wellbeingPeriod]);
 
   useEffect(() => {
     let active = true;
@@ -4085,18 +4093,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
   const handleConfirmMood = async () => {
     if (isReadOnlyMode || !selectedMood || isMoodSaving || moodSubmitInFlightRef.current) return;
+    const saveContextKey = portalAnamnesisContextKey;
     moodSubmitInFlightRef.current = true;
     setIsMoodSaving(true);
     setMoodSaveError('');
     try {
       const result = await onMoodCheckin(selectedMood.value, moodNote, selectedMood.emoji, selectedTag);
-      if (result?.success !== true) {
+      if (portalAnamnesisContextRef.current !== saveContextKey) return;
+      if (result?.success !== true || !result?.data?.id || result?.queued || result?.pending || result?.offline) {
         setMoodSaveError(result?.error || 'Não foi possível confirmar a gravação do check-in.');
         return;
       }
-      if (result?.data?.id) {
-        setWellbeingCheckins((current) => [result.data, ...current.filter((row: any) => String(row?.id || '') !== String(result.data.id))]);
-      }
+      wellbeingLoadRevisionRef.current += 1;
+      setWellbeingCheckins((current) => [result.data, ...current.filter((row: any) => String(row?.id || '') !== String(result.data.id))]);
       setShowMoodSuccess(true);
       setIsMoodModalOpen(false);
       setMoodNote("");
@@ -4104,7 +4113,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setSelectedTag(null);
       window.setTimeout(() => setShowMoodSuccess(false), 1200);
     } catch {
-      setMoodSaveError('Não foi possível salvar seu check-in.');
+      if (portalAnamnesisContextRef.current === saveContextKey) {
+        setMoodSaveError('Não foi possível salvar seu check-in.');
+      }
     } finally {
       moodSubmitInFlightRef.current = false;
       setIsMoodSaving(false);
