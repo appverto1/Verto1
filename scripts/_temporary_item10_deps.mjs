@@ -18,9 +18,9 @@ for(const g of groups){
  const diagnostics=ts.getPreEmitDiagnostics(original,source);
  const missing=new Set();
  for(const d of diagnostics){
-   if([2304,2503,2552].includes(d.code)){
+   if([2304,2503,2552,18004].includes(d.code)){
      const msg=ts.flattenDiagnosticMessageText(d.messageText,' ');
-     const m=msg.match(/(?:name|namespace) '([^']+)'/);
+     const m=msg.match(/(?:name|namespace|property) '([^']+)'/);
      if(m)missing.add(m[1]);
    }
  }
