@@ -41,11 +41,16 @@ export function appointmentClinicalSpecialtyKey(appointment: any): ClinicalSpeci
     source?.serviceName,
     source?.approach,
   ];
+  let resolvedKey: ClinicalSpecialtyScopeKey | null = null;
   for (const candidate of candidates) {
     const key = clinicalSpecialtyScopeKey(candidate);
-    if (key) return key;
+    if (!key) continue;
+    // A conflicting appointment snapshot cannot authorize a specialty plan.
+    // The server remains responsible for validating the persisted appointment.
+    if (resolvedKey && resolvedKey !== key) return null;
+    resolvedKey = key;
   }
-  return null;
+  return resolvedKey;
 }
 
 export function planClinicalSpecialtyKey(plan: SessionSpecialtyPlanLike | null | undefined): ClinicalSpecialtyScopeKey | null {
@@ -57,7 +62,9 @@ export function sessionPlanMatchesAppointmentSpecialty(
   appointment: any,
 ): boolean {
   const appointmentKey = appointmentClinicalSpecialtyKey(appointment);
-  if (!appointmentKey) return true;
+  // No appointment is a direct plan start; a scheduled appointment with an
+  // unknown or contradictory specialty must fail closed instead.
+  if (!appointmentKey) return appointment == null;
   return planClinicalSpecialtyKey(plan) === appointmentKey;
 }
 

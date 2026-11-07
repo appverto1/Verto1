@@ -52,6 +52,33 @@ assert.deepEqual(
 assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[0], fonoAppointment), true);
 assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[2], fonoAppointment), false);
 
+// Item 21: an appointment without a verifiable, unique specialty cannot
+// authorize a specialty plan, even when the chosen plan is otherwise active.
+const conflictingAppointment = {
+  specialty: 'Fonoaudiologia',
+  service_type: 'Terapia Ocupacional',
+};
+assert.equal(appointmentClinicalSpecialtyKey(conflictingAppointment), null);
+assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[0], conflictingAppointment), false);
+assert.deepEqual(sessionSpecialtyPlanCandidates(plans, conflictingAppointment), []);
+assert.equal(
+  appointmentClinicalSpecialtyKey({
+    service_type: 'Fonoaudiologia',
+    source_payload: JSON.stringify({ specialty: 'Terapia Ocupacional' }),
+  }),
+  null,
+  'snapshot legado divergente não pode determinar a especialidade da sessão',
+);
+assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[0], { service_type: 'ABA' }), false);
+assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[0], {}), false);
+assert.equal(sessionPlanMatchesAppointmentSpecialty(plans[0], null), true,
+  'início direto pelo plano sem agendamento mantém o comportamento anterior');
+assert.equal(
+  appointmentClinicalSpecialtyKey({ specialty: 'Fonoaudiologia', service_type: 'Fonoaudiólogo' }),
+  'speech_therapy',
+  'sinônimos da mesma especialidade permanecem válidos',
+);
+
 const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const sessionMode = fs.readFileSync('src/components/SessionMode.tsx', 'utf8');
 const cmv3PlanRoutes = fs.readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8');
