@@ -1,171 +1,167 @@
 ITEM07_VALIDATION_EXIT=1
-      "} from './services/pushNotificationService';\n" +
-      'import {\n' +
-      '  SupabaseRateLimitStore,\n' +
-      '  checkDistributedRuntimeState,\n' +
-      '  issueDistributedSessionToken,\n' +
-      '  releaseDistributedJobLease,\n' +
-      '  revokeAllDistributedSessionTokens,\n' +
-      '  revokeDistributedSessionToken,\n' +
-      '  tryAcquireDistributedJobLease,\n' +
-      '  validateDistributedSessionToken\n' +
-      "} from './services/distributedRuntimeState';\n" +
-      'import {\n' +
-      '  buildActivationEmailTemplate,\n' +
-      '  buildClinicInvitationEmailTemplate,\n' +
-      '  buildPasswordRecoveryEmailTemplate\n' +
-      "} from './src/services/emailTemplates';\n" +
-      'import {\n' +
-      '  createPasswordRecoveryToken,\n' +
-      '  verifyPasswordRecoveryToken\n' +
-      "} from './src/utils/passwordRecoveryLink';\n" +
-      'import {\n' +
-      '  createClinicInvitationActivationToken,\n' +
-      '  verifyClinicInvitationActivationToken\n' +
-      "} from './src/utils/clinicInvitationActivationToken';\n" +
-      "import { buildPatientGlobalIdentityUpdate } from './src/utils/patientAccountLinking';\n" +
-      'import {\n' +
-      '  resolveAuthoritativeHistoricalTissServiceCatalogId,\n' +
-      '  resolveBillingContextServiceCatalogId,\n' +
-      '  resolveUniqueTissServiceCatalogOptionByCode\n' +
-      "} from './src/utils/tissServiceCatalogResolution';\n" +
-      'import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from'... 1103270 more characters,
-    ''
-  ],
-  pid: 2276,
-  stdout: "import { registerOwnerSalesOfferCreationRoute } from './services/ownerSalesOfferCreationRoutes';\n" +
-    "import { createAbaV3DrainStatusHandler } from './services/abaV3DrainStatusHandler';\n" +
-    "import { registerPublicSalesActivationPasswordRoute } from './services/publicSalesActivationPasswordRoute';\n" +
-    "import { registerPublicSalesDirectorSessionRoute } from './services/publicSalesDirectorSessionRoute';\n" +
-    "import { registerPatientTimeReportRoute } from './services/patientTimeReportRoute';\n" +
-    "import { canActivateSpecialtyPlanForCase } from './services/therapeuticSpecialistActivation';\n" +
-    "import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';\n" +
-    "import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './services/groupSessions/groupSessionScheduleConflicts';\n" +
-    "import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';\n" +
-    "import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';\n" +
-    "import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';\n" +
-    "import { createClinicalOutcomesDashboardHandler } from './services/clinicalOutcomesDashboardHandler';\n" +
-    "import { createProtocolImportRequestHandler, createClinicProtocolImportsReadHandler, createClinicProtocolGrantRevokeHandler, createClinicProtocolRequestDeleteHandler } from './services/protocolImportClinicHandlers';\n" +
-    "import { createAdminProtocolImportsReadHandler, createAdminProtocolAccessWriteHandler, createAdminProtocolImportApproveHandler, createAdminProtocolImportRejectHandler, createAdminProtocolImportScanHandler } from './services/protocolImportAdminHandlers';\n" +
-    "import { createSessionMaintenanceProbesReadHandler, createMaintenanceOverviewReadHandler, createPeiMaintenanceDiagnosticsHandler, createLinkableMaintenanceTargetsHandler, createMaintenanceSchedulesReadHandler, createFutureMaintenanceAppointmentsHandler, createNextMaintenanceProbeHandler, createMaintenanceRecommendationsHandler, createMaintenancePlanItemsHandler } from './services/abaMaintenanceReadHandlers';\n" +
-    "import { createPatientMaintenancePanelHandler } from './services/abaMaintenancePanelHandler';\n" +
-    "import { createAbaSessionLiveSummaryReadHandler, createAbaSessionReportReadHandler, createAbaSessionRecordsReadHandler, createAbaRecentSessionEventsReadHandler, createAbaPatientSummaryReadHandler, createAbaSessionsReadHandler, createAbaTrialsReadHandler, createAbaBehaviorEventsReadHandler, createAbaMasteryEvaluationsReadHandler } from './services/abaSessionReadHandlers';\n" +
-    "import { createAbaChartReadHandlers } from './services/abaChartReadHandlers';\n" +
-    "import { createOwnerStatsHandler, createOwnerClientsHandler, createOwnerFinancialOverviewHandler, createOwnerFinancialSurveysHandler, createAdminDemoSandboxesHandler, createAdminStatsHandler, createAdminClientsHandler, createAdminVertoProtocolsHandler, createOwnerRecoveryLeadsHandler } from './services/ownerAdminReadHandlers';\n" +
-    "import { createTissProviderProfileReadHandler, createTissPayerProfileReadHandler, createPatientTissAuthorizationsReadHandler, createPatientTissAuthorizationReadHandler, createTissOwnProfessionalProfileReadHandler, createTissProfessionalProfilesReadHandler, createTissProfessionalProfileReadHandler, createTissPreGuidesReadHandler, createTissOfficialDocumentsReadHandler, createTissDocumentTrackingListReadHandler, createTissXmlDraftsReadHandler, createTissXmlDraftReadHandler, createTissRevenueEventsReadHandler, createTissBillingBatchDraftsReadHandler, createTissBillingBatchDraftReadHandler, createTissPreGuidesCoverageReadHandler, createTissPreGuideReadHandler, createPayerOptionsReadHandler, createAdminPayersReadHandler, createAdminPayerRequirementsReadHandler } from './services/tissPayerReadHandlers';\n" +
-    "import { createProfessionalFinancialReceiptHandlers } from './services/professionalFinancialReceiptHandlers';\n" +
-    "import { createPrivatePricingCatalogReadHandler, createPrivatePricingSnapshotReadHandler, createPatientFinanceLedgerReadHandler, createPatientFinanceTransactionDocumentReadHandler, createPatientFinancePolicyReadHandler, createPaymentsReadHandler, createProfessionalPaymentsReadHandler, createFinancialExpensesReadHandler, createFinancialEntriesReadHandler, createFinancialFeatureSurveyReadHandler } from './services/clinicFinancialReadHandlers';\n" +
-    "import { createClinicAuthorizationMeHandler, createUserFeatureAccessReadHandler, createUserFeatureAccessWriteHandler, createClinicCapabilityMembersReadHandler, createClinicCapabilityMembersWriteHandler, createClinicMemberAuthorizationReadHandler, createClinicMemberAuthorizationWriteHandler, createClinicMembersReadHandler, createClinicSupervisionEligibilityWriteHandler } from './services/clinicAccessMembershipHandlers';\n" +
-    "import { createClinicWorkScheduleReadHandler, createClinicWorkScheduleWriteHandler, createClinicWorkScheduleApplyHandler } from './services/clinicWorkScheduleHandlers';\n" +
-    "import { createReadyRouteHandler } from './services/readyRouteHandler';\n" +
-    "import { registerPublicSalesLeadRoute } from './services/publicSalesLeadRoutes';\n" +
-    "import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPaymentStatusRoute';\n" +
-    "import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';\n" +
-    "import { createSalesAssistedStripeEventHandlers } from './services/salesAssistedStripeEventHandlers';\n" +
-    "import { registerStripeCanonicalWebhookRoute } from './services/stripeCanonicalWebhookRoute';\n" +
-    "import express from 'express';\n" +
-    "import { createPortalAppointmentsListHandler, createPortalAppointmentDetailHandler, createPortalRescheduleSlotsHandler } from './services/portalAppointmentReadHandlers';\n" +
-    "import { registerTissPayerProfilesListRoute } from './services/tissPayerProfilesListRoute';\n" +
-    "import { registerTussMappingRoutes } from './services/tussMappingRoutes';\n" +
-    "import { handleClinicDre } from './services/clinicDreHandler';\n" +
-    "import { canManageAppointmentActionInClinic, resolveAuthenticatedCalendarScope } from './services/appointmentTenantGuards';\n" +
-    "import path from 'path';\n" +
-    "import fs from 'fs';\n" +
-    "import crypto from 'crypto';\n" +
-    "import dns from 'dns';\n" +
-    "import { fileURLToPath } from 'url';\n" +
-    "import { createServer as createViteServer } from 'vite';\n" +
-    "import { createClient } from '@supabase/supabase-js';\n" +
-    "import cookieParser from 'cookie-parser';\n" +
-    "import session from 'express-session';\n" +
-    "import pgSession from 'connect-pg-simple';\n" +
-    "import pg from 'pg';\n" +
-    "import dotenv from 'dotenv';\n" +
-    "import Stripe from 'stripe';\n" +
-    "import { Resend } from 'resend';\n" +
-    "import helmet from 'helmet';\n" +
-    "import rateLimit from 'express-rate-limit';\n" +
-    "import webpush from 'web-push';\n" +
-    "import { generateSecret, verifySync, generateURI } from 'otplib';\n" +
-    "import QRCode from 'qrcode';\n" +
-    'import {\n' +
-    '  ACTIVE_PATIENT_BILLING_LOOKUP_KEY,\n' +
-    '  DEFAULT_VERTO_PATIENT_PRICING_TIERS,\n' +
-    '  calculateVertoPatientBasedMonthlyPrice,\n' +
-    '  estimateStripeActivePatientPlan,\n' +
-    '  getBillableActivePatientCount,\n' +
-    '  getClinicBillingSummary,\n' +
-    '  isVertoPatientBasedBillingEnabled,\n' +
-    '  listStripeActivePatientBillingPlans,\n' +
-    '  syncClinicActivePatientAddonQuantity\n' +
-    "} from './services/stripeService';\n" +
-    "import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';\n" +
-    "import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';\n" +
-    "import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';\n" +
-    "import { registerHelpCenterRoutes } from './services/helpCenterRoutes';\n" +
-    "import { createInternalSchemaStatusHandler } from './services/internalSchemaStatusRouteHandler';\n" +
-    "import { createHealthRouteHandler } from './services/healthRouteHandler';\n" +
-    "import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';\n" +
-    "import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';\n" +
-    "import { startAppointmentNoShowCron } from './services/appointmentNoShowService';\n" +
-    'import {\n' +
-    '  classifyReservationSchemaProbe,\n' +
-    '  checkAppointmentActionResolutionSchema,\n' +
-    '  checkCriticalSchema,\n' +
-    '  describeSupabaseTarget,\n' +
-    '  isDeployEnvironment,\n' +
-    '  validateSupabaseTargetConfiguration,\n' +
-    '  APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,\n' +
-    '  TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION\n' +
-    "} from './scripts/check-critical-schema.mjs';\n" +
-    'import {\n' +
-    '  invalidateReminderClinicBranding,\n' +
-    '  resolvePushSafeClinicLogoUrl,\n' +
-    '  verifyStableClinicNotificationLogoSignature,\n' +
-    '  runAppointmentReminderScan,\n' +
-    '  startAppointmentReminderCron,\n' +
-    '  triggerAppointmentReminderScan,\n' +
-    '  startClinicAnnouncementCron,\n' +
-    '  dispatchClinicAnnouncementNow\n' +
-    "} from './services/cronService';\n" +
-    'import {\n' +
-    '  removePatientPushSubscription,\n' +
-    '  resolvePatientIdsForPush,\n' +
-    '  renewPatientPushSubscription,\n' +
-    '  savePatientPushSubscription,\n' +
-    '  sendAppointmentNotification\n' +
-    "} from './services/pushNotificationService';\n" +
-    'import {\n' +
-    '  SupabaseRateLimitStore,\n' +
-    '  checkDistributedRuntimeState,\n' +
-    '  issueDistributedSessionToken,\n' +
-    '  releaseDistributedJobLease,\n' +
-    '  revokeAllDistributedSessionTokens,\n' +
-    '  revokeDistributedSessionToken,\n' +
-    '  tryAcquireDistributedJobLease,\n' +
-    '  validateDistributedSessionToken\n' +
-    "} from './services/distributedRuntimeState';\n" +
-    'import {\n' +
-    '  buildActivationEmailTemplate,\n' +
-    '  buildClinicInvitationEmailTemplate,\n' +
-    '  buildPasswordRecoveryEmailTemplate\n' +
-    "} from './src/services/emailTemplates';\n" +
-    'import {\n' +
-    '  createPasswordRecoveryToken,\n' +
-    '  verifyPasswordRecoveryToken\n' +
-    "} from './src/utils/passwordRecoveryLink';\n" +
-    'import {\n' +
-    '  createClinicInvitationActivationToken,\n' +
-    '  verifyClinicInvitationActivationToken\n' +
-    "} from './src/utils/clinicInvitationActivationToken';\n" +
-    "import { buildPatientGlobalIdentityUpdate } from './src/utils/patientAccountLinking';\n" +
-    'import {\n' +
-    '  resolveAuthoritativeHistoricalTissServiceCatalogId,\n' +
-    '  resolveBillingContextServiceCatalogId,\n' +
-    '  resolveUniqueTissServiceCatalogOptionByCode\n' +
-    "} from './src/utils/tissServiceCatalogResolution';\n" +
-    'import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from'... 1103270 more characters,
-  stderr: ''
-}
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
-Node.js v20.20.2
+added 469 packages in 12s
+CORE_ASSERT_MOVED tests/salesBoletoPaymentPendingSafety.regression.test.mjs moduleCheckout
+CORE_ASSERT_MOVED tests/salesCheckoutReturnContext20260831.regression.test.mjs modularCheckout
+CORE_ASSERT_MOVED tests/salesCustomerFacingModulesOnly.test.mjs modularCheckout
+PUBLIC_ASSERT_MOVED tests/salesCheckoutProvisioning.test.ts checkoutRoute
+CORE_ASSERT_MOVED tests/salesModularStripeAssisted.test.ts checkoutCore
+PUBLIC_ASSERT_MOVED tests/salesModularStripeAssisted.test.ts publicLegacyCheckout
+CORE_ASSERT_MOVED tests/salesContractIdentity.test.ts modularCheckout
+ITEM07_SOURCE_EXTRACTED BEFORE 90640 AFTER 89727 CORE 588 PUBLIC 337 CORE_SHA fea115a5a83a98f187e2558b788f32d7cea0b15692620258b1a1bd1610a378f2 PUBLIC_SHA 6fcfd8e078a4541a53a709ff4f2b41c0067d5a401e92cd434652378f4e1089f3
+CORE_UNRESOLVED_RUNTIME_DEPENDENCIES ["MODULAR_COMMERCIAL_CONSENT_TEXT","MODULAR_COMMERCIAL_CONSENT_VERSION","SALES_CHECKOUT_LINK_SELECT","buildFrozenStripeCheckoutPlan","buildSalesCheckoutReturnContextToken","buildSalesModuleSetHash","buildSalesOfferPublicUrl","classifySalesProposalReview","crypto","deriveSalesCheckoutPublicToken","filterSalesCurrentOperatingTechnicalBlockers","getStripe","hashSalesOfferToken","isSalesInternalCommercialItemKey","resolveFrozenSalesOfferTrialDays","resolveStripeEnvironment","salesApplicationOrigin","salesCommercialExceptionApprovalMatches","salesOfferUsesCustomerFacingModulesOnly","sanitizeEmail","sanitizeString","serializeSalesCheckoutLink","supabase","validateStripeSecretForEnvironment"]
+PUBLIC_UNRESOLVED_RUNTIME_DEPENDENCIES ["MODULAR_COMMERCIAL_CONSENT_TEXT","MODULAR_COMMERCIAL_CONSENT_VERSION","app","buildSalesOfferPublicUrl","createOrReuseModularCheckout","crypto","getStripe","isCouponDurationMonths","isSalesOfferStripeReady","isUuid","loadPublicSalesOffer","publicSalesLeadIpLimiter","resolveSalesStripeConfiguration","resolveStripeEnvironment","sanitizeEmail","sanitizeString","supabase","validateStripeSecretForEnvironment"]
+CORE_TYPESCRIPT_DIAGNOSTIC_COUNT 0
+PUBLIC_TYPESCRIPT_DIAGNOSTIC_COUNT 0
+TAP version 13
+# Subtest: missing consent and terms fail before token resolution or Stripe access
+ok 1 - missing consent and terms fail before token resolution or Stripe access
+  ---
+  duration_ms: 3.164096
+  ...
+# Subtest: expired or unknown tokens cannot start Checkout or register acceptance
+ok 2 - expired or unknown tokens cannot start Checkout or register acceptance
+  ---
+  duration_ms: 0.251351
+  ...
+# Subtest: malicious browser prices, tenant, modules or environment are rejected
+ok 3 - malicious browser prices, tenant, modules or environment are rejected
+  ---
+  duration_ms: 0.577951
+  ...
+# Subtest: unaccepted offer never starts a Stripe session
+ok 4 - unaccepted offer never starts a Stripe session
+  ---
+  duration_ms: 0.298431
+  ...
+# Subtest: Checkout derives actor and deterministic key from server-frozen offer, never browser IDs
+ok 5 - Checkout derives actor and deterministic key from server-frozen offer, never browser IDs
+  ---
+  duration_ms: 0.659461
+  ...
+# Subtest: invalid frozen author or wrong Stripe environment fail closed before session creation
+ok 6 - invalid frozen author or wrong Stripe environment fail closed before session creation
+  ---
+  duration_ms: 0.286317
+  ...
+# Subtest: core rejects an unknown offer without creating Stripe session, subscription or records
+ok 7 - core rejects an unknown offer without creating Stripe session, subscription or records
+  ---
+  duration_ms: 1.285881
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 18.78516
+TAP version 13
+# Subtest: public consent and both checkout implementations are byte-identical to staging baseline
+ok 1 - public consent and both checkout implementations are byte-identical to staging baseline
+  ---
+  duration_ms: 7.503853
+  ...
+# Subtest: no new requests, no owner MFA bypass, no client supplied pricing or tenant
+ok 2 - no new requests, no owner MFA bypass, no client supplied pricing or tenant
+  ---
+  duration_ms: 0.496163
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 16.917891
+
+> react-example@0.0.0 build
+> vite build
+
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 3240 modules transformed.
+rendering chunks...
+[33m[plugin vite:reporter] 
+(!) /home/runner/work/Verto1/Verto1/src/services/dataService.ts is dynamically imported by /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/App.tsx but also statically imported by /home/runner/work/Verto1/Verto1/src/App.tsx, /home/runner/work/Verto1/Verto1/src/components/AbaReinforcerSessionPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/AbaV3ClinicalChartPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/Anamnesis.tsx, /home/runner/work/Verto1/Verto1/src/components/BillingTissSettingsPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/Calendar.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicAnnouncementsPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicExpenseManager.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicGlobalSettingsPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicInvitationAcceptance.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicalMeasurementV3Panel.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicalMentionNotifications.tsx, /home/runner/work/Verto1/Verto1/src/components/ClinicalOutcomesDashboard.tsx, /home/runner/work/Verto1/Verto1/src/components/CoordinatorDashboard.tsx, /home/runner/work/Verto1/Verto1/src/components/CumulativeGrowthChart.tsx, /home/runner/work/Verto1/Verto1/src/components/GroupSessionDialog.tsx, /home/runner/work/Verto1/Verto1/src/components/InvitationModal.tsx, /home/runner/work/Verto1/Verto1/src/components/LegacyAssessmentChartsPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/MemberPermissionEditor.tsx, /home/runner/work/Verto1/Verto1/src/components/MonthlyConferenceCenter.tsx, /home/runner/work/Verto1/Verto1/src/components/OperationalClosureCenter.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientCareNetworkPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientDashboard.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientDetailView.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientEvolutionTimelinePanel.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientFinanceWorkspace.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientSchoolInformation.tsx, /home/runner/work/Verto1/Verto1/src/components/PatientSharedChartDelegationPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/PayerRequirementsPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/PortalRelationshipConfirmation.tsx, /home/runner/work/Verto1/Verto1/src/components/PortalSharedClinicalChart.tsx, /home/runner/work/Verto1/Verto1/src/components/PrivatePricingManagement.tsx, /home/runner/work/Verto1/Verto1/src/components/ProfessionalOnboarding.tsx, /home/runner/work/Verto1/Verto1/src/components/ProfessionalSharedChartControl.tsx, /home/runner/work/Verto1/Verto1/src/components/Protocols.tsx, /home/runner/work/Verto1/Verto1/src/components/RoleCapabilityMatrix.tsx, /home/runner/work/Verto1/Verto1/src/components/SchoolEnrollmentDialog.tsx, /home/runner/work/Verto1/Verto1/src/components/SchoolMeetingWorkspace.tsx, /home/runner/work/Verto1/Verto1/src/components/SchoolsManagement.tsx, /home/runner/work/Verto1/Verto1/src/components/SessionMode.tsx, /home/runner/work/Verto1/Verto1/src/components/TeamManagement.tsx, /home/runner/work/Verto1/Verto1/src/components/TherapeuticPlanPanel.tsx, /home/runner/work/Verto1/Verto1/src/components/TherapeuticProgramLibrary.tsx, /home/runner/work/Verto1/Verto1/src/components/TissPreGuideTab.tsx, /home/runner/work/Verto1/Verto1/src/services/abaReinforcers.ts, dynamic import will not move module into another chunk.
+[39m
+computing gzip size...
+[2mdist/[22m[32mindex.html                                         [39m[1m[2m    2.64 kB[22m[1m[22m[2m │ gzip:   0.86 kB[22m
+[2mdist/[22m[2massets/[22m[35mindex-BifgkVE1.css                          [39m[1m[2m  279.18 kB[22m[1m[22m[2m │ gzip:  37.50 kB[22m
+[2mdist/[22m[2massets/[22m[36mclinicInvitationSubmissionGate-DjSedeoM.js  [39m[1m[2m    0.30 kB[22m[1m[22m[2m │ gzip:   0.21 kB[22m
+[2mdist/[22m[2massets/[22m[36mGoogleIcon-_ZINAZRP.js                      [39m[1m[2m    0.83 kB[22m[1m[22m[2m │ gzip:   0.52 kB[22m
+[2mdist/[22m[2massets/[22m[36mSecureMedia-DE4lI93L.js                     [39m[1m[2m    1.05 kB[22m[1m[22m[2m │ gzip:   0.57 kB[22m
+[2mdist/[22m[2massets/[22m[36mSafeResponsiveContainer-D7aTnWJ4.js         [39m[1m[2m    1.22 kB[22m[1m[22m[2m │ gzip:   0.65 kB[22m
+[2mdist/[22m[2massets/[22m[36mmediaSecurity-CcMI1NKH.js                   [39m[1m[2m    1.53 kB[22m[1m[22m[2m │ gzip:   0.70 kB[22m
+[2mdist/[22m[2massets/[22m[36mPortalFirstAccessTutorial-mWUJTLli.js       [39m[1m[2m    2.95 kB[22m[1m[22m[2m │ gzip:   1.38 kB[22m
+[2mdist/[22m[2massets/[22m[36mTutorial-BxqARWD4.js                        [39m[1m[2m    3.83 kB[22m[1m[22m[2m │ gzip:   1.72 kB[22m
+[2mdist/[22m[2massets/[22m[36mabaReinforcers-0L55YHrz.js                  [39m[1m[2m    4.40 kB[22m[1m[22m[2m │ gzip:   1.67 kB[22m
+[2mdist/[22m[2massets/[22m[36mBillerWorkspace-DeXdzR9s.js                 [39m[1m[2m    5.64 kB[22m[1m[22m[2m │ gzip:   2.13 kB[22m
+[2mdist/[22m[2massets/[22m[36mClinicInvitationAcceptance-8h-oj48B.js      [39m[1m[2m    6.53 kB[22m[1m[22m[2m │ gzip:   2.51 kB[22m
+[2mdist/[22m[2massets/[22m[36mPortalRelationshipConfirmation-CK2KAhfl.js  [39m[1m[2m    9.37 kB[22m[1m[22m[2m │ gzip:   2.57 kB[22m
+[2mdist/[22m[2massets/[22m[36mSalesActivationAccess-Cs4eb3vc.js           [39m[1m[2m   10.50 kB[22m[1m[22m[2m │ gzip:   3.46 kB[22m
+[2mdist/[22m[2massets/[22m[36mModularPublicOfferDetails-BmEGZrbD.js       [39m[1m[2m   13.02 kB[22m[1m[22m[2m │ gzip:   3.73 kB[22m
+[2mdist/[22m[2massets/[22m[36mExternalEvolutionShare-DuwgfSvS.js          [39m[1m[2m   14.40 kB[22m[1m[22m[2m │ gzip:   4.41 kB[22m
+[2mdist/[22m[2massets/[22m[36mActivationAccess-D-Nli6Da.js                [39m[1m[2m   19.50 kB[22m[1m[22m[2m │ gzip:   5.74 kB[22m
+[2mdist/[22m[2massets/[22m[36mPublicSalesOffer-7VgzLEyI.js                [39m[1m[2m   20.09 kB[22m[1m[22m[2m │ gzip:   5.95 kB[22m
+[2mdist/[22m[2massets/[22m[36mpurify.es-B5CD4DQe.js                       [39m[1m[2m   22.90 kB[22m[1m[22m[2m │ gzip:   8.84 kB[22m
+[2mdist/[22m[2massets/[22m[36mHelpCenter-BrKo8SrM.js                      [39m[1m[2m   24.05 kB[22m[1m[22m[2m │ gzip:   8.11 kB[22m
+[2mdist/[22m[2massets/[22m[36mExternalCareNetworkCentral-l9tb1Vdu.js      [39m[1m[2m   25.82 kB[22m[1m[22m[2m │ gzip:   6.88 kB[22m
+[2mdist/[22m[2massets/[22m[36mAdminDashboard-C62h9FkG.js                  [39m[1m[2m   26.11 kB[22m[1m[22m[2m │ gzip:   6.88 kB[22m
+[2mdist/[22m[2massets/[22m[36mProfessionalOnboarding-CUq7Nc7t.js          [39m[1m[2m   29.15 kB[22m[1m[22m[2m │ gzip:   7.92 kB[22m
+[2mdist/[22m[2massets/[22m[36mExternalPatientTimeline-DZNAryN_.js         [39m[1m[2m   33.36 kB[22m[1m[22m[2m │ gzip:   9.52 kB[22m
+[2mdist/[22m[2massets/[22m[36mappointmentConfirmationState-D_QPozyn.js    [39m[1m[2m   58.45 kB[22m[1m[22m[2m │ gzip:  16.88 kB[22m
+[2mdist/[22m[2massets/[22m[36mLandingPage-ev9zHplS.js                     [39m[1m[2m   72.83 kB[22m[1m[22m[2m │ gzip:  16.64 kB[22m
+[2mdist/[22m[2massets/[22m[36mvendor-icons-DnEDxtw2.js                    [39m[1m[2m   81.70 kB[22m[1m[22m[2m │ gzip:  17.50 kB[22m
+[2mdist/[22m[2massets/[22m[36mproxy-CpNdX7Yx.js                           [39m[1m[2m  124.09 kB[22m[1m[22m[2m │ gzip:  40.56 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex.es-C7CB8EPR.js                        [39m[1m[2m  159.65 kB[22m[1m[22m[2m │ gzip:  53.54 kB[22m
+[2mdist/[22m[2massets/[22m[36mPatientDashboard-CiPhgAcp.js                [39m[1m[2m  161.89 kB[22m[1m[22m[2m │ gzip:  40.90 kB[22m
+[2mdist/[22m[2massets/[22m[36mvendor-supabase-BBXVsBsY.js                 [39m[1m[2m  193.82 kB[22m[1m[22m[2m │ gzip:  50.95 kB[22m
+[2mdist/[22m[2massets/[22m[36mvendor-html2canvas-QH1iLAAe.js              [39m[1m[2m  202.38 kB[22m[1m[22m[2m │ gzip:  48.04 kB[22m
+[2mdist/[22m[2massets/[22m[36mvbmappLevel3Protocol-D60FNmZ1.js            [39m[1m[2m  221.66 kB[22m[1m[22m[2m │ gzip:  45.00 kB[22m
+[2mdist/[22m[2massets/[22m[36mvendor-jspdf-B5taFrCO.js                    [39m[1m[2m  391.67 kB[22m[1m[22m[2m │ gzip: 129.27 kB[22m
+[2mdist/[22m[2massets/[22m[36mvendor-recharts-DRWpeG5N.js                 [39m[1m[2m  437.13 kB[22m[1m[22m[2m │ gzip: 124.76 kB[22m
+[2mdist/[22m[2massets/[22m[36mPayerRequirementsPanel-DzINotTA.js          [39m[1m[2m  479.88 kB[22m[1m[22m[2m │ gzip: 100.16 kB[22m
+[2mdist/[22m[2massets/[22m[36mSuperAdminDashboard-DedZfBoh.js             [39m[1m[2m  499.40 kB[22m[1m[22m[2m │ gzip: 114.46 kB[22m
+[2mdist/[22m[2massets/[22m[36mindex-BbFyZQQL.js                           [39m[1m[33m  983.92 kB[39m[22m[2m │ gzip: 246.46 kB[22m
+[2mdist/[22m[2massets/[22m[36mCoordinatorDashboard-ClGwzCbz.js            [39m[1m[33m2,827.01 kB[39m[22m[2m │ gzip: 661.16 kB[22m
+[33m
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 19.10s[39m
+
+> react-example@0.0.0 check:docker-runtime-imports
+> node scripts/check-docker-runtime-imports.mjs
+
+Docker runtime imports covered (207 files).
+  ✗ teste: tests/salesExactPatientCheckoutUiP0000.regression.test.mjs — node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: The input did not match the regular expression /quantity: Number\(line\.quantity \|\| 1\)/. Input:
+
+"import { createModularCheckoutCore } from './services/salesModularCheckoutCore';\n" +
+  "import { registerPublicSalesCheckoutRoutes } from './services/publicSalesCheckoutRoutes';\n" +
+  "import { registerOwnerSalesOfferCreationRoute } from './services/ownerSalesOfferCreationRoutes';\n" +
+  "import { createAbaV3DrainStatusHandler } from './services/abaV3DrainStatusHandler';\n" +
+  "import { registerPublicSalesActivationPasswordRoute } from './services/publicSalesActivationPasswordRoute';\n" +
+  "import { registerPublicSalesDirectorSessionRoute } from './services/publicSalesDirectorSessionRoute';\n" +
+  "import { registerPatientTimeReportRoute } from './services/patientTimeReportRoute';\n" +
+  "import { canActivateSpecialtyPlanForCase } from './services/therapeuticSpecialistActivation';\n" +
+  "import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';\n" +
+  "import {loadCanonicalGroupSch
+Running source-equal staging baseline for pre-main ratchet.
+Preparing worktree (detached HEAD 35e426fe)
+HEAD is now at 35e426fe fix(staging): exigir ACK e impedir envio duplicado no Diário da Família (item 25)
+BASELINE_FAILURES ['teste: tests/factoryBlockerCatalog.regression.test.mjs ', 'teste: tests/p3SidebarNoHorizontalScroll.regression.test.mjs ']
+HEAD_FAILURES ['teste: tests/factoryBlockerCatalog.regression.test.mjs ', 'teste: tests/p3SidebarNoHorizontalScroll.regression.test.mjs ', 'teste: tests/salesExactPatientCheckoutUiP0000.regression.test.mjs ', 'teste: tests/salesExactPerPatientBillingP0000.test.ts ']
+NEW_FAILURES ['teste: tests/salesExactPatientCheckoutUiP0000.regression.test.mjs ', 'teste: tests/salesExactPerPatientBillingP0000.test.ts ']
