@@ -8,7 +8,9 @@ const handler = dashboard.match(/  const handleConfirmMood = async \(\) => \{[\s
 assert.ok(handler, 'Mood save handler must exist');
 assert.match(dashboard, /const wellbeingLoadRevisionRef = useRef\(0\)/);
 assert.match(dashboard, /const revisionAtStart = wellbeingLoadRevisionRef\.current/);
-assert.match(dashboard, /revisionAtStart !== wellbeingLoadRevisionRef\.current/);
+assert.match(dashboard, /revisionAtStart === wellbeingLoadRevisionRef\.current/);
+assert.match(dashboard, /const persistedIds = new Set\(current\.map/);
+assert.match(dashboard, /return \[\.\.\.current, \.\.\.fetched\.filter/);
 assert.match(dashboard, /portalAnamnesisContextRef\.current !== portalAnamnesisContextKey/);
 assert.match(dashboard, /\[isKidsProfile, portalAnamnesisContextKey, wellbeingPeriod\]/);
 assert.match(dashboard, /setWellbeingCheckins\(\[\]\);\n    if \(isKidsProfile/);
