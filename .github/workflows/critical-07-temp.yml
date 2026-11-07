@@ -1,4 +1,4 @@
-name: Temporary item 07 extraction validation
+name: Temporary item 07 checkout extraction validation
 on:
   push:
     branches:
