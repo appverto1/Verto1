@@ -126,6 +126,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   });
   const [settingsMessage, setSettingsMessage] = useState('');
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const patientSettingsSaveInFlightRef = useRef(false);
   const [isEnablingNotifications, setIsEnablingNotifications] = useState(false);
   const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(() => {
     if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
@@ -1228,12 +1229,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const handleSavePatientSettings = async () => {
+    if (isSavingSettings || patientSettingsSaveInFlightRef.current) return;
     const nextName = settingsForm.name.trim();
     if (!nextName) {
       setSettingsMessage('Informe seu nome para salvar.');
       return;
     }
 
+    patientSettingsSaveInFlightRef.current = true;
+    const contextAtSubmit = portalAnamnesisContextRef.current;
     setIsSavingSettings(true);
     setSettingsMessage('');
     try {
@@ -1246,8 +1250,15 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         profilePicturePath: (settingsForm as any).profilePicturePath || null
       });
 
-      if (!result?.success && !result?.queued) {
-        setSettingsMessage(result?.error || 'Não foi possível salvar suas configurações.');
+      // The offline outbox is not proof that the backend persisted the profile.
+      // A late response from another patient/clinic must not update this portal.
+      if (portalAnamnesisContextRef.current !== contextAtSubmit) return;
+      if (result?.success !== true || result?.queued === true || result?.pending === true || result?.offline === true) {
+        setSettingsMessage(
+          result?.queued === true || result?.pending === true || result?.offline === true
+            ? 'Alteração pendente de confirmação do servidor. Verifique a sincronização antes de sair.'
+            : result?.error || 'Não foi possível confirmar a gravação das configurações.'
+        );
         return;
       }
 
@@ -1262,11 +1273,16 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         profilePicture: persistedPicture || '',
         profilePicturePath: persistedPath || ''
       }));
-      setSettingsMessage(result?.queued ? 'Configurações salvas localmente. A sincronização será retomada automaticamente.' : 'Configurações salvas com sucesso.');
-      setTimeout(() => setIsSettingsOpen(false), 700);
+      setSettingsMessage('Configurações salvas com sucesso.');
+      setTimeout(() => {
+        if (portalAnamnesisContextRef.current === contextAtSubmit) setIsSettingsOpen(false);
+      }, 700);
     } catch (error: any) {
-      setSettingsMessage(error?.message || 'Não foi possível salvar suas configurações.');
+      if (portalAnamnesisContextRef.current === contextAtSubmit) {
+        setSettingsMessage(error?.message || 'Não foi possível salvar suas configurações.');
+      }
     } finally {
+      patientSettingsSaveInFlightRef.current = false;
       setIsSavingSettings(false);
     }
   };
