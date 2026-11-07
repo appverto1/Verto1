@@ -50,4 +50,55 @@ assert.match(
   'anamnese enviada deve permanecer bloqueada no portal'
 );
 
+
+const portalLoad = dashboard.slice(
+  dashboard.indexOf('const loadPortalAnamnesis = async'),
+  dashboard.indexOf('const openPortalAppointmentDetail = async'),
+);
+assert.match(
+  portalLoad,
+  /if \(!portalAnamnesisDraftDirtyRef\.current\)\s*\{\s*setPortalAnamnesisDraft\(/,
+  'GET tardio não pode substituir respostas ainda não salvas',
+);
+assert.match(
+  portalLoad,
+  /document\.visibilityState !== 'visible' \|\| !portalPatientId \|\| portalAnamnesisDraftDirtyRef\.current/,
+  'focus e visibilitychange não devem refazer GET durante edição não salva',
+);
+assert.match(
+  portalLoad,
+  /portalAnamnesisDraftDirtyRef\.current = false;[\s\S]*?portalAnamnesisMutationRef\.current = null;[\s\S]*?setPortalAnamnesisDraft\(\{\}\)/,
+  'trocar paciente ou clínica deve descartar somente o estado local do contexto anterior',
+);
+assert.match(
+  dashboard,
+  /const fieldDisabled = portalAnamnesisLocked \|\| isPrefilledByClinic \|\| portalAnamnesisState\.saving;/,
+  'campos não podem mudar enquanto o Save ou Enviar aguarda ACK',
+);
+assert.match(
+  dashboard,
+  /const update = \(nextValue: any\) => \{\s*portalAnamnesisDraftDirtyRef\.current = true;\s*setPortalAnamnesisDraft\(/,
+  'digitar marca o rascunho como não confirmado',
+);
+
+const portalMutations = dashboard.slice(
+  dashboard.indexOf('const savePortalAnamnesisDraft = async'),
+  dashboard.indexOf('const portalPlaceholderPanel ='),
+);
+for (const operation of ['savePortalAnamnesisDraft', 'submitPortalAnamnesis']) {
+  const start = portalMutations.indexOf('const ' + operation + ' = async');
+  const next = portalMutations.indexOf('const ', start + 7);
+  const body = portalMutations.slice(start, next > start ? next : undefined);
+  assert.match(body, /portalAnamnesisMutationRef\.current\) return;/,
+    operation + ': envio duplo síncrono deve ser bloqueado');
+  assert.match(body, /portalAnamnesisMutationRef\.current !== ticket \|\| portalAnamnesisContextRef\.current !== contextKey/,
+    operation + ': resposta tardia não pode atualizar outra clínica ou paciente');
+  assert.match(body, /if \(result\?\.success !== true\)/,
+    operation + ': apenas ACK positivo é persistência');
+  assert.match(body, /portalAnamnesisDraftDirtyRef\.current = false;/,
+    operation + ': somente ACK confirmado libera refetch do rascunho');
+  assert.match(body, /finally \{[\s\S]*?portalAnamnesisMutationRef\.current = null;/,
+    operation + ': lock deve ser liberado após falha ou sucesso');
+}
+
 console.log('anamnesisPortalReadOnlyStatus.regression.test.mjs: ok');
