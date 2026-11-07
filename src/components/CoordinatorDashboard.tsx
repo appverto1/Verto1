@@ -58,6 +58,7 @@ import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { ProfessionalMobileDrawerHeader, SettingsMenu } from "./SettingsMenu";
 import { TutorialOverlay } from "./Tutorial";
+import { useClinicalGuidedTutorial } from "../hooks/useClinicalGuidedTutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
 import { BillingCommunicationNotifications } from "./BillingCommunicationNotifications";
@@ -255,7 +256,6 @@ type NavigationNode = {
 // triggers/snapshots are deployed. Never promise an unpersisted price.
 const GROUP_FINANCIAL_PLAN_EDITOR_ENABLED = true;
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
-const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
 
 const createWeeklyScheduleSlotId = () =>
   `weekly-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -1055,9 +1055,6 @@ export function CoordinatorDashboard({
     return () => media.removeEventListener("change", sync);
   }, []);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
-  const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
-  const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
-  const guidedTutorialLoadedKeyRef = useRef("");
   const [expandedNavigationSections, setExpandedNavigationSections] = useState<Record<string, boolean>>({
     "care-root": true,
     "tiss-root": true,
@@ -11253,29 +11250,6 @@ export function CoordinatorDashboard({
     .filter((group) => group.length > 0);
 
   const guidedTutorialModuleSignature = Array.from(organizationModules).sort().join(",");
-  const guidedTutorialContextKey = [
-    "verto:guided-tutorial",
-    GUIDED_TUTORIAL_REVISION,
-    String(user?.id || "").trim(),
-    workspaceScopeKey || "global",
-    normalizedRole || "unknown",
-    moduleAccessMode,
-    guidedTutorialModuleSignature || "baseline",
-  ].join(":");
-
-  // A completed walkthrough belongs to this user, clinic and role. Changes in
-  // contracted modules must not present the initial tour again on the next login.
-  // Keep guidedTutorialContextKey for compatibility with already saved progress.
-  const guidedTutorialRoleKey = [
-    "verto:guided-tutorial:role",
-    GUIDED_TUTORIAL_REVISION,
-    String(user?.id || "").trim(),
-    workspaceScopeKey || "global",
-    normalizedRole || "unknown",
-  ].join(":");
-
-  // The onboarding tutorial points only to the help icon. Navigation between
-  // modules lives in the Help Center, not in a device-dependent guided tour.
   const guidedTutorialSteps = [
     {
       targetId: "help-center",
@@ -11285,82 +11259,26 @@ export function CoordinatorDashboard({
     },
   ];
 
-  const persistGuidedTutorial = useCallback((status: "active" | "skipped" | "completed", step: number) => {
-    try {
-      const progress = JSON.stringify({
-        revision: GUIDED_TUTORIAL_REVISION,
-        status,
-        step,
-        updatedAt: new Date().toISOString(),
-      });
-      window.localStorage.setItem(guidedTutorialRoleKey, progress);
-      window.localStorage.setItem(guidedTutorialContextKey, progress);
-    } catch {
-      // Local persistence is best-effort; live tutorial behavior still works.
-    }
-  }, [guidedTutorialContextKey, guidedTutorialRoleKey]);
-
-  const startGuidedTutorial = useCallback(() => {
-    if (!authorizationHydrated || guidedTutorialSteps.length === 0) return;
-    setGuidedTutorialStep(0);
-    persistGuidedTutorial("active", 0);
-    setRunGuidedTutorial(true);
-  }, [authorizationHydrated, guidedTutorialSteps.length, persistGuidedTutorial]);
-
-  const handleGuidedTutorialStepChange = useCallback((nextStep: number) => {
-    const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, nextStep));
-    setGuidedTutorialStep(safeStep);
-    persistGuidedTutorial("active", safeStep);
-  }, [guidedTutorialSteps.length, persistGuidedTutorial]);
+  const {
+    runGuidedTutorial,
+    guidedTutorialStep,
+    startGuidedTutorial,
+    handleGuidedTutorialStepChange,
+    closeGuidedTutorial,
+  } = useClinicalGuidedTutorial({
+    userId: String(user?.id || "").trim(),
+    clinicId: workspaceScopeKey,
+    role: normalizedRole,
+    moduleAccessMode,
+    moduleSignature: guidedTutorialModuleSignature,
+    authorizationHydrated,
+    stepCount: guidedTutorialSteps.length,
+  });
 
   const handleGuidedTutorialClose = useCallback((reason: "pause" | "skip" | "complete" = "pause") => {
-    const status = reason === "skip" ? "skipped" : reason === "complete" ? "completed" : "active";
-    persistGuidedTutorial(status, guidedTutorialStep);
-    setRunGuidedTutorial(false);
+    closeGuidedTutorial(reason);
     setIsMobileMenuOpen(false);
-  }, [guidedTutorialStep, persistGuidedTutorial]);
-
-  useEffect(() => {
-    if (!authorizationHydrated || !String(user?.id || "").trim() || guidedTutorialSteps.length === 0) return;
-    if (guidedTutorialLoadedKeyRef.current === guidedTutorialContextKey) return;
-    guidedTutorialLoadedKeyRef.current = guidedTutorialContextKey;
-
-    let stored: any = null;
-    try {
-      const stableRaw = window.localStorage.getItem(guidedTutorialRoleKey);
-      const legacyRaw = stableRaw ? null : window.localStorage.getItem(guidedTutorialContextKey);
-      stored = stableRaw || legacyRaw ? JSON.parse(stableRaw || legacyRaw || '{}') : null;
-      if (legacyRaw && stored?.revision === GUIDED_TUTORIAL_REVISION) {
-        // Preserve previously completed/skipped state when upgrading the key.
-        window.localStorage.setItem(guidedTutorialRoleKey, legacyRaw);
-      }
-    } catch {
-      stored = null;
-    }
-
-    if (stored?.revision === GUIDED_TUTORIAL_REVISION) {
-      if (stored.status === "active") {
-        const safeStep = Math.max(0, Math.min(guidedTutorialSteps.length - 1, Number(stored.step || 0)));
-        setGuidedTutorialStep(safeStep);
-        setRunGuidedTutorial(true);
-      } else {
-        // Switching role/clinic must not leave another context's popup open.
-        setRunGuidedTutorial(false);
-      }
-      return;
-    }
-
-    setGuidedTutorialStep(0);
-    persistGuidedTutorial("active", 0);
-    setRunGuidedTutorial(true);
-  }, [
-    authorizationHydrated,
-    guidedTutorialContextKey,
-    guidedTutorialRoleKey,
-    guidedTutorialSteps.length,
-    persistGuidedTutorial,
-    user?.id,
-  ]);
+  }, [closeGuidedTutorial]);
 
   // The tutorial step array is recreated on each dashboard render. Depend on
   // its stable target ID instead, so an explicit menu opening is not undone.
