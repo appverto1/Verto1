@@ -41,4 +41,34 @@ for (const [name, source] of [['TeamManagement', team], ['InvitationModal', moda
 assert.match(team, /await fetchInvitations\(request\.tenantKey\)/, 'team refresh must be bound to the request clinic');
 assert.match(modal, /setInvitations\(\(current\) => \[/, 'modal must append without stale state capture');
 
+// Item 16: acceptance must use the same synchronous gate, but be scoped to
+// the invitation itself (never to a clinic or role supplied by the browser).
+const acceptance = readFileSync('src/components/ClinicInvitationAcceptance.tsx', 'utf8');
+assert.match(acceptance, /createClinicInvitationSubmissionGate\(\)/);
+assert.match(acceptance, /acceptanceGateRef\.current\.hasPending\(\)/);
+assert.match(acceptance, /acceptanceGateRef\.current\.begin\(invitationId\)/);
+assert.match(acceptance, /acceptanceGateRef\.current\.isCurrent\(request, activeInvitationIdRef\.current\)/);
+assert.match(acceptance, /acceptanceGateRef\.current\.end\(request\)/);
+assert.match(acceptance, /acceptanceGateRef\.current\.reset\(\)/);
+assert.match(acceptance, /accepted\?\.invitationId === invitationId \? accepted : null/);
+assert.match(acceptance, /if \(!currentAcceptance\?\.user \|\| acceptanceGateRef\.current\.hasPending\(\)\) return/);
+assert.match(acceptance, /await dataService\.acceptInvitation\(invitationId\)/);
+assert.match(acceptance, /await onAccepted\(currentAcceptance\.user\)/);
+assert.doesNotMatch(acceptance, /dataService\.acceptInvitation\(.*(?:clinicId|role|specialty)/);
+
+const acceptanceGate = createClinicInvitationSubmissionGate();
+const inviteA = '11111111-1111-4111-8111-111111111111';
+const inviteB = '22222222-2222-4222-8222-222222222222';
+const firstAccept = acceptanceGate.begin(inviteA);
+assert.ok(firstAccept);
+assert.equal(acceptanceGate.begin(inviteA), null, 'two fast accept clicks must yield one request');
+assert.equal(acceptanceGate.isCurrent(firstAccept, inviteB), false, 'response for A cannot update invitation B');
+acceptanceGate.reset();
+const secondAccept = acceptanceGate.begin(inviteB);
+assert.ok(secondAccept);
+assert.equal(acceptanceGate.end(firstAccept), false, 'old finally cannot release B');
+assert.equal(acceptanceGate.isCurrent(secondAccept, inviteB), true);
+assert.equal(acceptanceGate.end(secondAccept), true);
+assert.equal(acceptanceGate.hasPending(), false);
+
 console.log('clinicInvitationSubmissionGate.regression.test.mjs: ok');
