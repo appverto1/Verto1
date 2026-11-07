@@ -470,6 +470,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [historyPaginationByKey, setHistoryPaginationByKey] = useState<Record<string, PatientHistoryPaginationState>>({});
   const historyRequestsInFlightRef = React.useRef(new Set<string>());
   const [newNote, setNewNote] = useState(""); 
+  const [isSavingNote, setIsSavingNote] = useState(false);
+  const [noteSaveError, setNoteSaveError] = useState('');
+  const noteSaveInFlightRef = useRef(false);
+  const noteSaveIdentityRef = useRef<{ draftKey: string; id: string } | null>(null);
   const [noteMode, setNoteMode] = useState('private'); 
   const [mentionCandidates, setMentionCandidates] = useState<any[]>([]);
   const [selectedMentionUserIds, setSelectedMentionUserIds] = useState<string[]>([]);
@@ -5211,14 +5215,40 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     });
   }, [notes, patient.id, noteMode, noteSearchQuery, noteSubjectFilter, noteDateFilter]);
   
-  const handleAddNoteWithSubject = () => {
-    if (newNote.trim()) {
-      onAddNote(patient.id, newNote, noteMode, newNoteSubject, {
-        mentionUserIds: noteMode === 'professional' ? selectedMentionUserIds : [],
+  const noteSaveContextRef = useRef('');
+  noteSaveContextRef.current = `${patient.id}:${noteMode}`;
+  const handleAddNoteWithSubject = async () => {
+    if (!newNote.trim() || noteSaveInFlightRef.current) return;
+    const context = noteSaveContextRef.current;
+    const text = newNote;
+    const subject = newNoteSubject;
+    const mentions = noteMode === 'professional' ? [...selectedMentionUserIds] : [];
+    const draftKey = JSON.stringify([context, text, subject, mentions]);
+    if (noteSaveIdentityRef.current?.draftKey !== draftKey) {
+      noteSaveIdentityRef.current = { draftKey, id: crypto.randomUUID() };
+    }
+    const clientNoteId = noteSaveIdentityRef.current.id;
+    noteSaveInFlightRef.current = true;
+    setIsSavingNote(true);
+    setNoteSaveError('');
+    try {
+      const result = await onAddNote(patient.id, text, noteMode, subject, {
+        mentionUserIds: mentions, requireServerAck: true, clientNoteId,
       });
-      setNewNote("");
-      setNewNoteSubject("");
-      setSelectedMentionUserIds([]);
+      if (noteSaveContextRef.current !== context) return;
+      if (result?.success !== true || result?.pending === true || result?.offline === true || !result?.data?.id) {
+        setNoteSaveError(String(result?.error || 'Não foi possível confirmar a anotação no servidor.'));
+        return;
+      }
+      noteSaveIdentityRef.current = null;
+      setNewNote((current: string) => current === text ? '' : current);
+      setNewNoteSubject((current: string) => current === subject ? '' : current);
+      setSelectedMentionUserIds((current: string[]) => current.filter((id) => !mentions.includes(id)));
+    } catch {
+      if (noteSaveContextRef.current === context) setNoteSaveError('Falha ao salvar anotação. Tente novamente.');
+    } finally {
+      noteSaveInFlightRef.current = false;
+      setIsSavingNote(false);
     }
   };
 
@@ -11744,7 +11774,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               {noteMode === 'professional' && selectedMentionUserIds.length > 0 && (
                 <p className="mt-2 text-[10px] font-medium text-indigo-500">{selectedMentionUserIds.length} membro(s) serão notificados.</p>
               )}
-              <button onClick={handleAddNoteWithSubject} className={`w-full mt-3 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-[#7551FF]' : noteMode === 'patient' ? 'bg-[#7a32fc]' : 'bg-indigo-600'}`}>{noteMode === 'private' ? "Salvar Nota" : noteMode === 'patient' ? "Enviar Mensagem" : "Compartilhar com Equipe"}</button> 
+              {noteSaveError && <p role="alert" className="mt-2 text-xs text-red-500">{noteSaveError}</p>}
+              <button disabled={isSavingNote || !newNote.trim()} onClick={() => void handleAddNoteWithSubject()} className={`w-full mt-3 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center justify-center gap-2 ${noteMode === 'private' ? 'bg-[#7551FF]' : noteMode === 'patient' ? 'bg-[#7a32fc]' : 'bg-indigo-600'}`}>{isSavingNote ? 'Salvando...' : noteMode === 'private' ? "Salvar Nota" : noteMode === 'patient' ? "Enviar Mensagem" : "Compartilhar com Equipe"}</button> 
             </div> 
 
             <div className="space-y-3"> 
