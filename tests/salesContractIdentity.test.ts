@@ -1,6 +1,14 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -20,8 +28,7 @@ const modularCheckout = checkoutCoreSource.slice(checkoutCoreSource.indexOf('con
 const checkoutEmailRoute = server.match(
   /app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout\/email"[\s\S]*?app\.get\(/
 )?.[0] || '';
-const checkoutProcessor = server.match(
-  /const processSalesAssistedCheckoutCompleted = async[\s\S]*?const processSalesAssistedStripeEvent = async/
+const checkoutProcessor = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async[\s\S]*?ITEM09_SOURCE_END/
 )?.[0] || '';
 
 assert.match(builder, /Identidade contratual/);

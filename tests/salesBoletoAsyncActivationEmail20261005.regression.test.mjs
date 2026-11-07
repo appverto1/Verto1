@@ -1,16 +1,23 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 
 const activationFlow = server.match(
   /const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS[\s\S]*?const preparePaidDirectorSessionBootstrap/,
 )?.[0] || '';
-const processPaid = server.match(
-  /const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/,
+const processPaid = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted =[^]*?ITEM09_SOURCE_END/,
 )?.[0] || '';
 const eventRecognizer = server.match(
-  /const isSalesAssistedStripeEvent = async[^]*?const processSalesAssistedStripeEvent = async/,
+  /const isSalesAssistedStripeEvent = async[^]*?ITEM09_SOURCE_END/,
 )?.[0] || '';
 const eventProcessor = server.match(
   /const processSalesAssistedStripeEvent = async[^]*?\/\/ Stripe Payment Link activation webhook/,

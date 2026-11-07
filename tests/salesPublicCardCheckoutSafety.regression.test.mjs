@@ -1,7 +1,15 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -40,8 +48,8 @@ test('backend alone validates test/live keys, accepted snapshot and idempotent C
   assert.match(publicCheckoutRouteSource,/public-modular-checkout:/);
   assert.match(checkoutCoreSource,/operationIdempotencyKey/);
   assert.match(publicCheckoutRouteSource,/stripe\.checkout\.sessions\.create/);
-  assert.match(server,/processSalesAssistedCheckoutCompleted/);
-  assert.match(server,/confirm_sales_assisted_checkout_payment/);
+  assert.match(stripePaidProcessorSource,/processSalesAssistedCheckoutCompleted/);
+  assert.match(stripePaidProcessorSource,/confirm_sales_assisted_checkout_payment/);
   assert.doesNotMatch(transport,/getSupabase|service_role|sk_live_|sk_test_|stripe\.checkout|localStorage|\/webhook/);
 });
 test('payment confirmation, Stripe session binding, recovery and onboarding remain untouched',()=>{

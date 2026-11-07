@@ -1,8 +1,16 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
 import type Stripe from 'stripe';
 import { createSalesAssistedStripeEventHandlers } from '../services/salesAssistedStripeEventHandlers';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const marker = '  const isSalesAssistedStripeEvent = async (\n';
 const markerEnd = '  return { isSalesAssistedStripeEvent, processSalesAssistedStripeEvent };\n';
