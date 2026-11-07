@@ -235,7 +235,7 @@ assert.throws(
 
 const ensureBlock = stripeScheduleSource.match(/const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
 )?.[0] || '';
-const reconcileBlock = stripeScheduleSource.match(/const reconcileSalesAssistedCheckout = async \([\s\S]*?\n  const isSalesAssistedStripeEvent = async \(/
+const reconcileBlock = stripeScheduleSource.match(/const reconcileSalesAssistedCheckout = async \([\s\S]*?ITEM09_SOURCE_END/
 )?.[0] || '';
 const reserveBlock = stripeWebhookEventStateSource.match(/async function reserveStripeWebhookEvent\([\s\S]*?\n}\n\nasync function markStripeWebhookEventStatus/
 )?.[0] || '';

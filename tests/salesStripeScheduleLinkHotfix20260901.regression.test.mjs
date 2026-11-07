@@ -10,6 +10,8 @@ const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinanc
 const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
 const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
 const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
+const assistedHandlerSource = readItem09Source('services/salesAssistedStripeEventHandlers.ts','utf8');
+const checkoutCoreSource = readItem09Source('services/salesModularCheckoutCore.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 
@@ -18,11 +20,15 @@ const scheduleBlock = stripeScheduleSource.match(/const stripeExpandableId = \(v
 
 const ensureBlock = stripeScheduleSource.match(/const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
 )?.[0] || '';
-const checkoutEventBlock = server.match(
-  /if \(event\.type === "checkout\.session\.completed"\) \{[\s\S]*?return \{ handled: true, result \};\n    \}/
+// Inspect the relocated assisted-event processor, not the monolithic server.
+const assistedPaidProcessorSource = assistedHandlerSource.slice(
+  assistedHandlerSource.indexOf('const processSalesAssistedStripeEvent = async ('),
+);
+const checkoutEventBlock = assistedPaidProcessorSource.match(
+  /if \(\s*event\.type === "checkout\.session\.completed" \|\|[\s\S]*?return \{ handled: true, result \};\n    \}/
 )?.[0] || '';
-const invoicePaidBlock = server.match(
-  /if \(\n      event\.type === "invoice\.paid"[\s\S]*?return \{ handled: true, result \};\n      \}\n    \}/
+const invoicePaidBlock = assistedPaidProcessorSource.match(
+  /if \(\s*event\.type === "invoice\.paid" \|\|[\s\S]*?return \{ handled: true, result \};\n      \}/
 )?.[0] || '';
 const prepareActivationBlock = item10ReconcileSource.match(
   /app\.post\(\n    "\/api\/public\/sales-offers\/:token\/prepare-activation"[\s\S]*?\n  \/\/ ITEM10_SOURCE_END/
@@ -78,7 +84,7 @@ assert.match(prepareActivationBlock, /reconcileSalesAssistedCheckout\(stripe, se
 
 // Escopo cirúrgico: esta entrega corrige o link/pós-pagamento e não antecipa a
 // mudança comercial posterior de remoção de trial/precificação.
-assert.match(server, /resolveFrozenSalesOfferTrialDays\(offer\)/);
-assert.match(server, /trial_period_days: frozenTrialDays/);
+assert.match(checkoutCoreSource, /resolveFrozenSalesOfferTrialDays\(offer\)/);
+assert.match(checkoutCoreSource, /trial_period_days: frozenTrialDays/);
 
 console.log('salesStripeScheduleLinkHotfix20260901.regression.test.mjs: ok');

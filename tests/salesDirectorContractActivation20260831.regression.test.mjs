@@ -63,7 +63,7 @@ assert.match(verification, /accessProfile\.mode[\s\S]*?"contract"/);
 assert.match(verification, /everyActiveModuleComesFromContract/);
 
 assert.match(stripeEntitlementsSource, /apply_sales_offer_module_entitlements_v2/);
-assert.match(server, /p_stripe_event_created_at:\s*params\.stripeEventCreatedAt/);
+assert.match(stripeEntitlementsSource, /p_stripe_event_created_at:\s*params\.stripeEventCreatedAt/);
 assert.match(finalize, /activation_channel:\s*requireActivationRecord\s*\?\s*"legacy_activation"\s*:\s*"stripe_payment"/);
 
 // Historical activation URLs remain readable for already-issued links, but are not used by new paid checkout.
