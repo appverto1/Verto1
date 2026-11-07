@@ -39,7 +39,7 @@ for(const g of groups){
  const injections=names.map(name=>{
    const depDecl=new RegExp('(^|\\n)\\s*(?:const|let|(?:async )?function)\\s+'+name+'\\b','g');
    const m=depDecl.exec(server);
-   if(m && m.index>originalPos) {
+   if(m && m.index>originalPos && g.id!=='eventState') {
      console.log('ITEM09_LAZY_LATE_DEPENDENCY',g.id,name,m.index,originalPos);
      const tail=server.slice(m.index,m.index+150);
      if(!new RegExp('\\b'+name+'\\s*(?:=\\s*(?:async\\s*)?\\(|=\\s*async\\b|\\()').test(tail))
