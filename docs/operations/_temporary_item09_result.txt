@@ -3,7 +3,7 @@ npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more 
 npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
 npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
 
-added 469 packages in 8s
+added 469 packages in 10s
 ITEM09_EXTRACTION_BEFORE_AFTER 89766 88426 DELTA 1340
 ITEM09_EXTRACTED_GROUP eventState 89 5fbe9a6520d2e47044c51446909e830392e0cf187b10590c246fa05a7da8b179 services/stripeWebhookEventState.ts
 ITEM09_EXTRACTED_GROUP discount 95 1e722fcf5eaf97d319335628afe5097510c5badd812e5d59bf5d3aaf7c75b97e services/salesSubscriptionDiscountSync.ts
@@ -32,25 +32,35 @@ TAP version 13
 # Subtest: all six Stripe groups retain exact audited source content and run from module factories
 ok 1 - all six Stripe groups retain exact audited source content and run from module factories
   ---
-  duration_ms: 73.739497
+  duration_ms: 72.720468
   ...
 # Subtest: Stripe webhook registrations retain their precise order, raw signature and idempotent reserve
 ok 2 - Stripe webhook registrations retain their precise order, raw signature and idempotent reserve
   ---
-  duration_ms: 1.357665
+  duration_ms: 1.28508
   ...
 # Subtest: subscription schedule and paid-state authority stay in backend without new payment creation
 ok 3 - subscription schedule and paid-state authority stay in backend without new payment creation
   ---
-  duration_ms: 0.262138
+  duration_ms: 0.310051
   ...
 ... END OF RESULT ...
-  duration_ms: 1.357665
+ITEM09_STATIC_ASSERTIONS_UPDATED 23 ['tests/legacySalesActivationStripeWebhookRoute.test.ts', 'tests/salesActivationEmailConcurrency.test.ts', 'tests/salesActivationExpiredLinkReissue.test.mjs', 'tests/salesActivationPersistedStripeState.test.mjs', 'tests/salesAssistedStripeEventHandlers.test.ts', 'tests/salesAutomaticDirectorPostPayment20260831.regression.test.mjs', 'tests/salesBoletoAsyncActivationEmail20261005.regression.test.mjs', 'tests/salesBoletoPaymentPendingSafety.regression.test.mjs', 'tests/salesCheckoutProvisioning.test.ts', 'tests/salesContractIdentity.test.ts', 'tests/salesDirectorContractActivation20260831.regression.test.mjs', 'tests/salesDirectorProvisioningRaceRecovery20260901.regression.test.mjs', 'tests/salesModularContractEmailAuthority20260901.regression.test.mjs', 'tests/salesModularStripeAssisted.test.ts', 'tests/salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs', 'tests/salesPaidDirectorOnboarding20260831.regression.test.mjs', 'tests/salesPublicCardCheckoutSafety.regression.test.mjs', 'tests/salesStripeModularScheduleBoundaryP0_20260902.regression.test.mjs', 'tests/salesStripeScheduleLinkHotfix20260901.regression.test.mjs', 'tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs', 'tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs', 'tests/stripeCanonicalWebhookRoute.test.ts', 'tests/stripeWebhookCoreExtraction.regression.test.mjs']
+TAP version 13
+# Subtest: all six Stripe groups retain exact audited source content and run from module factories
+ok 1 - all six Stripe groups retain exact audited source content and run from module factories
+  ---
+  duration_ms: 72.720468
+  ...
+# Subtest: Stripe webhook registrations retain their precise order, raw signature and idempotent reserve
+ok 2 - Stripe webhook registrations retain their precise order, raw signature and idempotent reserve
+  ---
+  duration_ms: 1.28508
   ...
 # Subtest: subscription schedule and paid-state authority stay in backend without new payment creation
 ok 3 - subscription schedule and paid-state authority stay in backend without new payment creation
   ---
-  duration_ms: 0.262138
+  duration_ms: 0.310051
   ...
 1..3
 # tests 3
@@ -60,42 +70,42 @@ ok 3 - subscription schedule and paid-state authority stay in backend without ne
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 83.130461
+# duration_ms 83.591915
 TAP version 13
 # Subtest: first valid Stripe event inserts processing claim exactly once
 ok 1 - first valid Stripe event inserts processing claim exactly once
   ---
-  duration_ms: 1.034771
+  duration_ms: 1.243559
   ...
 # Subtest: concurrent duplicate deliveries cannot claim a second processing lease
 ok 2 - concurrent duplicate deliveries cannot claim a second processing lease
   ---
-  duration_ms: 0.627359
+  duration_ms: 0.715533
   ...
 # Subtest: processed event is permanently deduplicated
 ok 3 - processed event is permanently deduplicated
   ---
-  duration_ms: 0.319046
+  duration_ms: 0.484139
   ...
 # Subtest: failed event retries with atomically incremented attempt and cleared error
 ok 4 - failed event retries with atomically incremented attempt and cleared error
   ---
-  duration_ms: 0.255534
+  duration_ms: 0.310972
   ...
 # Subtest: stale processing can be claimed by one retry only; fresh processing cannot
 ok 5 - stale processing can be claimed by one retry only; fresh processing cannot
   ---
-  duration_ms: 0.258252
+  duration_ms: 0.330581
   ...
 # Subtest: missing IDs and non-duplicate database errors fail closed
 ok 6 - missing IDs and non-duplicate database errors fail closed
   ---
-  duration_ms: 0.370895
+  duration_ms: 0.488847
   ...
 # Subtest: status marking never creates a new webhook event and preserves failure code
 ok 7 - status marking never creates a new webhook event and preserves failure code
   ---
-  duration_ms: 0.177089
+  duration_ms: 0.235019
   ...
 1..7
 # tests 7
@@ -105,42 +115,42 @@ ok 7 - status marking never creates a new webhook event and preserves failure co
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 10.727717
+# duration_ms 13.183153
 TAP version 13
 # Subtest: non-sales Stripe event cannot read billing data or create a schedule
 ok 1 - non-sales Stripe event cannot read billing data or create a schedule
   ---
-  duration_ms: 1.580729
+  duration_ms: 1.780757
   ...
 # Subtest: wrong Stripe environment fails closed before SQL and Stripe calls
 ok 2 - wrong Stripe environment fails closed before SQL and Stripe calls
   ---
-  duration_ms: 0.408361
+  duration_ms: 0.435207
   ...
 # Subtest: a missing canonical Stripe subscription ID does not create a schedule
 ok 3 - a missing canonical Stripe subscription ID does not create a schedule
   ---
-  duration_ms: 0.180963
+  duration_ms: 0.200839
   ...
 # Subtest: missing checkout link does not create a subscription or schedule
 ok 4 - missing checkout link does not create a subscription or schedule
   ---
-  duration_ms: 0.271639
+  duration_ms: 0.33023
   ...
 # Subtest: cross-offer or cross-lead Stripe metadata is rejected before mutation
 ok 5 - cross-offer or cross-lead Stripe metadata is rejected before mutation
   ---
-  duration_ms: 0.287127
+  duration_ms: 0.307107
   ...
 # Subtest: a checkout linked to a different subscription is rejected without a duplicate
 ok 6 - a checkout linked to a different subscription is rejected without a duplicate
   ---
-  duration_ms: 0.150351
+  duration_ms: 0.20181
   ...
 # Subtest: one-phase subscription link is persisted without creating another Stripe subscription
 ok 7 - one-phase subscription link is persisted without creating another Stripe subscription
   ---
-  duration_ms: 0.371156
+  duration_ms: 0.449268
   ...
 1..7
 # tests 7
@@ -150,7 +160,7 @@ ok 7 - one-phase subscription link is persisted without creating another Stripe 
 # cancelled 0
 # skipped 0
 # todo 0
-# duration_ms 11.510874
+# duration_ms 12.152661
 
 > react-example@0.0.0 build
 > vite build
@@ -207,21 +217,11 @@ computing gzip size...
 - Using dynamic import() to code-split the application
 - Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
 - Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
-[32m✓ built in 14.25s[39m
+[32m✓ built in 16.96s[39m
 
 > react-example@0.0.0 check:docker-runtime-imports
 > node scripts/check-docker-runtime-imports.mjs
 
 Docker runtime imports covered (213 files).
-ITEM09_PREMAIN_CANDIDATE_EXIT=1
-  ✗ teste: tests/salesBoletoPaymentPendingSafety.regression.test.mjs — TAP version 13
-  ✗ teste: tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs — TAP version 13
-  ✗ teste: tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs — file:///home/runner/work/Verto1/Verto1/tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs:21
-  ✗ teste: tests/factoryBlockerCatalog.regression.test.mjs — node:internal/modules/run_main:123
-  ✗ teste: tests/p3SidebarNoHorizontalScroll.regression.test.mjs — node:internal/modules/run_main:123
-  ✗ teste: tests/salesExactPerPatientBillingP0000.test.ts — node:internal/modules/run_main:123
-Preparing worktree (detached HEAD 30d57fe3)
-HEAD is now at 30d57fe3 refactor(staging): modularize item07 public acceptance and Stripe Checkout
-BASELINE_FAILURES ['teste: tests/factoryBlockerCatalog.regression.test.mjs ', 'teste: tests/p3SidebarNoHorizontalScroll.regression.test.mjs ']
-CANDIDATE_FAILURES ['teste: tests/factoryBlockerCatalog.regression.test.mjs ', 'teste: tests/p3SidebarNoHorizontalScroll.regression.test.mjs ', 'teste: tests/salesBoletoPaymentPendingSafety.regression.test.mjs ', 'teste: tests/salesExactPerPatientBillingP0000.test.ts ', 'teste: tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs ', 'teste: tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs ']
-NEW_REGRESSIONS ['teste: tests/salesBoletoPaymentPendingSafety.regression.test.mjs ', 'teste: tests/salesExactPerPatientBillingP0000.test.ts ', 'teste: tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs ', 'teste: tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs ']
+ITEM09_PREMAIN_EXIT 1 FAILURES ['tests/factoryBlockerCatalog.regression.test.mjs', 'tests/p3SidebarNoHorizontalScroll.regression.test.mjs', 'tests/salesBoletoPaymentPendingSafety.regression.test.mjs', 'tests/salesExactPerPatientBillingP0000.test.ts', 'tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs', 'tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs']
+ITEM09_UNEXPECTED_FAILURES ['tests/salesBoletoPaymentPendingSafety.regression.test.mjs', 'tests/salesExactPerPatientBillingP0000.test.ts', 'tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs', 'tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs']
