@@ -10,7 +10,7 @@ import { LogoVerto } from './Common';
 import { ModularOfferDetails } from './ModularPublicOfferDetails';
 export { ModularOfferDetails } from './ModularPublicOfferDetails';
 import { establishPublicSalesDirectorSession } from '../services/publicSalesDirectorSession';
-import { loadPublicSalesOfferResponse } from '../services/publicSalesOfferTransport';
+import { loadPublicSalesOfferResponse, requireConfirmedPublicSalesOffer } from '../services/publicSalesOfferTransport';
 import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
 import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse } from '../services/publicSalesPostPaymentTransport';
 import {
@@ -347,12 +347,10 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
           if (!cancelled) { setOfferUnavailable(true); setError(''); }
           return;
         }
-        if (!response.ok || data?.success === false) {
-          throw new Error(data?.message || data?.error || 'Oferta indisponível.');
-        }
+        const confirmedOffer = requireConfirmedPublicSalesOffer(response, data);
         if (!cancelled) {
-          setOffer(data.offer);
-          setAcceptedAt(data.offer?.acceptedAt || null);
+          setOffer(confirmedOffer);
+          setAcceptedAt(confirmedOffer?.acceptedAt || null);
         }
       } catch (loadError: any) {
         if (!cancelled) setError(loadError?.message || 'Não foi possível carregar esta oferta.');
