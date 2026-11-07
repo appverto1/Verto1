@@ -1,4 +1,4 @@
-name: Temporary item09 Stripe lazy-initialization validation
+name: Temporary item09 Stripe module typecheck and regression gate
 on:
   push:
     branches:
