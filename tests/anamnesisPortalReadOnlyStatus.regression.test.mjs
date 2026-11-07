@@ -93,6 +93,8 @@ for (const [operation, body] of [
 ]) {
   assert.match(body, /portalAnamnesisMutationRef\.current\) return;/,
     operation + ': envio duplo síncrono deve ser bloqueado');
+  assert.match(body, /portalAnamnesisRequestRef\.current \+= 1;/,
+    operation + ': GET anterior deve ser invalidado antes de gravar');
   assert.match(body, /portalAnamnesisMutationRef\.current !== ticket \|\| portalAnamnesisContextRef\.current !== contextKey/,
     operation + ': resposta tardia não pode atualizar outra clínica ou paciente');
   assert.match(body, /if \(result\?\.success !== true\)/,
