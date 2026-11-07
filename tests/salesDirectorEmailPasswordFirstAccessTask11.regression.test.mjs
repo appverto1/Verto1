@@ -4,13 +4,15 @@ import { test } from 'node:test';
 
 const ui = readFileSync('src/components/SalesActivationAccess.tsx', 'utf8');
 const landing = readFileSync('src/components/LandingPage.tsx', 'utf8');
+const rules = readFileSync('src/utils/salesActivationPasswordRules.ts','utf8');
+const transport = readFileSync('src/services/salesActivationPasswordTransport.ts','utf8');
 const server = readFileSync('server.ts', 'utf8');
 const activation = ui.match(/const handlePasswordActivation = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
 const credentialLogin = ui.match(/const finishPasswordLogin = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
-const passwordRoute = server.match(/app\.post\(\s*"\/api\/public\/sales-activations\/:token\/password"[\s\S]*?const stripeSubscriptionToEntitlementStatus/)?.[0] || '';
+const passwordRoute = readFileSync('services/publicSalesActivationPasswordRoute.ts', 'utf8');
 
 test('director password is strong and confirmed before the single activation POST', () => {
-  assert.match(ui, /if \(value\.length < 12\)/);
+  assert.match(rules, /if \(value\.length < 12\)/);
   assert.match(ui, /if \(value\.length > 128\)/);
   assert.match(ui, /if \(!\/\[A-Z\]\//);
   assert.match(ui, /if \(!\/\[a-z\]\//);
@@ -18,9 +20,9 @@ test('director password is strong and confirmed before the single activation POS
   assert.match(ui, /if \(!\/\[\^A-Za-z0-9\]\//);
   assert.match(activation, /validateActivationPassword\(password\)/);
   assert.match(activation, /if \(password !== passwordConfirmation\)/);
-  assert.match(activation, /if \(!passwordSaved\) \{[\s\S]*?fetch\([\s\S]*?\/password/);
-  assert.match(activation, /credentials: 'omit'/);
-  assert.match(activation, /body: JSON\.stringify\(\{ password \}\)/);
+  assert.match(activation, /if \(!passwordSaved\) \{[\s\S]*?persistPublicSalesActivationPassword\(token, password\)/);
+  assert.match(transport, /credentials: 'omit'/);
+  assert.match(transport, /body: JSON\.stringify\(\{ password \}\)/);
   assert.doesNotMatch(activation, /window\.location\.assign|checkout\.sessions\.create/);
 });
 
