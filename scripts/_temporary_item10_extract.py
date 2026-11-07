@@ -32,7 +32,7 @@ for g in groups:
     if g['end'] is not None and src.count(g['end'])!=1:raise RuntimeError('Missing/ambiguous ending '+g['name'])
     a=src.index(g['start'])
     if g['name']=='bootstrap':
-        closing=re.search(r'(?m)^  };\\n(?:\\n)?',src[a:])
+        closing=re.search(r'(?m)^  };\n(?:\n)?',src[a:])
         if not closing:raise RuntimeError('Bootstrap final declaration not found')
         b=a+closing.end()
         # The original function ends here, before any existing Stripe factories.
