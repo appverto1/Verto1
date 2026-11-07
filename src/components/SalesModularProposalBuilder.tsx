@@ -32,7 +32,7 @@ import {
 
 import { prepareSalesPublicOffer, copySalesPublicOfferUrl } from '../services/salesPublicOfferLinks';
 import {normalizeContractEmail,isValidContractEmail,resolveFrozenPublicOfferContractEmail} from '../utils/salesPublicOfferContractIdentity';
-import { loadSalesModularProposalData, saveSalesModularScenario, selectSalesModularScenario, renameSalesModularScenario, archiveSalesModularScenario } from '../services/salesModularProposalPersistence';
+import { loadSalesModularProposalData, saveSalesModularScenario, selectSalesModularScenario, renameSalesModularScenario, archiveSalesModularScenario, readConfirmedSalesModularProposalResponse } from '../services/salesModularProposalPersistence';
 import { buildSalesModularProposalDuplicateDraft } from '../utils/salesModularProposalScenarioDraft';
 import {
   applySalesPackageTierSelection,
@@ -401,15 +401,7 @@ export const SalesModularProposalBuilder = ({
         ...(init.headers || {})
       }
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data?.success !== true) {
-      const fetchError = new Error(
-        data?.error || 'Não foi possível concluir esta ação.'
-      );
-      (fetchError as any).code = data?.code;
-      throw fetchError;
-    }
-    return data;
+    return readConfirmedSalesModularProposalResponse(response);
   };
 
   useEffect(() => {
