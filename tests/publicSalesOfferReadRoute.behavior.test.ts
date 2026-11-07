@@ -169,9 +169,18 @@ test('new service owns the unique existing GET and server passes its loader to a
   const end=service.indexOf('  return loadPublicSalesOffer;',start);
   assert.ok(start>=0 && end>start);
   const originalBlock=service.slice(start,end);
+  // The only permitted departure from the original reviewed block is to
+  // use the already-computed customer-facing filtered phases. Without this,
+  // internal commercial lines leak into the anonymous public contract.
+  assert.match(originalBlock,/commercialPhases: sanitizePublicCommercialPhases\(\s*customerFacingCommercialPhases,\s*\)/);
+  const reviewedOriginal = originalBlock.replace(
+    'customerFacingCommercialPhases,\n              ),',
+    'modularSnapshot.commercialPhases,\n              ),',
+  );
+  assert.notEqual(reviewedOriginal,originalBlock);
   let fingerprint=0x811c9dc5;
-  for(let i=0;i<originalBlock.length;i++) {
-    fingerprint=Math.imul(fingerprint^originalBlock.charCodeAt(i),0x01000193)>>>0;
+  for(let i=0;i<reviewedOriginal.length;i++) {
+    fingerprint=Math.imul(fingerprint^reviewedOriginal.charCodeAt(i),0x01000193)>>>0;
   }
   assert.equal(fingerprint.toString(16).padStart(8,'0'),'5d8daf79');
   assert.doesNotMatch(service,/getStripe\(|createOrReuseModularCheckout\(|createCheckoutSession\(/);
