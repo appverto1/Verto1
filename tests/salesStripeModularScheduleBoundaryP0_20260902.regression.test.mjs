@@ -1,7 +1,9 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ProvisioningSource = readItem10Source('services/salesPaidDirectorAccountProvisioning.ts','utf8');
 const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
 const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -239,11 +241,11 @@ const reserveBlock = stripeWebhookEventStateSource.match(/async function reserve
 )?.[0] || '';
 const processPaidBlock = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async \([\s\S]*?\n  ITEM09_SOURCE_END/
 )?.[0] || '';
-const provisionDirectorBlock = server.match(
+const provisionDirectorBlock = item10ProvisioningSource.match(
   /async function provisionPaidSalesDirectorAccount\([\s\S]*?\n  async function finalizeSalesActivationForUser/
 )?.[0] || '';
-const finalizeActivationBlock = server.match(
-  /async function finalizeSalesActivationForUser\([\s\S]*?\n  const mutationActionLabel/
+const finalizeActivationBlock = item10ProvisioningSource.match(
+  /async function finalizeSalesActivationForUser\([\s\S]*?\n  \/\/ ITEM10_SOURCE_END/
 )?.[0] || '';
 const discountSyncBlock = stripeDiscountSource.match(/const syncSalesSubscriptionDiscount = async \([\s\S]*?\n  const eventTypeSubscriptionIsActive/
 )?.[0] || '';

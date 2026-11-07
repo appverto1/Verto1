@@ -1,7 +1,9 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ReconcileSource = readItem10Source('services/publicSalesPostPaymentReconciliationRoute.ts','utf8');
 const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
 const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -22,8 +24,8 @@ const checkoutEventBlock = server.match(
 const invoicePaidBlock = server.match(
   /if \(\n      event\.type === "invoice\.paid"[\s\S]*?return \{ handled: true, result \};\n      \}\n    \}/
 )?.[0] || '';
-const prepareActivationBlock = server.match(
-  /app\.post\(\n    "\/api\/public\/sales-offers\/:token\/prepare-activation"[\s\S]*?\n  registerPublicSalesDirectorSessionRoute\(/
+const prepareActivationBlock = item10ReconcileSource.match(
+  /app\.post\(\n    "\/api\/public\/sales-offers\/:token\/prepare-activation"[\s\S]*?\n  \/\/ ITEM10_SOURCE_END/
 )?.[0] || '';
 
 assert.ok(scheduleBlock, 'bloco de reconciliação de Schedule modular deve existir');

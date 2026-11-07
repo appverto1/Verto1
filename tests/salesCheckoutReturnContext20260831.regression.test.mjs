@@ -1,7 +1,9 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ReconcileSource = readItem10Source('services/publicSalesPostPaymentReconciliationRoute.ts','utf8');
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
@@ -11,7 +13,7 @@ const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8
 const checkoutHelper = server.match(/const SALES_CHECKOUT_RETURN_CONTEXT_PREFIX[^]*?function resolveSalesStripeConfiguration/)?.[0] || '';
 const modularCheckout = checkoutCoreSource.slice(checkoutCoreSource.indexOf('const createOrReuseModularCheckout = async'));
 const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
-const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
+const reconcileRoute = item10ReconcileSource.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 const directorRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 assert.match(checkoutHelper, /SALES_CHECKOUT_RETURN_CONTEXT_PREFIX\s*=\s*"pagamento-"/);

@@ -1,7 +1,10 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10BootstrapSource = readItem10Source('services/paidDirectorSessionBootstrap.ts','utf8');
+const item10ReconcileSource = readItem10Source('services/publicSalesPostPaymentReconciliationRoute.ts','utf8');
 const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
 const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -14,9 +17,9 @@ const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8
 const directorSession = fs.readFileSync('src/services/publicSalesDirectorSession.ts', 'utf8');
 
 const processPaid = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted =[^]*?ITEM09_SOURCE_END/)?.[0] || '';
-const bootstrap = server.match(/const preparePaidDirectorSessionBootstrap =[^]*?createSalesAssistedCheckoutPaymentProcessor/)?.[0] || '';
+const bootstrap = item10BootstrapSource.match(/const preparePaidDirectorSessionBootstrap =[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
-const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
+const reconcileRoute = item10ReconcileSource.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 // Compatibility intent: the Director remains provisioned server-side. For delayed

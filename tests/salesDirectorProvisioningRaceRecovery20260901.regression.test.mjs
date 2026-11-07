@@ -1,7 +1,10 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ProvisioningSource = readItem10Source('services/salesPaidDirectorAccountProvisioning.ts','utf8');
+const item10ReconcileSource = readItem10Source('services/publicSalesPostPaymentReconciliationRoute.ts','utf8');
 const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
 const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -11,8 +14,8 @@ const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEnt
 
 const server = fs.readFileSync('server.ts', 'utf8');
 
-const provision = server.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
-const reconcile = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
+const provision = item10ProvisioningSource.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
+const reconcile = item10ReconcileSource.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 
 assert.match(provision, /createUser\(\{/);
 assert.match(provision, /normalized\.includes\("already"\)/);
