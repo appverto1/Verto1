@@ -2,13 +2,14 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
+const offerRoutes = fs.readFileSync('services/ownerSalesOfferCreationRoutes.ts', 'utf8');
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
 const migration = fs.readFileSync(
   'supabase/migrations/20260814100000_sales_offer_contract_identity.sql',
   'utf8'
 );
 
-const modularOfferPreparation = server.match(
+const modularOfferPreparation = offerRoutes.match(
   /const prepareSalesModularOffer = async[\s\S]*?const prepareSalesOfferFromSimulation = async/
 )?.[0] || '';
 const modularCheckout = server.match(

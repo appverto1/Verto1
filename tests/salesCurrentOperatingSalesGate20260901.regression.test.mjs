@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const builder = readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
+const offerRoutes = readFileSync('services/ownerSalesOfferCreationRoutes.ts', 'utf8');
 const currentOperating = readFileSync('src/utils/salesCurrentOperatingEconomics.ts', 'utf8');
 
 assert.match(
@@ -32,16 +33,16 @@ assert.match(
 );
 
 const saveRouteStart = server.indexOf('"/api/owner/sales/leads/:leadId/modular-simulations"', server.indexOf('app.post('));
-const publicOfferStart = server.indexOf('const prepareSalesModularOffer = async');
+const publicOfferStart = server.indexOf('registerOwnerSalesOfferCreationRoute({');
 assert.ok(saveRouteStart >= 0 && publicOfferStart > saveRouteStart, 'save/public-offer route boundaries not found');
 const saveRoute = server.slice(saveRouteStart, publicOfferStart);
 assert.match(saveRoute, /const review = classifySalesProposalReview\(results\);/);
 assert.match(saveRoute, /filterSalesCurrentOperatingTechnicalBlockers\([\s\S]*?review\.technicalBlockingCodes/);
 assert.match(saveRoute, /commercialReview:\s*\{[\s\S]*?\.\.\.effectiveReview/);
 
-const legacyOfferStart = server.indexOf('const prepareSalesOfferFromSimulation = async', publicOfferStart);
-assert.ok(legacyOfferStart > publicOfferStart, 'public-offer route end not found');
-const publicOffer = server.slice(publicOfferStart, legacyOfferStart);
+const legacyOfferStart = offerRoutes.indexOf('const prepareSalesOfferFromSimulation = async');
+assert.ok(legacyOfferStart > offerRoutes.indexOf('const prepareSalesModularOffer = async'), 'public-offer route end not found');
+const publicOffer = offerRoutes.slice(offerRoutes.indexOf('const prepareSalesModularOffer = async'), legacyOfferStart);
 assert.doesNotMatch(publicOffer, /if \(recalculated\.missingCosts\.length > 0\)/);
 assert.doesNotMatch(publicOffer, /Complete os custos das funcionalidades antes de gerar a proposta/);
 assert.match(publicOffer, /proposalTechnicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers/);
