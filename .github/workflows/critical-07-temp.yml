@@ -1,4 +1,4 @@
-name: Temporary item 07 checkout extraction validation
+name: Temporary item 07 checkout backend parity validation
 on:
   push:
     branches:
