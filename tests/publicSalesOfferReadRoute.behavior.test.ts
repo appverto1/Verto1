@@ -163,6 +163,17 @@ test('new service owns the unique existing GET and server passes its loader to a
   assert.match(service,/publicSalesLeadIpLimiter/);
   assert.match(service,/hashSalesOfferToken\(safeToken\)/);
   assert.match(service,/return loadPublicSalesOffer;/);
+  // A byte-exact copy of the reviewed 552-line server block: no silent
+  // changes to status, token, expiry, sanitization or legacy semantics.
+  const start=service.indexOf('  const sanitizePublicOfferDiscount = (raw: any) => {');
+  const end=service.indexOf('  return loadPublicSalesOffer;',start);
+  assert.ok(start>=0 && end>start);
+  const originalBlock=service.slice(start,end);
+  let fingerprint=0x811c9dc5;
+  for(let i=0;i<originalBlock.length;i++) {
+    fingerprint=Math.imul(fingerprint^originalBlock.charCodeAt(i),0x01000193)>>>0;
+  }
+  assert.equal(fingerprint.toString(16).padStart(8,'0'),'5d8daf79');
   assert.doesNotMatch(service,/getStripe\(|createOrReuseModularCheckout\(|createCheckoutSession\(/);
 });
 
