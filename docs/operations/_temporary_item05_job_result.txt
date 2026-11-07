@@ -1,221 +1,221 @@
 ITEM05_GATE_EXIT=1
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at <anonymous> (/home/runner/work/Verto1/Verto1/tests/abaChartReadHandlers.test.ts:6:18)
+  ✓ teste: tests/salesAssistedStripeEventHandlers.test.ts
+  ✓ teste: tests/stripeCanonicalWebhookRoute.test.ts
+  ✓ teste: tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs
+  ✓ teste: tests/salesPaidDirectorDirectOnboardingTask10.regression.test.mjs
+  ✓ teste: tests/publicSalesDirectorSession.test.ts
+  ✓ teste: tests/publicSalesDirectorSessionRoute.test.ts
+  ✓ teste: tests/salesActivationPasswordFirstAccess.test.mjs
+  ✓ teste: tests/salesActivationPasswordProviderAgnostic.test.mjs
+  ✓ teste: tests/salesActivationPartialRecovery.test.ts
+  ✓ teste: tests/salesDirectorEmailPasswordFirstAccessTask11.regression.test.mjs
+  ✓ teste: tests/salesActivationPasswordTransport.test.ts
+  ✓ teste: tests/salesActivationPasswordRules.test.ts
+  ✓ teste: tests/salesActivationPasswordRoute.test.ts
+  ✓ teste: tests/salesDirectorGoogleFirstAccessTask12.regression.test.mjs
+  ✓ teste: tests/salesActivationGoogleOAuth.test.ts
+  ✓ teste: tests/clinicSettingsConfirmedSaveTask13.regression.test.mjs
+  ✓ teste: tests/confirmedClinicSettingsSave.test.ts
+  ✓ teste: tests/guidedFirstAccessRolePersistenceTask14.regression.test.mjs
+  ✓ teste: tests/contextualGuidedTutorialP0.regression.test.mjs
+  ✓ teste: tests/googleOauthActivationUi.regression.test.mjs
+  ✓ teste: tests/authStateChangeDeadlockRegression.test.mjs
+  ✓ teste: tests/salesStripeWebhookDbMonotonicGuard.behavior.test.mjs
+  ✓ teste: tests/salesInterestSubmission.contract.test.mjs
+  ✓ teste: tests/salesInterestSubmission.behavior.test.ts
+  ✓ teste: tests/publicSalesLeadRouteExtraction.regression.test.mjs
+  ✓ teste: tests/publicSalesLeadRouteBehavior.test.ts
+  ✓ teste: tests/publicSalesLeadInput.behavior.test.ts
+  ✓ teste: tests/productionPaidOfferAccessRecovery.regression.test.mjs
+  ✓ teste: tests/factoryRecoveryControls.regression.test.mjs
+  ✓ teste: tests/factoryAuthorizedTarget.regression.test.mjs
+  ✓ teste: tests/factoryPostMergeConsistency.regression.test.mjs
+  ✓ teste: tests/security.regression.test.mjs
+  ✓ teste: tests/patientFileActorJwtBinding.regression.test.mjs
+  ✓ teste: tests/patientSharedChartGovernanceP0.regression.test.mjs
+  ✓ teste: tests/patientSharedChartPatientSwitchIsolation.test.mjs
+  ✓ teste: tests/patientSharedChartDelegationHttp.test.ts
+  ✓ teste: tests/goLiveHardening.test.mjs
+  ✓ teste: tests/distributedSessionSafety.regression.test.mjs
+  ✓ teste: tests/productionSessionPersistence.regression.test.mjs
+  ✓ teste: tests/healthRouteHandler.test.ts
+  ✓ teste: tests/internalSchemaStatusRouteHandler.test.ts
+  ✓ teste: tests/backgroundWorkerEconomyMode.test.ts
+  ✓ teste: tests/pushSubscriptionInvalidation.test.ts
+  ✓ teste: tests/patientNotificationPushPresentation.test.mjs
+  ✓ teste: tests/patientPushPriorityAndTiming.test.ts
+  ✓ teste: tests/clinicPolicyPayloadHash.test.ts
+  ✓ teste: tests/supabaseSchemaSelectGuard.test.ts
+  ✓ teste: tests/therapeuticPlanHierarchyRebac.regression.test.mjs
+  ✓ teste: tests/therapeuticPlanCaseProfessionalCapability.regression.test.ts
+  ✓ teste: tests/therapeuticPlanSessionContext.regression.test.mjs
+  ✓ teste: tests/sessionSpecialtyIsolation.test.ts
+  ✓ teste: tests/p0504SessionContinuationPolicy.test.ts
+  ✓ teste: tests/p0504ContinuationPreviewRoutes.test.ts
+  ✓ teste: tests/clinicSchedulingActiveMembership.regression.test.mjs
+  ✓ teste: tests/calendarPatientIdentitySharedRoom.regression.test.ts
+  ✓ teste: tests/abaMeasurementV3CollectionUi.test.mjs
+  ✓ teste: tests/patientCaseTeamCoordinatorAuthority.regression.test.mjs
+  ✓ teste: tests/p0CaseTeamModalViewport.regression.test.mjs
+  ✓ teste: tests/p0CaseTeamEligibleRefresh.regression.test.mjs
+  ✓ teste: tests/patientCaseTeamManagerRemoval.regression.test.mjs
+  ✓ teste: tests/patientCaseTeamPrimaryPointerNullable.regression.test.mjs
+  ✓ teste: tests/patientCaseTeamSchemaDriftRecovery.test.mjs
+  ✓ teste: tests/ptsDraftPersistenceActivation.regression.test.mjs
+  ✓ teste: tests/ptsLegacyEvidenceBoundary.regression.test.mjs
+  ✓ teste: tests/ptsTherapeuticDashboard.test.mjs
+  ✓ teste: tests/clinicCanonicalTimeZone.regression.test.mjs
+  ✓ teste: tests/abaSessionClinicalDateTimezone.regression.test.mjs
+  ✓ teste: tests/abaReinforcersRuntime.regression.test.mjs
+  ✓ teste: tests/sessionCompletionMissingSessionRecovery.regression.test.mjs
+  ✓ teste: tests/sessionLifecycleRecovery.regression.test.mjs
+  ✓ teste: tests/sessionAutoFinalization.regression.test.mjs
+  ✓ teste: tests/sessionOfflineLifecycleP0.regression.test.mjs
+  ✓ teste: tests/clinicalMeasurementV3RouteModularization.regression.test.mjs
+  ✓ teste: tests/patientDirectoryOrdering.regression.test.mjs
+  ✓ teste: tests/progressReportFilters.regression.test.mjs
+  ✓ teste: tests/anamnesisSavePersistenceConfirmation.regression.test.mjs
+  ✓ teste: tests/anamnesisPortalReadOnlyStatus.regression.test.mjs
+  ✓ teste: tests/anamnesisProfessionalCapability.regression.test.mjs
+  ✓ teste: tests/authorizationRoleMatrixE2E.regression.test.ts
+  ✓ teste: tests/supervisorPatientScopeE2E.regression.test.mjs
+  ✓ teste: tests/clinicalGraphRoleScopeP0.regression.test.ts
+  ✓ teste: tests/existingProfessionalInAppInvitation.test.mjs
+  ✓ teste: tests/clinicReinviteAccess.test.ts
+  ✓ teste: tests/teamManagementTenantRefresh.regression.test.mjs
+  ✓ teste: tests/clinicInvitationSubmissionGate.regression.test.mjs
+  ✓ teste: tests/patientSelfTenantIsolation.regression.test.mjs
+  ✓ teste: tests/sessionExpiredCleanLogout.regression.test.mjs
+  ✓ teste: tests/patientTaskCompletionIdempotency.regression.test.mjs
+  ✓ teste: tests/p0WellbeingProductionReconciliation.regression.test.mjs
+  ✓ teste: tests/agendaPortalActionsP0.regression.test.mjs
+  ✓ teste: tests/p0ContextAuthAgendaBatch05.test.ts
+  ✓ teste: tests/schedulingOverlappingRoomsPatientIdentity.test.ts
+  ✓ teste: tests/critical22RecurringAppointmentCadence.test.ts
+  ✓ teste: tests/appointmentCancellationReasons.test.ts
+  ✓ teste: tests/groupSessionRules.test.ts
+  ✓ teste: tests/groupFinancialPlanPrice.test.ts
+  ✓ teste: tests/groupFinancialPlanPersistence.test.ts
+  ✓ teste: tests/groupScheduleConflict.test.ts
+  ✓ teste: tests/groupSessionWriteValidation.test.ts
+  ✓ teste: tests/groupSessionFinancialValidation.test.ts
+  ✓ teste: tests/groupSessionPricePreview.test.ts
+  ✓ teste: tests/groupSessionPricePreviewRoute.test.ts
+  ✓ teste: tests/groupFinancialPlanFormAndAuthority.test.ts
+  ✓ teste: tests/groupSessionBookingPlan.test.ts
+  ✓ teste: tests/groupSessionResourceValidation.test.ts
+  ✓ teste: tests/groupSessionBookingPreview.test.ts
+  ✓ teste: tests/groupSessionAvailability.test.ts
+  ✓ teste: tests/groupSessionBookingLedgerSql.test.mjs
+  ✓ teste: tests/groupSessionTransactionalSlotGuards.test.mjs
+  ✓ teste: tests/groupSessionBookingPreviewRoute.test.ts
+  ✓ teste: tests/groupSessionFinancialRateRoutes.test.ts
+  ✓ teste: tests/groupSessionFinancialCapabilityGuard.test.ts
+  ✓ teste: tests/groupSessionFinanceAtomicSql.test.ts
+  ✓ teste: tests/p0BackendAppointmentFinalization.test.ts
+  ✓ teste: tests/p0AppointmentReminderClaimIntegrity.test.ts
+  ✓ teste: tests/abaLegacyProtocolApplicationsP0.regression.test.mjs
+  ✓ teste: tests/receptionAuthorizationFirstRender.regression.test.mjs
+  ✓ teste: tests/familyDiaryPersistence.regression.test.mjs
+  ✓ teste: tests/abaLegacyAssessmentEvidence.regression.test.mjs
+  ✓ teste: tests/clinicalPlanAnalyticsShell.regression.test.mjs
+  ✓ teste: tests/clinicalOutcomePlanScope.regression.test.ts
+  ✓ teste: tests/p1ClinicalChartHydration.regression.test.mjs
+  ✓ teste: tests/p1AdultChartsSessionFinancial.regression.test.mjs
+  ✓ teste: tests/p000PediatricAnamnesisSnapshot.regression.test.mjs
+  ✓ teste: tests/p000PatientProfilePartialPatch.regression.test.mjs
+  ✓ teste: tests/p0HelpNavigationSearch.test.ts
+  ✓ teste: tests/p0HelpRoleProgressContract.test.ts
+  ✓ teste: tests/helpTutorialSupport.test.ts
+  ✓ teste: tests/patientTimeReportRoute.test.ts
+  ✓ teste: tests/abaV3DrainStatusHandler.test.ts
+  ✓ teste: tests/p3PtsBackNavigationHeader.regression.test.mjs
+  ✓ teste: tests/p3SingleProfessionalTransferAction.regression.test.mjs
+  ✓ teste: tests/p3PatientTaskOverdueBadge.regression.test.mjs
+  ✓ teste: tests/p3PatientTaskModalViewport.regression.test.mjs
+  ✓ teste: tests/p3PatientFileImagePreviewFit.regression.test.mjs
+  ✓ teste: tests/p3PatientProfileMenuConsolidation.regression.test.mjs
+  ✓ teste: tests/p3AnamnesisDraftRestoreModal.regression.test.mjs
+  ✓ teste: tests/p3OnboardingAvailabilityGuidance.regression.test.mjs
+  ✓ teste: tests/p1AgendaReceptionRoomStatus.regression.test.mjs
+  ✓ teste: tests/p1PortalRescheduleConfiguredWeekdays.regression.test.ts
+  ✓ teste: tests/p1PortalRescheduleEmptyWeekMap.regression.test.ts
+  ✓ teste: tests/p000PediatricSessionRoute.regression.test.mjs
+  ✓ teste: tests/p000PatientCategoryPersistence.regression.test.mjs
+  ✓ teste: tests/p000PediatricTargetCollection.regression.test.mjs
+  ✓ teste: tests/p000PtsActivationOptionalAndCas.regression.test.mjs
+  ✓ teste: tests/critical20TherapeuticPlanAck.regression.test.mjs
+  ✓ teste: tests/p1AdultClinicalFinancialScopes.regression.test.mjs
+  ✓ teste: tests/clinicalPlanAnalyticsSessionNavigation.regression.test.mjs
+  ✓ teste: tests/planPtsSessionGraphIntegrationP0.regression.test.mjs
+  ✓ teste: tests/contextualGuidedTutorialP0.regression.test.mjs
+  ✓ teste: tests/p0AbaV3TutorialTasks26to28.regression.test.mjs
+  ✓ teste: tests/p0Financial403ScopeAndGraphs.regression.test.ts
+  ✓ teste: tests/patientFinanceSessionReadability.regression.test.ts
+  ✓ teste: tests/patientFinancialSpecialtyClinicGate.test.ts
+  ✓ teste: tests/p1DashboardRestoreDevicePush.regression.test.mjs
+  ✓ teste: tests/p1PushAnamnesisLote03to07.regression.test.mjs
+  ✓ teste: tests/p1AnamnesisEditorDocumentsCharts.regression.test.mjs
+  ✓ teste: tests/clinicalProgramChangeOverview.regression.test.mjs
+  ✓ teste: tests/sidebarHoverExpansion.regression.test.mjs
+  ✓ teste: tests/vertoBrandingAssets.regression.test.mjs
+  ✓ teste: tests/salesSuperAdminCommercialModel20260830.regression.test.mjs
+  ✓ teste: tests/salesExactPerPatientBillingP0000.test.ts
+  ✓ teste: tests/salesExactPerPatientStripeQuantityP0000.test.ts
+  ✓ teste: tests/salesExactPatientCheckoutUiP0000.regression.test.mjs
+  ✓ teste: tests/modulePurchaseEligibility.test.ts
+  ✓ teste: tests/moduleSubscriptionUpgrade.test.ts
+  ✓ teste: tests/moduleSubscriptionUpgradeExecution.test.ts
+  ✓ teste: tests/moduleSubscriptionUpgradeInvoiceEvidence.test.ts
+  ✓ teste: tests/moduleSubscriptionUpgradeFrozenPrice.test.ts
+  ✓ teste: tests/moduleSubscriptionUpgradeContract.test.ts
+  ✓ teste: tests/moduleUpgradeV5S1Finalization.regression.test.mjs
+  ✓ teste: tests/moduleUpgradeV5S1Http.test.ts
+  ✓ teste: tests/abaChartReadHandlers.test.ts
+  ✓ teste: tests/reminderValueNormalization.test.ts
+  ✓ teste: tests/clinicalReadExtractionParity.test.mjs
+  ✓ teste: tests/clinicalReadHandlersEquivalence.test.mjs
+  ✓ teste: tests/p2AdultSessionNoTechnicalCards.regression.test.mjs
+  ✓ teste: tests/p2PendingCancellationAgendaHighlight.regression.test.mjs
+  ✓ teste: tests/p2SingleStatusActions.regression.test.mjs
+  ✓ teste: tests/protocolImportExtractionParity.test.mjs
+  ✓ teste: tests/protocolImportHandlersEquivalence.test.mjs
+  ✓ teste: tests/patientPlanReadParity.test.mjs
+  ✓ teste: tests/patientPlanReadEquivalence.test.mjs
+
+Falhas: 2
+  ✗ teste: tests/factoryBlockerCatalog.regression.test.mjs — node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: structured factory blocker missing from catalog: ALTERNATIVE_CI_PROOF_INVALID
+    at validateCatalog (file:///home/runner/work/Verto1/Verto1/tests/factoryBlockerCatalog.regression.test.mjs:662:29)
+    at file:///home/runner/work/Verto1/Verto1/tests/factoryBlockerCatalog.regression.test.mjs:695:17
     at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
     at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    "fatal: path 'server.ts' exists on disk, but not in '52e2686c21d284ee0e948f9827b4719032a328e6'\n"
-  ],
-  pid: 6061,
-  stdout: '',
-  stderr: "fatal: path 'server.ts' exists on disk, but not in '52e2686c21d284ee0e948f9827b4719032a328e6'\n"
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '=='
 }
 
 Node.js v20.20.2
-  ✗ teste: tests/reminderValueNormalization.test.ts — fatal: path 'services/cronService.ts' exists on disk, but not in '43a4d5ee3540072c2daa701cd381f321a7b38111'
-node:internal/errors:984
-  const err = new Error(message);
-              ^
+  ✗ teste: tests/p3SidebarNoHorizontalScroll.regression.test.mjs — node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
 
-Error: Command failed: git show 43a4d5ee3540072c2daa701cd381f321a7b38111:services/cronService.ts
-fatal: path 'services/cronService.ts' exists on disk, but not in '43a4d5ee3540072c2daa701cd381f321a7b38111'
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at <anonymous> (/home/runner/work/Verto1/Verto1/tests/reminderValueNormalization.test.ts:8:16) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    "fatal: path 'services/cronService.ts' exists on disk, but not in '43a4d5ee3540072c2daa701cd381f321a7b38111'\n"
-  ],
-  pid: 6090,
-  stdout: '',
-  stderr: "fatal: path 'services/cronService.ts' exists on disk, but not in '43a4d5ee3540072c2daa701cd381f321a7b38111'\n"
-}
-
-Node.js v20.20.2
-  ✗ teste: tests/clinicalReadExtractionParity.test.mjs — fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file
-node:internal/errors:984
-  const err = new Error(message);
-              ^
-
-Error: Command failed: git cat-file blob 9a297970657b2bda31e00352589fae1436603bc4
-fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at file:///home/runner/work/Verto1/Verto1/tests/clinicalReadExtractionParity.test.mjs:9:18
+AssertionError [ERR_ASSERTION]: src/components/SuperAdminDashboard.tsx: rolagem horizontal proibida
+    at file:///home/runner/work/Verto1/Verto1/tests/p3SidebarNoHorizontalScroll.regression.test.mjs:19:12
     at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
     at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
     at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    'fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file\n'
-  ],
-  pid: 6102,
-  stdout: '',
-  stderr: 'fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file\n'
-}
-
-Node.js v20.20.2
-  ✗ teste: tests/clinicalReadHandlersEquivalence.test.mjs — fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file
-node:internal/errors:984
-  const err = new Error(message);
-              ^
-
-Error: Command failed: git cat-file blob 9a297970657b2bda31e00352589fae1436603bc4
-fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at file:///home/runner/work/Verto1/Verto1/tests/clinicalReadHandlersEquivalence.test.mjs:8:20
-    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
-    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
-    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    'fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file\n'
-  ],
-  pid: 6114,
-  stdout: '',
-  stderr: 'fatal: git cat-file 9a297970657b2bda31e00352589fae1436603bc4: bad file\n'
-}
-
-Node.js v20.20.2
-  ✗ teste: tests/protocolImportExtractionParity.test.mjs — fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file
-node:internal/errors:984
-  const err = new Error(message);
-              ^
-
-Error: Command failed: git cat-file blob b2805dd44be4ed9408694eab7c47168cb4480dc2
-fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at file:///home/runner/work/Verto1/Verto1/tests/protocolImportExtractionParity.test.mjs:9:18
-    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
-    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
-    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    'fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file\n'
-  ],
-  pid: 6159,
-  stdout: '',
-  stderr: 'fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file\n'
-}
-
-Node.js v20.20.2
-  ✗ teste: tests/protocolImportHandlersEquivalence.test.mjs — fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file
-node:internal/errors:984
-  const err = new Error(message);
-              ^
-
-Error: Command failed: git cat-file blob b2805dd44be4ed9408694eab7c47168cb4480dc2
-fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at file:///home/runner/work/Verto1/Verto1/tests/protocolImportHandlersEquivalence.test.mjs:8:20
-    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
-    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
-    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    'fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file\n'
-  ],
-  pid: 6171,
-  stdout: '',
-  stderr: 'fatal: git cat-file b2805dd44be4ed9408694eab7c47168cb4480dc2: bad file\n'
-}
-
-Node.js v20.20.2
-  ✗ teste: tests/patientPlanReadParity.test.mjs — fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file
-node:internal/errors:984
-  const err = new Error(message);
-              ^
-
-Error: Command failed: git cat-file blob c055fae8e6b74f122e66e259e0450bdc81dc4325
-fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at file:///home/runner/work/Verto1/Verto1/tests/patientPlanReadParity.test.mjs:9:18
-    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
-    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
-    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    'fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file\n'
-  ],
-  pid: 6183,
-  stdout: '',
-  stderr: 'fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file\n'
-}
-
-Node.js v20.20.2
-  ✗ teste: tests/patientPlanReadEquivalence.test.mjs — fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file
-node:internal/errors:984
-  const err = new Error(message);
-              ^
-
-Error: Command failed: git cat-file blob c055fae8e6b74f122e66e259e0450bdc81dc4325
-fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file
-
-    at genericNodeError (node:internal/errors:984:15)
-    at wrappedFn (node:internal/errors:538:14)
-    at checkExecSyncError (node:child_process:891:11)
-    at execFileSync (node:child_process:927:15)
-    at file:///home/runner/work/Verto1/Verto1/tests/patientPlanReadEquivalence.test.mjs:7:20
-    at ModuleJob.run (node:internal/modules/esm/module_job:325:25)
-    at async ModuleLoader.import (node:internal/modules/esm/loader:606:24)
-    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
-  status: 128,
-  signal: null,
-  output: [
-    null,
-    '',
-    'fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file\n'
-  ],
-  pid: 6195,
-  stdout: '',
-  stderr: 'fatal: git cat-file c055fae8e6b74f122e66e259e0450bdc81dc4325: bad file\n'
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'hidden min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 py-3 md:flex',
+  expected: /\boverflow-x-hidden\b/,
+  operator: 'match'
 }
 
 Node.js v20.20.2
