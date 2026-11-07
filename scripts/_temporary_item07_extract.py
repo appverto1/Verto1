@@ -189,6 +189,6 @@ gate_path=root/'scripts/pre-main-gate.mjs'
 gate=gate_path.read_text(encoding='utf8')
 anchor="  'tests/salesPublicCardCheckoutSafety.regression.test.mjs',"
 if gate.count(anchor)!=1: raise RuntimeError('Gate insertion anchor missing')
-gate=gate.replace(anchor,anchor+"\n  'tests/salesCheckoutBackendExtraction.regression.test.mjs',")
+gate=gate.replace(anchor,anchor+"\n  'tests/salesCheckoutBackendExtraction.regression.test.mjs',\n  'tests/publicSalesCheckoutBackendRoutes.behavior.test.ts',")
 gate_path.write_text(gate,encoding='utf8')
 print('ITEM07_SOURCE_EXTRACTED','BEFORE',len(source.splitlines()),'AFTER',len(rewritten.splitlines()),'CORE',len(core.splitlines()),'PUBLIC',len(public.splitlines()),'CORE_SHA',hcore,'PUBLIC_SHA',hpub)
