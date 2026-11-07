@@ -44,7 +44,7 @@ assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
 assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
-assert.match(publicOffer, /director-session/);
+assert.match(directorSession, /director-session/);
 assert.match(directorSession, /supabase\.auth\.verifyOtp/);
 assert.match(directorSession, /provider:\s*'sales_checkout'/);
 assert.match(directorSession, /\/api\/auth\/login/);
