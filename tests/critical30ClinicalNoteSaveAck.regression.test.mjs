@@ -25,6 +25,8 @@ function harness(save, opts = {}) {
   const state = { text: 'Registro clínico sintético', subject: 'Evolução', mentions: ['member-1'], saving: false, error: '', calls: [] };
   const ctx = {
     useRef: (initial) => ({ current: initial }),
+    noteSaveInFlightRef: { current: false },
+    noteSaveIdentityRef: { current: null },
     crypto: { randomUUID: (() => { let i = 0; return () => 'synthetic-note-' + ++i; })() },
     patient: { id: 'patient-A' },
     noteMode: opts.mode || 'professional',
