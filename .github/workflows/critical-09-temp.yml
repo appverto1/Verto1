@@ -1,4 +1,4 @@
-name: Temporary item09 Stripe efficient regression gate
+name: Temporary item09 Stripe focused regression gate
 on:
   push:
     branches:
@@ -35,6 +35,10 @@ jobs:
             node tests/stripeWebhookCoreExtraction.regression.test.mjs
             npx tsx tests/stripeWebhookEventState.behavior.test.ts
             npx tsx tests/salesModularSubscriptionSchedule.behavior.test.ts
+            node tests/salesBoletoPaymentPendingSafety.regression.test.mjs
+            npx tsx tests/salesExactPerPatientBillingP0000.test.ts
+            node tests/salesStripeWebhookDbMonotonicGuard.regression.test.mjs
+            node tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs
             npm run build
             npm run check:docker-runtime-imports
             set +e
