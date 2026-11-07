@@ -38,7 +38,7 @@ export async function submitSalesInterest({
         }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false) {
+      if (!response.ok || data?.success !== true) {
         throw new Error(
           data?.message ||
             data?.error ||
