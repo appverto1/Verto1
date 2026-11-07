@@ -100,7 +100,7 @@ test('missing IDs and non-duplicate database errors fail closed',async()=>{
  const s=fake();
  await assert.rejects(()=>s.handlers.reserveStripeWebhookEvent(event('','')),/STRIPE_WEBHOOK_EVENT_ID_INVALID/);
  s.setInsertError({code:'DATABASE_UNAVAILABLE',message:'unavailable'});
- await assert.rejects(()=>s.handlers.reserveStripeWebhookEvent(event('evt_database')),/unavailable|DATABASE_UNAVAILABLE/);
+ await assert.rejects(()=>s.handlers.reserveStripeWebhookEvent(event('evt_database')),(err:any)=>err?.code==='DATABASE_UNAVAILABLE');
  assert.equal(s.rows.size,0);
 });
 test('status marking never creates a new webhook event and preserves failure code',async()=>{
