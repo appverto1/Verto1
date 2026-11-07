@@ -38,7 +38,7 @@ test('HTTP 403, HTTP 500 and a success:false payload always fail closed, without
       parseResponse:async(response)=>response.json(),
     });
     assert.equal(result.success,false);
-    assert.equal(result.error,resultPayload.message || resultPayload.error);
+    assert.equal(result.error,'message' in resultPayload ? resultPayload.message : resultPayload.error);
   }
   assert.equal(calls,3);
 });
