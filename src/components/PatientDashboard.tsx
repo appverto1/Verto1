@@ -739,7 +739,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   useEffect(() => {
     const refreshAnamnesisWhenVisible = () => {
-      if (document.visibilityState !== 'visible' || !portalPatientId || portalAnamnesisDraftDirtyRef.current) return;
+      if (document.visibilityState !== 'visible' || !portalPatientId || portalAnamnesisDraftDirtyRef.current || portalAnamnesisMutationRef.current) return;
       if (Date.now() - portalAnamnesisLastLoadedAtRef.current < 15_000) return;
       void loadPortalAnamnesis();
     };
@@ -2904,6 +2904,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const contextKey = portalAnamnesisContextKey;
     const ticket = { patientId, requestId };
     portalAnamnesisMutationRef.current = ticket;
+    // Invalidate any GET started before this write, so it cannot unlock inputs mid-save.
+    portalAnamnesisRequestRef.current += 1;
     setPortalAnamnesisState((prev) => ({ ...prev, saving: true, error: '', message: '' }));
     try {
       const result = await dataService.savePortalAnamnesisDraft(patientId, portalAnamnesisDraft, requestId);
@@ -2936,6 +2938,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const contextKey = portalAnamnesisContextKey;
     const ticket = { patientId, requestId };
     portalAnamnesisMutationRef.current = ticket;
+    // Invalidate any GET started before this write, so it cannot unlock inputs mid-save.
+    portalAnamnesisRequestRef.current += 1;
     setPortalAnamnesisState((prev) => ({ ...prev, saving: true, error: '', message: '' }));
     try {
       const result = await dataService.submitPortalAnamnesis(patientId, portalAnamnesisDraft, requestId);
