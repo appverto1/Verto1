@@ -1,4 +1,5 @@
 import { getSupabase } from '../lib/supabase';
+import { requirePersistedBillingMessageAck } from './billingCommunicationSaveAck';
 
 export type BillingCommunicationReferenceState = 'AVAILABLE' | 'RESTRICTED' | 'UNAVAILABLE' | null;
 
@@ -139,7 +140,7 @@ export const billingCommunicationService = {
     return Number(payload?.unreadCount || 0);
   },
 
-  createThread(input: {
+  async createThread(input: {
     clinicId: string;
     subject: string;
     message: string;
@@ -148,7 +149,7 @@ export const billingCommunicationService = {
     referenceType?: string | null;
     referenceId?: string | null;
   }) {
-    return rpc<{ threadId: string; messageId: string; sequence: number; idempotent?: boolean }>(
+    const response = await rpc<unknown>(
       'create_clinic_communication_thread_v1',
       {
         p_clinic_id: input.clinicId,
@@ -160,10 +161,11 @@ export const billingCommunicationService = {
         p_idempotency_key: input.idempotencyKey,
       },
     );
+    return requirePersistedBillingMessageAck(response);
   },
 
-  sendMessage(input: { threadId: string; message: string; mentionUserIds: string[]; idempotencyKey: string }) {
-    return rpc<{ threadId: string; messageId: string; sequence: number; idempotent?: boolean }>(
+  async sendMessage(input: { threadId: string; message: string; mentionUserIds: string[]; idempotencyKey: string }) {
+    const response = await rpc<unknown>(
       'send_clinic_communication_message_v1',
       {
         p_thread_id: input.threadId,
@@ -172,6 +174,7 @@ export const billingCommunicationService = {
         p_idempotency_key: input.idempotencyKey,
       },
     );
+    return requirePersistedBillingMessageAck(response, input.threadId);
   },
 
   setArchived(threadId: string, archived: boolean) {
