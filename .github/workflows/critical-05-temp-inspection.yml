@@ -30,15 +30,15 @@ jobs:
             if [ $? -eq 0 ]; then
               base64 -d scripts/_temporary_critical05_extract.gz.b64 | gzip -d > "$RUNNER_TEMP/critical05.py"
               python3 - "$RUNNER_TEMP/critical05.py" <<'PYPATCH'
-              from pathlib import Path
-              import sys
-              p=Path(sys.argv[1])
-              s=p.read_text()
-              old = 'return ("import type Stripe from \'stripe\';\\n"'
-              new = 'return ("import type Stripe from \'stripe\';\\n" + "import type { SalesSimulationInput, SalesUsageProfile } from \'../src/utils/salesProfitability\';\\n"'
-              if s.count(old)!=1: raise RuntimeError('Unexpected extractor source structure')
-              p.write_text(s.replace(old,new))
-              PYPATCH
+          from pathlib import Path
+          import sys
+          p=Path(sys.argv[1])
+          s=p.read_text()
+          old = 'return ("import type Stripe from \'stripe\';\\n"'
+          new = 'return ("import type Stripe from \'stripe\';\\n" + "import type { SalesSimulationInput, SalesUsageProfile } from \'../src/utils/salesProfitability\';\\n"'
+          if s.count(old)!=1: raise RuntimeError('Unexpected extractor source structure')
+          p.write_text(s.replace(old,new))
+          PYPATCH
               python3 "$RUNNER_TEMP/critical05.py" && \
               npx tsx tests/ownerSalesOfferCreationRoutes.behavior.test.ts && \
               node tests/ownerSalesOfferCreationRoutes.regression.test.mjs && \
