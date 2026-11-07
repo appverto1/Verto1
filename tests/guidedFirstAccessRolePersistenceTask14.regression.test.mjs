@@ -10,6 +10,8 @@ import {
 } from '../src/utils/portalGuidedTutorialProgress.mjs';
 
 const coordinator = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
+const clinicalHook = readFileSync('src/hooks/useClinicalGuidedTutorial.ts', 'utf8');
+const clinicalProgress = readFileSync('src/utils/clinicalGuidedTutorialProgress.mjs', 'utf8');
 const biller = readFileSync('src/components/BillerWorkspace.tsx', 'utf8');
 const patient = readFileSync('src/components/PatientDashboard.tsx', 'utf8');
 const portal = readFileSync('src/components/PortalFirstAccessTutorial.tsx', 'utf8');
@@ -96,25 +98,26 @@ test('missing identity, malformed records and unavailable storage fail safely', 
   assert.equal(persistPortalGuidedTutorial(unavailableStorage, key, 'completed'), false);
 });
 
-test('clinical guide retains prior progress while module entitlements change', () => {
-  assert.match(coordinator, /GUIDED_TUTORIAL_REVISION = "p0-contextual-v1"/);
-  assert.match(coordinator, /const guidedTutorialContextKey = \[/);
-  assert.match(coordinator, /moduleAccessMode,[\s\S]*?guidedTutorialModuleSignature/);
-  assert.match(coordinator, /const guidedTutorialRoleKey = \[[\s\S]*?String\(user\?\.id \|\| ""\)\.trim\(\),[\s\S]*?workspaceScopeKey[\s\S]*?normalizedRole/);
-  const stableKeyStart = coordinator.indexOf('const guidedTutorialRoleKey = [');
-  const stableKeyEnd = coordinator.indexOf('].join(":");', stableKeyStart);
-  assert.ok(stableKeyStart > 0 && stableKeyEnd > stableKeyStart);
-  assert.doesNotMatch(coordinator.slice(stableKeyStart, stableKeyEnd), /moduleAccessMode|guidedTutorialModuleSignature/);
-  assert.match(coordinator, /window\.localStorage\.setItem\(guidedTutorialRoleKey, progress\)/);
-  assert.match(coordinator, /window\.localStorage\.setItem\(guidedTutorialContextKey, progress\)/);
-  assert.match(coordinator, /const stableRaw = window\.localStorage\.getItem\(guidedTutorialRoleKey\)/);
-  assert.match(coordinator, /const legacyRaw = stableRaw \? null : window\.localStorage\.getItem\(guidedTutorialContextKey\)/);
-  assert.match(coordinator, /if \(legacyRaw && stored\?\.revision === GUIDED_TUTORIAL_REVISION\)/);
-  assert.match(coordinator, /if \(stored\.status === "active"\)/);
-  assert.match(coordinator, /setRunGuidedTutorial\(false\);[\s\S]*?return;/);
-  assert.match(coordinator, /reason === "skip" \? "skipped" : reason === "complete" \? "completed" : "active"/);
+test('clinical guide is modularized without losing role/clinic keys or legacy progress', () => {
+  assert.match(clinicalProgress, /CLINICAL_GUIDED_TUTORIAL_REVISION = 'p0-contextual-v1'/);
+  assert.match(clinicalProgress, /'verto:guided-tutorial:role'/);
+  assert.match(clinicalProgress, /'verto:guided-tutorial'/);
+  assert.match(clinicalProgress, /moduleSignature \|\| 'baseline'/);
+  assert.match(clinicalProgress, /storage\.setItem\(roleKey, legacyRaw\)/);
+  assert.match(clinicalProgress, /storage\.setItem\(roleKey, progress\)/);
+  assert.match(clinicalProgress, /storage\.setItem\(contextKey, progress\)/);
+  assert.match(clinicalHook, /readClinicalGuidedTutorial\(window\.localStorage, roleKey, contextKey\)/);
+  assert.match(clinicalHook, /persistClinicalGuidedTutorial\(window\.localStorage, roleKey, contextKey, status, step\)/);
+  assert.match(clinicalHook, /if \(initializedRoleKeyRef\.current === roleKey\) return;/);
+  assert.match(clinicalHook, /active: stored\.status === 'active'/);
+  assert.match(clinicalHook, /runGuidedTutorial = canRun && portalGuidedTutorialIsVisible\(tutorialState, roleKey\)/);
+  assert.match(coordinator, /const guidedTutorialModuleSignature = Array\.from\(organizationModules\)\.sort\(\)\.join\(","\)/);
+  assert.match(coordinator, /useClinicalGuidedTutorial\(\{[\s\S]*?userId: String\(user\?\.id \|\| ""\)\.trim\(\),[\s\S]*?clinicId: workspaceScopeKey,[\s\S]*?role: normalizedRole/);
+  assert.match(coordinator, /moduleSignature: guidedTutorialModuleSignature/);
+  assert.match(coordinator, /authorizationHydrated,/);
+  assert.match(coordinator, /closeGuidedTutorial\(reason\)/);
   assert.match(coordinator, /onOpenGuidedTutorial=\{startGuidedTutorial\}/);
-  assert.match(coordinator, /authorizationHydrated &&/);
+  assert.doesNotMatch(coordinator, /const \[runGuidedTutorial, setRunGuidedTutorial\]/);
 });
 
 test('biller and pediatric/adult patient portals have a scoped first-use guide and manual replay', () => {
