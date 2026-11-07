@@ -21,6 +21,7 @@ for(const section of pair){
      if(m)missing.add(m[1]);
    }
  }
+ missing.add('crypto'); // Node crypto shadows browser crypto in original server.ts.
  const names=[...missing].filter(x=>!['Stripe','SalesSimulationInput','SalesUsageProfile'].includes(x)).sort();
  console.log(section.name+'_UNRESOLVED_RUNTIME_DEPENDENCIES',JSON.stringify(names));
  const imports="import type { SalesSimulationInput, SalesUsageProfile } from '../src/utils/salesProfitability';\n";
