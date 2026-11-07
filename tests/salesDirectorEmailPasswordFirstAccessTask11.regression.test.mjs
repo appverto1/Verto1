@@ -13,11 +13,11 @@ const passwordRoute = readFileSync('services/publicSalesActivationPasswordRoute.
 
 test('director password is strong and confirmed before the single activation POST', () => {
   assert.match(rules, /if \(value\.length < 12\)/);
-  assert.match(ui, /if \(value\.length > 128\)/);
-  assert.match(ui, /if \(!\/\[A-Z\]\//);
-  assert.match(ui, /if \(!\/\[a-z\]\//);
-  assert.match(ui, /if \(!\/\\d\//);
-  assert.match(ui, /if \(!\/\[\^A-Za-z0-9\]\//);
+  assert.match(rules, /if \(value\.length > 128\)/);
+  assert.match(rules, /if \(!\/\[A-Z\]\//);
+  assert.match(rules, /if \(!\/\[a-z\]\//);
+  assert.match(rules, /if \(!\/\\d\//);
+  assert.match(rules, /if \(!\/\[\^A-Za-z0-9\]\//);
   assert.match(activation, /validateActivationPassword\(password\)/);
   assert.match(activation, /if \(password !== passwordConfirmation\)/);
   assert.match(activation, /if \(!passwordSaved\) \{[\s\S]*?persistPublicSalesActivationPassword\(token, password\)/);
