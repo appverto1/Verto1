@@ -111,6 +111,28 @@ for path in sorted(Path('tests').glob('*')):
    text=text.replace('const checkoutProcessor = server.match', 'const checkoutProcessor = stripePaidProcessorSource.match')
  if path.name=='salesStripeWebhookDbMonotonicGuard.regression.test.mjs':
    text=text.replace('assert.match(server,/if \\(sanitizeString\\(existing\\.status, 40\\) ===', 'assert.match(stripeWebhookEventStateSource,/if \\(sanitizeString\\(existing\\.status, 40\\) ===')
+ # Preserve frozen-seat, boleto and webhook dedupe assertions against the new
+ # runtime module containing each unmodified expression.
+ if path.name=='salesBoletoPaymentPendingSafety.regression.test.mjs':
+   for expression in [
+     'paymentStatus === \\"paid\\" \\\\|\\\\|',
+     'paymentStatus === \\"no_payment_required\\"',
+     'if \\\\(!paymentConfirmed\\\\) \\\\{',
+     'activationPrepared: false',
+   ]:
+     text=text.replace('assert.match(server,/'+expression+'/);',
+                       'assert.match(stripePaidProcessorSource,/'+expression+'/);')
+ if path.name=='salesExactPerPatientBillingP0000.test.ts':
+   text=text.replace("const checkoutBackend = server + '\\\\n' + checkoutCoreSource;",
+                     "const checkoutBackend = server + '\\\\n' + checkoutCoreSource + '\\\\n' + stripeScheduleSource + '\\\\n' + stripePaidProcessorSource;")
+ for pathName in ['salesStripeWebhookDbMonotonicGuard.regression.test.mjs','salesStripeWebhookLeadStateIsolation.regression.test.mjs']:
+   if path.name==pathName:
+     text=text.replace("assert.match(server,/\\\\.from\\\\('stripe_webhook_events'\\\\)/);",
+                       "assert.match(stripeWebhookEventStateSource,/\\\\.from\\\\('stripe_webhook_events'\\\\)/);")
+     text=text.replace("assert.match(server,/if \\\\(sanitizeString\\\\(existing\\\\.status, 40\\\\) === 'processed'\\\\) return false/);",
+                       "assert.match(stripeWebhookEventStateSource,/if \\\\(sanitizeString\\\\(existing\\\\.status, 40\\\\) === 'processed'\\\\) return false/);")
+     text=text.replace('assert.match(server,/async function reserveStripeWebhookEvent/);',
+                       'assert.match(stripeWebhookEventStateSource,/async function reserveStripeWebhookEvent/);')
  if text!=original:
    path.write_text(text,encoding='utf8')
    updated.append(str(path))
