@@ -7,6 +7,7 @@ const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckout
 
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
 const draftInput = fs.readFileSync('src/utils/salesModularProposalBuilderInput.ts', 'utf8');
+const duplicateDraft = fs.readFileSync('src/utils/salesModularProposalScenarioDraft.ts', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 const calculator = fs.readFileSync('src/utils/salesModularProposal.ts', 'utf8');
 const stripePlan = fs.readFileSync('src/utils/salesCommercialEvolution.ts', 'utf8');
@@ -26,7 +27,8 @@ assert.match(builder, /input\.exactPerPatientBilling !== true && nextStandardCom
 assert.match(draftInput, /export const commercialCapacityForExactDemand =/);
 assert.match(builder, /const initialCapacity = commercialCapacityForExactDemand\(patientQuantity\);/);
 assert.match(builder, /input\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(safeQuantity\)/);
-assert.match(builder, /snapshotInput\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(snapshotDemand\)/);
+assert.match(builder, /buildSalesModularProposalDuplicateDraft\(simulation, catalog\)/);
+assert.match(duplicateDraft, /snapshotInput\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(snapshotDemand\)/);
 assert.match(builder, /Plano Essencial · 1 a 50 pacientes/);
 
 // An immutable historical offer must not silently become exact-seat billing.
