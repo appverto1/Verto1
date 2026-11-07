@@ -1,14 +1,20 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
+
 const server = fs.readFileSync('server.ts', 'utf8');
 
-const scheduleBlock = server.match(
-  /const stripeExpandableId = \(value: unknown[\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
+const scheduleBlock = stripeScheduleSource.match(/const stripeExpandableId = \(value: unknown[\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
 )?.[0] || '';
 
-const ensureBlock = server.match(
-  /const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
+const ensureBlock = stripeScheduleSource.match(/const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
 )?.[0] || '';
 const checkoutEventBlock = server.match(
   /if \(event\.type === "checkout\.session\.completed"\) \{[\s\S]*?return \{ handled: true, result \};\n    \}/

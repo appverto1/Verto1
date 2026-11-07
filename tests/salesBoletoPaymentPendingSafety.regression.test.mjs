@@ -1,7 +1,15 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -33,11 +41,11 @@ test('bounded payment polling never relabels a possibly unpaid boleto as provisi
   assert.match(publicPage,/\['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'\]\.includes\(paymentReturnState\)/);
 });
 test('paid status and activation remain backend-authoritative and never use client payment status',()=>{
-  assert.match(server,/paymentStatus === "paid" \|\|/);
-  assert.match(server,/paymentStatus === "no_payment_required"/);
-  assert.match(server,/if \(!paymentConfirmed\) \{/);
-  assert.match(server,/activationPrepared: false/);
-  assert.match(server,/confirm_sales_assisted_checkout_payment/);
+  assert.match(stripePaidProcessorSource,/paymentStatus === "paid" \|\|/);
+  assert.match(stripePaidProcessorSource,/paymentStatus === "no_payment_required"/);
+  assert.match(stripePaidProcessorSource,/if \(!paymentConfirmed\) \{/);
+  assert.match(stripePaidProcessorSource,/activationPrepared: false/);
+  assert.match(stripePaidProcessorSource,/confirm_sales_assisted_checkout_payment/);
   assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
   assert.match(assisted,/event\.type === "checkout\.session\.async_payment_succeeded"/);
   assert.match(server,/reserveStripeWebhookEvent/);

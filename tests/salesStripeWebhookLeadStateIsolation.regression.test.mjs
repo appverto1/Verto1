@@ -1,7 +1,15 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -10,7 +18,7 @@ const server = readFileSync('server.ts','utf8');
 const assisted = readFileSync('services/salesAssistedStripeEventHandlers.ts','utf8');
 const canonical = readFileSync('services/stripeCanonicalWebhookRoute.ts','utf8');
 const migration = readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
-const checkout = server.match(/const processSalesAssistedCheckoutCompleted = async[\s\S]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
+const checkout = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async[\s\S]*?ITEM09_SOURCE_END/)?.[0] || '';
 const processor = assisted.match(/const processSalesAssistedStripeEvent = async[\s\S]*?return \{ isSalesAssistedStripeEvent, processSalesAssistedStripeEvent \}/)?.[0] || '';
 const leadPatch = server.match(/app\.patch\(\s*"\/api\/owner\/sales\/leads\/:leadId"[\s\S]*?app\.get\(\s*"\/api\/owner\/sales\/pricing-catalogs"/)?.[0] || '';
 
@@ -46,10 +54,10 @@ test('out-of-order unpaid session cannot erase terminal Checkout link or payment
 test('Stripe webhook signature, idempotency, entitlements and checkout reuse remain in place', () => {
   assert.match(canonical,/stripe\.webhooks\.constructEvent/);
   assert.match(canonical,/"\/api\/stripe\/webhook"/);
-  assert.match(server,/async function reserveStripeWebhookEvent/);
-  assert.match(server,/\.from\('stripe_webhook_events'\)/);
+  assert.match(stripeWebhookEventStateSource,/async function reserveStripeWebhookEvent/);
+  assert.match(stripeWebhookEventStateSource,/\.from\('stripe_webhook_events'\)/);
   assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
-  assert.match(server,/confirm_sales_assisted_checkout_payment/);
+  assert.match(stripePaidProcessorSource,/confirm_sales_assisted_checkout_payment/);
   assert.match(server,/applyModularEntitlementsForOrganization/);
   assert.match(checkoutCoreSource,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
   assert.match(checkoutCoreSource,/operationIdempotencyKey/);

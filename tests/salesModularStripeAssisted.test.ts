@@ -1,6 +1,14 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -96,7 +104,7 @@ assert.match(server, /subscription_schedule\.completed/);
 assert.match(server, /subscription_schedule\.canceled/);
 assert.match(server, /reserveStripeWebhookEvent/, 'webhook precisa de reserva idempotente');
 assert.match(server, /constructEvent/, 'assinatura Stripe precisa ser validada');
-assert.match(server, /confirm_sales_assisted_checkout_payment/);
+assert.match(stripePaidProcessorSource, /confirm_sales_assisted_checkout_payment/);
 assert.match(server, /pending_activations/);
 assert.match(server, /\.eq\("stripe_checkout_session_id", session\.id\)[\s\S]*?\.eq\("source", "sales_assisted_signup"\)/);
 

@@ -1,9 +1,17 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
+
 const server = fs.readFileSync('server.ts', 'utf8');
 const activationFlow = server.match(
-  /const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS[\s\S]*?const processSalesAssistedCheckoutCompleted/
+  /const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS[\s\S]*?createSalesAssistedCheckoutPaymentProcessor/
 )?.[0] || '';
 const resendTransport = server.match(
   /async function postResendEmail[\s\S]*?async function sendEmailViaResend[\s\S]*?return \{[\s\S]*?deliveryMode,/

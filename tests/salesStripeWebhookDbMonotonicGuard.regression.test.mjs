@@ -1,7 +1,15 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -14,7 +22,7 @@ const link=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_checkout_te
 
 test('manual owner edits keep response representation, old webhook no-return writes cannot regress converted leads',()=>{
   const owner=server.split('"/api/owner/sales/leads/:leadId"')[1]?.split('app.get(')[0]||'';
-  const unpaid=server.split('if (!paymentConfirmed) {')[1]?.split('return { paymentConfirmed: false, activationPrepared: false };')[0]||'';
+  const unpaid=stripePaidProcessorSource.split('if (!paymentConfirmed) {')[1]?.split('return { paymentConfirmed: false, activationPrepared: false };')[0]||'';
   const unpaidLead=unpaid.split('.from("sales_leads")')[1]?.split('supabase.from("sales_lead_events")')[0]||'';
   assert.match(owner,/\.update\(patch\)[\s\S]*?\.select\(/);
   assert.match(owner,/checkPlatformAdmin/);
@@ -55,10 +63,10 @@ test('migration is transactional, tightly scoped, security-invoker and read-free
 test('existing Stripe signature, event-id deduplication, payment RPC, module isolation and idempotency remain unchanged',()=>{
   assert.match(canonical,/stripe\.webhooks\.constructEvent/);
   assert.match(canonical,/"\/api\/stripe\/webhook"/);
-  assert.match(server,/async function reserveStripeWebhookEvent/);
-  assert.match(server,/\.from\('stripe_webhook_events'\)/);
-  assert.match(server,/if \(sanitizeString\(existing\.status, 40\) === 'processed'\) return false/);
-  assert.match(server,/confirm_sales_assisted_checkout_payment/);
+  assert.match(stripeWebhookEventStateSource,/async function reserveStripeWebhookEvent/);
+  assert.match(stripeWebhookEventStateSource,/\.from\('stripe_webhook_events'\)/);
+  assert.match(stripeWebhookEventStateSource,/if \(sanitizeString\(existing\.status, 40\) === 'processed'\) return false/);
+  assert.match(stripePaidProcessorSource,/confirm_sales_assisted_checkout_payment/);
   assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
   assert.match(server,/applyModularEntitlementsForOrganization/);
   assert.match(checkoutCoreSource,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);

@@ -1,20 +1,27 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 
 const currentPeriodHelperSource = server.match(
-  /const stripePositivePeriodTimestamp = \(value\) => \{[\s\S]*?\n  \};\n\n  const resolveStripeSubscriptionCurrentPeriod = \(subscription\) => \{[\s\S]*?\n  \};\n\n  const syncSalesSubscriptionDiscount = async \(/
+  /const stripePositivePeriodTimestamp = \(value\) => \{[\s\S]*?\n  \};\n\n  const resolveStripeSubscriptionCurrentPeriod = \(subscription\) => \{[\s\S]*?\n  \};\n\n  const \{ syncSalesSubscriptionDiscount, eventTypeSubscriptionIsActive \} = createSalesSubscriptionDiscountSync\(/
 )?.[0]
-  ?.replace(/\n\n  const syncSalesSubscriptionDiscount = async \($/, '') || '';
+  ?.replace(/\n\n  const \{ syncSalesSubscriptionDiscount, eventTypeSubscriptionIsActive \} = createSalesSubscriptionDiscountSync\($/, '') || '';
 assert.ok(currentPeriodHelperSource, 'resolver central de período Stripe deve existir');
 
 const resolveStripeSubscriptionCurrentPeriod = new Function(
   `${currentPeriodHelperSource}\nreturn resolveStripeSubscriptionCurrentPeriod;`,
 )();
 
-const helperSource = server.match(
-  /const normalizeModularSchedulePhaseBoundaries = \([\s\S]*?\n  \};\n\n  const ensureModularSubscriptionSchedule = async \(/
+const helperSource = stripeScheduleSource.match(/const normalizeModularSchedulePhaseBoundaries = \([\s\S]*?\n  \};\n\n  const ensureModularSubscriptionSchedule = async \(/
 )?.[0]
   ?.replace(/\n\n  const ensureModularSubscriptionSchedule = async \($/, '') || '';
 assert.ok(helperSource, 'normalizador operacional das fronteiras deve existir');
@@ -224,17 +231,13 @@ assert.throws(
   /MODULAR_SCHEDULE_CURRENT_PHASE_BEFORE_SUBSCRIPTION_PERIOD_END/,
 );
 
-const ensureBlock = server.match(
-  /const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
+const ensureBlock = stripeScheduleSource.match(/const ensureModularSubscriptionSchedule = async \([\s\S]*?\n  const reconcileSalesAssistedCheckout = async \(/
 )?.[0] || '';
-const reconcileBlock = server.match(
-  /const reconcileSalesAssistedCheckout = async \([\s\S]*?\n  const isSalesAssistedStripeEvent = async \(/
+const reconcileBlock = stripeScheduleSource.match(/const reconcileSalesAssistedCheckout = async \([\s\S]*?\n  const isSalesAssistedStripeEvent = async \(/
 )?.[0] || '';
-const reserveBlock = server.match(
-  /async function reserveStripeWebhookEvent\([\s\S]*?\n}\n\nasync function markStripeWebhookEventStatus/
+const reserveBlock = stripeWebhookEventStateSource.match(/async function reserveStripeWebhookEvent\([\s\S]*?\n}\n\nasync function markStripeWebhookEventStatus/
 )?.[0] || '';
-const processPaidBlock = server.match(
-  /const processSalesAssistedCheckoutCompleted = async \([\s\S]*?\n  const stripeInvoiceSubscriptionId/
+const processPaidBlock = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async \([\s\S]*?\n  ITEM09_SOURCE_END/
 )?.[0] || '';
 const provisionDirectorBlock = server.match(
   /async function provisionPaidSalesDirectorAccount\([\s\S]*?\n  async function finalizeSalesActivationForUser/
@@ -242,11 +245,9 @@ const provisionDirectorBlock = server.match(
 const finalizeActivationBlock = server.match(
   /async function finalizeSalesActivationForUser\([\s\S]*?\n  const mutationActionLabel/
 )?.[0] || '';
-const discountSyncBlock = server.match(
-  /const syncSalesSubscriptionDiscount = async \([\s\S]*?\n  const eventTypeSubscriptionIsActive/
+const discountSyncBlock = stripeDiscountSource.match(/const syncSalesSubscriptionDiscount = async \([\s\S]*?\n  const eventTypeSubscriptionIsActive/
 )?.[0] || '';
-const financialStateBlock = server.match(
-  /const persistPlatformSubscriptionFinancialState = async \([\s\S]*?\n  const persistPlatformBillingInvoiceLedger/
+const financialStateBlock = stripeFinancialSource.match(/const persistPlatformSubscriptionFinancialState = async \([\s\S]*?\n  const persistPlatformBillingInvoiceLedger/
 )?.[0] || '';
 
 assert.ok(ensureBlock, 'ensureModularSubscriptionSchedule deve existir');
@@ -290,3 +291,5 @@ assert.doesNotMatch(
 );
 
 console.log('salesStripeModularScheduleBoundaryP0_20260902.regression.test.mjs: ok');
+
+assert.doesNotMatch(stripeFinancialSource.replace(/const stripeInvoicePeriodBounds[\s\S]*?\n  \};/,''),/subscription as any\)\?\.current_period_end/);

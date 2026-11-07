@@ -1,3 +1,4 @@
+import {readFileSync as readItem09Source} from 'node:fs';
 import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -5,6 +6,13 @@ import { calculateSalesModularProposal } from '../src/utils/salesModularProposal
 import { buildFrozenStripeCheckoutPlan, DEFAULT_CUSTOM_CAPACITY_POLICY } from '../src/utils/salesCommercialEvolution';
 import { modularAssumptionsFixture, modularCatalogFixture, proposalInputFixture, PACKAGE_TIERS } from './fixtures/salesModularFixture';
 import { DEFAULT_SALES_PROFITABILITY_POLICY } from '../src/utils/salesModularEconomics';
+
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
 const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
@@ -111,7 +119,7 @@ assert.doesNotMatch(exact, /Math\.max\(contract\.billedAdditionalBlocks/);
 assert.match(exact, /EXACT_PER_PATIENT_SUBSCRIPTION_SCOPE_INVALID/);
 assert.match(exact, /EXACT_PER_PATIENT_STRIPE_ITEMS_MISMATCH/);
 const server = fs.readFileSync('server.ts', 'utf8');
-const checkoutBackend = server + '\n' + checkoutCoreSource;
+const checkoutBackend = server + '\n' + checkoutCoreSource + '\n' + stripeScheduleSource + '\n' + stripePaidProcessorSource;
 assert.match(server, /exactPerPatientBilling: source\.exactPerPatientBilling === true/);
 assert.match(checkoutBackend, /quantity: Number\(line\.quantity \|\| 1\)/);
 assert.match(checkoutBackend, /quantity: Number\(item\.quantity \|\| 1\)/);
