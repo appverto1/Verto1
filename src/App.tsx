@@ -4897,7 +4897,7 @@ export default function App() {
     );
     return { success: true, pending: Boolean(persistenceResult?.pending) };
   };
-  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string, options?: { mentionUserIds?: string[] }) => {
+  const handleAddNote = async (pid: any, txt: string, visibility: string, subject?: string, options?: { mentionUserIds?: string[]; requireServerAck?: boolean; clientNoteId?: string }) => {
     const normalizedVisibility = toStoredPatientNoteVisibility(visibility);
     const uiVisibility = resolvePatientNoteAudience({ visibility: normalizedVisibility });
     const patient = allPatients.find(p => p.id === pid);
@@ -4906,7 +4906,8 @@ export default function App() {
       patient_email: patient?.email || null,
       patient_name: patient?.name || null
     });
-    const tempId = crypto.randomUUID();
+    const requireServerAck = options?.requireServerAck === true;
+    const tempId = requireServerAck && options?.clientNoteId ? options.clientNoteId : crypto.randomUUID();
     const newNote = { 
       id: tempId, 
       patientId: pid, 
@@ -4915,8 +4916,10 @@ export default function App() {
       visibility: uiVisibility, 
       subject: subject || "Geral" 
     };
-    setTherapistNotes(prev => [newNote, ...prev]);
-    onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuario de ${formatPatientLabel({ name: patientIdentity.patientName, id: patientIdentity.patientId || pid })}.`);
+    if (!requireServerAck) {
+      setTherapistNotes(prev => [newNote, ...prev]);
+      onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuario de ${formatPatientLabel({ name: patientIdentity.patientName, id: patientIdentity.patientId || pid })}.`);
+    }
 
     // Sync to Backend
     const { dataService } = await import('./services/dataService');
@@ -4930,7 +4933,15 @@ export default function App() {
         visibility: normalizedVisibility,
         subject: subject || "Geral",
         mention_user_ids: Array.isArray(options?.mentionUserIds) ? options!.mentionUserIds : []
-      });
+      }, { requireServerAck });
+      if (requireServerAck) {
+        if (result?.success === true && result?.pending !== true && result?.offline !== true && result?.data?.id) {
+          setTherapistNotes(prev => [{ ...newNote, id: result.data.id }, ...prev.filter((note: any) => note.id !== tempId)]);
+          onAddActivityLog("Registro de EvoluÃ§Ã£o", `Nova nota (${normalizedVisibility}) adicionada ao prontuario de ${formatPatientLabel({ name: patientIdentity.patientName, id: patientIdentity.patientId || pid })}.`);
+          return { success: true, data: result.data };
+        }
+        return { success: false, error: String(result?.error || 'O servidor não confirmou o salvamento da anotação.') };
+      }
       if (result?.success && result?.data?.id) {
         setTherapistNotes(prev => prev.map((n: any) => (n.id === tempId ? { ...n, id: result.data.id } : n)));
       } else if (result?.success === false && !(result?.offline && result?.pending)) {
@@ -4940,6 +4951,7 @@ export default function App() {
       }
     } catch (error) {
       console.error("Falha ao sincronizar nota no servidor:", error);
+      if (requireServerAck) return { success: false, error: 'Falha ao salvar anotação. Tente novamente.' };
       setTherapistNotes(prev => prev.filter((n: any) => n.id !== tempId));
       alert('Falha ao salvar anotação. Tente novamente.');
     }
