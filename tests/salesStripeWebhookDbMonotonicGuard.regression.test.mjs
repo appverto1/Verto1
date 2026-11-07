@@ -5,6 +5,7 @@ import {test} from 'node:test';
 const sql=readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
 const server=readFileSync('server.ts','utf8');
 const assisted=readFileSync('services/salesAssistedStripeEventHandlers.ts','utf8');
+const canonical=readFileSync('services/stripeCanonicalWebhookRoute.ts','utf8');
 const link=sql.match(/CREATE OR REPLACE FUNCTION public\.guard_sales_checkout_terminal_pending_v1\(\)[\s\S]*?\$link_guard\$;/)?.[0] || '';
 
 test('manual owner edits keep response representation, old webhook no-return writes cannot regress converted leads',()=>{
@@ -48,7 +49,8 @@ test('migration is transactional, tightly scoped, security-invoker and read-free
 });
 
 test('existing Stripe signature, event-id deduplication, payment RPC, module isolation and idempotency remain unchanged',()=>{
-  assert.match(server,/stripe\.webhooks\.constructEvent/);
+  assert.match(canonical,/stripe\.webhooks\.constructEvent/);
+  assert.match(canonical,/"\/api\/stripe\/webhook"/);
   assert.match(server,/async function reserveStripeWebhookEvent/);
   assert.match(server,/\.from\('stripe_webhook_events'\)/);
   assert.match(server,/if \(sanitizeString\(existing\.status, 40\) === 'processed'\) return false/);

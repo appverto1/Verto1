@@ -63,8 +63,9 @@ test('moved sales-assisted webhook source is byte-for-byte identical and registe
   assert.equal(fnv(mod.slice(mod.indexOf(marker), mod.indexOf(markerEnd))), '24e0e5ac');
   const handlers = server.indexOf('createSalesAssistedStripeEventHandlers({');
   const legacy = server.indexOf('registerLegacySalesActivationStripeWebhookRoute(app, {');
-  const canonical = server.indexOf('"/api/stripe/webhook"');
+  const canonical = server.indexOf('registerStripeCanonicalWebhookRoute(app, {');
   assert.ok(handlers >= 0 && legacy > handlers && canonical > legacy);
+  assert.match(fs.readFileSync('services/stripeCanonicalWebhookRoute.ts', 'utf8'), /"\/api\/stripe\/webhook"/);
   assert.match(server, /applyModularEntitlementsForOrganization: \(params\) =>\s+applyModularEntitlementsForOrganization\(params\)/);
   assert.match(server, /stripeSubscriptionToEntitlementStatus: \(status\) =>\s+stripeSubscriptionToEntitlementStatus\(status\)/);
   assert.doesNotMatch(server, /  const processSalesAssistedStripeEvent = async/);

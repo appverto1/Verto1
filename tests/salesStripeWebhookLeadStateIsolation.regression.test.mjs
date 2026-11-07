@@ -4,6 +4,7 @@ import {test} from 'node:test';
 
 const server = readFileSync('server.ts','utf8');
 const assisted = readFileSync('services/salesAssistedStripeEventHandlers.ts','utf8');
+const canonical = readFileSync('services/stripeCanonicalWebhookRoute.ts','utf8');
 const migration = readFileSync('supabase/migrations/20261104200000_sales_stripe_webhook_monotonic_guard.sql','utf8');
 const checkout = server.match(/const processSalesAssistedCheckoutCompleted = async[\s\S]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const processor = assisted.match(/const processSalesAssistedStripeEvent = async[\s\S]*?return \{ isSalesAssistedStripeEvent, processSalesAssistedStripeEvent \}/)?.[0] || '';
@@ -39,7 +40,8 @@ test('out-of-order unpaid session cannot erase terminal Checkout link or payment
 });
 
 test('Stripe webhook signature, idempotency, entitlements and checkout reuse remain in place', () => {
-  assert.match(server,/stripe\.webhooks\.constructEvent/);
+  assert.match(canonical,/stripe\.webhooks\.constructEvent/);
+  assert.match(canonical,/"\/api\/stripe\/webhook"/);
   assert.match(server,/async function reserveStripeWebhookEvent/);
   assert.match(server,/\.from\('stripe_webhook_events'\)/);
   assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
