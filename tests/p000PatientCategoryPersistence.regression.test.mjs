@@ -72,6 +72,15 @@ assert.match(coordinator, /const canonicalProfileType = resolvePatientProfileTyp
 assert.match(coordinator, /patientRegistrationSaveInFlightRef\.current = true/);
 assert.match(coordinator, /patientRegistrationSaveInFlightRef\.current = false/);
 assert.match(coordinator, /if \(updateResult\?\.success !== true\)/);
+// Salvar deve falhar fechado: resposta ausente/ambigua nao pode fechar o modal nem registrar sucesso.
+const patientCreateAckCondition = coordinator.match(/const addPatientResult = await onAddPatient\(newPatient\);\s*if \((addPatientResult\?\.success !== true)\) \{/);
+assert.ok(patientCreateAckCondition, 'cadastro de paciente deve exigir success === true explicitamente');
+for (const result of [undefined, null, {}, { success: false }, { success: 0 }, { success: 'true' }]) {
+  assert.equal(vm.runInNewContext(patientCreateAckCondition[1], { addPatientResult: result }), true,
+    'resposta sem confirmacao explicita nao pode ser tratada como cadastro concluido');
+}
+assert.equal(vm.runInNewContext(patientCreateAckCondition[1], { addPatientResult: { success: true } }), false,
+  'confirmacao explicita deve preservar o caminho de sucesso existente');
 assert.match(dataService, /async updatePatient\([\s\S]{0,410}requireServerAck: options\?\.requireServerAck === true/);
 assert.match(dataService, /async confirmPatientCategoryOnServer\([\s\S]{0,1000}fetchNoStoreJsonWithRetry/);
 assert.match(dataService, /persisted\.patient_group \?\? persisted\.group/);
