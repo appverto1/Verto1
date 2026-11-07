@@ -325,6 +325,7 @@ const criticalTests = [
   'tests/abaLegacyProtocolApplicationsP0.regression.test.mjs',
   'tests/receptionAuthorizationFirstRender.regression.test.mjs',
   'tests/familyDiaryPersistence.regression.test.mjs',
+  'tests/familyDiarySaveAck.regression.test.mjs',
   'tests/abaLegacyAssessmentEvidence.regression.test.mjs',
   'tests/clinicalPlanAnalyticsShell.regression.test.mjs',
   'tests/clinicalOutcomePlanScope.regression.test.ts',

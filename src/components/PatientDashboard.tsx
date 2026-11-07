@@ -108,6 +108,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [showFamilySuccess, setShowFamilySuccess] = useState(false);
   const [isFamilySaving, setIsFamilySaving] = useState(false);
+  const familySaveInFlightRef = useRef(false);
+  const familyAnnotationInFlightRef = useRef(false);
   const [isFamilyLogOpen, setIsFamilyLogOpen] = useState(false);
   const [familyAnnotation, setFamilyAnnotation] = useState('');
   const [familyAnnotationState, setFamilyAnnotationState] = useState({ saving: false, message: '', error: '' });
@@ -2226,11 +2228,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const hasReachedFamilyPhotoLimitToday = familyPhotoCountToday >= FAMILY_DAILY_PHOTO_LIMIT;
 
   const handleConfirmFamilyNote = async () => {
-    if (isReadOnlyMode) return;
+    if (isReadOnlyMode || familySaveInFlightRef.current) return;
     if ((familyNote.trim() || familyImage) && !isFamilySaving) {
+      familySaveInFlightRef.current = true;
       setIsFamilySaving(true);
       setFamilyUploadError('');
       let uploadedPathThisAttempt: string | null = null;
+      let historyWriteAttempted = false;
       try {
         let persistedImage = familyImage || undefined;
         let persistedImagePath: string | undefined = familyImagePath || undefined;
@@ -2250,9 +2254,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
         }
 
         if (!portalPatientId) throw new Error('Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.');
+        historyWriteAttempted = true;
         const saveResult = await onAddFamilyNote(portalPatientId, familyNote, persistedImage, persistedImagePath);
-        if (saveResult?.success === false) {
-          throw new Error(saveResult?.error || 'Não foi possível persistir o registro no histórico.');
+        if (saveResult?.success !== true) {
+          throw new Error(saveResult?.error || 'Não foi possível confirmar a gravação do registro no histórico.');
         }
 
         setFamilyNote('');
@@ -2266,9 +2271,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           window.setTimeout(() => setShowFamilySuccess(false), 1600);
         }
       } catch (error: any) {
-        if (uploadedPathThisAttempt) void dataService.cleanupPatientPhotoUpload(uploadedPathThisAttempt);
+        // A missing ACK may hide a committed history entry: do not delete its uploaded photo.
+        if (uploadedPathThisAttempt && !historyWriteAttempted) void dataService.cleanupPatientPhotoUpload(uploadedPathThisAttempt);
         setFamilyUploadError(error?.message || 'Não foi possível salvar o registro. Tente novamente.');
       } finally {
+        familySaveInFlightRef.current = false;
         setIsFamilySaving(false);
       }
     }
@@ -3074,19 +3081,32 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const saveFamilyAnnotation = async () => {
     const text = familyAnnotation.trim();
-    if (!text || familyAnnotationState.saving || isReadOnlyMode) return;
-    setFamilyAnnotationState({ saving: true, message: '', error: '' });
+    if (!text || familyAnnotationInFlightRef.current || isReadOnlyMode) return;
     if (!portalPatientId) {
       setFamilyAnnotationState({ saving: false, message: '', error: 'Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.' });
       return;
     }
-    const result = await onAddFamilyNote(portalPatientId, text, undefined, undefined, 'note');
-    if (result?.success === false) {
-      setFamilyAnnotationState({ saving: false, message: '', error: result?.error || 'Não foi possível enviar a anotação.' });
-      return;
+    familyAnnotationInFlightRef.current = true;
+    setFamilyAnnotationState({ saving: true, message: '', error: '' });
+    try {
+      const result = await onAddFamilyNote(portalPatientId, text, undefined, undefined, 'note');
+      if (result?.success !== true) {
+        setFamilyAnnotationState({ saving: false, message: '', error: result?.error || 'Não foi possível confirmar a gravação da anotação.' });
+        return;
+      }
+      setFamilyAnnotation('');
+      setFamilyAnnotationState({
+        saving: false,
+        message: result?.pending === true || result?.offline === true
+          ? 'Anotação salva neste dispositivo e aguardando sincronização.'
+          : 'Anotação enviada para a equipe.',
+        error: ''
+      });
+    } catch (error: any) {
+      setFamilyAnnotationState({ saving: false, message: '', error: error?.message || 'Não foi possível salvar a anotação.' });
+    } finally {
+      familyAnnotationInFlightRef.current = false;
     }
-    setFamilyAnnotation('');
-    setFamilyAnnotationState({ saving: false, message: 'Anotação enviada para a equipe.', error: '' });
   };
 
   const openPortalPatientFile = async (document: any) => {
