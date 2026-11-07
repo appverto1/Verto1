@@ -1,0 +1,73 @@
+name: Temporary item 09 Stripe source inspection
+on:
+  push:
+    branches:
+      - refactor/critical-09-stripe-core-20261107
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Audit Stripe declarations without running payment code
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,hashlib,subprocess
+          src=Path('server.ts').read_text(encoding='utf8')
+          ls=src.splitlines()
+          labels=[
+            'reserveStripeWebhookEvent','markStripeWebhookEventStatus',
+            'processSalesAssistedCheckoutCompleted','reconcileSalesAssistedCheckout',
+            'stripeInvoiceSubscriptionId','salesAssistedFlowType',
+            'ensureModularSubscriptionSchedule','persistPlatformBillingInvoiceLedger',
+            'persistPlatformSubscriptionFinancialState','applyModularEntitlementsForOrganization',
+            'syncSalesSubscriptionDiscount','syncStripeBillingPlanSnapshots',
+            'stripeSubscriptionToEntitlementStatus','createSalesAssistedStripeEventHandlers',
+            'registerStripeCanonicalWebhookRoute','registerLegacySalesActivationStripeWebhookRoute',
+            'confirm_sales_assisted_checkout_payment',
+            'persistStripeSubscriptionReference','syncClinicSubscriptionQuantity',
+          ]
+          out=['STAGING SOURCE SHA256 '+hashlib.sha256(src.encode()).hexdigest(),f'SERVER TOTAL LINES {len(ls)}']
+          blocks=[]
+          for label in labels:
+            found=[i for i,s in enumerate(ls) if re.search(r'^\s*(?:(?:async )?function|const|let)\s+'+re.escape(label)+r'\s*(?:=|\()',s)]
+            used=[i for i,s in enumerate(ls) if label in s]
+            out.append('SYMBOL '+label+' definitions='+str([i+1 for i in found])+' refs='+str([i+1 for i in used[:40]]))
+            for k in found:
+              # Locate following function/const at matching indentation; inspect 3 examples.
+              indent=len(ls[k])-len(ls[k].lstrip())
+              end=next((j for j in range(k+1,len(ls)) if ls[j].strip() and len(ls[j])-len(ls[j].lstrip())<=indent and re.match(r'\s*(?:const |let |(?:async )?function |app\.|register)',ls[j])), min(len(ls),k+220))
+              count=end-k
+              out.append('BLOCK '+label+f' line={k+1} until~={end+1} lines={count} indent={indent}')
+              if label in ('reserveStripeWebhookEvent','markStripeWebhookEventStatus','reconcileSalesAssistedCheckout','persistPlatformSubscriptionFinancialState','ensureModularSubscriptionSchedule','syncSalesSubscriptionDiscount','applyModularEntitlementsForOrganization','processSalesAssistedCheckoutCompleted'):
+                blocks.append((max(0,k-2),min(end,k+195),label))
+          # Do not reveal environment, payments or DB rows. Static source only.
+          for key in ['stripe_webhook_events','stripeEvent.status','status === "processing"','reserveStripeWebhookEvent(','processSalesAssistedCheckoutCompleted','confirm_sales_assisted_checkout_payment','subscriptionSchedules.create','subscriptionSchedules.update','invoice.paid']:
+            found=[i for i,s in enumerate(ls) if key in s]
+            out.append('TEXT '+key+' lines='+str([i+1 for i in found[:95]])+' count='+str(len(found)))
+          merged=[]
+          for a,b,name in sorted(blocks):
+            if merged and a<=merged[-1][1]:
+              merged[-1]=(merged[-1][0],max(merged[-1][1],b),merged[-1][2]+','+name)
+            else: merged.append((a,b,name))
+          for a,b,name in merged:
+            out.append('--- EXCERPT '+name+f' {a+1}-{b} ---')
+            out.extend(f'{i+1:06d}: {ls[i]}' for i in range(a,b))
+          for needle in ['reserveStripeWebhookEvent','markStripeWebhookEventStatus','processSalesAssistedCheckoutCompleted','reconcileSalesAssistedCheckout','persistPlatformSubscriptionFinancialState']:
+            r=subprocess.run(['git','grep','-l','-F',needle,'--','tests'],capture_output=True,text=True)
+            out.append('TESTS '+needle+' '+r.stdout.strip().replace('\n',', '))
+          dst=Path('docs/operations/_temporary_item09_inspection.txt')
+          dst.write_text('\n'.join(out)+'\n',encoding='utf8')
+          print('ITEM09_INSPECTION_DONE',len(out),'lines /',dst.stat().st_size,'bytes')
+          PY
+          git config user.name 'verto-audit-bot'
+          git config user.email 'verto-audit-bot@users.noreply.github.com'
+          git add docs/operations/_temporary_item09_inspection.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(audit): temporary item09 source mapping [skip ci]'
+            git push
+          fi
