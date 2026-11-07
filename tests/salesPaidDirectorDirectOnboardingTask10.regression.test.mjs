@@ -8,6 +8,7 @@ const onboarding = readFileSync('src/components/ProfessionalOnboarding.tsx', 'ut
 const server = readFileSync('server.ts', 'utf8');
 const checkoutTransport = readFileSync('src/services/publicSalesCardCheckout.ts','utf8');
 const postPaymentTransport = readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
+const directorService = readFileSync('src/services/publicSalesDirectorSession.ts','utf8');
 
 const openSession = offer.match(/const openDirectorSession = async \(checkoutSessionId: string\) => \{[\s\S]*?\n  \};/)?.[0] || '';
 const paymentEffect = offer.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[paymentStatusRefreshKey, token\]\);/)?.[0] || '';
@@ -31,20 +32,21 @@ test('paid Checkout return reconciles on the server before any optional status p
 test('director enters the clinic only after one-time server bootstrap and authenticated login', () => {
   assert.match(finishPayment, /if \(state === 'review_required'\) return true/);
   assert.match(finishPayment, /if \(state === 'director_ready'\) \{[\s\S]*?await openDirectorSession\(checkoutSessionId\)/);
-  assert.match(openSession, /\/director-session/);
-  assert.match(openSession, /method: 'POST'/);
-  assert.match(openSession, /credentials: 'omit'/);
-  assert.match(openSession, /body: JSON\.stringify\(\{ sessionId: checkoutSessionId \}\)/);
-  assert.match(openSession, /payload\?\.tokenHash/);
-  assert.match(openSession, /supabase\.auth\.verifyOtp\(/);
-  assert.match(openSession, /verified\?\.data\?\.session\?\.access_token/);
-  assert.match(openSession, /fetch\('\/api\/auth\/login'/);
-  assert.match(openSession, /credentials: 'include'/);
-  assert.match(openSession, /accessToken: verified\.data\.session\.access_token/);
-  assert.match(openSession, /intendedRole: 'director'/);
-  assert.match(openSession, /if \(!loginResponse\.ok \|\| loginPayload\?\.success === false\) \{/);
+  assert.match(openSession, /establishPublicSalesDirectorSession\(token, checkoutSessionId\)/);
+  assert.match(directorService, /\/director-session/);
+  assert.match(directorService, /method: 'POST'/);
+  assert.match(directorService, /credentials: 'omit'/);
+  assert.match(directorService, /body: JSON\.stringify\(\{ sessionId: checkoutSessionId \}\)/);
+  assert.match(directorService, /payload\?\.tokenHash/);
+  assert.match(directorService, /supabase\.auth\.verifyOtp\(/);
+  assert.match(directorService, /verified\?\.data\?\.session\?\.access_token/);
+  assert.match(directorService, /request\('\/api\/auth\/login'/);
+  assert.match(directorService, /credentials: 'include'/);
+  assert.match(directorService, /accessToken: verified\.data\.session\.access_token/);
+  assert.match(directorService, /intendedRole: 'director'/);
+  assert.match(directorService, /if \(!loginResponse\.ok \|\| loginPayload\?\.success === false\) \{/);
   assert.match(openSession, /setPaymentReturnState\('account_activated'\);[\s\S]*?window\.location\.replace\('\/'\)/);
-  assert.doesNotMatch(openSession, /requestPublicSalesCardCheckout|\/checkout['"`]|stripe\.checkout/);
+  assert.doesNotMatch(openSession + directorService, /requestPublicSalesCardCheckout|\/checkout['"`]|stripe\.checkout/);
 });
 
 test('only explicit acceptance/checkout action can start checkout, never payment recovery', () => {
