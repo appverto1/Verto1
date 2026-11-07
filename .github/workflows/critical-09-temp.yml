@@ -1,4 +1,4 @@
-name: Temporary item09 Stripe focused regression gate
+name: Temporary item09 Stripe source-safe test regression gate
 on:
   push:
     branches:
