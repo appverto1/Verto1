@@ -144,7 +144,7 @@ import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 const baseline='35e426feb6670b7a26f89cb86bbba4d378425e48';
-const before=execFileSync('git',['show',baseline+':server.ts'],{encoding:'utf8'});
+const before=execFileSync('git',['show',baseline+':server.ts'],{encoding:'utf8',maxBuffer:16*1024*1024});
 const after=readFileSync('server.ts','utf8');
 const core=readFileSync('services/salesModularCheckoutCore.ts','utf8');
 const routes=readFileSync('services/publicSalesCheckoutRoutes.ts','utf8');
