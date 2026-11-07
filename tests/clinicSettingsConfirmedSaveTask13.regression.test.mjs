@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
+import ts from 'typescript';
 
 const service = readFileSync('src/services/dataService.ts', 'utf8');
 const app = readFileSync('src/App.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const onboarding = readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
+const confirmedSaveModule = readFileSync('src/services/confirmedClinicSettingsSave.ts', 'utf8');
+const transpiledConfirmedSave = ts.transpileModule(confirmedSaveModule, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+}).outputText;
+const sandbox = { exports: {} };
+new Function('exports', 'module', transpiledConfirmedSave)(sandbox.exports, sandbox);
+const { persistConfirmedClinicSettings } = sandbox.exports;
 
 const serviceStart = service.indexOf('async saveUserProfile(userId: string, profile: any) {');
 const serviceEnd = service.indexOf('\n  },\n\n  /**', serviceStart);
@@ -32,10 +40,10 @@ function makeSave({ response, networkError } = {}) {
     return { pending: true, success: true };
   };
   const factory = new Function(
-    'fetchWithAuthRetry', 'getAuthHeaders', 'safeJson', 'saveOfflineFirst',
+    'fetchWithAuthRetry', 'getAuthHeaders', 'safeJson', 'saveOfflineFirst', 'persistConfirmedClinicSettings',
     method + '\nreturn saveUserProfile;',
   );
-  return { save: factory(fetchWithAuthRetry, getAuthHeaders, safeJson, saveOfflineFirst), calls };
+  return { save: factory(fetchWithAuthRetry, getAuthHeaders, safeJson, saveOfflineFirst, persistConfirmedClinicSettings), calls };
 }
 
 test('clinic Save waits for exactly one authenticated authoritative backend response', async () => {

@@ -220,6 +220,7 @@ const criticalTests = [
   'tests/salesDirectorGoogleFirstAccessTask12.regression.test.mjs',
   'tests/salesActivationGoogleOAuth.test.ts',
   'tests/clinicSettingsConfirmedSaveTask13.regression.test.mjs',
+  'tests/confirmedClinicSettingsSave.test.ts',
   'tests/guidedFirstAccessRolePersistenceTask14.regression.test.mjs',
   'tests/contextualGuidedTutorialP0.regression.test.mjs',
   'tests/googleOauthActivationUi.regression.test.mjs',
