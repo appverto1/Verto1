@@ -2614,7 +2614,8 @@ export const dataService = {
           body: JSON.stringify({ ...data, idempotencyKey }),
         });
         const result = await safeJson(response);
-        if (response.ok && result?.success === true && result?.data?.id && result?.queued !== true && result?.pending !== true && result?.offline !== true) {
+        const confirmed = response.ok || (response.status === 409 && isIdempotentConflictPayload(result));
+        if (confirmed && result?.success === true && result?.data?.id && result?.queued !== true && result?.pending !== true && result?.offline !== true) {
           return { success: true, data: result.data };
         }
         return { success: false, error: String(result?.error || result?.message || 'O servidor não confirmou o salvamento da anotação.') };
