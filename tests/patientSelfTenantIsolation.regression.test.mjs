@@ -56,4 +56,29 @@ assert.doesNotMatch(protocols, /getPatientIdsByEmailAcrossClinics/, 'protocols m
 assert.match(tasks, /patientId: portalScope\.patientId/, 'legacy tasks must be restricted to the canonical patient id');
 assert.match(assigned, /patientId: portalScope\.patientId[\s\S]*clinicId: portalScope\.clinicId/, 'assigned tasks must bind clinic and patient');
 
+// Item 18: o primeiro acesso deve manter a identidade canônica da sessão,
+// mesmo quando histórico ou tarefas retornarem IDs legados/inesperados.
+// As APIs acima já vinculam leituras ao patientId + clinicId autorizados.
+const app = fs.readFileSync('src/App.tsx', 'utf8');
+const patientLoadStart = app.indexOf('const fetchPatientScopedData = async (force = false) => {');
+const patientLoadEnd = app.indexOf('const patientIsReadOnlyMode', patientLoadStart);
+assert.ok(patientLoadStart >= 0 && patientLoadEnd > patientLoadStart, 'patient portal loader must exist');
+const patientLoad = app.slice(patientLoadStart, patientLoadEnd);
+assert.match(patientLoad, /const portalContextResult = await dataService\.getPortalContext\(\)/);
+assert.match(patientLoad, /const resolvedContextPatientId = String\(portalContext\?\.resolvedPatientId \|\| ''\)\.trim\(\)/);
+assert.match(
+  patientLoad,
+  /if \(!resolvedContextPatientId\) \{[\s\S]*?setHistory\(\[\]\);[\s\S]*?setTasks\(\[\]\);[\s\S]*?return;/,
+  'missing server-authorized patient identity must fail closed before scoped reads',
+);
+const patientIdWrites = [...patientLoad.matchAll(/setResolvedPatientPortalId\(([^)]*)\)/g)]
+  .map((match) => match[1].trim());
+assert.deepEqual(
+  patientIdWrites,
+  ["''", 'resolvedContextPatientId'],
+  'untrusted history/task rows must never replace the patient ID confirmed by the portal context',
+);
+assert.match(patientLoad, /if \(!mounted \|\| requestId !== requestGeneration\) return;/, 'stale requests must not update a switched context');
+assert.match(app, /patientPortalId=\{resolvedPatientPortalId\}/, 'patient dashboard must receive the canonical patient ID');
+
 console.log('patientSelfTenantIsolation.regression: PASS');
