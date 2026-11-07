@@ -9,6 +9,7 @@ const server = readFileSync('server.ts', 'utf8');
 const checkoutTransport = readFileSync('src/services/publicSalesCardCheckout.ts','utf8');
 const postPaymentTransport = readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
 const directorService = readFileSync('src/services/publicSalesDirectorSession.ts','utf8');
+const directorRoute = readFileSync('services/publicSalesDirectorSessionRoute.ts','utf8');
 
 const openSession = offer.match(/const openDirectorSession = async \(checkoutSessionId: string\) => \{[\s\S]*?\n  \};/)?.[0] || '';
 const paymentEffect = offer.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[paymentStatusRefreshKey, token\]\);/)?.[0] || '';
@@ -68,6 +69,9 @@ test('paid director onboarding stays server-authorized and saves without a secon
   assert.match(server, /async function resolveOnboardingContextForUser/);
   assert.match(server, /requiresPayment: onboardingMode === 'clinic_owner' \? !canAccessDashboard : false/);
   assert.match(server, /verifySalesDirectorContractAccess\(/);
+  assert.match(directorRoute, /verifySalesDirectorContractAccess\(/);
+  assert.match(directorRoute, /payment_confirmed_at/);
+  assert.match(directorRoute, /userId !== clinicId/);
 });
 
 test('payment statuses never turn pending or review into a false paid director session', () => {

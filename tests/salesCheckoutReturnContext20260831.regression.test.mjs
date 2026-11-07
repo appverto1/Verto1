@@ -7,8 +7,8 @@ const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8
 const checkoutHelper = server.match(/const SALES_CHECKOUT_RETURN_CONTEXT_PREFIX[^]*?function resolveSalesStripeConfiguration/)?.[0] || '';
 const modularCheckout = server.match(/const createOrReuseModularCheckout =[^]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/)?.[0] || '';
 const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
-const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
-const directorRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
+const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
+const directorRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 assert.match(checkoutHelper, /SALES_CHECKOUT_RETURN_CONTEXT_PREFIX\s*=\s*"pagamento-"/);
 assert.match(checkoutHelper, /sales_checkout_links/);

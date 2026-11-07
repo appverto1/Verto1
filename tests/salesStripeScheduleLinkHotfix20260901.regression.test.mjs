@@ -17,7 +17,7 @@ const invoicePaidBlock = server.match(
   /if \(\n      event\.type === "invoice\.paid"[\s\S]*?return \{ handled: true, result \};\n      \}\n    \}/
 )?.[0] || '';
 const prepareActivationBlock = server.match(
-  /app\.post\(\n    "\/api\/public\/sales-offers\/:token\/prepare-activation"[\s\S]*?\n  app\.post\(\n    "\/api\/public\/sales-offers\/:token\/director-session"/
+  /app\.post\(\n    "\/api\/public\/sales-offers\/:token\/prepare-activation"[\s\S]*?\n  app\.post\(\n    registerPublicSalesDirectorSessionRoute\(/
 )?.[0] || '';
 
 assert.ok(scheduleBlock, 'bloco de reconciliação de Schedule modular deve existir');

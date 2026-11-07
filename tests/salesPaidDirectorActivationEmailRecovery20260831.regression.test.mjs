@@ -8,8 +8,8 @@ const directorSession = fs.readFileSync('src/services/publicSalesDirectorSession
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const bootstrap = server.match(/const preparePaidDirectorSessionBootstrap =[^]*?const processSalesAssistedCheckoutCompleted/)?.[0] || '';
 const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
-const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
-const sessionRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
+const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?registerPublicSalesDirectorSessionRoute\(/)?.[0] || '';
+const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 // Compatibility intent: the Director remains provisioned server-side. For delayed
 // payment methods, a payment-confirmed e-mail is an additional durable first-access path.

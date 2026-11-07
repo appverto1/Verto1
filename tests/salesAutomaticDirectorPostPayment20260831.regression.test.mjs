@@ -9,7 +9,7 @@ const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const provision = server.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
 const finalize = server.match(/async function finalizeSalesActivationForUser[^]*?const mutationActionLabel/)?.[0] || '';
-const sessionRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
+const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 const verification = server.match(/const verifySalesDirectorContractAccess =[^]*?const resolveAcceptedModularCapacityContract/)?.[0] || '';
 
 assert.match(processPaid, /paymentStatus === "paid"/);
