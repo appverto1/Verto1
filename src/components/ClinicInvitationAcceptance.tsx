@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ChevronRight, Link2, ShieldCheck } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { dataService } from '../services/dataService';
+import { createClinicInvitationSubmissionGate } from '../utils/clinicInvitationSubmissionGate.mjs';
 
 type ClinicInvitationAcceptanceProps = {
   invitationId: string;
@@ -43,11 +44,24 @@ export const ClinicInvitationAcceptance = ({
 }: ClinicInvitationAcceptanceProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
-  const [accepted, setAccepted] = useState<{ user: any; onboardingContext: any } | null>(null);
+  const [accepted, setAccepted] = useState<{ invitationId: string; user: any; onboardingContext: any } | null>(null);
+  const acceptanceGateRef = useRef(createClinicInvitationSubmissionGate());
+  const activeInvitationIdRef = useRef(invitationId);
+  activeInvitationIdRef.current = invitationId;
 
-  const acceptedClinicName = String(accepted?.onboardingContext?.clinic?.name || '').trim() || 'Clínica convidante';
-  const acceptedRole = String(accepted?.onboardingContext?.membership?.role || '').trim().toLowerCase();
-  const acceptedSpecialty = String(accepted?.onboardingContext?.membership?.specialty || '').trim();
+  useEffect(() => {
+    acceptanceGateRef.current.reset();
+    setIsSubmitting(false);
+    setError('');
+    setAccepted(null);
+  }, [invitationId]);
+
+  // Never show a previously accepted workspace after navigating to another invite.
+  const currentAcceptance = accepted?.invitationId === invitationId ? accepted : null;
+
+  const acceptedClinicName = String(currentAcceptance?.onboardingContext?.clinic?.name || '').trim() || 'Clínica convidante';
+  const acceptedRole = String(currentAcceptance?.onboardingContext?.membership?.role || '').trim().toLowerCase();
+  const acceptedSpecialty = String(currentAcceptance?.onboardingContext?.membership?.specialty || '').trim();
   const acceptedRoleLabel = acceptedRole === 'director'
     ? 'Direção'
     : acceptedRole === 'coordinator'
@@ -63,39 +77,54 @@ export const ClinicInvitationAcceptance = ({
               : 'Membro da clínica';
 
   const handleAccept = async () => {
+    if (acceptanceGateRef.current.hasPending() || currentAcceptance) return;
     if (!isInvitationId(invitationId)) {
       setError('O link do convite é inválido. Solicite um novo convite à clínica.');
       return;
     }
 
+    const request = acceptanceGateRef.current.begin(invitationId);
+    if (!request) return;
     setIsSubmitting(true);
     setError('');
     try {
       const result = await dataService.acceptInvitation(invitationId);
+      if (!acceptanceGateRef.current.isCurrent(request, activeInvitationIdRef.current)) return;
       if (!result?.success || !result?.user) {
         throw result;
       }
       setAccepted({
+        invitationId,
         user: result.user,
         onboardingContext: result.onboardingContext || {},
       });
     } catch (acceptanceError) {
-      setError(invitationErrorMessage(acceptanceError));
+      if (acceptanceGateRef.current.isCurrent(request, activeInvitationIdRef.current)) {
+        setError(invitationErrorMessage(acceptanceError));
+      }
     } finally {
-      setIsSubmitting(false);
+      if (acceptanceGateRef.current.end(request) && activeInvitationIdRef.current === request.tenantKey) {
+        setIsSubmitting(false);
+      }
     }
   };
 
   const handleEnterClinic = async () => {
-    if (!accepted?.user) return;
+    if (!currentAcceptance?.user || acceptanceGateRef.current.hasPending()) return;
+    const request = acceptanceGateRef.current.begin(invitationId);
+    if (!request) return;
     setIsSubmitting(true);
     setError('');
     try {
-      await onAccepted(accepted.user);
+      await onAccepted(currentAcceptance.user);
     } catch (enterError) {
-      setError(invitationErrorMessage(enterError));
+      if (acceptanceGateRef.current.isCurrent(request, activeInvitationIdRef.current)) {
+        setError(invitationErrorMessage(enterError));
+      }
     } finally {
-      setIsSubmitting(false);
+      if (acceptanceGateRef.current.end(request) && activeInvitationIdRef.current === request.tenantKey) {
+        setIsSubmitting(false);
+      }
     }
   };
 
@@ -111,14 +140,14 @@ export const ClinicInvitationAcceptance = ({
             <Link2 size={21} aria-hidden="true" />
           </div>
           <div>
-            <p className="text-sm font-medium text-violet-700">{accepted ? 'Vínculo confirmado' : 'Novo vínculo profissional'}</p>
+            <p className="text-sm font-medium text-violet-700">{currentAcceptance ? 'Vínculo confirmado' : 'Novo vínculo profissional'}</p>
             <h1 id="clinic-invitation-title" className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
-              {accepted ? 'Tudo pronto para entrar' : 'Revisar convite da clínica'}
+              {currentAcceptance ? 'Tudo pronto para entrar' : 'Revisar convite da clínica'}
             </h1>
           </div>
         </div>
 
-        {accepted ? (
+        {currentAcceptance ? (
           <div className="mt-5 space-y-3">
             <p className="text-sm leading-6 text-slate-600">
               Seu acesso existente foi associado com segurança. Nenhum dado pessoal ou profissional foi substituído.
@@ -162,7 +191,7 @@ export const ClinicInvitationAcceptance = ({
         ) : null}
 
         <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-          {!accepted ? (
+          {!currentAcceptance ? (
             <button
               type="button"
               onClick={onDismiss}
@@ -174,11 +203,11 @@ export const ClinicInvitationAcceptance = ({
           ) : null}
           <button
             type="button"
-            onClick={() => void (accepted ? handleEnterClinic() : handleAccept())}
+            onClick={() => void (currentAcceptance ? handleEnterClinic() : handleAccept())}
             disabled={isSubmitting}
             className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#6925e8] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {isSubmitting ? 'Validando convite…' : accepted ? 'Entrar na clínica' : 'Aceitar vínculo'}
+            {isSubmitting ? 'Validando convite…' : currentAcceptance ? 'Entrar na clínica' : 'Aceitar vínculo'}
             {!isSubmitting ? <ChevronRight size={17} aria-hidden="true" /> : null}
           </button>
         </div>
