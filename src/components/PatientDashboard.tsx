@@ -100,6 +100,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [wellbeingPeriod, setWellbeingPeriod] = useState<WellbeingPeriod>('month');
   const [readMessageIds, setReadMessageIds] = useState<Set<string>>(() => new Set());
   const [isMoodSaving, setIsMoodSaving] = useState(false);
+  const moodSubmitInFlightRef = useRef(false);
   const [moodSaveError, setMoodSaveError] = useState('');
   const [familyNote, setFamilyNote] = useState("");
   const [familyImage, setFamilyImage] = useState<string | null>(null);
@@ -4065,13 +4066,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setIsMoodModalOpen(true);
   };
   const handleConfirmMood = async () => {
-    if (isReadOnlyMode || !selectedMood || isMoodSaving) return;
+    if (isReadOnlyMode || !selectedMood || isMoodSaving || moodSubmitInFlightRef.current) return;
+    moodSubmitInFlightRef.current = true;
     setIsMoodSaving(true);
     setMoodSaveError('');
     try {
       const result = await onMoodCheckin(selectedMood.value, moodNote, selectedMood.emoji, selectedTag);
-      if (result?.success === false) {
-        setMoodSaveError(result?.error || 'Não foi possível salvar seu check-in.');
+      if (result?.success !== true) {
+        setMoodSaveError(result?.error || 'Não foi possível confirmar a gravação do check-in.');
         return;
       }
       if (result?.data?.id) {
@@ -4083,7 +4085,10 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       setSelectedMood(null);
       setSelectedTag(null);
       window.setTimeout(() => setShowMoodSuccess(false), 1200);
+    } catch {
+      setMoodSaveError('Não foi possível salvar seu check-in.');
     } finally {
+      moodSubmitInFlightRef.current = false;
       setIsMoodSaving(false);
     }
   };
