@@ -406,6 +406,7 @@ test('script comparisons separate contactability and interested decisions withou
 const acquisitionSql=readFileSync('supabase/migrations/20261028233000_sales_acquisition_multiselect_v1.sql','utf8');
 const acquisitionApi=readFileSync('services/salesAcquisitionRoutes.ts','utf8');
 const acquisitionPanel=readFileSync('src/components/CommercialAcquisitionPanel.tsx','utf8');
+const acquisitionTransport=readFileSync('src/services/salesKanbanAcquisition.ts','utf8');
 test('global acquisition catalog seeds event, paid traffic and referral with owner-only isolation',()=>{
   assert.match(acquisitionSql,/values\('Evento'\),\('Tráfego pago'\),\('Indicação'\)/);
   assert.match(acquisitionSql,/sales_acquisition_channels_name_uidx/);
@@ -424,7 +425,8 @@ test('every card supports acquisition multiselect without F5 and serialized Save
   assert.match(kanban,/type="checkbox" checked=\{checked\}/);
   assert.match(kanban,/Salvar canais/);
   assert.match(kanban,/setAcquisitionByLead\(old=>/);
-  assert.match(kanban,/acquisition\/board\?leadIds=/);
+  assert.match(kanban,/loadSalesKanbanAcquisitionBoard\(request,q\)/);
+  assert.match(acquisitionTransport,/\/api\/owner\/sales\/acquisition\/board/);
   assert.match(acquisitionApi,/save_sales_lead_acquisition_channels_v1/);
   assert.match(acquisitionSql,/where id=p_lead_id and deleted_at is null for update/);
   assert.match(acquisitionSql,/acquisition_channels_saved/);
@@ -617,7 +619,8 @@ test('commercial drilldown enforces owner MFA, window bounds, paging and SQL exe
 test('optional script/channel failures cannot blank the canonical Kanban or overwrite saved origins',()=>{
   assert.match(kanban,/const scriptsPromise=request\('\/api\/owner\/sales\/scripts\/active'\)/);
   assert.match(kanban,/\.catch\(\(\)=>\(\{data:\{versions:\[\]\},failed:true\}\)\)/);
-  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/board\?leadIds='\+q\)/);
+  assert.match(kanban,/loadSalesKanbanAcquisitionBoard\(request,q\)/);
+  assert.match(acquisitionTransport,/\?leadIds=/);
   assert.match(kanban,/\.catch\(\(\)=>\(\{data:\{channels:\[\],links:\[\]\},failed:true\}\)\)/);
   assert.match(kanban,/const \[board,history,acquisitionResult\] = await Promise\.all/);
   assert.match(kanban,/setAcquisitionCatalogUnavailable\(pages\.some\(page=>page\.acquisitionFailed\)\)/);
