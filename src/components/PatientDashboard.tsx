@@ -88,6 +88,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [taskStep, setTaskStep] = useState(1);
   const [showTaskSuccess, setShowTaskSuccess] = useState(false);
   const [isTaskSaving, setIsTaskSaving] = useState(false);
+  const [taskSaveError, setTaskSaveError] = useState('');
   const taskSubmitInFlightRef = useRef(false);
   const [selectedMood, setSelectedMood] = useState<any>(null);
   const [hoveredMood, setHoveredMood] = useState<any>(null);
@@ -3829,6 +3830,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
 
   const closeTaskModal = () => {
+    setTaskSaveError('');
     setSelectedTask(null);
     setTaskStep(1);
     setTaskNote("");
@@ -4110,6 +4112,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   };
   const openTaskModal = (task: any) => {
     if (isReadOnlyMode) return;
+    setTaskSaveError('');
     setSelectedTask(task);
     setTaskEnergy(isKidsProfile ? 50 : null);
     setTaskNote("");
@@ -4137,6 +4140,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!isKidsProfile && (taskEnergy === null || !Number.isFinite(Number(taskEnergy)))) return;
     taskSubmitInFlightRef.current = true;
     setIsTaskSaving(true);
+    setTaskSaveError('');
     try {
       const interventionDetails = [
         interventionResponse?.trim() ? `Resposta:
@@ -4148,13 +4152,18 @@ ${interventionImages.join('\n')}` : ''
       ].filter(Boolean).join('\n\n');
       const finalNote = selectedTask.type === 'intervention' ? interventionDetails : taskNote;
       const result = await onCompleteTask(selectedTask, taskEnergy, finalNote);
-      if (result?.success === false) return;
+      if (result?.success !== true || result?.pending || result?.queued || result?.offline) {
+        setTaskSaveError(result?.error || 'A conclusão da tarefa não foi confirmada pelo servidor. Tente novamente.');
+        return;
+      }
       setShowTaskSuccess(true);
       window.setTimeout(() => setShowTaskSuccess(false), 1200);
       setSelectedTask(null);
       setInterventionResponse("");
       setInterventionImages([]);
       setTaskStep(1);
+    } catch (error: any) {
+      setTaskSaveError(error?.message || 'Não foi possível concluir a tarefa.');
     } finally {
       taskSubmitInFlightRef.current = false;
       setIsTaskSaving(false);
@@ -4530,6 +4539,7 @@ ${interventionImages.join('\n')}` : ''
                   : taskReflectionPrompt}
               </p>
             </div>
+            {taskSaveError && <p role="alert" className="mb-4 rounded-xl bg-rose-50 px-3 py-2 text-sm font-medium text-rose-700">{taskSaveError}</p>}
             {selectedTask.type === 'intervention' ? (
               <div className="animate-slide-up space-y-4">
                 {isConventionalAdult && taskStep === 0 && (
