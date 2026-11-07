@@ -177,8 +177,6 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   // Unconfirmed answers must survive focus/refetch until an explicit Save ACK.
   const portalAnamnesisDraftDirtyRef = useRef(false);
   const portalAnamnesisMutationRef = useRef<{ patientId: string; requestId: string } | null>(null);
-  const portalAnamnesisContextRef = useRef(String(portalPatientId || ''));
-  portalAnamnesisContextRef.current = String(portalPatientId || '');
   const portalAnamnesisRequestRef = useRef(0);
   const portalAnamnesisLastLoadedAtRef = useRef(0);
   const portalNotificationsRequestRef = useRef(0);
@@ -211,6 +209,9 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const readOnlyNotice = "Você não possui um tratamento ativo no momento. Entre em contato com sua clínica para retomar o acompanhamento.";
   const portalContext = user?.portalContext && typeof user.portalContext === 'object' ? user.portalContext : {};
   const portalPatientId = String(patientPortalId || portalContext?.resolvedPatientId || user?.patientId || user?.patient_id || '').trim();
+  const portalAnamnesisContextKey = [portalPatientId, String(user?.id || ''), String(user?.activeWorkspaceId || user?.clinicId || portalContext?.clinicId || '')].join(':');
+  const portalAnamnesisContextRef = useRef(portalAnamnesisContextKey);
+  portalAnamnesisContextRef.current = portalAnamnesisContextKey;
 
   useEffect(() => {
     let active = true;
@@ -734,7 +735,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     setPortalAnamnesisDraft({});
     setPortalAnamnesisChecked(false);
     setPortalAnamnesisState({ loading: false, saving: false, message: '', error: '' });
-  }, [portalPatientId, user?.email]);
+  }, [portalPatientId, user?.email, user?.id, user?.activeWorkspaceId, user?.clinicId, user?.portalContext?.clinicId]);
 
   useEffect(() => {
     const refreshAnamnesisWhenVisible = () => {
@@ -2900,13 +2901,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const patientId = String(portalPatientId || '');
     const requestId = String(portalAnamnesis?.request?.id || '');
     if (!patientId || !requestId || portalAnamnesisLocked || portalAnamnesisMutationRef.current) return;
+    const contextKey = portalAnamnesisContextKey;
     const ticket = { patientId, requestId };
     portalAnamnesisMutationRef.current = ticket;
     setPortalAnamnesisState((prev) => ({ ...prev, saving: true, error: '', message: '' }));
     try {
       const result = await dataService.savePortalAnamnesisDraft(patientId, portalAnamnesisDraft, requestId);
       // An older patient/clinic session cannot clear or overwrite the new portal's draft.
-      if (portalAnamnesisMutationRef.current !== ticket || portalAnamnesisContextRef.current !== patientId) return;
+      if (portalAnamnesisMutationRef.current !== ticket || portalAnamnesisContextRef.current !== contextKey) return;
       if (result?.success !== true) {
         setPortalAnamnesisState({ loading: false, saving: false, message: '', error: result?.error || 'Não foi possível salvar o rascunho.' });
         return;
@@ -2931,12 +2933,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!patientId || !requestId || portalAnamnesisLocked || portalAnamnesisMutationRef.current) return;
     const confirmed = window.confirm('Enviar a ficha para a clínica? Após o envio, novas edições dependem de uma nova solicitação.');
     if (!confirmed) return;
+    const contextKey = portalAnamnesisContextKey;
     const ticket = { patientId, requestId };
     portalAnamnesisMutationRef.current = ticket;
     setPortalAnamnesisState((prev) => ({ ...prev, saving: true, error: '', message: '' }));
     try {
       const result = await dataService.submitPortalAnamnesis(patientId, portalAnamnesisDraft, requestId);
-      if (portalAnamnesisMutationRef.current !== ticket || portalAnamnesisContextRef.current !== patientId) return;
+      if (portalAnamnesisMutationRef.current !== ticket || portalAnamnesisContextRef.current !== contextKey) return;
       if (result?.success !== true) {
         setPortalAnamnesisState({ loading: false, saving: false, message: '', error: result?.error || 'Não foi possível enviar a ficha.' });
         return;
