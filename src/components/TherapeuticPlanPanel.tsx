@@ -1392,7 +1392,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       idempotencyKey: scopeIdempotencyKeyRef.current,
     });
     setScopeSaving(false);
-    if (response?.success === false) {
+    if (response?.success !== true) {
       setError(response?.message || response?.error || 'Não foi possível criar o escopo do plano.');
       return;
     }
@@ -1502,7 +1502,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       status: nextStatus,
     });
     setScopeSaving(false);
-    if (response?.success === false) {
+    if (response?.success !== true) {
       setError(response?.message || response?.error || (nextStatus === 'active'
         ? 'Não foi possível ativar este plano.'
         : 'Não foi possível pausar este plano.'));
@@ -1539,7 +1539,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
       status: scopeEditDraft.status,
     });
     setScopeSaving(false);
-    if (response?.success === false) {
+    if (response?.success !== true) {
       setError(response?.message || response?.error || 'Não foi possível salvar este plano.');
       return;
     }
@@ -1613,7 +1613,7 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
           return { success: false };
         }
       }
-      if (response?.success === false) {
+      if (response?.success !== true) {
         if (activate && response?.error === 'PTS_DRAFT_VALIDATION_FAILED') {
           setError('');
           if (response?.draftPreserved === true && response?.data?.id) {
