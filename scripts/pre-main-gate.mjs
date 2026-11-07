@@ -298,6 +298,7 @@ const criticalTests = [
   'tests/sessionExpiredCleanLogout.regression.test.mjs',
   'tests/patientTaskCompletionIdempotency.regression.test.mjs',
   'tests/p0WellbeingProductionReconciliation.regression.test.mjs',
+  'tests/adultAbaEnergySaveAck.regression.test.mjs',
   'tests/agendaPortalActionsP0.regression.test.mjs',
   'tests/p0ContextAuthAgendaBatch05.test.ts',
   'tests/schedulingOverlappingRoomsPatientIdentity.test.ts',
