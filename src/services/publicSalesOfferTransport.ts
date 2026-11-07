@@ -12,3 +12,21 @@ export const loadPublicSalesOfferResponse = async (
   const data = await response.json().catch(() => ({}));
   return { response, data };
 };
+
+
+// A 2xx response alone is not proof of an accessible, server-issued contract.
+// Interpret the public projection after its token-specific 404 handling in UI.
+export const requireConfirmedPublicSalesOffer = (response: Response, data: any) => {
+  const offer = data?.offer;
+  if (
+    !response.ok ||
+    data?.success !== true ||
+    !offer ||
+    typeof offer !== 'object' ||
+    Array.isArray(offer) ||
+    (offer.offerType !== 'modular' && offer.offerType !== 'legacy')
+  ) {
+    throw new Error(data?.message || data?.error || 'Oferta indisponível.');
+  }
+  return offer;
+};
