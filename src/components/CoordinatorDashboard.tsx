@@ -7237,7 +7237,7 @@ export function CoordinatorDashboard({
         }
       } else {
         const addPatientResult = await onAddPatient(newPatient);
-        if (addPatientResult?.success === false) {
+        if (addPatientResult?.success !== true) {
           const errorMessage = String(addPatientResult?.error || "Não foi possível cadastrar paciente.");
           showToast(errorMessage, "error");
           return;
