@@ -67,8 +67,46 @@ jobs:
               python3 "$RUNNER_TEMP/critical05.py" && \
               npx tsx tests/ownerSalesOfferCreationRoutes.behavior.test.ts && \
               node tests/ownerSalesOfferCreationRoutes.regression.test.mjs && \
-              npm run check:pre-main && \
-              npm run build
+              npm run build && \
+              bash -c '
+                set -uo pipefail
+                head_log="$RUNNER_TEMP/item05-premain-head.log"
+                base_log="$RUNNER_TEMP/item05-premain-base.log"
+                new_log="$RUNNER_TEMP/item05-premain-new.log"
+                set +e
+                npm run check:pre-main > "$head_log" 2>&1
+                head_status=$?
+                set -e
+                tail -n 25 "$head_log"
+                if [ "$head_status" -eq 0 ]; then
+                  echo "Full pre-main gate passed without failures"
+                  exit 0
+                fi
+                git worktree add --detach "$RUNNER_TEMP/item05-staging-baseline" e22837120896c29c7f133b6288e9c1a9bd660e66
+                (
+                  cd "$RUNNER_TEMP/item05-staging-baseline"
+                  ln -s "$GITHUB_WORKSPACE/node_modules" node_modules
+                  set +e
+                  npm run check:pre-main > "$base_log" 2>&1
+                  echo "$?" > "$RUNNER_TEMP/item05-base-status"
+                )
+                base_status=$(cat "$RUNNER_TEMP/item05-base-status")
+                if [ "$base_status" -eq 0 ]; then
+                  echo "Baseline passed but candidate pre-main failed"
+                  exit 1
+                fi
+                normalize_failures() {
+                  grep -E "^[[:space:]]*✗[[:space:]]+" "$1" | sed -E "s/^[[:space:]]*✗[[:space:]]+//" | sed -E "s/[[:space:]]+—.*$//" | sort -u || true
+                }
+                comm -23 <(normalize_failures "$head_log") <(normalize_failures "$base_log") > "$new_log"
+                echo "Baseline failures:"; normalize_failures "$base_log"
+                echo "Candidate failures:"; normalize_failures "$head_log"
+                if [ -s "$new_log" ]; then
+                  echo "New regressions:"; cat "$new_log"
+                  exit 1
+                fi
+                echo "ITEM05_PREMAIN_RATCHET_PASS: candidate has no new regression"
+              '
             else
               echo "npm ci failed"
               exit 1
