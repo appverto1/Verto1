@@ -1,0 +1,60 @@
+name: Critical 05 temporary source inspection
+on:
+  push:
+    branches:
+      - audit/critical-05-links-20261107
+permissions:
+  contents: write
+jobs:
+  extract-context:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect commercial link code without executing application
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, hashlib
+          path=Path('server.ts')
+          data=path.read_text(encoding='utf-8')
+          lines=data.splitlines()
+          marks=[
+            'prepareSalesModularOffer', 'prepareSalesOfferFromSimulation',
+            'loadPublicSalesOffer', '/api/owner/sales/offers',
+            '/api/public/sales-offers', 'public_token_hash',
+            'create_sales_modular_offer_v2', 'create_sales_offer',
+            'prepareSalesOffer', 'loadSalesOffer'
+          ]
+          out=['Source SHA256 '+hashlib.sha256(data.encode()).hexdigest(), 'Total lines '+str(len(lines))]
+          hits=[]
+          for needle in marks:
+            matches=[i for i,s in enumerate(lines) if needle in s]
+            out.append('MATCH '+needle+' count='+str(len(matches))+' lines='+','.join(str(i+1) for i in matches[:60]))
+            for i in matches[:12]:
+              hits.append((max(0,i-35), min(len(lines),i+140),needle))
+          hits.sort()
+          merged=[]
+          for st,en,tag in hits:
+            if merged and st<=merged[-1][1]:
+              merged[-1]=(merged[-1][0],max(en,merged[-1][1]))
+            else: merged.append((st,en))
+          for st,en in merged:
+            out.append('--- LINES '+str(st+1)+'-'+str(en)+' ---')
+            out += [f'{i+1:06d}: {lines[i]}' for i in range(st,en)]
+          dst=Path('docs/operations/_temporary_item05_backend_inspection.txt')
+          dst.parent.mkdir(parents=True,exist_ok=True)
+          dst.write_text('\n'.join(out),encoding='utf-8')
+          print('Wrote source excerpts', len(out), 'lines; no environment variables were read')
+          PY
+      - name: Commit inspection artifact only on isolated branch
+        shell: bash
+        run: |
+          git config user.name 'verto-audit-bot'
+          git config user.email 'verto-audit-bot@users.noreply.github.com'
+          git add docs/operations/_temporary_item05_backend_inspection.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(audit): temporary item05 inspection [skip ci]'
+            git push
+          fi
