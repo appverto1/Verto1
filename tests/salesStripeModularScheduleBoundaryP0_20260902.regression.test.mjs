@@ -239,7 +239,7 @@ const reconcileBlock = stripeScheduleSource.match(/const reconcileSalesAssistedC
 )?.[0] || '';
 const reserveBlock = stripeWebhookEventStateSource.match(/async function reserveStripeWebhookEvent\([\s\S]*?\n}\n\nasync function markStripeWebhookEventStatus/
 )?.[0] || '';
-const processPaidBlock = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async \([\s\S]*?\n  ITEM09_SOURCE_END/
+const processPaidBlock = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async \([\s\S]*?\n  \/\/ ITEM09_SOURCE_END/
 )?.[0] || '';
 const provisionDirectorBlock = item10ProvisioningSource.match(
   /async function provisionPaidSalesDirectorAccount\([\s\S]*?\n  async function finalizeSalesActivationForUser/
@@ -273,7 +273,7 @@ assert.doesNotMatch(ensureBlock, /paymentIntents\.create\(|charges\.create\(/);
 // provisionamento, permitindo retry do mesmo checkout sem nova cobrança.
 assert.match(
   reconcileBlock,
-  /await ensureModularSubscriptionSchedule\(stripe, session\);[\s\S]*?processSalesAssistedCheckoutCompleted\(stripe, session\)/,
+  /await ensureModularSubscriptionSchedule\(stripe, session\);[\s\S]*?processSalesAssistedCheckoutCompleted\(stripe, session, options\)/,
 );
 assert.match(reserveBlock, /sanitizeString\(existing\.status, 40\) === 'failed'/);
 assert.match(reserveBlock, /attempt_count: Math\.max\(1, Number\(existing\.attempt_count \|\| 1\)\) \+ 1/);
