@@ -71,6 +71,8 @@ tests=[
  'tests/salesPublicCardCheckoutSafety.regression.test.mjs',
  'tests/salesContractIdentity.test.ts',
  'tests/salesCurrentOperatingSalesGate20260901.regression.test.mjs',
+ 'tests/salesExactPatientCheckoutUiP0000.regression.test.mjs',
+ 'tests/salesExactPerPatientBillingP0000.test.ts',
 ]
 for path in tests:
     p=root/path
@@ -133,6 +135,22 @@ for path in tests:
     if path.endswith('salesStripeWebhookDbMonotonicGuard.regression.test.mjs') or path.endswith('salesStripeWebhookLeadStateIsolation.regression.test.mjs'):
         t=t.replace('assert.match(server,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/)', 'assert.match(checkoutCoreSource,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/)')
         t=t.replace('assert.match(server,/operationIdempotencyKey/)', 'assert.match(checkoutCoreSource,/operationIdempotencyKey/)')
+    if path.endswith('salesExactPatientCheckoutUiP0000.regression.test.mjs'):
+        # Quantity is now sent to Stripe inside the extracted backend, not server.ts.
+        t=t.replace(r'assert.match(server, /quantity: Number\(line\.quantity \|\| 1\)/);',
+                    r'assert.match(checkoutCoreSource, /quantity: Number\(line\.quantity \|\| 1\)/);')
+    if path.endswith('salesExactPerPatientBillingP0000.test.ts'):
+        # The following checks remain exact: they now search both unchanged runtime
+        # sources instead of assuming all checkout statements live in the monolith.
+        t=t.replace("const server = fs.readFileSync('server.ts', 'utf8');",
+                    "const server = fs.readFileSync('server.ts', 'utf8');\nconst checkoutBackend = server + '\\n' + checkoutCoreSource;")
+        for fragment in [
+            r'quantity: Number\(line\.quantity \|\| 1\)',
+            r'quantity: Number\(item\.quantity \|\| 1\)',
+            r'billingModelVersion: frozenResults\?\.input\?\.exactPerPatientBilling',
+        ]:
+            t=t.replace('assert.match(server, /'+fragment+'/);',
+                        'assert.match(checkoutBackend, /'+fragment+'/);')
     if t==original: raise RuntimeError('No test change: '+path)
     p.write_text(t,encoding='utf8')
 
