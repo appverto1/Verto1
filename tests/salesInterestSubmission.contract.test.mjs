@@ -24,7 +24,7 @@ test('request protocol, source and idempotency stay exactly as before', () => {
   assert.match(transport, /initialAcquisitionChannel\.trim\(\) \|\| "public_landing"/);
   assert.match(transport, /source: "public_landing"/);
   assert.match(transport, /formStartedAt: startedAt/);
-  assert.match(transport, /if \(!response\.ok \|\| data\?\.success === false\)/);
+  assert.match(transport, /if \(!response\.ok \|\| data\?\.success !== true\)/);
   assert.match(server, /registerPublicSalesLeadRoute\(app,/);
   assert.match(backend, /"\/api\/public\/sales-leads"/);
   assert.match(backend, /supabase\.rpc\("upsert_public_sales_lead"/);
