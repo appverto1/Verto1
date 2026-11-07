@@ -19,6 +19,7 @@ import {
   ReceiptText
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
+import { createClinicInvitationSubmissionGate } from '../utils/clinicInvitationSubmissionGate.mjs';
 import { MemberPermissionEditor } from './MemberPermissionEditor';
 import { SecureImage } from './SecureMedia';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -263,6 +264,7 @@ export function TeamManagement({
   const [inviteSent, setInviteSent] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [isAssigning, setIsAssigning] = useState(false);
+  const invitationGateRef = useRef(createClinicInvitationSubmissionGate());
   const [cancellingInvitationId, setCancellingInvitationId] = useState<string | null>(null);
   const [resendingInvitationId, setResendingInvitationId] = useState<string | null>(null);
   const [unlinkingMemberId, setUnlinkingMemberId] = useState<string | null>(null);
@@ -323,6 +325,10 @@ export function TeamManagement({
 
   useEffect(() => {
     const expectedTenantKey = activeTenantKey;
+    invitationGateRef.current.reset();
+    setIsAssigning(false);
+    setSuccess(null);
+    setInviteSent(false);
     setMembersTenantKey('');
     setInvitationsTenantKey('');
     setMembers([]);
@@ -395,7 +401,7 @@ export function TeamManagement({
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsAssigning(true);
+    if (invitationGateRef.current.hasPending()) return;
     setError(null);
     setSuccess(null);
     setInviteSent(false);
@@ -422,6 +428,9 @@ export function TeamManagement({
       return;
     }
 
+    const request = invitationGateRef.current.begin(activeTenantKey);
+    if (!request) return;
+    setIsAssigning(true);
     try {
       const result = await dataService.inviteToClinic(
         newMemberEmail,
@@ -433,22 +442,27 @@ export function TeamManagement({
             }
           : {}
       );
+      if (!invitationGateRef.current.isCurrent(request, activeTenantKeyRef.current)) return;
       if (result.success && (result.inAppInvitation === true || result.invitationEmailSent !== false)) {
         setInviteSent(true);
         setSuccess(result.message || (result.inAppInvitation ? 'Convite disponibilizado no aplicativo do profissional.' : 'Convite enviado com sucesso.'));
         setNewMemberEmail('');
         setNewMemberSpecialty('');
-        await fetchInvitations();
+        await fetchInvitations(request.tenantKey);
       } else {
         if (result.invitationPersisted) {
-          await fetchInvitations();
+          await fetchInvitations(request.tenantKey);
         }
         setError(result.error || result.message || 'Não foi possível enviar o convite.');
       }
     } catch (err) {
-      setError('Erro ao enviar convite');
+      if (invitationGateRef.current.isCurrent(request, activeTenantKeyRef.current)) {
+        setError('Erro ao enviar convite');
+      }
     } finally {
-      setIsAssigning(false);
+      if (invitationGateRef.current.end(request) && activeTenantKeyRef.current === request.tenantKey) {
+        setIsAssigning(false);
+      }
     }
   };
 
