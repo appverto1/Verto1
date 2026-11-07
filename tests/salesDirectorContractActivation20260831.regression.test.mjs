@@ -1,7 +1,10 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ProvisioningSource = readItem10Source('services/salesPaidDirectorAccountProvisioning.ts','utf8');
+const item10ContractSource = readItem10Source('services/salesDirectorContractAccess.ts','utf8');
 const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
 const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -16,9 +19,9 @@ const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8
 const processPaid = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted =[^]*?ITEM09_SOURCE_END/)?.[0] || '';
 const paymentStatus = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
 const directorSession = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
-const verification = server.match(/const verifySalesDirectorContractAccess =[^]*?const resolveAcceptedModularCapacityContract/)?.[0] || '';
-const provision = server.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
-const finalize = server.match(/async function finalizeSalesActivationForUser[^]*?const mutationActionLabel/)?.[0] || '';
+const verification = item10ContractSource.match(/const verifySalesDirectorContractAccess =[^]*?ITEM10_SOURCE_END/)?.[0] || '';
+const provision = item10ProvisioningSource.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
+const finalize = item10ProvisioningSource.match(/async function finalizeSalesActivationForUser[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 
 // New paid contracts are provisioned server-side as Director. E-mail is never a
 // provisioning gate, but delayed payment methods may send a first-access link.
@@ -60,7 +63,7 @@ assert.match(verification, /accessProfile\.mode[\s\S]*?"contract"/);
 assert.match(verification, /everyActiveModuleComesFromContract/);
 
 assert.match(stripeEntitlementsSource, /apply_sales_offer_module_entitlements_v2/);
-assert.match(server, /p_stripe_event_created_at:\s*params\.stripeEventCreatedAt/);
+assert.match(stripeEntitlementsSource, /p_stripe_event_created_at:\s*params\.stripeEventCreatedAt/);
 assert.match(finalize, /activation_channel:\s*requireActivationRecord\s*\?\s*"legacy_activation"\s*:\s*"stripe_payment"/);
 
 // Historical activation URLs remain readable for already-issued links, but are not used by new paid checkout.

@@ -1,7 +1,10 @@
+import {readFileSync as readItem10Source} from 'node:fs';
 import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ProvisioningSource = readItem10Source('services/salesPaidDirectorAccountProvisioning.ts','utf8');
+const item10ContractSource = readItem10Source('services/salesDirectorContractAccess.ts','utf8');
 const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
 const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -15,10 +18,10 @@ const directorSession = fs.readFileSync('src/services/publicSalesDirectorSession
 const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 
 const processPaid = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted =[^]*?ITEM09_SOURCE_END/)?.[0] || '';
-const provision = server.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
-const finalize = server.match(/async function finalizeSalesActivationForUser[^]*?const mutationActionLabel/)?.[0] || '';
+const provision = item10ProvisioningSource.match(/async function provisionPaidSalesDirectorAccount[^]*?async function finalizeSalesActivationForUser/)?.[0] || '';
+const finalize = item10ProvisioningSource.match(/async function finalizeSalesActivationForUser[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
-const verification = server.match(/const verifySalesDirectorContractAccess =[^]*?const resolveAcceptedModularCapacityContract/)?.[0] || '';
+const verification = item10ContractSource.match(/const verifySalesDirectorContractAccess =[^]*?ITEM10_SOURCE_END/)?.[0] || '';
 
 assert.match(processPaid, /paymentStatus === "paid"/);
 assert.match(processPaid, /confirm_sales_assisted_checkout_payment/);
