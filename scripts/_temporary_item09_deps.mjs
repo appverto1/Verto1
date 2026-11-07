@@ -32,6 +32,13 @@ for(const g of groups){
  const marker='  // ITEM09_'+g.id+'_DEPS';
  if(!content.includes(marker))throw Error('Missing dependency marker '+marker);
  content=content.replace(marker,'  const { '+names.join(', ')+' } = deps;');
+ if(g.id==='schedule'){
+   const oldCast='as Stripe.SubscriptionScheduleUpdateParams';
+   if(content.split(oldCast).length!==2)throw Error('Unexpected Stripe schedule cast count');
+   content=content.replace(oldCast,'as unknown as Stripe.SubscriptionScheduleUpdateParams');
+   console.log('ITEM09_TYPE_ONLY_STRIPE_SCHEDULE_CAST');
+ }
+
  fs.writeFileSync(g.path,content);
  const serverMarker='// ITEM09_'+g.id+'_INJECT';
  if(!server.includes(serverMarker))throw Error('Missing server injection '+serverMarker);
