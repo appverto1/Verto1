@@ -1,0 +1,13 @@
+ITEM05_GATE_EXIT=1
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+
+added 469 packages in 14s
+MODULE_DIAGNOSTIC {'code': 2749, 'message': "'SalesSimulationInput' refers to a value, but is being used as a type here. Did you mean 'typeof SalesSimulationInput'?"}
+MODULE_DIAGNOSTIC {'code': 2749, 'message': "'SalesSimulationInput' refers to a value, but is being used as a type here. Did you mean 'typeof SalesSimulationInput'?"}
+MODULE_DIAGNOSTIC {'code': 2749, 'message': "'SalesUsageProfile' refers to a value, but is being used as a type here. Did you mean 'typeof SalesUsageProfile'?"}
+Traceback (most recent call last):
+  File "/home/runner/work/_temp/critical05.py", line 70, in <module>
+    raise RuntimeError('Extracted module TypeScript diagnostics remain')
+RuntimeError: Extracted module TypeScript diagnostics remain
