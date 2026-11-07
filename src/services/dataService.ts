@@ -2605,7 +2605,7 @@ export const dataService = {
     const data = { ...note, id, created_at: note.created_at || new Date().toISOString() };
     if (options.requireServerAck === true) {
       // Manual clinical Save is authoritative: do not enqueue or infer success from HTTP 2xx.
-      const idempotencyKey = createIdempotencyKey('POST:/api/notes', id);
+      const idempotencyKey = `POST:/api/notes:${id}`; // Stable across retries of the same clinical draft.
       try {
         const response = await fetchWithAuthRetry('/api/notes', {
           method: 'POST',
