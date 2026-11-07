@@ -40,3 +40,25 @@ test('public site submission preserves the exact request and error handling cont
     globalThis.fetch = originalFetch;
   }
 });
+
+test('a 2xx response without success:true never acknowledges lead persistence', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  try {
+    for (const payload of [{}, {success: null}, {success: 0}, {success: 'true'}, {success: false}]) {
+      globalThis.fetch = (async () => {
+        calls++;
+        return {ok: true, status: 201, json: async () => payload} as Response;
+      }) as typeof fetch;
+      await assert.rejects(submitSalesInterest(input), /Não foi possível registrar seu interesse/);
+    }
+    globalThis.fetch = (async () => {
+      calls++;
+      return {ok: true, status: 201, json: async () => {throw new SyntaxError('invalid JSON');}} as Response;
+    }) as typeof fetch;
+    await assert.rejects(submitSalesInterest(input), /Não foi possível registrar seu interesse/);
+    assert.equal(calls, 6, 'rejecting invalid ACKs must not add HTTP requests or retries');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
