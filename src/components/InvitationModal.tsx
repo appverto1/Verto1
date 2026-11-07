@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Mail,
   X,
@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { dataService } from '../services/dataService';
+import { createClinicInvitationSubmissionGate } from '../utils/clinicInvitationSubmissionGate.mjs';
 import {
   CLINICAL_SPECIALTY_OPTIONS,
 } from '../utils/clinicalSpecialties';
@@ -39,6 +40,7 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const [role, setRole] = useState<InviteRole>('therapist');
   const [specialty, setSpecialty] = useState('');
   const [loading, setLoading] = useState(false);
+  const invitationGateRef = useRef(createClinicInvitationSubmissionGate());
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [invitations, setInvitations] = useState<{email: string, role: string}[]>([]);
@@ -49,9 +51,29 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
   const canGrantDirector = actorRole === 'director';
   const canGrantAdministrativeRoles = actorRole === 'director' || actorRole === 'coordinator';
   const canCreateAccounts = actorRole === 'director' || actorRole === 'coordinator';
+  const activeTenantKey = String(
+    user?.activeAccessContext?.clinicId ||
+    user?.activeAccessContext?.clinic_id ||
+    user?.activeWorkspaceId ||
+    user?.clinicId ||
+    ''
+  ).trim();
+  const activeTenantKeyRef = useRef(activeTenantKey);
+  activeTenantKeyRef.current = activeTenantKey;
+
+  useEffect(() => {
+    invitationGateRef.current.reset();
+    setLoading(false);
+    setError(null);
+    setSuccess(false);
+    setInvitations([]);
+    setEmail('');
+    setSpecialty('');
+  }, [activeTenantKey]);
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (invitationGateRef.current.hasPending()) return;
     if (!canCreateAccounts) {
       setError('Somente Diretor e Coordenador podem enviar convites de equipe.');
       return;
@@ -69,6 +91,8 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
       return;
     }
 
+    const request = invitationGateRef.current.begin(activeTenantKey);
+    if (!request) return;
     setLoading(true);
     setError(null);
     setSuccess(false);
@@ -84,9 +108,10 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
             }
           : {}
       );
+      if (!invitationGateRef.current.isCurrent(request, activeTenantKeyRef.current)) return;
       if (result.success && (result.inAppInvitation === true || result.invitationEmailSent !== false)) {
-        setInvitations([
-          ...invitations,
+        setInvitations((current) => [
+          ...current,
           { email, role: formatInviteRoleLabel(role, specialty) },
         ]);
         setEmail('');
@@ -102,9 +127,13 @@ export function InvitationModal({ user, onClose }: InvitationModalProps) {
         );
       }
     } catch (err) {
-      setError('Erro ao enviar convite');
+      if (invitationGateRef.current.isCurrent(request, activeTenantKeyRef.current)) {
+        setError('Erro ao enviar convite');
+      }
     } finally {
-      setLoading(false);
+      if (invitationGateRef.current.end(request) && activeTenantKeyRef.current === request.tenantKey) {
+        setLoading(false);
+      }
     }
   };
 
