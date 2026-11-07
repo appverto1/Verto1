@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
+const directorSession = fs.readFileSync('src/services/publicSalesDirectorSession.ts', 'utf8');
 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const bootstrap = server.match(/const preparePaidDirectorSessionBootstrap =[^]*?const processSalesAssistedCheckoutCompleted/)?.[0] || '';
@@ -44,9 +45,9 @@ assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActiv
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
 assert.match(publicOffer, /director-session/);
-assert.match(publicOffer, /supabase\.auth\.verifyOtp/);
-assert.match(publicOffer, /provider:\s*'sales_checkout'/);
-assert.match(publicOffer, /\/api\/auth\/login/);
+assert.match(directorSession, /supabase\.auth\.verifyOtp/);
+assert.match(directorSession, /provider:\s*'sales_checkout'/);
+assert.match(directorSession, /\/api\/auth\/login/);
 assert.match(publicOffer, /A Stripe confirmou o pagamento/);
 assert.doesNotMatch(publicOffer, /Reenviar e-mail|activation_ready|\/ativacao-comercial\//);
 
