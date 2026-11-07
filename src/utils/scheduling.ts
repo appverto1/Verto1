@@ -299,6 +299,37 @@ export function getAppointmentDurationOption(value: any, fallback = DEFAULT_SESS
   return SESSION_DURATION_QUICK_OPTIONS.includes(duration) ? String(duration) : 'custom';
 }
 
+/**
+ * Move a recurring series while preserving the calendar-day gaps that were
+ * actually scheduled. Index * 7 breaks biweekly/monthly and multi-slot weekly
+ * series. UTC date-only arithmetic avoids daylight-saving offsets.
+ * This is presentation math only; the backend still validates each write.
+ */
+export function shiftRecurringAppointmentDatePreservingCadence(
+  originalAnchorDate: any,
+  originalOccurrenceDate: any,
+  updatedAnchorDate: any,
+): string {
+  const anchorKey = normalizeAppointmentDate(originalAnchorDate);
+  const occurrenceKey = normalizeAppointmentDate(originalOccurrenceDate);
+  const updatedKey = normalizeAppointmentDate(updatedAnchorDate);
+  if (!anchorKey || !occurrenceKey || !updatedKey) return String(updatedAnchorDate || '');
+
+  const utcDay = (dateKey: string): number | null => {
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const value = Date.UTC(year, month - 1, day);
+    return Number.isFinite(value) && new Date(value).toISOString().slice(0, 10) === dateKey
+      ? value
+      : null;
+  };
+  const anchor = utcDay(anchorKey);
+  const occurrence = utcDay(occurrenceKey);
+  const updated = utcDay(updatedKey);
+  if (anchor === null || occurrence === null || updated === null) return String(updatedAnchorDate || '');
+
+  return new Date(updated + (occurrence - anchor)).toISOString().slice(0, 10);
+}
+
 export function buildRecurrenceDateKeys(params: {
   startDate: any;
   count?: any;

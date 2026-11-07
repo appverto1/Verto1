@@ -30,6 +30,7 @@ import {
   normalizeWeeklyScheduleSlots,
   resolveRecurringAppointmentBillingFields,
   roomPreventsOverlappingAppointments,
+  shiftRecurringAppointmentDatePreservingCadence,
 } from './utils/scheduling';
 import {
   mapPatientProfileTypeToLegacyPortalType,
@@ -5373,14 +5374,6 @@ export default function App() {
       if (!year || !month || !day) return null;
       return new Date(year, month - 1, day);
     };
-    const formatDateKey = (date: Date) =>
-      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-    const addDaysToDateKey = (value: any, days: number) => {
-      const date = parseDateKey(value);
-      if (!date) return String(value || '');
-      date.setDate(date.getDate() + days);
-      return formatDateKey(date);
-    };
     const daysBetween = (from: any, to: any) => {
       const start = parseDateKey(from);
       const end = parseDateKey(to);
@@ -5412,11 +5405,11 @@ export default function App() {
       if (!shouldUpdateFutureRecurrence || String(appointment?.id) === String(id)) {
         return nextDate;
       }
-      const appointmentIndex = getRecurrenceIndex(appointment);
-      if (currentRecurrenceIndex > 0 && appointmentIndex > 0) {
-        return addDaysToDateKey(nextDate, (appointmentIndex - currentRecurrenceIndex) * 7);
-      }
-      return addDaysToDateKey(nextDate, daysBetween(currentAppointment.date, appointment?.date));
+      return shiftRecurringAppointmentDatePreservingCadence(
+        currentAppointment.date,
+        appointment?.date,
+        nextDate,
+      );
     };
     const buildReminderReset = (scheduleChanged: boolean) =>
       scheduleChanged
