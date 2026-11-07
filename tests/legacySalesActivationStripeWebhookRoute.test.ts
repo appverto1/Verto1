@@ -18,9 +18,10 @@ test('legacy webhook body is unchanged, uses raw middleware and stays before can
   assert.equal(fnv32(module.slice(module.indexOf(marker), -2)), 'a5fcfd4b');
   assert.match(module, /express\.raw\(\{ type: "application\/json" \}\)/);
   const legacy = server.indexOf('registerLegacySalesActivationStripeWebhookRoute(app, {');
-  const canonical = server.indexOf('"/api/stripe/webhook"');
+  const canonical = server.indexOf('registerStripeCanonicalWebhookRoute(app, {');
   const json = server.indexOf('app.use(express.json({');
   assert.ok(legacy >= 0 && canonical > legacy && json > canonical);
+  assert.match(fs.readFileSync('services/stripeCanonicalWebhookRoute.ts', 'utf8'), /"\/api\/stripe\/webhook"/);
   assert.doesNotMatch(server, /  app.post\(\n    "\/api\/webhook\/stripe"/);
 });
 
