@@ -1,0 +1,24 @@
+ITEM07_VALIDATION_EXIT=1
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
+npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
+npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+
+added 469 packages in 14s
+CORE_ASSERT_MOVED tests/salesBoletoPaymentPendingSafety.regression.test.mjs moduleCheckout
+CORE_ASSERT_MOVED tests/salesCheckoutReturnContext20260831.regression.test.mjs modularCheckout
+CORE_ASSERT_MOVED tests/salesCustomerFacingModulesOnly.test.mjs modularCheckout
+PUBLIC_ASSERT_MOVED tests/salesCheckoutProvisioning.test.ts checkoutRoute
+CORE_ASSERT_MOVED tests/salesModularStripeAssisted.test.ts checkoutCore
+PUBLIC_ASSERT_MOVED tests/salesModularStripeAssisted.test.ts publicLegacyCheckout
+CORE_ASSERT_MOVED tests/salesContractIdentity.test.ts modularCheckout
+ITEM07_SOURCE_EXTRACTED BEFORE 90640 AFTER 89727 CORE 588 PUBLIC 337 CORE_SHA fea115a5a83a98f187e2558b788f32d7cea0b15692620258b1a1bd1610a378f2 PUBLIC_SHA 6fcfd8e078a4541a53a709ff4f2b41c0067d5a401e92cd434652378f4e1089f3
+CORE_UNRESOLVED_RUNTIME_DEPENDENCIES ["MODULAR_COMMERCIAL_CONSENT_TEXT","MODULAR_COMMERCIAL_CONSENT_VERSION","SALES_CHECKOUT_LINK_SELECT","buildFrozenStripeCheckoutPlan","buildSalesCheckoutReturnContextToken","buildSalesModuleSetHash","buildSalesOfferPublicUrl","classifySalesProposalReview","deriveSalesCheckoutPublicToken","filterSalesCurrentOperatingTechnicalBlockers","getStripe","hashSalesOfferToken","isSalesInternalCommercialItemKey","resolveFrozenSalesOfferTrialDays","resolveStripeEnvironment","salesApplicationOrigin","salesCommercialExceptionApprovalMatches","salesOfferUsesCustomerFacingModulesOnly","sanitizeEmail","sanitizeString","serializeSalesCheckoutLink","supabase","validateStripeSecretForEnvironment"]
+PUBLIC_UNRESOLVED_RUNTIME_DEPENDENCIES ["MODULAR_COMMERCIAL_CONSENT_TEXT","MODULAR_COMMERCIAL_CONSENT_VERSION","app","buildSalesOfferPublicUrl","createOrReuseModularCheckout","getStripe","isCouponDurationMonths","isSalesOfferStripeReady","isUuid","loadPublicSalesOffer","publicSalesLeadIpLimiter","resolveSalesStripeConfiguration","resolveStripeEnvironment","sanitizeEmail","sanitizeString","supabase","validateStripeSecretForEnvironment"]
+CORE_TYPESCRIPT_DIAGNOSTIC_COUNT 5
+MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
+MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
+MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
+MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
+MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
+PUBLIC_TYPESCRIPT_DIAGNOSTIC_COUNT 1
+MODULE_DIAGNOSTIC PUBLIC 2339 Property 'createHash' does not exist on type 'Crypto'.
