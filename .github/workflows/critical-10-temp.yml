@@ -1,0 +1,77 @@
+name: Temporary critical 10 source inventory
+on:
+  push:
+    branches:
+      - refactor/critical-10-paid-director-backend-20261107
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: Capture source boundaries and references (no app execution)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re,hashlib,subprocess
+          p=Path('server.ts')
+          ls=p.read_text(encoding='utf-8').splitlines()
+          keys=[
+            'provisionPaidSalesDirectorAccount','finalizeSalesActivationForUser',
+            'preparePaidDirectorSessionBootstrap','resolveSalesPostPaymentContextToken',
+            'verifySalesDirectorContractAccess','resolveOnboardingContextForUser',
+            'registerPublicSalesDirectorSessionRoute','prepare-activation',
+            'resolveSalesPostPaymentState','provisionPaidSalesDirectorAccount',
+            'createSalesAssistedStripeEventHandlers','processSalesAssistedCheckoutCompleted',
+            'ensureClinicAndMembershipForCoordinator',
+            'prepareSalesActivationAccess',
+            'deriveSalesActivationToken','hashSalesOfferToken'
+          ]
+          out=[f'SERVER_LINES {len(ls)}','SERVER_SHA256 '+hashlib.sha256('\n'.join(ls).encode()).hexdigest()]
+          defs={}
+          for name in keys:
+            occurrences=[i for i,line in enumerate(ls) if name in line]
+            d=[i for i,line in enumerate(ls) if re.search(r'^\s*(?:const|let|(?:async )?function)\s+'+re.escape(name)+r'\b',line)]
+            defs[name]=d
+            out.append(f'SYMBOL {name} DECLARATIONS '+str([x+1 for x in d])+' REFERENCES '+str([x+1 for x in occurrences[:100]]))
+          for i,line in enumerate(ls):
+            if 18000<=i<35000 and re.match(r'^  (?:const|let|async function)\s+[\w]+',line):
+              if any(t in line.lower() for t in ['sales','director','activation','provision','onboarding','contract','payment']):
+                out.append(f'FUNCTION {i+1} {line.strip()[:180]}')
+          spans=[]
+          for name, ds in defs.items():
+            if name in ['provisionPaidSalesDirectorAccount','finalizeSalesActivationForUser',
+                        'preparePaidDirectorSessionBootstrap','resolveSalesPostPaymentContextToken',
+                        'verifySalesDirectorContractAccess','resolveOnboardingContextForUser']:
+              for d in ds[:1]:
+                spans.append((max(0,d-8),min(len(ls),d+75),name))
+          for i,line in enumerate(ls):
+            if '/api/public/sales-offers/:token/prepare-activation' in line:
+              spans.append((max(0,i-15),min(len(ls),i+205),'prepare-activation'))
+          spans.sort()
+          merged=[]
+          for a,b,name in spans:
+            if merged and a<=merged[-1][1]:
+              merged[-1]=(merged[-1][0],max(b,merged[-1][1]),merged[-1][2]+','+name)
+            else:merged.append((a,b,name))
+          for a,b,name in merged:
+            out.append(f'--- CONTEXT {name} LINES {a+1}-{b} ---')
+            out.extend(f'{i+1:06d}: {ls[i]}' for i in range(a,b))
+          for key in ['provisionPaidSalesDirectorAccount','finalizeSalesActivationForUser','preparePaidDirectorSessionBootstrap','resolveSalesPostPaymentContextToken','prepare-activation']:
+            r=subprocess.run(['git','grep','-l','-F',key,'--','tests','scripts','services'],capture_output=True,text=True)
+            out.append(f'TEST_REF {key}: '+r.stdout.strip().replace('\n',', '))
+          dst=Path('docs/operations/_temporary_item10_source_inventory.txt')
+          dst.parent.mkdir(parents=True,exist_ok=True)
+          dst.write_text('\n'.join(out)+'\n',encoding='utf-8')
+          print('ITEM10_INVENTORY_LINES',len(out),'BYTES',dst.stat().st_size)
+          PY
+          git config user.name verto-audit-bot
+          git config user.email verto-audit-bot@users.noreply.github.com
+          git add docs/operations/_temporary_item10_source_inventory.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(audit): temporary item10 backend source mapping [skip ci]'
+            git push
+          fi
