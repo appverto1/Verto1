@@ -4,9 +4,7 @@ import fs from 'node:fs';
 const server = fs.readFileSync('server.ts', 'utf8');
 const activationUi = fs.readFileSync('src/components/SalesActivationAccess.tsx', 'utf8');
 
-const passwordActivation = server.match(
-  /app\.post\(\s*"\/api\/public\/sales-activations\/:token\/password"[\s\S]*?const stripeSubscriptionToEntitlementStatus/
-)?.[0] || '';
+const passwordActivation = fs.readFileSync('services/publicSalesActivationPasswordRoute.ts', 'utf8');
 const authLogin = server.match(
   /app\.post\('\/api\/auth\/login'[\s\S]*?app\.post\('\/api\/auth\/logout'/
 )?.[0] || '';

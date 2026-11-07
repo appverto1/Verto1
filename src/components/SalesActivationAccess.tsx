@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
+import { validateActivationPassword } from '../utils/salesActivationPasswordRules';
+import { loadPublicSalesActivationSummary, persistPublicSalesActivationPassword } from '../services/salesActivationPasswordTransport';
 import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
 
@@ -29,16 +31,6 @@ type ActivationSummary = {
   expiresAt: string | null;
   role: 'director';
   modules: Array<{ itemKey: string; publicName: string }>;
-};
-
-const validateActivationPassword = (value: string): string | null => {
-  if (value.length < 12) return 'A senha deve ter no mínimo 12 caracteres.';
-  if (value.length > 128) return 'A senha deve ter no máximo 128 caracteres.';
-  if (!/[A-Z]/.test(value)) return 'Inclua ao menos uma letra maiúscula.';
-  if (!/[a-z]/.test(value)) return 'Inclua ao menos uma letra minúscula.';
-  if (!/\d/.test(value)) return 'Inclua ao menos um número.';
-  if (!/[^A-Za-z0-9]/.test(value)) return 'Inclua ao menos um símbolo.';
-  return null;
 };
 
 const formatDate = (value: string | null) => {
@@ -72,11 +64,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       setLoading(true);
       setError('');
       try {
-        const response = await fetch(
-          `/api/public/sales-activations/${encodeURIComponent(token)}`,
-          { credentials: 'omit', signal: controller.signal },
-        );
-        const payload = await response.json().catch(() => ({}));
+        const { response, payload } = await loadPublicSalesActivationSummary(token, controller.signal);
         if (!response.ok || payload?.success === false) {
           throw new Error(payload?.message || 'Este link de ativação não está disponível.');
         }
@@ -207,16 +195,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       }
 
       if (!passwordSaved) {
-        const response = await fetch(
-          `/api/public/sales-activations/${encodeURIComponent(token)}/password`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'omit',
-            body: JSON.stringify({ password }),
-          },
-        );
-        const payload = await response.json().catch(() => ({}));
+        const { response, payload } = await persistPublicSalesActivationPassword(token, password);
 
         // Provisioning happens after Auth persistence. If a downstream step is
         // temporarily unavailable, never make the user think the password was
