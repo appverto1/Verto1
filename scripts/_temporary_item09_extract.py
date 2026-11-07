@@ -79,6 +79,22 @@ for g in sorted(groups,key=lambda x:x["st"],reverse=True):
     revised=revised[:g["st"]]+g["replace"]+revised[g["ed"]:]
 imports="".join(f"import {{ {g['factory']} }} from './{g['path'][:-3]}';\n" for g in groups)
 revised=imports+revised
+# The original top-level declarations are hoisted and never run until a webhook.
+# Supabase is initialized later in the module; avoid reading it before startup.
+legacy_registration="const { reserveStripeWebhookEvent, markStripeWebhookEventStatus } = createStripeWebhookEventState({\n  // ITEM09_eventState_INJECT\n});"
+lazy_registration=("let item09WebhookEventState: ReturnType<typeof createStripeWebhookEventState> | null = null;\n"
+    "const getItem09WebhookEventState = () => (item09WebhookEventState ??= createStripeWebhookEventState({\n"
+    "  // ITEM09_eventState_INJECT\n"
+    "}));")
+if revised.count(legacy_registration)!=1:raise RuntimeError("Webhook factory registration drift")
+revised=revised.replace(legacy_registration,lazy_registration)
+if revised.count("    reserveStripeWebhookEvent,\n")!=2:raise RuntimeError("Expected exactly two webhook reserve registrations")
+if revised.count("    markStripeWebhookEventStatus,\n")!=2:raise RuntimeError("Expected exactly two webhook status registrations")
+revised=revised.replace("    reserveStripeWebhookEvent,\n",
+    "    reserveStripeWebhookEvent: (event: Stripe.Event) => getItem09WebhookEventState().reserveStripeWebhookEvent(event),\n")
+revised=revised.replace("    markStripeWebhookEventStatus,\n",
+    "    markStripeWebhookEventStatus: (event: Stripe.Event, status: 'processed' | 'failed', code?: string | null) =>\n"
+    "      getItem09WebhookEventState().markStripeWebhookEventStatus(event, status, code),\n")
 p.write_text(revised,encoding="utf8")
 print("ITEM09_EXTRACTION_BEFORE_AFTER",BASE_LINES,len(revised.splitlines()),"DELTA",BASE_LINES-len(revised.splitlines()))
 for g in groups:print("ITEM09_EXTRACTED_GROUP",g["id"],len(g["original"].splitlines()),g["hash"],g["path"])
