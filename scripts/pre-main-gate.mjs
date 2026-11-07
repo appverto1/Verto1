@@ -215,6 +215,8 @@ const criticalTests = [
   'tests/salesModularSubscriptionSchedule.behavior.test.ts',
   'tests/salesStripeWebhookLeadStateIsolation.regression.test.mjs',
   'tests/salesPaidDirectorDirectOnboardingTask10.regression.test.mjs',
+  'tests/salesPaidDirectorBackendExtraction.regression.test.mjs',
+  'tests/publicSalesPostPaymentReconciliationRoute.behavior.test.ts',
   'tests/publicSalesDirectorSession.test.ts',
   'tests/publicSalesDirectorSessionRoute.test.ts',
   'tests/salesActivationPasswordFirstAccess.test.mjs',
