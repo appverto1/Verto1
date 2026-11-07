@@ -1,0 +1,60 @@
+name: Item 06 one-shot backend extraction
+
+# Temporary workflow, removed from the branch immediately after its single run.
+# Needed because the connected file editor cannot submit the 4.1-MB server.ts.
+on:
+  push:
+    branches:
+      - 'refactor/critical-06-public-offer-full-read-20261107'
+    paths:
+      - '.github/workflows/item06-one-shot-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-exact-patch:
+    if: github.repository == 'appverto1/Verto1' && github.ref == 'refs/heads/refactor/critical-06-public-offer-full-read-20261107'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 1
+      - name: Verify original git blob and extract exact public GET
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object server.ts)" = "dfa23556a6b8dba75c561cfb7a04946503a04c74"
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const source=readFileSync('server.ts','utf8');
+          const module=readFileSync('services/publicSalesOfferReadRoute.ts','utf8');
+          const startText='  const sanitizePublicOfferDiscount = (raw: any) => {';
+          const endText='  registerPublicSalesCheckoutRoutes({';
+          const at=source.indexOf(startText),end=source.indexOf(endText,at);
+          if(at<0||end<at||source.indexOf(startText,at+1)!==-1)throw Error('Item 06: source boundary changed');
+          const moved=source.slice(at,end);
+          let h=0x811c9dc5;for(let i=0;i<moved.length;i++)h=Math.imul(h^moved.charCodeAt(i),0x01000193)>>>0;
+          if(h.toString(16).padStart(8,'0')!=='5d8daf79')throw Error('Item 06: source fingerprint changed');
+          if(!module.includes(moved))throw Error('Item 06: extracted code is not byte-identical');
+          if(source.includes('registerPublicSalesOfferReadRoute('))throw Error('Item 06: route already registered');
+          const newSource="import { registerPublicSalesOfferReadRoute } from './services/publicSalesOfferReadRoute';\n"+source.slice(0,at)+"  const loadPublicSalesOffer = registerPublicSalesOfferReadRoute({\n    app,\n    supabase,\n    publicSalesLeadIpLimiter,\n    sanitizeString,\n    hashSalesOfferToken,\n    extractMissingColumnName,\n    isMissingRelationError,\n    salesOfferPublicStatusAllowed,\n    salesOfferUsesCustomerFacingModulesOnly,\n    isSalesInternalCommercialItemKey,\n    PUBLIC_ACTIVE_PATIENT_PRICE,\n    resolveStripeEnvironment,\n    validateStripeSecretForEnvironment,\n    resolveSalesStripeConfiguration,\n    isSalesOfferStripeReady,\n  });\n\n"+source.slice(end);
+          if(newSource.length>=source.length)throw Error('Item 06: expected reduction missing');
+          writeFileSync('server.ts',newSource);
+          console.log('Item 06: original lines',source.split('\n').length,'new lines',newSource.split('\n').length,'removed',source.split('\n').length-newSource.split('\n').length);
+          NODE
+          git diff --check
+          git diff --numstat -- server.ts
+      - name: Commit only server.ts on the exact feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = 'refs/heads/refactor/critical-06-public-offer-full-read-20261107'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- server.ts
+          git diff --cached --quiet && { echo '::error::Empty server.ts extraction'; exit 1; }
+          git commit -m 'refactor(item06): move 552 public-offer lines out of server.ts'
+          git push origin HEAD:'refs/heads/refactor/critical-06-public-offer-full-read-20261107'
