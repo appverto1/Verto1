@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {loadPublicSalesOfferResponse} from '../src/services/publicSalesOfferTransport';
+import {loadPublicSalesOfferResponse,requireConfirmedPublicSalesOffer} from '../src/services/publicSalesOfferTransport';
 
 test('anonymous public GET uses only opaque URL token and no login/cookies/auth headers',async()=>{
   const calls:Array<{url:string;init:RequestInit|undefined}>=[];
@@ -51,4 +51,38 @@ test('network failures propagate once; non-JSON response follows existing empty-
   const result=await loadPublicSalesOfferResponse('invalid',notJson);
   assert.equal(result.response.status,503);
   assert.deepEqual(result.data,{});
+});
+
+test('public offer read only acknowledges boolean success:true with a public frozen offer shape',()=>{
+  for(const payload of [
+    {},{success:false},{success:'true',offer:{offerType:'modular'}},
+    {success:true},{success:true,offer:null},{success:true,offer:[]},
+    {success:true,offer:'unexpected'},{success:true,offer:{offerType:'unknown'}},
+  ]){
+    assert.throws(()=>requireConfirmedPublicSalesOffer(new Response('{}',{status:200}),payload),/Oferta indisponível/);
+  }
+  assert.throws(
+    ()=>requireConfirmedPublicSalesOffer(
+      new Response('{}',{status:503}),{success:true,offer:{offerType:'modular'}}
+    ),/Oferta indisponível/,
+  );
+  const legacy={offerType:'legacy',clinicName:'Clínica histórica',baseUnitAmountCents:12000};
+  const modular={offerType:'modular',proposalName:'Proposta modular',items:[],commercialPhases:[]};
+  assert.equal(requireConfirmedPublicSalesOffer(new Response('{}',{status:200}),{success:true,offer:legacy}),legacy);
+  assert.equal(requireConfirmedPublicSalesOffer(new Response('{}',{status:200}),{success:true,offer:modular}),modular);
+});
+test('public read keeps backend error without redirect, cache or implicit retry',async()=>{
+  let calls=0;
+  const request=(async()=>{
+    calls++;
+    return new Response(JSON.stringify({success:true}),{status:200});
+  }) as typeof fetch;
+  const {response,data}=await loadPublicSalesOfferResponse('opaque-token',request);
+  assert.throws(()=>requireConfirmedPublicSalesOffer(response,data),/Oferta indisponível/);
+  assert.equal(calls,1);
+  assert.throws(
+    ()=>requireConfirmedPublicSalesOffer(
+      new Response('{}',{status:409}),{error:'OFFER_UNAVAILABLE',message:'Reemissão necessária'}
+    ),/Reemissão necessária/
+  );
 });

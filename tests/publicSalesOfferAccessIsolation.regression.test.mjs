@@ -21,7 +21,9 @@ test('public data is read once via backend token and old offer is cleared before
   assert.ok(load.indexOf('setOffer(null)')<load.indexOf('await loadPublicSalesOfferResponse(token)'));
   assert.match(load,/response\.status === 404 && data\?\.error === 'OFFER_UNAVAILABLE'/);
   assert.match(load,/setOfferUnavailable\(true\)/);
-  assert.match(load,/if \(!cancelled\) \{[\s\S]*?setOffer\(data\.offer\)/);
+  assert.match(load,/requireConfirmedPublicSalesOffer\(response, data\)/);
+  assert.match(load,/if \(!cancelled\) \{[\s\S]*?setOffer\(confirmedOffer\)/);
+  assert.match(load,/setAcceptedAt\(confirmedOffer\?\.acceptedAt \|\| null\)/);
   assert.match(page,/return \(\) => \{[\s\S]*?cancelled = true/);
   assert.match(transport,/encodeURIComponent\(token\)/);
 });
