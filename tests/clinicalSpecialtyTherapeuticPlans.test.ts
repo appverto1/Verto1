@@ -226,10 +226,8 @@ assert.match(planReadRoute, /\.lte\('created_at', historicalCutoff\.updatedAt\)[
 assert.match(planReadRoute, /from\('aba_program_versions'\)/);
 assert.match(planReadRoute, /historicalPrograms/);
 
-const planCreateRoute = routeSection(
-  "app.post('/api/aba/patients/:patientId/therapeutic-plans'",
-  "app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'",
-);
+// Creation logic moved in ABA-M05; the original security assertions stay intact.
+const planCreateRoute = fs.readFileSync('services/therapeuticPlanCreateHandler.ts', 'utf8');
 assert.doesNotMatch(
   planCreateRoute,
   /req\.body\?\.(?:specialty|specialty_name|specialtyName)(?![A-Za-z_])/,

@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+
+const original = execFileSync('git', ['cat-file', 'blob', 'be014bb8cd3d421d8aa43091a89cbd5cb49c0636'], { encoding: 'utf8', maxBuffer: 8_000_000 });
+const current = readFileSync('server.ts', 'utf8');
+const handler = readFileSync('services/therapeuticPlanCreateHandler.ts', 'utf8');
+const originalRegistration = "  app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireScopedTherapeuticPlanCapability('create'), checkPatientAccess, async (req: any, res) => {";
+const originalStart = original.indexOf(originalRegistration);
+const originalEnd = original.indexOf("\n  });\n\n  app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'", originalStart);
+assert.ok(originalStart >= 0 && originalEnd > originalStart, 'original handler boundaries');
+const originalBody = original.slice(originalStart + originalRegistration.length, originalEnd);
+const extractedStart = handler.indexOf('\n    try {');
+const extractedEnd = handler.lastIndexOf('\n  };');
+assert.ok(extractedStart > 0 && extractedEnd > extractedStart, 'extracted handler boundaries');
+assert.equal(handler.slice(extractedStart, extractedEnd), originalBody,
+  'plan creation business logic and Supabase calls must match byte-for-byte');
+assert.equal(current.split("app.post('/api/aba/patients/:patientId/therapeutic-plans',").length, 2, 'registered once');
+assert.match(current, /app\.post\('\/api\/aba\/patients\/:patientId\/therapeutic-plans', checkAuth, requireScopedTherapeuticPlanCapability\('create'\), checkPatientAccess, createTherapeuticPlanCreateHandler\(\(\) => \(\{/);
+assert.ok(current.indexOf("app.get('/api/aba/patients/:patientId/therapeutic-plan'") < current.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-plans'"));
+assert.ok(current.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-plans'") < current.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'"));
+assert.match(handler, /\.eq\('organization_id', organizationId\)/);
+assert.match(handler, /\.eq\('clinic_id', clinicId\)/);
+assert.match(handler, /THERAPEUTIC_PLAN_PROFESSIONAL_NOT_LINKED/);
+assert.match(handler, /THERAPEUTIC_PLAN_IDEMPOTENCY_CONFLICT/);
+assert.match(handler, /request_hash: requestHash/);
+assert.match(handler, /PATIENT_CASE_TEAM_MEMBERSHIP_ROLES/);
+assert.doesNotMatch(handler, /from ['"]\.\.\/server['"]/);
+const ui = readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
+assert.match(ui, /data-testid="therapeutic-plan-hub-overview"/);
+assert.match(ui, /Planos por especialidade/);
+assert.match(ui, /Planos em rascunho/);
+assert.match(ui, /scopeDraft\.participantProfessionalIds\.length/);
+assert.match(ui, /response\?\.success !== true/);
+assert.match(ui, /idempotencyKey: scopeIdempotencyKeyRef\.current/);
+console.log('ABA-M05: handler parity, scope, middleware and visual hub OK');
