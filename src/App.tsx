@@ -4426,13 +4426,6 @@ export default function App() {
             }
           };
         });
-        const identity = resolvePatientIdentityForPortal({
-          ...user,
-          patientId: resolvedContextPatientId,
-          patient_id: resolvedContextPatientId,
-          patient_email: portalContext?.resolvedPatientEmail || user.email,
-          email: portalContext?.resolvedPatientEmail || user.email
-        });
         const clinicalPortalEnabled = portalHasModule('clinical_core');
         const [historyRes, notesRes] = await Promise.allSettled([
           clinicalPortalEnabled ? dataService.getPatientSelfHistory(resolvedContextPatientId) : Promise.resolve({ success: true, data: [] }),
@@ -4462,16 +4455,6 @@ export default function App() {
         historySeen.add(key);
         return true;
       });
-
-      const candidateResolvedIds = [
-        ...(Array.isArray(mergedHistory) ? mergedHistory : []),
-        ...(identity?.patientId ? [{ patient_id: identity.patientId }] : [])
-      ]
-        .map((row: any) => String(row?.patient_id || row?.patientId || '').trim())
-        .filter((id: string) => id.length > 0 && id !== String(user.id || '').trim());
-      if (mounted && candidateResolvedIds.length > 0) {
-        setResolvedPatientPortalId(candidateResolvedIds[0]);
-      }
 
       if (mounted) {
         const normalizedHistory = Array.isArray(mergedHistory)
@@ -4508,14 +4491,6 @@ export default function App() {
       const safeTasksRes = tasksRes.status === 'fulfilled' ? tasksRes.value : null;
       const safeAssignedTasksRes = assignedTasksRes.status === 'fulfilled' ? assignedTasksRes.value : null;
       const safeProtocolsRes = protocolsRes.status === 'fulfilled' ? protocolsRes.value : null;
-
-      const secondaryResolvedId = [
-        ...(Array.isArray(safeTasksRes?.data) ? safeTasksRes.data : []),
-        ...(Array.isArray(safeAssignedTasksRes?.data) ? safeAssignedTasksRes.data : [])
-      ]
-        .map((row: any) => String(row?.patient_id || row?.patientId || '').trim())
-        .find((id: string) => id.length > 0 && id !== String(user.id || '').trim());
-      if (secondaryResolvedId) setResolvedPatientPortalId(secondaryResolvedId);
 
       if (mounted) setTasks((() => {
         const baseTasks = Array.isArray(safeTasksRes?.data)
