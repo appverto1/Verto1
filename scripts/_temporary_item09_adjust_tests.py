@@ -54,14 +54,14 @@ for path in sorted(Path('tests').glob('*')):
  # change which source is evaluated, not weaken the pattern itself.
  if 'const processSalesAssistedCheckoutCompleted' in text:
    # The trailing declaration originally just delimited the paid function.
-   text=text.replace('const stripeInvoiceSubscriptionId/', '// ITEM09_SOURCE_END/')
-   text=text.replace('const processSalesAssistedStripeEvent = async/', '// ITEM09_SOURCE_END/')
+   text=text.replace('const stripeInvoiceSubscriptionId/', 'ITEM09_SOURCE_END/')
+   text=text.replace('const processSalesAssistedStripeEvent = async/', 'ITEM09_SOURCE_END/')
  if 'const preparePaidDirectorSessionBootstrap' in text:
    text=text.replace('const processSalesAssistedCheckoutCompleted/', 'createSalesAssistedCheckoutPaymentProcessor/')
  if 'const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS' in text:
    text=text.replace('const processSalesAssistedCheckoutCompleted/', 'createSalesAssistedCheckoutPaymentProcessor/')
  if 'const reconcileSalesAssistedCheckout' in text:
-   text=text.replace('const isSalesAssistedStripeEvent = async/', '// ITEM09_SOURCE_END/')
+   text=text.replace('const isSalesAssistedStripeEvent = async/', 'ITEM09_SOURCE_END/')
  # Source before subscription discount and phase schedule was used only
  # as an end-delimiter for the existing pure function under test.
  if 'const currentPeriodHelperSource' in text:
