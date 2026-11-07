@@ -1,5 +1,9 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const offerRoutes = fs.readFileSync('services/ownerSalesOfferCreationRoutes.ts', 'utf8');
@@ -12,9 +16,7 @@ const migration = fs.readFileSync(
 const modularOfferPreparation = offerRoutes.match(
   /const prepareSalesModularOffer = async[\s\S]*?const prepareSalesOfferFromSimulation = async/
 )?.[0] || '';
-const modularCheckout = server.match(
-  /const createOrReuseModularCheckout = async[\s\S]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/
-)?.[0] || '';
+const modularCheckout = checkoutCoreSource.slice(checkoutCoreSource.indexOf('const createOrReuseModularCheckout = async'));
 const checkoutEmailRoute = server.match(
   /app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout\/email"[\s\S]*?app\.get\(/
 )?.[0] || '';

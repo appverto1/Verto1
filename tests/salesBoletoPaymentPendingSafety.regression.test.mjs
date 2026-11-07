@@ -1,6 +1,10 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const publicPage=readFileSync('src/components/PublicSalesOffer.tsx','utf8');
 const postPaymentTransport=readFileSync('src/services/publicSalesPostPaymentTransport.ts','utf8');
@@ -41,7 +45,7 @@ test('paid status and activation remain backend-authoritative and never use clie
   assert.match(env,/validateStripeSecretForEnvironment/);
 });
 test('Boleto is not forcibly enabled in a live subscription or assumed available from the client',()=>{
-  const moduleCheckout=server.match(/const createOrReuseModularCheckout = async[\s\S]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/)?.[0]||'';
+  const moduleCheckout = checkoutCoreSource.slice(checkoutCoreSource.indexOf('const createOrReuseModularCheckout = async'));
   assert.match(moduleCheckout,/mode: "subscription"/);
   assert.match(moduleCheckout,/resolveStripeEnvironment\(\)/);
   assert.match(moduleCheckout,/validateStripeSecretForEnvironment/);

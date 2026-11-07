@@ -1,5 +1,9 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260813130000_organization_module_entitlements.sql', 'utf8');
@@ -76,12 +80,12 @@ assert.match(server, /Retry an interrupted paid modular activation on a later lo
 
 assert.match(migration, /trial_days integer not null default 0/);
 assert.match(migration, /check \(trial_days in \(0, 7, 14, 30\)\)/);
-assert.match(server, /trial_period_days/);
+assert.match(checkoutCoreSource, /trial_period_days/);
 assert.match(server, /payment_method_collection: "always"/);
-assert.match(server, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
+assert.match(checkoutCoreSource, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
 assert.match(server, /createOrReuseModularCheckout/);
-assert.match(server, /moduleSetHash/);
-assert.match(server, /MODULAR_CHECKOUT_ENVIRONMENT_MISMATCH/);
+assert.match(checkoutCoreSource, /moduleSetHash/);
+assert.match(checkoutCoreSource, /MODULAR_CHECKOUT_ENVIRONMENT_MISMATCH/);
 assert.doesNotMatch(server, /\.eq\(["']environment["'],\s*["']test["']\)/);
 assert.doesNotMatch(server, /environment:\s*["']test["']/);
 assert.match(stripeEnvironment, /STRIPE_ENVIRONMENT/);
@@ -101,3 +105,6 @@ assert.match(app, /moduleAccessMode/);
 assert.match(app, /entitlementVersion/);
 
 console.log('organizationModuleEntitlements.test.mjs: ok');
+
+assert.doesNotMatch(checkoutCoreSource,/\.eq\(["']environment["'],\s*["']test["']\)/);
+assert.doesNotMatch(publicCheckoutRouteSource,/environment:\s*["']test["']/);

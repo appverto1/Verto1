@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {test} from 'node:test';
+import {readFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
+const baseline='35e426feb6670b7a26f89cb86bbba4d378425e48';
+const before=execFileSync('git',['show',baseline+':server.ts'],{encoding:'utf8',maxBuffer:16*1024*1024});
+const after=readFileSync('server.ts','utf8');
+const core=readFileSync('services/salesModularCheckoutCore.ts','utf8');
+const routes=readFileSync('services/publicSalesCheckoutRoutes.ts','utf8');
+const between=(s,a,b)=>{
+  const start=s.indexOf(a);const end=s.indexOf(b,start);
+  assert.ok(start>=0&&end>start, 'missing or reordered source boundary');
+  return s.slice(start,end);
+};
+const coreBefore=between(before,'  const createOrReuseModularCheckout = async (','  app.post(\n    "/api/owner/sales/offers/:offerId/modular-checkout",');
+const publicBefore=between(before,'  app.post(\n    "/api/public/sales-offers/:token/accept",','  registerPublicSalesPaymentStatusRoute(app,');
+const hash=s=>createHash('sha256').update(s).digest('hex');
+test('public consent and both checkout implementations are byte-identical to staging baseline',()=>{
+  assert.ok(core.includes(coreBefore),'core statements must remain unchanged');
+  assert.ok(routes.includes(publicBefore),'public route handlers must remain unchanged');
+  assert.equal(hash(coreBefore),'fea115a5a83a98f187e2558b788f32d7cea0b15692620258b1a1bd1610a378f2');
+  assert.equal(hash(publicBefore),'6fcfd8e078a4541a53a709ff4f2b41c0067d5a401e92cd434652378f4e1089f3');
+  assert.doesNotMatch(after,/app\.post\(\s*"\/api\/public\/sales-offers\/:token\/checkout"/);
+  assert.doesNotMatch(after,/const createOrReuseModularCheckout = async/);
+  assert.match(after,/registerPublicSalesCheckoutRoutes\(\{/);
+  assert.match(after,/createModularCheckoutCore\(\{/);
+});
+test('no new requests, no owner MFA bypass, no client supplied pricing or tenant',()=>{
+  assert.match(routes,/publicSalesLeadIpLimiter/);
+  assert.match(routes,/req\.body\?\.commercialValuesConsent !== true/);
+  assert.match(routes,/req\.body\?\.acceptTerms !== true/);
+  assert.match(routes,/MODULAR_CHECKOUT_BROWSER_VALUES_REJECTED/);
+  assert.match(routes,/actorUserId = sanitizeString\(\(offer as any\)\.created_by/);
+  assert.match(routes,/createOrReuseModularCheckout\(req, res, \{/);
+  assert.match(after,/checkPlatformAdmin/);
+  assert.match(after,/hasVerifiedMfaSession/);
+  assert.match(core,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
+  assert.match(core,/MODULAR_CHECKOUT_RECONCILIATION_FAILED/);
+  assert.match(core,/customer_email: contractEmail/);
+  assert.match(core,/payment_method_collection: "always"/);
+  assert.match(core,/checkout\.sessions\.expire\(session\.id\)/);
+  assert.match(core,/operationIdempotencyKey/);
+});

@@ -1,5 +1,9 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const builder = readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
@@ -48,10 +52,10 @@ assert.doesNotMatch(publicOffer, /Complete os custos das funcionalidades antes d
 assert.match(publicOffer, /proposalTechnicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers/);
 assert.match(publicOffer, /blockingCodes: proposalTechnicalBlockingCodes/);
 
-const checkoutStart = server.indexOf('const createOrReuseModularCheckout = async');
-const checkoutRouteStart = server.indexOf('"/api/owner/sales/offers/:offerId/modular-checkout"', checkoutStart);
+const checkoutStart = checkoutCoreSource.indexOf('const createOrReuseModularCheckout = async');
+const checkoutRouteStart = checkoutCoreSource.indexOf('return createOrReuseModularCheckout;', checkoutStart);
 assert.ok(checkoutStart >= 0 && checkoutRouteStart > checkoutStart, 'checkout boundaries not found');
-const checkout = server.slice(checkoutStart, checkoutRouteStart);
+const checkout = checkoutCoreSource.slice(checkoutStart, checkoutRouteStart);
 assert.match(checkout, /frozenTechnicalBlockingCodes = filterSalesCurrentOperatingTechnicalBlockers/);
 assert.match(checkout, /blockingCodes: frozenTechnicalBlockingCodes/);
 

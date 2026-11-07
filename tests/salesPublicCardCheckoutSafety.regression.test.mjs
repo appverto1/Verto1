@@ -1,6 +1,10 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const page=readFileSync('src/components/PublicSalesOffer.tsx','utf8');
 const transport=readFileSync('src/services/publicSalesCardCheckout.ts','utf8');
@@ -30,12 +34,12 @@ test('backend alone validates test/live keys, accepted snapshot and idempotent C
   assert.match(env,/STRIPE_ENVIRONMENT deve ser explicitamente test ou live/);
   assert.match(env,/sk_test_/);
   assert.match(env,/sk_live_/);
-  assert.match(server,/const createOrReuseModularCheckout = async/);
-  assert.match(server,/MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
-  assert.match(server,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
-  assert.match(server,/public-modular-checkout:/);
-  assert.match(server,/operationIdempotencyKey/);
-  assert.match(server,/stripe\.checkout\.sessions\.create/);
+  assert.match(checkoutCoreSource,/const createOrReuseModularCheckout = async/);
+  assert.match(checkoutCoreSource,/MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
+  assert.match(checkoutCoreSource,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
+  assert.match(publicCheckoutRouteSource,/public-modular-checkout:/);
+  assert.match(checkoutCoreSource,/operationIdempotencyKey/);
+  assert.match(publicCheckoutRouteSource,/stripe\.checkout\.sessions\.create/);
   assert.match(server,/processSalesAssistedCheckoutCompleted/);
   assert.match(server,/confirm_sales_assisted_checkout_payment/);
   assert.doesNotMatch(transport,/getSupabase|service_role|sk_live_|sk_test_|stripe\.checkout|localStorage|\/webhook/);
