@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
+const directorSession = fs.readFileSync('src/services/publicSalesDirectorSession.ts', 'utf8');
 const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
@@ -44,9 +45,9 @@ assert.match(sessionRoute, /supabase\.auth\.admin\.generateLink/);
 assert.match(sessionRoute, /hashed_token/);
 assert.doesNotMatch(sessionRoute, /emails\.send|sendTransactionalEmail/);
 
-assert.match(publicOffer, /supabase\.auth\.verifyOtp/);
-assert.match(publicOffer, /provider:\s*'sales_checkout'/);
-assert.match(publicOffer, /intendedRole:\s*'director'/);
+assert.match(directorSession, /supabase\.auth\.verifyOtp/);
+assert.match(directorSession, /provider:\s*'sales_checkout'/);
+assert.match(directorSession, /intendedRole:\s*'director'/);
 assert.match(publicOffer, /window\.location\.replace\('\/'\)/);
 assert.match(publicOffer, /Entrada no onboarding da clínica/);
 assert.doesNotMatch(publicOffer, /E-mail de ativação enviado|Reenviar e-mail/);
