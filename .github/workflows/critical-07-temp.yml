@@ -1,0 +1,67 @@
+name: Temporary item 07 checkout source inspection
+on:
+  push:
+    branches:
+      - refactor/critical-07-checkout-backend-20261107
+permissions:
+  contents: write
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Inspect exact checkout boundaries (no execution of payment code)
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, hashlib, subprocess
+          f=Path('server.ts'); s=f.read_text(); ls=s.splitlines()
+          keys=['const createOrReuseModularCheckout = async','"/api/owner/sales/offers/:offerId/modular-checkout"','"/api/public/sales-offers/:token/accept"','"/api/public/sales-offers/:token/checkout"','registerPublicSalesPaymentStatusRoute(app,','"/api/owner/sales/offers/:offerId/modular-checkout/expire"','"/api/owner/sales/offers/:offerId/modular-checkout/email"']
+          out=[f'SHA256 {hashlib.sha256(s.encode()).hexdigest()} LINES {len(ls)}']
+          def matches(key): return [i for i,v in enumerate(ls) if key in v]
+          for key in keys:
+            out.append('ANCHOR '+repr(key)+' '+str([i+1 for i in matches(key)]))
+          spans=[]
+          core=matches(keys[0]); owner=matches(keys[1]); accept=matches(keys[2]); public=matches(keys[3]); pay=matches(keys[4])
+          if len(core)==1 and len(owner)==1:
+            spans += [(core[0]-12,core[0]+165),(owner[0]-22,owner[0]+240)]
+            spans += [(max(core[0],owner[0]-130),owner[0]+15)]
+          if len(accept)==1 and len(public)==1:
+            spans += [(accept[0]-12,public[0]+15)]
+          if len(public)==1 and len(pay)==1:
+            spans += [(public[0]-12,pay[0]+15)]
+          # Signature/uses around each dependency and sensitive call in core.
+          if core and owner:
+            for i in range(core[0],owner[0]):
+              if any(needle in ls[i] for needle in ['const requestHash','sessions.create','sessions.retrieve','idempotencyKey','checkout.sessions.expire','MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT','operationIdempotencyKey','return res.status','return respondWithLink','const frozenTrialDays','supabase.rpc','const offer =','const { data: offer']):
+                spans.append((i-7,i+14))
+          # Include owner GET/POST route registrations until public checkout section
+          if owner and accept:
+            spans += [(owner[0],min(owner[0]+15,len(ls)))]
+          merged=[]
+          for a,b in sorted((max(0,a),min(len(ls),b)) for a,b in spans):
+            if merged and a<=merged[-1][1]:merged[-1]=(merged[-1][0],max(merged[-1][1],b))
+            else:merged.append((a,b))
+          for a,b in merged:
+            out.append(f'--- CONTEXT {a+1}..{b} ---')
+            out += [f'{i+1:06d}: {ls[i]}' for i in range(a,b)]
+          tracked=['createOrReuseModularCheckout','MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT','public-modular-checkout:','sales-offers/:token/checkout','/api/public/sales-offers/:token/accept']
+          for needle in tracked:
+            cmd=['git','grep','-n','-F',needle,'--','tests','scripts','services','src']
+            r=subprocess.run(cmd,capture_output=True,text=True)
+            out.append('--- REFERENCES '+needle+' ---')
+            out+=r.stdout.splitlines()[:140]
+          Path('docs/operations/_temporary_item07_inspection.txt').write_text('\n'.join(out)+'\n')
+          print('CHECKOUT_AUDIT_WRITTEN anchors/spans',len(merged), 'lines',len(out))
+          PY
+          git config user.name 'verto-audit-bot'
+          git config user.email 'verto-audit-bot@users.noreply.github.com'
+          git add docs/operations/_temporary_item07_inspection.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore(audit): temporary item07 checkout inspection [skip ci]'
+            git push
+          fi
