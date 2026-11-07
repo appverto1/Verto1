@@ -2600,9 +2600,28 @@ export const dataService = {
     return { success: true, data: local.filter(r => r.data.patient_email === email).map(r => r.data) };
   },
 
-  async addNote(note: any) {
+  async addNote(note: any, options: { requireServerAck?: boolean } = {}) {
     const id = note.id || generateId();
     const data = { ...note, id, created_at: note.created_at || new Date().toISOString() };
+    if (options.requireServerAck === true) {
+      // Manual clinical Save is authoritative: do not enqueue or infer success from HTTP 2xx.
+      const idempotencyKey = createIdempotencyKey('POST:/api/notes', id);
+      try {
+        const response = await fetchWithAuthRetry('/api/notes', {
+          method: 'POST',
+          headers: { ...(await getAuthHeaders()), 'X-Idempotency-Key': idempotencyKey },
+          credentials: 'include',
+          body: JSON.stringify({ ...data, idempotencyKey }),
+        });
+        const result = await safeJson(response);
+        if (response.ok && result?.success === true && result?.data?.id && result?.queued !== true && result?.pending !== true && result?.offline !== true) {
+          return { success: true, data: result.data };
+        }
+        return { success: false, error: String(result?.error || result?.message || 'O servidor não confirmou o salvamento da anotação.') };
+      } catch {
+        return { success: false, error: 'Sem confirmação do servidor. A anotação não foi marcada como salva.' };
+      }
+    }
     return await saveOfflineFirst(id, data, 'note', '/api/notes');
   },
 
