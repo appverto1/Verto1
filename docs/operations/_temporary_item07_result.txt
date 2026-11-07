@@ -1,24 +1,171 @@
 ITEM07_VALIDATION_EXIT=1
-npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
-npm warn deprecated node-domexception@1.0.0: Use your platform's native DOMException instead
-npm warn deprecated glob@10.5.0: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+      "} from './services/pushNotificationService';\n" +
+      'import {\n' +
+      '  SupabaseRateLimitStore,\n' +
+      '  checkDistributedRuntimeState,\n' +
+      '  issueDistributedSessionToken,\n' +
+      '  releaseDistributedJobLease,\n' +
+      '  revokeAllDistributedSessionTokens,\n' +
+      '  revokeDistributedSessionToken,\n' +
+      '  tryAcquireDistributedJobLease,\n' +
+      '  validateDistributedSessionToken\n' +
+      "} from './services/distributedRuntimeState';\n" +
+      'import {\n' +
+      '  buildActivationEmailTemplate,\n' +
+      '  buildClinicInvitationEmailTemplate,\n' +
+      '  buildPasswordRecoveryEmailTemplate\n' +
+      "} from './src/services/emailTemplates';\n" +
+      'import {\n' +
+      '  createPasswordRecoveryToken,\n' +
+      '  verifyPasswordRecoveryToken\n' +
+      "} from './src/utils/passwordRecoveryLink';\n" +
+      'import {\n' +
+      '  createClinicInvitationActivationToken,\n' +
+      '  verifyClinicInvitationActivationToken\n' +
+      "} from './src/utils/clinicInvitationActivationToken';\n" +
+      "import { buildPatientGlobalIdentityUpdate } from './src/utils/patientAccountLinking';\n" +
+      'import {\n' +
+      '  resolveAuthoritativeHistoricalTissServiceCatalogId,\n' +
+      '  resolveBillingContextServiceCatalogId,\n' +
+      '  resolveUniqueTissServiceCatalogOptionByCode\n' +
+      "} from './src/utils/tissServiceCatalogResolution';\n" +
+      'import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from'... 1103270 more characters,
+    ''
+  ],
+  pid: 2276,
+  stdout: "import { registerOwnerSalesOfferCreationRoute } from './services/ownerSalesOfferCreationRoutes';\n" +
+    "import { createAbaV3DrainStatusHandler } from './services/abaV3DrainStatusHandler';\n" +
+    "import { registerPublicSalesActivationPasswordRoute } from './services/publicSalesActivationPasswordRoute';\n" +
+    "import { registerPublicSalesDirectorSessionRoute } from './services/publicSalesDirectorSessionRoute';\n" +
+    "import { registerPatientTimeReportRoute } from './services/patientTimeReportRoute';\n" +
+    "import { canActivateSpecialtyPlanForCase } from './services/therapeuticSpecialistActivation';\n" +
+    "import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';\n" +
+    "import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './services/groupSessions/groupSessionScheduleConflicts';\n" +
+    "import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';\n" +
+    "import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';\n" +
+    "import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';\n" +
+    "import { createClinicalOutcomesDashboardHandler } from './services/clinicalOutcomesDashboardHandler';\n" +
+    "import { createProtocolImportRequestHandler, createClinicProtocolImportsReadHandler, createClinicProtocolGrantRevokeHandler, createClinicProtocolRequestDeleteHandler } from './services/protocolImportClinicHandlers';\n" +
+    "import { createAdminProtocolImportsReadHandler, createAdminProtocolAccessWriteHandler, createAdminProtocolImportApproveHandler, createAdminProtocolImportRejectHandler, createAdminProtocolImportScanHandler } from './services/protocolImportAdminHandlers';\n" +
+    "import { createSessionMaintenanceProbesReadHandler, createMaintenanceOverviewReadHandler, createPeiMaintenanceDiagnosticsHandler, createLinkableMaintenanceTargetsHandler, createMaintenanceSchedulesReadHandler, createFutureMaintenanceAppointmentsHandler, createNextMaintenanceProbeHandler, createMaintenanceRecommendationsHandler, createMaintenancePlanItemsHandler } from './services/abaMaintenanceReadHandlers';\n" +
+    "import { createPatientMaintenancePanelHandler } from './services/abaMaintenancePanelHandler';\n" +
+    "import { createAbaSessionLiveSummaryReadHandler, createAbaSessionReportReadHandler, createAbaSessionRecordsReadHandler, createAbaRecentSessionEventsReadHandler, createAbaPatientSummaryReadHandler, createAbaSessionsReadHandler, createAbaTrialsReadHandler, createAbaBehaviorEventsReadHandler, createAbaMasteryEvaluationsReadHandler } from './services/abaSessionReadHandlers';\n" +
+    "import { createAbaChartReadHandlers } from './services/abaChartReadHandlers';\n" +
+    "import { createOwnerStatsHandler, createOwnerClientsHandler, createOwnerFinancialOverviewHandler, createOwnerFinancialSurveysHandler, createAdminDemoSandboxesHandler, createAdminStatsHandler, createAdminClientsHandler, createAdminVertoProtocolsHandler, createOwnerRecoveryLeadsHandler } from './services/ownerAdminReadHandlers';\n" +
+    "import { createTissProviderProfileReadHandler, createTissPayerProfileReadHandler, createPatientTissAuthorizationsReadHandler, createPatientTissAuthorizationReadHandler, createTissOwnProfessionalProfileReadHandler, createTissProfessionalProfilesReadHandler, createTissProfessionalProfileReadHandler, createTissPreGuidesReadHandler, createTissOfficialDocumentsReadHandler, createTissDocumentTrackingListReadHandler, createTissXmlDraftsReadHandler, createTissXmlDraftReadHandler, createTissRevenueEventsReadHandler, createTissBillingBatchDraftsReadHandler, createTissBillingBatchDraftReadHandler, createTissPreGuidesCoverageReadHandler, createTissPreGuideReadHandler, createPayerOptionsReadHandler, createAdminPayersReadHandler, createAdminPayerRequirementsReadHandler } from './services/tissPayerReadHandlers';\n" +
+    "import { createProfessionalFinancialReceiptHandlers } from './services/professionalFinancialReceiptHandlers';\n" +
+    "import { createPrivatePricingCatalogReadHandler, createPrivatePricingSnapshotReadHandler, createPatientFinanceLedgerReadHandler, createPatientFinanceTransactionDocumentReadHandler, createPatientFinancePolicyReadHandler, createPaymentsReadHandler, createProfessionalPaymentsReadHandler, createFinancialExpensesReadHandler, createFinancialEntriesReadHandler, createFinancialFeatureSurveyReadHandler } from './services/clinicFinancialReadHandlers';\n" +
+    "import { createClinicAuthorizationMeHandler, createUserFeatureAccessReadHandler, createUserFeatureAccessWriteHandler, createClinicCapabilityMembersReadHandler, createClinicCapabilityMembersWriteHandler, createClinicMemberAuthorizationReadHandler, createClinicMemberAuthorizationWriteHandler, createClinicMembersReadHandler, createClinicSupervisionEligibilityWriteHandler } from './services/clinicAccessMembershipHandlers';\n" +
+    "import { createClinicWorkScheduleReadHandler, createClinicWorkScheduleWriteHandler, createClinicWorkScheduleApplyHandler } from './services/clinicWorkScheduleHandlers';\n" +
+    "import { createReadyRouteHandler } from './services/readyRouteHandler';\n" +
+    "import { registerPublicSalesLeadRoute } from './services/publicSalesLeadRoutes';\n" +
+    "import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPaymentStatusRoute';\n" +
+    "import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';\n" +
+    "import { createSalesAssistedStripeEventHandlers } from './services/salesAssistedStripeEventHandlers';\n" +
+    "import { registerStripeCanonicalWebhookRoute } from './services/stripeCanonicalWebhookRoute';\n" +
+    "import express from 'express';\n" +
+    "import { createPortalAppointmentsListHandler, createPortalAppointmentDetailHandler, createPortalRescheduleSlotsHandler } from './services/portalAppointmentReadHandlers';\n" +
+    "import { registerTissPayerProfilesListRoute } from './services/tissPayerProfilesListRoute';\n" +
+    "import { registerTussMappingRoutes } from './services/tussMappingRoutes';\n" +
+    "import { handleClinicDre } from './services/clinicDreHandler';\n" +
+    "import { canManageAppointmentActionInClinic, resolveAuthenticatedCalendarScope } from './services/appointmentTenantGuards';\n" +
+    "import path from 'path';\n" +
+    "import fs from 'fs';\n" +
+    "import crypto from 'crypto';\n" +
+    "import dns from 'dns';\n" +
+    "import { fileURLToPath } from 'url';\n" +
+    "import { createServer as createViteServer } from 'vite';\n" +
+    "import { createClient } from '@supabase/supabase-js';\n" +
+    "import cookieParser from 'cookie-parser';\n" +
+    "import session from 'express-session';\n" +
+    "import pgSession from 'connect-pg-simple';\n" +
+    "import pg from 'pg';\n" +
+    "import dotenv from 'dotenv';\n" +
+    "import Stripe from 'stripe';\n" +
+    "import { Resend } from 'resend';\n" +
+    "import helmet from 'helmet';\n" +
+    "import rateLimit from 'express-rate-limit';\n" +
+    "import webpush from 'web-push';\n" +
+    "import { generateSecret, verifySync, generateURI } from 'otplib';\n" +
+    "import QRCode from 'qrcode';\n" +
+    'import {\n' +
+    '  ACTIVE_PATIENT_BILLING_LOOKUP_KEY,\n' +
+    '  DEFAULT_VERTO_PATIENT_PRICING_TIERS,\n' +
+    '  calculateVertoPatientBasedMonthlyPrice,\n' +
+    '  estimateStripeActivePatientPlan,\n' +
+    '  getBillableActivePatientCount,\n' +
+    '  getClinicBillingSummary,\n' +
+    '  isVertoPatientBasedBillingEnabled,\n' +
+    '  listStripeActivePatientBillingPlans,\n' +
+    '  syncClinicActivePatientAddonQuantity\n' +
+    "} from './services/stripeService';\n" +
+    "import type { SafeStripeBillingPlan, SafeStripeBillingTier } from './services/stripeService';\n" +
+    "import { registerSchoolManagementRoutes } from './services/schoolManagementRoutes';\n" +
+    "import { requireVertoDeploymentEnvironment } from './services/deploymentEnvironment';\n" +
+    "import { registerHelpCenterRoutes } from './services/helpCenterRoutes';\n" +
+    "import { createInternalSchemaStatusHandler } from './services/internalSchemaStatusRouteHandler';\n" +
+    "import { createHealthRouteHandler } from './services/healthRouteHandler';\n" +
+    "import { registerClinicAppointmentPolicyRoutes } from './services/clinicAppointmentPolicyRoutes';\n" +
+    "import { registerClinicalMeasurementV3Routes } from './services/clinicalMeasurementV3Routes';\n" +
+    "import { startAppointmentNoShowCron } from './services/appointmentNoShowService';\n" +
+    'import {\n' +
+    '  classifyReservationSchemaProbe,\n' +
+    '  checkAppointmentActionResolutionSchema,\n' +
+    '  checkCriticalSchema,\n' +
+    '  describeSupabaseTarget,\n' +
+    '  isDeployEnvironment,\n' +
+    '  validateSupabaseTargetConfiguration,\n' +
+    '  APPOINTMENT_ACTION_RESOLUTION_SCHEMA_VERSION,\n' +
+    '  TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION\n' +
+    "} from './scripts/check-critical-schema.mjs';\n" +
+    'import {\n' +
+    '  invalidateReminderClinicBranding,\n' +
+    '  resolvePushSafeClinicLogoUrl,\n' +
+    '  verifyStableClinicNotificationLogoSignature,\n' +
+    '  runAppointmentReminderScan,\n' +
+    '  startAppointmentReminderCron,\n' +
+    '  triggerAppointmentReminderScan,\n' +
+    '  startClinicAnnouncementCron,\n' +
+    '  dispatchClinicAnnouncementNow\n' +
+    "} from './services/cronService';\n" +
+    'import {\n' +
+    '  removePatientPushSubscription,\n' +
+    '  resolvePatientIdsForPush,\n' +
+    '  renewPatientPushSubscription,\n' +
+    '  savePatientPushSubscription,\n' +
+    '  sendAppointmentNotification\n' +
+    "} from './services/pushNotificationService';\n" +
+    'import {\n' +
+    '  SupabaseRateLimitStore,\n' +
+    '  checkDistributedRuntimeState,\n' +
+    '  issueDistributedSessionToken,\n' +
+    '  releaseDistributedJobLease,\n' +
+    '  revokeAllDistributedSessionTokens,\n' +
+    '  revokeDistributedSessionToken,\n' +
+    '  tryAcquireDistributedJobLease,\n' +
+    '  validateDistributedSessionToken\n' +
+    "} from './services/distributedRuntimeState';\n" +
+    'import {\n' +
+    '  buildActivationEmailTemplate,\n' +
+    '  buildClinicInvitationEmailTemplate,\n' +
+    '  buildPasswordRecoveryEmailTemplate\n' +
+    "} from './src/services/emailTemplates';\n" +
+    'import {\n' +
+    '  createPasswordRecoveryToken,\n' +
+    '  verifyPasswordRecoveryToken\n' +
+    "} from './src/utils/passwordRecoveryLink';\n" +
+    'import {\n' +
+    '  createClinicInvitationActivationToken,\n' +
+    '  verifyClinicInvitationActivationToken\n' +
+    "} from './src/utils/clinicInvitationActivationToken';\n" +
+    "import { buildPatientGlobalIdentityUpdate } from './src/utils/patientAccountLinking';\n" +
+    'import {\n' +
+    '  resolveAuthoritativeHistoricalTissServiceCatalogId,\n' +
+    '  resolveBillingContextServiceCatalogId,\n' +
+    '  resolveUniqueTissServiceCatalogOptionByCode\n' +
+    "} from './src/utils/tissServiceCatalogResolution';\n" +
+    'import { VERTO_EMAIL_HORIZONTAL_LOGO_URL, isVertoInstitutionalAsset } from'... 1103270 more characters,
+  stderr: ''
+}
 
-added 469 packages in 14s
-CORE_ASSERT_MOVED tests/salesBoletoPaymentPendingSafety.regression.test.mjs moduleCheckout
-CORE_ASSERT_MOVED tests/salesCheckoutReturnContext20260831.regression.test.mjs modularCheckout
-CORE_ASSERT_MOVED tests/salesCustomerFacingModulesOnly.test.mjs modularCheckout
-PUBLIC_ASSERT_MOVED tests/salesCheckoutProvisioning.test.ts checkoutRoute
-CORE_ASSERT_MOVED tests/salesModularStripeAssisted.test.ts checkoutCore
-PUBLIC_ASSERT_MOVED tests/salesModularStripeAssisted.test.ts publicLegacyCheckout
-CORE_ASSERT_MOVED tests/salesContractIdentity.test.ts modularCheckout
-ITEM07_SOURCE_EXTRACTED BEFORE 90640 AFTER 89727 CORE 588 PUBLIC 337 CORE_SHA fea115a5a83a98f187e2558b788f32d7cea0b15692620258b1a1bd1610a378f2 PUBLIC_SHA 6fcfd8e078a4541a53a709ff4f2b41c0067d5a401e92cd434652378f4e1089f3
-CORE_UNRESOLVED_RUNTIME_DEPENDENCIES ["MODULAR_COMMERCIAL_CONSENT_TEXT","MODULAR_COMMERCIAL_CONSENT_VERSION","SALES_CHECKOUT_LINK_SELECT","buildFrozenStripeCheckoutPlan","buildSalesCheckoutReturnContextToken","buildSalesModuleSetHash","buildSalesOfferPublicUrl","classifySalesProposalReview","deriveSalesCheckoutPublicToken","filterSalesCurrentOperatingTechnicalBlockers","getStripe","hashSalesOfferToken","isSalesInternalCommercialItemKey","resolveFrozenSalesOfferTrialDays","resolveStripeEnvironment","salesApplicationOrigin","salesCommercialExceptionApprovalMatches","salesOfferUsesCustomerFacingModulesOnly","sanitizeEmail","sanitizeString","serializeSalesCheckoutLink","supabase","validateStripeSecretForEnvironment"]
-PUBLIC_UNRESOLVED_RUNTIME_DEPENDENCIES ["MODULAR_COMMERCIAL_CONSENT_TEXT","MODULAR_COMMERCIAL_CONSENT_VERSION","app","buildSalesOfferPublicUrl","createOrReuseModularCheckout","getStripe","isCouponDurationMonths","isSalesOfferStripeReady","isUuid","loadPublicSalesOffer","publicSalesLeadIpLimiter","resolveSalesStripeConfiguration","resolveStripeEnvironment","sanitizeEmail","sanitizeString","supabase","validateStripeSecretForEnvironment"]
-CORE_TYPESCRIPT_DIAGNOSTIC_COUNT 5
-MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
-MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
-MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
-MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
-MODULE_DIAGNOSTIC CORE 2339 Property 'createHash' does not exist on type 'Crypto'.
-PUBLIC_TYPESCRIPT_DIAGNOSTIC_COUNT 1
-MODULE_DIAGNOSTIC PUBLIC 2339 Property 'createHash' does not exist on type 'Crypto'.
+Node.js v20.20.2
