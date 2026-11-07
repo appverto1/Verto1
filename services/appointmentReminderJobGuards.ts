@@ -76,8 +76,13 @@ export function validateClaimedAppointmentReminder(
     return { allowed: true, reason: '' };
   }
   if (job?.notification_kind === 'APPOINTMENT_REMINDER_12H') {
-    const response = String(appointment?.patient_response || appointment?.patient_confirmation_status || '').trim().toLowerCase();
-    if (responded.has(response)) return deny('APPOINTMENT_REMINDER_SUPERSEDED');
+    // Both persisted fields can coexist during schema/legacy transitions.
+    // A response in either field must suppress the 12h reminder; preferring
+    // patient_response via || could ignore a confirmed canonical status.
+    const responses = [appointment?.patient_response, appointment?.patient_confirmation_status];
+    if (responses.some((value) => responded.has(String(value ?? '').trim().toLowerCase()))) {
+      return deny('APPOINTMENT_REMINDER_SUPERSEDED');
+    }
     return { allowed: true, reason: '' };
   }
   return deny('APPOINTMENT_REMINDER_INVALID_KIND');
