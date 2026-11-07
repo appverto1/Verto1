@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
-import { getSupabase } from '../lib/supabase';
+import { beginSalesActivationGoogleOAuth } from '../services/salesActivationGoogleOAuth';
 import { validateActivationPassword } from '../utils/salesActivationPasswordRules';
 import { loadPublicSalesActivationSummary, persistPublicSalesActivationPassword } from '../services/salesActivationPasswordTransport';
 import { LogoVerto } from './Common';
@@ -22,7 +22,6 @@ type SalesActivationAccessProps = {
 };
 
 const ACTIVATION_ERROR_KEY = 'verto_activation_error';
-const SALES_ACTIVATION_OAUTH_PENDING_KEY = 'verto_sales_activation_oauth_pending';
 
 type ActivationSummary = {
   name: string;
@@ -113,35 +112,8 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     setError('');
     setMessage('');
     try {
-      localStorage.setItem('verto_intended_role', 'director');
-      localStorage.setItem('verto_activation_email', activation.email.toLowerCase());
-      localStorage.setItem(SALES_ACTIVATION_OAUTH_PENDING_KEY, token);
-      const supabase = await getSupabase();
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/ativacao-comercial/${encodeURIComponent(token)}`,
-          scopes: 'https://www.googleapis.com/auth/userinfo.email',
-          queryParams: { prompt: 'select_account' },
-        },
-      });
-      if (oauthError) throw oauthError;
+      await beginSalesActivationGoogleOAuth(token, activation.email, window.location.origin);
     } catch (oauthError: any) {
-      try {
-        // Clear only this attempt's temporary context. A failed OAuth start must
-        // not leave a Director role hint or contractual email for a later login.
-        if (localStorage.getItem(SALES_ACTIVATION_OAUTH_PENDING_KEY) === token) {
-          localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
-          if (localStorage.getItem('verto_intended_role') === 'director') {
-            localStorage.removeItem('verto_intended_role');
-          }
-          if (localStorage.getItem('verto_activation_email') === activation.email.toLowerCase()) {
-            localStorage.removeItem('verto_activation_email');
-          }
-        }
-      } catch {
-        // Storage is optional; the backend always validates Director identity.
-      }
       setError(oauthError?.message || 'Não foi possível iniciar o acesso com Google.');
       setSubmitting(false);
     }

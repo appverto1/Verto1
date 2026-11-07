@@ -1,6 +1,7 @@
 import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
+import { SALES_ACTIVATION_OAUTH_PENDING_KEY, readSalesActivationOAuthContext } from './services/salesActivationGoogleOAuth';
 import { Database, CheckCircle2, AlertCircle, Lock, ShieldCheck, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
 import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
 import { dataService } from './services/dataService';
@@ -378,7 +379,6 @@ class LazyImportBoundary extends React.Component<LazyImportBoundaryProps, LazyIm
 
 const AUTO_RETRIED_FAILED_SYNC_KEY = 'verto.failedSyncAutoRetried.v1';
 const ACTIVATION_ERROR_KEY = 'verto_activation_error';
-const SALES_ACTIVATION_OAUTH_PENDING_KEY = 'verto_sales_activation_oauth_pending';
 
 const publishActivationErrorMessage = (value: unknown) => {
   const message = String(value || 'Não foi possível concluir este convite. Abra novamente o link recebido por e-mail.').trim();
@@ -1584,29 +1584,14 @@ export default function App() {
       return { handled: false as const, result: null };
     }
 
-    const routeMatch = window.location.pathname.match(/^\/ativacao-comercial\/([^/]+)\/?$/i);
-    if (!routeMatch) return { handled: false as const, result: null };
-
-    let routeToken = '';
-    try {
-      routeToken = decodeURIComponent(routeMatch[1]);
-    } catch {
-      routeToken = '';
-    }
-
-    const pendingToken = String(
-      localStorage.getItem(SALES_ACTIVATION_OAUTH_PENDING_KEY) || '',
-    ).trim();
-    const activationEmail = String(
-      localStorage.getItem('verto_activation_email') || '',
-    ).trim().toLowerCase();
-
-    // Only the explicit "enter with Google" action may finish a paid sales
-    // activation. The token marker prevents a stale Google session from being
-    // reinterpreted as authorization for another commercial activation link.
-    if (!routeToken || pendingToken !== routeToken || !activationEmail) {
+    const activationContext = readSalesActivationOAuthContext(
+      window.location.pathname,
+      localStorage,
+    );
+    if (!activationContext) {
       return { handled: false as const, result: null };
     }
+    const { activationEmail } = activationContext;
 
     const accessToken = String(session.access_token);
     if (salesActivationOAuthLoginRef.current?.accessToken === accessToken) {
