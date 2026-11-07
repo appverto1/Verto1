@@ -36,6 +36,8 @@
 | 23 | Lembretes, confirmação, remarcação e cancelamento |
 | 24 | Reflexo em financeiro, sem duplicidade/cross-clinic |
 
+**Checkpoint operacional 15 — 07/11/2026 (staging):** o envio de convites já existe em `TeamManagement` e `InvitationModal`, com transporte `dataService.inviteToClinic` e autorização de clínica/role no backend. Esta rodada corrige apenas duas condições de corrida de apresentação: duplo envio antes de re-render e resposta tardia de convite após troca de clínica. Guarda compartilhada e regressão no gate `pre-main`; nenhuma nova requisição, polling, migration, mudança de role/RLS, Stripe ou produção. **CI, merge e deploy desta alteração devem ser comprovados pelo PR**; aceite real, e-mail, F5, novo login e isolamento de clínicas permanecem como smoke humano. A tarefa 16 (aceite/portal) não foi antecipada.
+
 ## Bloco C — Cards e portais (25–34)
 | Nº | Entrega contratada |
 |---|---|
