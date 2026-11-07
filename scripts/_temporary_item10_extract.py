@@ -9,7 +9,7 @@ groups=[
  dict(name='bootstrap',target='services/paidDirectorSessionBootstrap.ts',
       factory='createPaidDirectorSessionBootstrap',
       start='  const preparePaidDirectorSessionBootstrap = async (',
-      end='  const {\n    isSalesAssistedStripeEvent,',
+      end=None,
       exports=['preparePaidDirectorSessionBootstrap']),
  dict(name='reconciliation',target='services/publicSalesPostPaymentReconciliationRoute.ts',
       factory='registerPublicSalesPostPaymentReconciliationRoute',
@@ -29,8 +29,17 @@ groups=[
 ]
 for g in groups:
     if src.count(g['start'])!=1:raise RuntimeError('Missing/ambiguous beginning '+g['name'])
-    if src.count(g['end'])!=1:raise RuntimeError('Missing/ambiguous ending '+g['name'])
-    a=src.index(g['start']);b=src.index(g['end'],a)
+    if g['end'] is not None and src.count(g['end'])!=1:raise RuntimeError('Missing/ambiguous ending '+g['name'])
+    a=src.index(g['start'])
+    if g['name']=='bootstrap':
+        closing=re.search(r'(?m)^  };\\n(?:\\n)?',src[a:])
+        if not closing:raise RuntimeError('Bootstrap final declaration not found')
+        b=a+closing.end()
+        # The original function ends here, before any existing Stripe factories.
+        if 'createSalesAssistedCheckoutPaymentProcessor' in src[a:b]:
+            raise RuntimeError('Bootstrap extraction would capture unrelated Stripe services')
+    else:
+        b=src.index(g['end'],a)
     if b<a:raise RuntimeError('Invalid boundary '+g['name'])
     g.update(a=a,b=b,original=src[a:b])
     for name in g['exports']:
