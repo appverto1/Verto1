@@ -1,8 +1,6 @@
 name: Temporary item 09 Stripe source inspection
 on:
-  push:
-    branches:
-      - refactor/critical-09-stripe-core-20261107
+  workflow_dispatch:
 permissions:
   contents: write
 jobs:
