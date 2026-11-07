@@ -11,6 +11,7 @@ import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { compareSiteInterestProspecting } from '../utils/siteInterestPriority.mjs';
 import { splitOpportunityPhones, previewOpportunityDuplicates, createManualOpportunities } from '../services/salesKanbanOpportunityCreation';
 import { loadSalesProspectingHistory, moveSalesKanbanLead, persistSalesAttemptTime, persistSalesDecisorContact, persistSalesFollowup, persistSalesLoss } from '../services/salesKanbanActivity';
+import { loadSalesKanbanAcquisitionBoard, persistSalesKanbanAcquisition, persistSalesKanbanAcquisitionBulk } from '../services/salesKanbanAcquisition';
 import {
   agendaMatches,compareAgendaPriority,resolveAgendaMoment,
   brazilDateKey,followupBucket,followupFilters,matchesFollowup,isCallDueToday,progressColor,progressWidth,
@@ -226,7 +227,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       setAcquisitionCatalogUnavailable(false);
       return;
     }
-    const result=await request('/api/owner/sales/acquisition/board');
+    const result=await loadSalesKanbanAcquisitionBoard(request);
     setAcquisitionChannels(result.channels||[]);
     setAcquisitionCatalogUnavailable(false);
   };
@@ -249,10 +250,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       const key=keysRef.current[keyName]||crypto.randomUUID();
       keysRef.current[keyName]=key;
       setSavingAcquisition(true);setError(null);
-      const result=await request('/api/owner/sales/acquisition/leads/'+dialog.leadId,{
-        method:'PUT',headers:{'X-Idempotency-Key':key},
-        body:JSON.stringify({channelIds:dialog.channelIds}),
-      });
+      const result=await persistSalesKanbanAcquisition(request,dialog.leadId,key,dialog.channelIds);
       delete keysRef.current[keyName];
       setAcquisitionByLead(old=>({...old,[dialog.leadId]:result.selection.channelIds||[]}));
       setAcquisitionRefreshKey(k=>k+1);
@@ -273,7 +271,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
       },
     });
     const json = await response.json().catch(() => ({}));
-    if (!response.ok || !json.success) throw Error(json.error || 'Não foi possível concluir a operação.');
+    if (!response.ok || json.success !== true) throw Error(json.error || 'Não foi possível concluir a operação.');
     return json;
   };
 
@@ -298,7 +296,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
           const [board,history,acquisitionResult] = await Promise.all([
             request('/api/owner/sales/kanban/board?leadIds='+q+(pageIndex===0?'&sitePriority=1':'')),
             chunk.length ? loadSalesProspectingHistory(request,q) : Promise.resolve({data:[],leads:[]}),
-            request('/api/owner/sales/acquisition/board?leadIds='+q)
+            loadSalesKanbanAcquisitionBoard(request,q)
               .then(data=>({data,failed:false}))
               .catch(()=>({data:{channels:[],links:[]},failed:true})),
           ]);
@@ -462,10 +460,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
     keysRef.current[keyName]=key;
     setBulkExistingBusy(true);setError(null);setInfo(null);
     try{
-      const result=await request('/api/owner/sales/acquisition/leads/bulk',{
-        method:'PUT',headers:{'X-Idempotency-Key':key},
-        body:JSON.stringify({selections}),
-      });
+      const result=await persistSalesKanbanAcquisitionBulk(request,key,selections);
       delete keysRef.current[keyName];
       setAcquisitionByLead(old=>{
         const next={...old};
