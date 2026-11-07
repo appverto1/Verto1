@@ -1,5 +1,9 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const server = readFileSync('server.ts', 'utf8');
 const builder = readFileSync(
@@ -23,12 +27,9 @@ const modularSimulationSave =
   )?.[0] || '';
 const publicOfferRoute =
   server.match(
-    /app\.get\(\s*"\/api\/public\/sales-offers\/:token"[\s\S]*?app\.post\(\s*"\/api\/public\/sales-offers\/:token\/accept"/
+    /app\.get\(\s*"\/api\/public\/sales-offers\/:token"[\s\S]*?registerPublicSalesCheckoutRoutes/
   )?.[0] || '';
-const modularCheckout =
-  server.match(
-    /const createOrReuseModularCheckout = async[\s\S]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/
-  )?.[0] || '';
+const modularCheckout = checkoutCoreSource.slice(checkoutCoreSource.indexOf('const createOrReuseModularCheckout = async'));
 
 assert.match(builder, /platformFoundationPricingMode: 'manual'/);
 assert.match(builder, /platformFoundationMonthlyAmountCents: 0/);

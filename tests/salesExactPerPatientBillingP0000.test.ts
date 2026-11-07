@@ -1,9 +1,13 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { calculateSalesModularProposal } from '../src/utils/salesModularProposal';
 import { buildFrozenStripeCheckoutPlan, DEFAULT_CUSTOM_CAPACITY_POLICY } from '../src/utils/salesCommercialEvolution';
 import { modularAssumptionsFixture, modularCatalogFixture, proposalInputFixture, PACKAGE_TIERS } from './fixtures/salesModularFixture';
 import { DEFAULT_SALES_PROFITABILITY_POLICY } from '../src/utils/salesModularEconomics';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const rates = [
   ['clinical_core', 1000],
@@ -107,10 +111,11 @@ assert.doesNotMatch(exact, /Math\.max\(contract\.billedAdditionalBlocks/);
 assert.match(exact, /EXACT_PER_PATIENT_SUBSCRIPTION_SCOPE_INVALID/);
 assert.match(exact, /EXACT_PER_PATIENT_STRIPE_ITEMS_MISMATCH/);
 const server = fs.readFileSync('server.ts', 'utf8');
+const checkoutBackend = server + '\n' + checkoutCoreSource;
 assert.match(server, /exactPerPatientBilling: source\.exactPerPatientBilling === true/);
-assert.match(server, /quantity: Number\(line\.quantity \|\| 1\)/);
-assert.match(server, /quantity: Number\(item\.quantity \|\| 1\)/);
-assert.match(server, /billingModelVersion: frozenResults\?\.input\?\.exactPerPatientBilling/);
+assert.match(checkoutBackend, /quantity: Number\(line\.quantity \|\| 1\)/);
+assert.match(checkoutBackend, /quantity: Number\(item\.quantity \|\| 1\)/);
+assert.match(checkoutBackend, /billingModelVersion: frozenResults\?\.input\?\.exactPerPatientBilling/);
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx','utf8');
 assert.match(builder, /exactPerPatientBilling: true/);
 console.log('salesExactPerPatientBillingP0000.test.ts: PASS');

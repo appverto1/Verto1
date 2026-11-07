@@ -1,6 +1,10 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
 
 const server = readFileSync('server.ts','utf8');
 const assisted = readFileSync('services/salesAssistedStripeEventHandlers.ts','utf8');
@@ -47,6 +51,6 @@ test('Stripe webhook signature, idempotency, entitlements and checkout reuse rem
   assert.match(assisted,/checkout\.session\.async_payment_succeeded/);
   assert.match(server,/confirm_sales_assisted_checkout_payment/);
   assert.match(server,/applyModularEntitlementsForOrganization/);
-  assert.match(server,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
-  assert.match(server,/operationIdempotencyKey/);
+  assert.match(checkoutCoreSource,/MODULAR_CHECKOUT_IDEMPOTENCY_CONFLICT/);
+  assert.match(checkoutCoreSource,/operationIdempotencyKey/);
 });
