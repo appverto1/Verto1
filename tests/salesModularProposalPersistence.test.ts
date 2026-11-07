@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 import {
   loadSalesModularProposalData,saveSalesModularScenario,selectSalesModularScenario,
-  renameSalesModularScenario,archiveSalesModularScenario
+  renameSalesModularScenario,archiveSalesModularScenario,readConfirmedSalesModularProposalResponse
 } from '../src/services/salesModularProposalPersistence';
 
 const lead='lead/with ?spaces',simulation='scenario/?with spaces';
@@ -58,4 +58,25 @@ test('server conflict/error propagates once with no retries or state changes',as
   let calls=0;const request=async()=>{calls++;throw Object.assign(new Error('PROPOSAL_SNAPSHOT_CONFLICT'),{code:'PROPOSAL_SNAPSHOT_CONFLICT'});};
   await assert.rejects(saveSalesModularScenario(request,lead,key,{}),{code:'PROPOSAL_SNAPSHOT_CONFLICT'});
   assert.equal(calls,1);
+});
+
+test('proposal API only acknowledges a boolean success:true after the response body',async()=>{
+  let reads=0;
+  for(const payload of [{}, {success:false}, {success:'true'}, {success:1}, {success:null}]){
+    const response={ok:true,json:async()=>{reads++;return payload;}} as Response;
+    await assert.rejects(readConfirmedSalesModularProposalResponse(response),/Não foi possível concluir esta ação/);
+  }
+  const valid={ok:true,json:async()=>{reads++;return {success:true,simulation:{id:'frozen-id'}};}} as Response;
+  assert.equal((await readConfirmedSalesModularProposalResponse(valid)).simulation.id,'frozen-id');
+  assert.equal(reads,6,'response parser must never retry, fetch or read twice');
+});
+test('HTTP rejection, malformed JSON and API errors keep original code and fail closed',async()=>{
+  const error={ok:false,json:async()=>({success:true,code:'PROPOSAL_SNAPSHOT_CONFLICT',error:'Snapshot incompatível'})} as Response;
+  await assert.rejects(readConfirmedSalesModularProposalResponse(error),(cause:unknown)=>{
+    assert.equal((cause as any).code,'PROPOSAL_SNAPSHOT_CONFLICT');
+    assert.match((cause as Error).message,/Snapshot incompatível/);
+    return true;
+  });
+  const malformed={ok:true,json:async()=>{throw new SyntaxError('invalid JSON');}} as Response;
+  await assert.rejects(readConfirmedSalesModularProposalResponse(malformed),/Não foi possível concluir esta ação/);
 });

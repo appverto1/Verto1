@@ -40,3 +40,18 @@ export const archiveSalesModularScenario = (
   method: 'PATCH',
   body: JSON.stringify({ action: 'archive' })
 });
+
+
+// The existing request() is the only HTTP read. Never acknowledge a Save
+// solely because the HTTP status is 2xx or JSON is parseable.
+export const readConfirmedSalesModularProposalResponse = async (response: Response) => {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.success !== true) {
+    const fetchError = new Error(
+      data?.error || 'Não foi possível concluir esta ação.'
+    );
+    (fetchError as any).code = data?.code;
+    throw fetchError;
+  }
+  return data;
+};
