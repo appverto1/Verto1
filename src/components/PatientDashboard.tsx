@@ -227,9 +227,14 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return () => { active = false; };
     }
     void dataService.getPatientSelfWellbeingCheckins(wellbeingPeriod).then((result: any) => {
-      if (!active || revisionAtStart !== wellbeingLoadRevisionRef.current ||
-          portalAnamnesisContextRef.current !== portalAnamnesisContextKey) return;
-      setWellbeingCheckins(result?.success === true && Array.isArray(result?.data) ? result.data : []);
+      if (!active || portalAnamnesisContextRef.current !== portalAnamnesisContextKey) return;
+      const fetched = result?.success === true && Array.isArray(result?.data) ? result.data : [];
+      setWellbeingCheckins((current) => {
+        if (revisionAtStart === wellbeingLoadRevisionRef.current) return fetched;
+        // A confirmed write landed while this read was in flight: retain it and add older history.
+        const persistedIds = new Set(current.map((row: any) => String(row?.id || '')).filter(Boolean));
+        return [...current, ...fetched.filter((row: any) => !persistedIds.has(String(row?.id || '')))];
+      });
     });
     return () => { active = false; };
   }, [isKidsProfile, portalAnamnesisContextKey, wellbeingPeriod]);
