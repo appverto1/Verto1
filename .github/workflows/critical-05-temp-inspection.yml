@@ -37,7 +37,30 @@ jobs:
           old = 'return ("import type Stripe from \'stripe\';\\n"'
           new = 'return ("import type Stripe from \'stripe\';\\n" + "import type { SalesSimulationInput, SalesUsageProfile } from \'../src/utils/salesProfitability\';\\n"'
           if s.count(old)!=1: raise RuntimeError('Unexpected extractor source structure')
-          p.write_text(s.replace(old,new))
+          s=s.replace(old,new)
+          a=s.index("test('route delegates only server actor")
+          b=s.index("test('route cannot treat invalid records", a)
+          corrected = """test('modular preparation rejects role spoofing before any write', async()=>{
+           const s=setup('modular');const res=s.response();
+           await s.handler(s.request({leadId:uuid,simulationId:other,contractEmail:'director@example.com',actorUserId:other}),res);
+           assert.equal(res.statusCode,403);
+           assert.equal(res.body.code,'PROPOSAL_ACCESS_DENIED');
+          });
+
+          test('owner with valid MFA still requires selected canonical simulation', async()=>{
+           const s=setup('modular');const registered=[];
+           registerOwnerSalesOfferCreationRoute({...s.deps,app:{post:(...parts)=>registered.push(parts)},hasVerifiedMfaSession:()=>true} as any);
+           const req=s.request({leadId:uuid,simulationId:other,contractEmail:'director@example.com',actorUserId:other});
+           req.session.user.isPlatformAdmin=true;
+           const res=s.response();
+           await registered[0][3](req,res);
+           assert.equal(res.statusCode,409);
+           assert.equal(res.body.code,'PROPOSAL_SIMULATION_INVALID');
+          });
+
+          """
+          s=s[:a]+corrected+s[b:]
+          p.write_text(s)
           PYPATCH
               python3 "$RUNNER_TEMP/critical05.py" && \
               npx tsx tests/ownerSalesOfferCreationRoutes.behavior.test.ts && \
