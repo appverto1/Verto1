@@ -244,6 +244,7 @@ const criticalTests = [
   'tests/clinicSettingsConfirmedSaveTask13.regression.test.mjs',
   'tests/confirmedClinicSettingsSave.test.ts',
   'tests/guidedFirstAccessRolePersistenceTask14.regression.test.mjs',
+  'tests/clinicalGuidedTutorialProgress.test.ts',
   'tests/contextualGuidedTutorialP0.regression.test.mjs',
   'tests/googleOauthActivationUi.regression.test.mjs',
   'tests/authStateChangeDeadlockRegression.test.mjs',
