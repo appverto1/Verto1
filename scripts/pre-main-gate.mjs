@@ -321,6 +321,7 @@ const criticalTests = [
   'tests/adultMoodHistoryContextRace.regression.test.mjs',
   'tests/adultConventionalProfileSaveAck.regression.test.mjs',
   'tests/critical30ClinicalNoteSaveAck.regression.test.mjs',
+  'tests/billingCommunicationSaveAck.test.ts',
   'tests/agendaPortalActionsP0.regression.test.mjs',
   'tests/p0ContextAuthAgendaBatch05.test.ts',
   'tests/schedulingOverlappingRoomsPatientIdentity.test.ts',
