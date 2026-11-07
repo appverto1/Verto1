@@ -66,11 +66,11 @@ assert.match(activation, /deferInvitationAcceptance: isInvitationAcceptanceActio
 assert.match(activation, /verto_pending_invitation_acceptance/);
 assert.match(invitationAcceptance, /dataService\.acceptInvitation\(invitationId\)/);
 assert.match(invitationAcceptance, /onboardingContext: result\.onboardingContext \|\| \{\}/);
-assert.match(invitationAcceptance, /accepted\?\.onboardingContext\?\.clinic\?\.name/);
+assert.match(invitationAcceptance, /currentAcceptance\?\.onboardingContext\?\.clinic\?\.name/);
 assert.match(invitationAcceptance, /Entrar na clínica/);
 assert.match(invitationAcceptance, /Continuar depois/);
-assert.match(invitationAcceptance, /\{!accepted \? \(/);
-assert.doesNotMatch(invitationAcceptance, /accepted \? 'Ver depois'/);
+assert.match(invitationAcceptance, /\{!currentAcceptance \? \(/);
+assert.doesNotMatch(invitationAcceptance, /currentAcceptance \? 'Ver depois'/);
 assert.match(invitationAcceptance, /No clinic,[\s\S]*?role, name, or e-mail comes from the URL/);
 assert.match(dataService, /async acceptInvitation\(invitationId: string\)/);
 
