@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BookOpenCheck } from 'lucide-react';
 import { TutorialOverlay } from './Tutorial';
-import { portalGuidedTutorialKey, readPortalGuidedTutorial, persistPortalGuidedTutorial } from '../utils/portalGuidedTutorialProgress.mjs';
+import { portalGuidedTutorialKey, readPortalGuidedTutorial, persistPortalGuidedTutorial, portalGuidedTutorialIsVisible } from '../utils/portalGuidedTutorialProgress.mjs';
 
 type Portal = 'biller' | 'patient';
 
@@ -15,7 +15,7 @@ type PortalFirstAccessTutorialProps = {
 // memberships, roles or portal permissions. Keep help progress isolated by
 // authenticated user, active clinic, portal and (for patients) patient context.
 export function PortalFirstAccessTutorial({ user, portal, targetId }: PortalFirstAccessTutorialProps) {
-  const [isActive, setIsActive] = useState(false);
+  const [tutorialState, setTutorialState] = useState<{ key: string; active: boolean }>({ key: '', active: false });
   const initializedKeyRef = useRef('');
   const userId = String(user?.id || '').trim();
   const clinicId = String(user?.activeWorkspaceId || user?.activeAccessContext?.clinicId || user?.clinicId || user?.clinic_id || 'no-clinic').trim();
@@ -26,9 +26,15 @@ export function PortalFirstAccessTutorial({ user, portal, targetId }: PortalFirs
     : '';
 
   const progressKey = portalGuidedTutorialKey({ userId, clinicId, portal, patientId });
+  const isActive = portalGuidedTutorialIsVisible(tutorialState, progressKey);
 
   useEffect(() => {
-    if (!userId || initializedKeyRef.current === progressKey) return;
+    if (!userId || !progressKey) {
+      initializedKeyRef.current = '';
+      setTutorialState({ key: '', active: false });
+      return;
+    }
+    if (initializedKeyRef.current === progressKey) return;
     initializedKeyRef.current = progressKey;
     let status: string | null = null;
     try {
@@ -36,7 +42,7 @@ export function PortalFirstAccessTutorial({ user, portal, targetId }: PortalFirs
     } catch {
       // Some browsers prohibit access even to the localStorage property.
     }
-    setIsActive(status !== 'completed' && status !== 'skipped');
+    setTutorialState({ key: progressKey, active: status !== 'completed' && status !== 'skipped' });
   }, [progressKey, userId]);
 
   const steps = useMemo(() => [{
@@ -59,12 +65,12 @@ export function PortalFirstAccessTutorial({ user, portal, targetId }: PortalFirs
 
   const restart = () => {
     persist('active');
-    setIsActive(true);
+    setTutorialState({ key: progressKey, active: true });
   };
 
   const close = (reason: 'pause' | 'skip' | 'complete' = 'pause') => {
     persist(reason === 'complete' ? 'completed' : reason === 'skip' ? 'skipped' : 'active');
-    setIsActive(false);
+    setTutorialState({ key: progressKey, active: false });
   };
 
   return (
