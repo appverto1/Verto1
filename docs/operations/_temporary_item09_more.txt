@@ -1,0 +1,465 @@
+ITEM09 NAMED TOP-LEVEL DECLARATIONS 21000..25600
+21007:   const validateCriticalAppointmentActionResolutionSchema = async () => {
+21041:   const connectSrc = ["'self'", "https://*.supabase.co", "wss://*.supabase.co", "https://*.clarity.ms"];
+21068:   const distributedRateLimitStore = (scope: string, windowMs: number) =>
+21073:   const limiter = rateLimit({
+21089:   const recoveryLimiter = rateLimit({
+21103:   const authLoginLimiter = rateLimit({
+21114:   const authMfaLimiter = rateLimit({
+21128:   const authMeLimiter = rateLimit({
+21139:   const authSignupLimiter = rateLimit({
+21150:   const publicSalesLeadIpLimiter = rateLimit({
+21165:   const publicSalesLeadIdentityLimiter = rateLimit({
+21187:   const publicSalesActivationLimiter = rateLimit({
+21202:   const publicSalesPostPaymentRateLimitKey = (req: any) => {
+21220:   const publicSalesPaymentStatusLimiter = rateLimit({
+21240:   const publicSalesPostPaymentLimiter = rateLimit({
+21257:   const patientCreateLimiter = rateLimit({
+21271:   const inviteLimiter = rateLimit({
+21282:   const uploadLimiter = rateLimit({
+21293:   const portalActionLimiter = rateLimit({
+21304:   const appointmentReminderCronLimiter = rateLimit({
+21315:   const pushRenewalLimiter = rateLimit({
+21326:   const resendActivationLimiter = rateLimit({
+21337:   const modularCheckoutLimiter = rateLimit({
+21351:   const resendRecoveryLimiter = rateLimit({
+21362:   const stripePositivePeriodTimestamp = (value) => {
+21368:   const resolveStripeSubscriptionCurrentPeriod = (subscription) => {
+21395:   const syncSalesSubscriptionDiscount = async (
+21485:   const eventTypeSubscriptionIsActive = (status: string) =>
+21490:   const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS = 30_000;
+21492:   const claimSalesActivationEmailDelivery = async (checkoutSessionId: string) => {
+21524:   const prepareSalesActivationAccess = async (params: {
+21798:   const preparePaidDirectorSessionBootstrap = async (params: {
+21887:   const processSalesAssistedCheckoutCompleted = async (
+22226:   const stripeInvoiceSubscriptionId = (invoice: Stripe.Invoice) =>
+22236:   const stripeTimestampToIso = (value: unknown): string | null => {
+22242:   const stripeInvoicePeriodBounds = (invoice: Stripe.Invoice) => {
+22258:   const persistPlatformSubscriptionFinancialState = async (params: {
+22332:   const persistPlatformBillingInvoiceLedger = async (params: {
+22408:   const salesAssistedFlowType = (value: unknown) => {
+22413:   const stripeExpandableId = (value: unknown, maxLength = 200) => {
+22421:   const sanitizeStripeScheduleMetadata = (raw: unknown) => {
+22433:   const preserveStripeSchedulePhaseForUpdate = (phase: any) => {
+22534:   const buildStripeScheduleContinuationPhase = (
+22561:   const normalizeModularSchedulePhaseBoundaries = (
+22646:   const ensureModularSubscriptionSchedule = async (
+23023:   const reconcileSalesAssistedCheckout = async (
+23165:   let sessionStore: any = undefined;
+23166:   let sessionPool: any = null;
+23240:   const sessionMaxAgeDays = Math.max(
+23244:   const patientPortalSessionMaxAgeDays = Math.max(
+23266:   const emailVerificationExemptPaths = new Set([
+23277:   const mustBlockUnverifiedEmail = (req: any, user: any): boolean => {
+23284:   const syncWorkspaceContextInSession = (req: any, _res: any, next: any) => {
+23290:   const isBillingAccessBlocked = async (user: any): Promise<boolean> => {
+23326:   const checkAuth = async (req: any, res: any, next: any) => {
+23586:   const checkPortalAuth = async (req: any, res: any, next: any) => {
+23613:   const repairActivityLabelText = (value: unknown) =>
+23627:   const normalizeActivityActionLabel = (value: unknown) =>
+23635:   const toActivityActionSlug = (value: unknown) => {
+23643:   const activityActionByLabel: Record<string, string> = {
+23708:   const resolveActivityLogAction = ({
+23758:   const stringifyActivityPayload = (value: unknown) => {
+23768:   const isTechnicalActivityLogEntry = (entry: any) => {
+23792:   const appointmentAgendaLogActions = new Set([
+23798:   const patientNonAgendaLogActions = new Set([
+23804:   const parseActivityPayloadDetails = (entry: any) => {
+23814:   const resolveActivityEntryAction = (entry: any) => {
+23825:   const isAppointmentAgendaInteractionLogEntry = (entry: any) => {
+23846:   const patientAuditVisibilityActions = new Set([
+23854:   const isPatientNonAgendaActivityLogEntry = (entry: any, currentUser?: any) => {
+23885:   const filterVisibleActivityLogs = (rows: any[], currentUser?: any) =>
+23891:   const persistActivityLog = async ({
+24001:   const getApprovedProtocolImportRequestCount = async (clinicId: string): Promise<number> => {
+24017:   const loadApprovedProtocolImportRequestsForClinic = async (clinicId: string): Promise<any[]> => {
+24064:   const getApprovedProtocolImportRequestKeys = async (clinicId: string): Promise<string[]> => {
+24073:   const findMissingApprovedProtocolKeysForClinicState = async (clinicId: string, currentProtocols: any[]) => {
+24090:   const syncApprovedProtocolsToClinicState = async (params: {
+24199:   const revokeProtocolGrantForRequest = async (params: {
+24233:   const summarizePayloadForAudit = (input: any): string => {
+24257:   const isActivityLogOptionalColumn = (column: string | null) =>
+24286:   const writeActivityLogWithFallback = async (
+24324:   const buildActivityLogPayload = (currentUser: any, body: any, req?: any) => {
+24375:   const trackProfessionalSignupCheckoutCancellation = async ({
+24458:   const resolveSalesOwnerUserId = async (): Promise<string | null> => {
+24472:   const notifySalesOwnerForLead = async (params: {
+24574:   const sanitizePublicOfferDiscount = (raw: any) => {
+24599:   const sanitizePublicModularMetadata = (raw: any) => {
+24632:   const sanitizePublicCommercialPhases = (raw: any) =>
+24661:   const sanitizePublicCapacityBlockPhases = (raw: any) =>
+24708:   const sanitizePublicBasePackage = (raw: any) => {
+24770:   const loadPublicSalesOffer = async (token: string) => {
+25265:   const loadPublicSalesActivation = async (rawToken: unknown) => {
+25422:   const stripeSubscriptionToEntitlementStatus = (
+25433:   const applyModularEntitlementsForOrganization = async (params: {
+25466:   const verifySalesDirectorContractAccess = async (params: {
+25575:   const resolveAcceptedModularCapacityContract = (offer: any) => {
+--- DETAIL 22225..22260 ---
+022225: 
+022226:   const stripeInvoiceSubscriptionId = (invoice: Stripe.Invoice) =>
+022227:     sanitizeString(
+022228:       String(
+022229:         (invoice as any)?.subscription ||
+022230:           (invoice as any)?.parent?.subscription_details?.subscription ||
+022231:           "",
+022232:       ),
+022233:       200,
+022234:     );
+022235: 
+022236:   const stripeTimestampToIso = (value: unknown): string | null => {
+022237:     const seconds = stripePositivePeriodTimestamp(value);
+022238:     if (seconds === null) return null;
+022239:     return new Date(seconds * 1000).toISOString();
+022240:   };
+022241: 
+022242:   const stripeInvoicePeriodBounds = (invoice: Stripe.Invoice) => {
+022243:     const lines = Array.isArray((invoice as any)?.lines?.data)
+022244:       ? (invoice as any).lines.data
+022245:       : [];
+022246:     const starts = lines
+022247:       .map((line: any) => Number(line?.period?.start || 0))
+022248:       .filter((value: number) => Number.isFinite(value) && value > 0);
+022249:     const ends = lines
+022250:       .map((line: any) => Number(line?.period?.end || 0))
+022251:       .filter((value: number) => Number.isFinite(value) && value > 0);
+022252:     return {
+022253:       periodStart: starts.length ? new Date(Math.min(...starts) * 1000).toISOString() : null,
+022254:       periodEnd: ends.length ? new Date(Math.max(...ends) * 1000).toISOString() : null,
+022255:     };
+022256:   };
+022257: 
+022258:   const persistPlatformSubscriptionFinancialState = async (params: {
+022259:     subscription: Stripe.Subscription;
+022260:     organizationId?: string | null;
+--- DETAIL 22407..22470 ---
+022407: 
+022408:   const salesAssistedFlowType = (value: unknown) => {
+022409:     const flow = sanitizeString(value, 80);
+022410:     return flow === "sales_assisted_signup" || flow === "sales_modular_assisted";
+022411:   };
+022412: 
+022413:   const stripeExpandableId = (value: unknown, maxLength = 200) => {
+022414:     if (typeof value === "string") return sanitizeString(value, maxLength);
+022415:     if (value && typeof value === "object") {
+022416:       return sanitizeString((value as any).id, maxLength);
+022417:     }
+022418:     return "";
+022419:   };
+022420: 
+022421:   const sanitizeStripeScheduleMetadata = (raw: unknown) => {
+022422:     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+022423:     return Object.fromEntries(
+022424:       Object.entries(raw as Record<string, unknown>)
+022425:         .map(([key, value]) => [
+022426:           sanitizeString(key, 80),
+022427:           sanitizeString(value, 500),
+022428:         ])
+022429:         .filter(([key]) => Boolean(key)),
+022430:     );
+022431:   };
+022432: 
+022433:   const preserveStripeSchedulePhaseForUpdate = (phase: any) => {
+022434:     const startDate = Number(phase?.start_date || 0);
+022435:     const endDate = Number(phase?.end_date || 0);
+022436:     const sourceItems = Array.isArray(phase?.items) ? phase.items : [];
+022437:     if (!Number.isFinite(startDate) || startDate <= 0 || sourceItems.length === 0) {
+022438:       throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_INVALID");
+022439:     }
+022440: 
+022441:     const items = sourceItems.map((item: any) => {
+022442:       const priceId = stripeExpandableId(item?.price || item?.plan, 200);
+022443:       if (!priceId) throw new Error("MODULAR_SCHEDULE_PHASE_PRICE_MISSING");
+022444:       const quantity = Number(item?.quantity);
+022445:       const taxRates = Array.isArray(item?.tax_rates)
+022446:         ? item.tax_rates
+022447:             .map((rate: any) => stripeExpandableId(rate, 200))
+022448:             .filter(Boolean)
+022449:         : [];
+022450:       const itemMetadata = sanitizeStripeScheduleMetadata(item?.metadata);
+022451:       const preservedItem: Record<string, any> = {
+022452:         price: priceId,
+022453:         ...(Number.isFinite(quantity) && quantity > 0
+022454:           ? { quantity: Math.floor(quantity) }
+022455:           : {}),
+022456:         ...(taxRates.length > 0 ? { tax_rates: taxRates } : {}),
+022457:         ...(Object.keys(itemMetadata).length > 0
+022458:           ? { metadata: itemMetadata }
+022459:           : {}),
+022460:       };
+022461:       if (item?.billing_thresholds && typeof item.billing_thresholds === "object") {
+022462:         preservedItem.billing_thresholds = item.billing_thresholds;
+022463:       }
+022464:       if (Array.isArray(item?.discounts) && item.discounts.length > 0) {
+022465:         // The modular assisted Checkout currently prices discounts directly into
+022466:         // Stripe Prices. Silently dropping an externally attached item discount
+022467:         // here would change the contract, so fail closed instead.
+022468:         throw new Error("MODULAR_SCHEDULE_EXISTING_ITEM_DISCOUNT_REVIEW_REQUIRED");
+022469:       }
+022470:       return preservedItem;
+--- DETAIL 22570..22660 ---
+022570:         boundaryShiftSeconds: 0,
+022571:         futurePhases: [],
+022572:       };
+022573:     }
+022574: 
+022575:     const firstPlanEnd = phases[0]?.endsAt
+022576:       ? Math.floor(Date.parse(phases[0].endsAt) / 1000)
+022577:       : 0;
+022578:     if (!Number.isFinite(firstPlanEnd) || firstPlanEnd <= 0) {
+022579:       throw new Error("MODULAR_SCHEDULE_FIRST_PHASE_END_MISSING");
+022580:     }
+022581:     if (
+022582:       !Number.isFinite(stripeCurrentPeriodEnd)
+022583:       || stripeCurrentPeriodEnd <= 0
+022584:     ) {
+022585:       throw new Error("MODULAR_SUBSCRIPTION_CURRENT_PERIOD_END_MISSING");
+022586:     }
+022587:     if (!Number.isFinite(importedCurrentEnd) || importedCurrentEnd <= 0) {
+022588:       throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_END_MISSING");
+022589:     }
+022590: 
+022591:     // The imported Schedule can legitimately be longer than the Subscription's
+022592:     // current period when a previous idempotent reconciliation already added a
+022593:     // continuation. It must never be shorter than Stripe's canonical period.
+022594:     if (importedCurrentEnd < stripeCurrentPeriodEnd - 1) {
+022595:       throw new Error("MODULAR_SCHEDULE_CURRENT_PHASE_BEFORE_SUBSCRIPTION_PERIOD_END");
+022596:     }
+022597: 
+022598:     const effectiveFirstTransitionEnd = Math.max(
+022599:       firstPlanEnd,
+022600:       stripeCurrentPeriodEnd,
+022601:       importedCurrentEnd,
+022602:     );
+022603:     if (effectiveFirstTransitionEnd < stripeCurrentPeriodEnd - 1) {
+022604:       // Preserve the original safety invariant: a commercial phase may never
+022605:       // truncate the billing period already created and paid in Stripe.
+022606:       throw new Error("MODULAR_SCHEDULE_PHASE_BOUNDARY_BEFORE_CURRENT_PERIOD_END");
+022607:     }
+022608: 
+022609:     // Frozen commercial timestamps are based on the offer/Checkout preparation
+022610:     // instant (T0). Stripe anchors the real subscription when Checkout completes
+022611:     // (T1). If T1 is later, translate all future boundaries by the same delta so
+022612:     // durations and prices remain frozen while the first transition lands on the
+022613:     // real Stripe billing boundary. This changes no commercial amount or module.
+022614:     const boundaryShiftSeconds = Math.max(
+022615:       0,
+022616:       effectiveFirstTransitionEnd - firstPlanEnd,
+022617:     );
+022618:     const futurePhases = phases.slice(1).map((phase, index) => {
+022619:       const originalStart = phase?.startsAt
+022620:         ? Math.floor(Date.parse(phase.startsAt) / 1000)
+022621:         : 0;
+022622:       const originalEnd = phase?.endsAt
+022623:         ? Math.floor(Date.parse(phase.endsAt) / 1000)
+022624:         : null;
+022625:       if (!Number.isFinite(originalStart) || originalStart <= 0) {
+022626:         throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_START_INVALID");
+022627:       }
+022628:       const startDate = originalStart + boundaryShiftSeconds;
+022629:       const endDate = originalEnd === null
+022630:         ? null
+022631:         : originalEnd + boundaryShiftSeconds;
+022632:       if (endDate !== null && (!Number.isFinite(endDate) || endDate <= startDate)) {
+022633:         throw new Error("MODULAR_SCHEDULE_FUTURE_PHASE_END_INVALID");
+022634:       }
+022635:       return { phase, index, startDate, endDate };
+022636:     });
+022637: 
+022638:     return {
+022639:       firstPlanEnd,
+022640:       effectiveFirstTransitionEnd,
+022641:       boundaryShiftSeconds,
+022642:       futurePhases,
+022643:     };
+022644:   };
+022645: 
+022646:   const ensureModularSubscriptionSchedule = async (
+022647:     stripe: Stripe,
+022648:     session: Stripe.Checkout.Session,
+022649:   ) => {
+022650:     const metadata = (session.metadata || {}) as Record<string, string>;
+022651:     if (sanitizeString(metadata.flowType, 80) !== "sales_modular_assisted") {
+022652:       return null;
+022653:     }
+022654: 
+022655:     const stripeEnvironment = resolveStripeEnvironment();
+022656:     validateStripeSecretForEnvironment(stripeEnvironment);
+022657:     if (sanitizeString(metadata.environment, 20) !== stripeEnvironment) {
+022658:       throw new Error("MODULAR_CHECKOUT_ENVIRONMENT_MISMATCH");
+022659:     }
+022660: 
+--- DETAIL 22980..23090 ---
+022980:         throw new Error("MODULAR_SCHEDULE_PHASE_SEQUENCE_INVALID");
+022981:       }
+022982:     }
+022983: 
+022984:     await stripe.subscriptionSchedules.update(
+022985:       schedule.id,
+022986:       {
+022987:         end_behavior: "release",
+022988:         phases: configuredPhases,
+022989:         metadata: {
+022990:           flowType: "sales_modular_assisted",
+022991:           offerId: link.offer_id,
+022992:           leadId: link.lead_id,
+022993:           checkoutLinkId: link.id,
+022994:           environment: stripeEnvironment,
+022995:         },
+022996:         // Current billing configuration is preserved byte-for-semantics; this
+022997:         // prevents schedule setup itself from producing an unexpected proration.
+022998:         proration_behavior: "none",
+022999:       } as Stripe.SubscriptionScheduleUpdateParams,
+023000:       {
+023001:         idempotencyKey: crypto
+023002:           .createHash("sha256")
+023003:           .update(`modular-schedule-configure:${link.id}:${subscriptionId}:${schedule.id}`)
+023004:           .digest("hex"),
+023005:       },
+023006:     );
+023007: 
+023008:     const { error: persistError } = await supabase
+023009:       .from("sales_checkout_links")
+023010:       .update({
+023011:         stripe_subscription_id: subscriptionId,
+023012:         stripe_schedule_id: schedule.id,
+023013:         stripe_customer_id: sanitizeString(String(session.customer || ""), 200) || null,
+023014:         status: canonicalLinkStatus,
+023015:         updated_at: new Date().toISOString(),
+023016:       })
+023017:       .eq("id", link.id)
+023018:       .eq("stripe_subscription_id", subscriptionId);
+023019:     if (persistError) throw persistError;
+023020:     return schedule.id;
+023021:   };
+023022: 
+023023:   const reconcileSalesAssistedCheckout = async (
+023024:     stripe: Stripe,
+023025:     session: Stripe.Checkout.Session,
+023026:     options: { sendActivationEmail?: boolean } = {},
+023027:   ) => {
+023028:     await ensureModularSubscriptionSchedule(stripe, session);
+023029:     return await processSalesAssistedCheckoutCompleted(stripe, session, options);
+023030:   };
+023031: 
+023032:   const {
+023033:     isSalesAssistedStripeEvent,
+023034:     processSalesAssistedStripeEvent,
+023035:   } = createSalesAssistedStripeEventHandlers({
+023036:     salesAssistedFlowType,
+023037:     stripeInvoiceSubscriptionId,
+023038:     reconcileSalesAssistedCheckout,
+023039:     sanitizeString,
+023040:     supabase,
+023041:     isUuid,
+023042:     resolveStripeEnvironment,
+023043:     validateStripeSecretForEnvironment,
+023044:     persistPlatformBillingInvoiceLedger,
+023045:     persistPlatformSubscriptionFinancialState,
+023046:     syncSalesSubscriptionDiscount,
+023047:     // These constants are declared later in startServer: preserve late binding.
+023048:     applyModularEntitlementsForOrganization: (params) =>
+023049:       applyModularEntitlementsForOrganization(params),
+023050:     stripeSubscriptionToEntitlementStatus: (status) =>
+023051:       stripeSubscriptionToEntitlementStatus(status),
+023052:   });
+023053: 
+023054:   // Stripe Payment Link activation webhook - MUST BE BEFORE express.json()
+023055:   registerLegacySalesActivationStripeWebhookRoute(app, {
+023056:     getStripe,
+023057:     getResend,
+023058:     supabase,
+023059:     sanitizeString,
+023060:     sanitizeEmail,
+023061:     maskEmail,
+023062:     OFFICIAL_FROM_NOREPLY,
+023063:     buildPostPaymentActivationEmail,
+023064:     isSalesAssistedStripeEvent,
+023065:     reserveStripeWebhookEvent,
+023066:     processSalesAssistedStripeEvent,
+023067:     markStripeWebhookEventStatus,
+023068:   });
+023069: 
+023070:   // Stripe Webhook - MUST BE BEFORE express.json()
+023071:   registerStripeCanonicalWebhookRoute(app, {
+023072:     getStripe,
+023073:     reserveStripeWebhookEvent,
+023074:     processSalesAssistedStripeEvent,
+023075:     markStripeWebhookEventStatus,
+023076:     sanitizeString,
+023077:     sanitizeEmail,
+023078:     maskEmail,
+023079:     checkoutSessionUsesActivePatientPrice,
+023080:     ACTIVE_PATIENT_BILLING_MODEL,
+023081:     updateClinicSubscriptionStatus,
+023082:     resolveActivePatientPriceId,
+023083:     queueActivePatientSync,
+023084:     persistStripeCustomerReference,
+023085:     persistStripeSubscriptionReference,
+023086:     supabase,
+023087:     generateSupabaseActionLink,
+023088:     getActivationRedirectUrl,
+023089:     buildActivationEmailTemplate,
+023090:     sendTransactionalEmailSafe,
+--- DETAIL 25415..25475 ---
+025415:     // until the authenticated request is processed, as in the original closure.
+025416:     finalizeSalesActivationForUser: (params) => finalizeSalesActivationForUser(params),
+025417:     maskEmail,
+025418:     sanitizeEmail,
+025419:     sanitizeString,
+025420:   });
+025421: 
+025422:   const stripeSubscriptionToEntitlementStatus = (
+025423:     status: unknown,
+025424:   ): "active" | "trial" | "grace" | "suspended" | "cancelled" => {
+025425:     const normalized = sanitizeString(status, 40).toLowerCase();
+025426:     if (normalized === "trialing") return "trial";
+025427:     if (normalized === "active") return "active";
+025428:     if (normalized === "past_due") return "grace";
+025429:     if (normalized === "canceled") return "cancelled";
+025430:     return "suspended";
+025431:   };
+025432: 
+025433:   const applyModularEntitlementsForOrganization = async (params: {
+025434:     offerId: string;
+025435:     organizationId: string;
+025436:     stripeSubscriptionId: string;
+025437:     stripeEventId: string;
+025438:     stripeEventCreatedAt: string;
+025439:     status: "active" | "trial" | "grace" | "suspended" | "cancelled";
+025440:   }) => {
+025441:     const { error } = await supabase.rpc(
+025442:       "apply_sales_offer_module_entitlements_v2",
+025443:       {
+025444:         p_offer_id: params.offerId,
+025445:         p_organization_id: params.organizationId,
+025446:         p_stripe_subscription_id: params.stripeSubscriptionId,
+025447:         p_stripe_event_id: params.stripeEventId,
+025448:         p_stripe_event_created_at: params.stripeEventCreatedAt,
+025449:         p_status: params.status,
+025450:       },
+025451:     );
+025452:     if (error) {
+025453:       console.error("[Module Entitlement] Provisioning RPC failed:", {
+025454:         offerId: sanitizeString(params.offerId, 120),
+025455:         organizationId: sanitizeString(params.organizationId, 120),
+025456:         code: sanitizeString((error as any)?.code, 80) || null,
+025457:         message: sanitizeString((error as any)?.message || String(error), 240),
+025458:       });
+025459:       const wrapped = new Error("MODULE_ENTITLEMENT_PROVISIONING_FAILED");
+025460:       (wrapped as any).code = "MODULE_ENTITLEMENT_PROVISIONING_FAILED";
+025461:       (wrapped as any).cause = error;
+025462:       throw wrapped;
+025463:     }
+025464:   };
+025465: 
+025466:   const verifySalesDirectorContractAccess = async (params: {
+025467:     offerId: string;
+025468:     userId: string;
+025469:     organizationId: string;
+025470:     stripeSubscriptionId: string;
+025471:   }) => {
+025472:     const [profileResult, membershipResult, accessProfileResult, offerItemsResult, entitlementResult] =
+025473:       await Promise.all([
+025474:         supabase
+025475:           .from("users")
