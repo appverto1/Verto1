@@ -23,7 +23,7 @@ const reconcileRoute = item10ReconcileSource.match(/"\/api\/public\/sales-offers
 const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 // Compatibility intent: the Director remains provisioned server-side. For delayed
-// payment methods, a payment-confirmed e-mail is an additional durable first-access path.
+// Boleto uses the email path; modular card uses verified first-browser activation.
 assert.match(bootstrap, /deriveSalesActivationToken\(checkoutSessionId\)/);
 assert.match(bootstrap, /hashSalesOfferToken\(bootstrapToken\)/);
 assert.match(bootstrap, /pending_activations/);
