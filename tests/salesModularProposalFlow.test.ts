@@ -66,8 +66,8 @@ assert.match(
   /<option value="consulta">Sessão<\/option>/,
   'o valor persistido permanece consulta e o rótulo visível vira Sessão'
 );
-assert.match(publicOffer, /Continuar para cadastro do cartão/);
-assert.match(publicOfferDetails, /dias gratuitos/);
+assert.match(publicOffer, /Continuar para pagamento \(cartão ou boleto\)/);
+assert.match(publicOfferDetails, /Proposta com condição comercial antiga/);
 
 const visibleFiles = [
   'src/components/Calendar.tsx',
