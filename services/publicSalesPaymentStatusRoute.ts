@@ -53,7 +53,7 @@ export function registerPublicSalesPaymentStatusRoute(
         const { data: offer, error: offerError } = await supabase
           .from("sales_offers")
           .select(
-            "id,lead_id,status,payment_confirmed_at,provisioning_status,provisioning_error_code,offer_type,stripe_subscription_id",
+            "id,lead_id,status,payment_confirmed_at,provisioning_status,provisioning_error_code,offer_type,stripe_subscription_id,settled_payment_method",
           )
           .eq("id", context.offerId)
           .eq("lead_id", context.leadId)
@@ -107,21 +107,27 @@ export function registerPublicSalesPaymentStatusRoute(
         const expectedBootstrapToken = paymentConfirmed
           ? deriveSalesActivationToken(checkoutSessionId)
           : "";
-        const directorSessionReady = Boolean(
+        const activationUnclaimed = Boolean(
           accountProvisioned
           && bootstrap
           && bootstrap.used !== true
-          && Boolean(bootstrap.activation_email_sent_at)
           && sanitizeString(bootstrap.token, 128) === hashSalesOfferToken(expectedBootstrapToken)
           && (!bootstrap.expires_at || new Date(bootstrap.expires_at).getTime() > Date.now()),
         );
+        const settledMethod = sanitizeString(offer.settled_payment_method, 20);
+        const cardActivationReady = activationUnclaimed && settledMethod === 'card';
+        const directorSessionReady = activationUnclaimed
+          && settledMethod === 'boleto'
+          && Boolean(bootstrap.activation_email_sent_at);
         const sessionClaimed = Boolean(accountProvisioned && bootstrap?.used === true);
         const state = reviewRequired
           ? "review_required"
           : sessionClaimed
             ? "account_activated"
-            : directorSessionReady
-              ? "director_ready"
+            : cardActivationReady
+              ? "card_ready"
+              : directorSessionReady
+                ? "director_ready"
               : paymentConfirmed
                 ? "provisioning"
                 : "payment_pending";
@@ -132,6 +138,7 @@ export function registerPublicSalesPaymentStatusRoute(
           paymentConfirmed,
           accountProvisioned,
           directorSessionReady,
+          cardActivationReady,
           activationEmailSent: Boolean(bootstrap?.activation_email_sent_at),
           sessionClaimed,
           accountActivated: sessionClaimed,
