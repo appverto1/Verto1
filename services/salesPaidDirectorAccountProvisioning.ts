@@ -58,6 +58,9 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       authUser?.user_metadata?.sales_activation_offer_id,
       120,
     );
+    // Replayed Stripe events must never reset a saved clinical onboarding.
+    // Read the server-owned profile, never browser-editable user metadata.
+    const onboardingCompleted = existingProfile.data?.first_login_completed === true;
     const { data: activeMembershipRows, error: activeMembershipError } = await supabase
       .from("clinic_memberships")
       .select("clinic_id,role,status")
@@ -107,7 +110,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
           sales_activation_offer_id: offerId,
           sales_checkout_session_id: checkoutSessionId,
           sales_paid_director: true,
-          first_login_completed: false,
+          first_login_completed: onboardingCompleted,
         },
       });
     if (updateAuthError) throw updateAuthError;
@@ -131,11 +134,11 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       }
       let updates: Record<string, any> = cleanObject({
         email,
-        name: ownerName,
+        name: onboardingCompleted ? (profile.name || ownerName) : ownerName,
         role: "director",
         clinic_id: authUser.id,
-        subscription_status: "active",
-        first_login_completed: false,
+        subscription_status: onboardingCompleted ? profile.subscription_status : "active",
+        first_login_completed: onboardingCompleted,
         updated_at: new Date().toISOString(),
       });
       while (Object.keys(updates).length > 0) {
@@ -164,7 +167,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
 
     await ensureClinicAndMembershipForCoordinator(authUser.id, "director");
     const clinicName = sanitizeString(params.clinicName, 180);
-    if (clinicName) {
+    if (clinicName && !onboardingCompleted) {
       await patchTableSafely("clinics", { column: "id", value: authUser.id }, {
         name: clinicName,
         updated_at: new Date().toISOString(),
@@ -208,7 +211,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
         sales_activation_offer_id: offerId,
         sales_checkout_session_id: checkoutSessionId,
         sales_paid_director: true,
-        first_login_completed: false,
+        first_login_completed: onboardingCompleted,
       },
     });
     if (metadataError) throw metadataError;
