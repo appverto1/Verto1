@@ -10,6 +10,7 @@ const panel = read('src/components/TherapeuticPlanPanel.tsx');
 const migration = read('supabase/migrations/20261009160000_pts_activation_optional_content_v4.sql');
 const baseMigration = read('supabase/migrations/20260826190000_pts_draft_persistence_activation_v3.sql');
 const server = read('server.ts');
+const ptsHandlers = read('services/ptsVersionWriteHandlers.ts');
 
 const context = { exports: {}, Date, Set, Map, Object, Array, String, Number, RegExp };
 vm.runInNewContext(ts.transpileModule(source, {
@@ -33,7 +34,7 @@ assert.match(migration, /revoke all on function public\.patient_pts_snapshot_rea
 assert.match(migration, /grant execute on function public\.patient_pts_snapshot_ready_for_activation_v3\(jsonb\)[\s\S]*to service_role/);
 assert.match(baseMigration, /from public\.save_patient_pts_draft_v2\([\s\S]*p_expected_draft_revision/);
 assert.match(server, /requireClinicCapability\('treatment_plan\.edit'\), checkPatientAccess/);
-assert.match(server, /PTS_DRAFT_VERSION_CONFLICT/);
+assert.match(ptsHandlers, /PTS_DRAFT_VERSION_CONFLICT/);
 
 assert.match(editor, /expectedDraftRevision: confirmedRevisionRef\.current/);
 assert.match(editor, /persistInFlightRef\.current = true[\s\S]*persistInFlightRef\.current = false/);
