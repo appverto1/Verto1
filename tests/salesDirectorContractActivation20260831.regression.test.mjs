@@ -27,7 +27,7 @@ const finalize = item10ProvisioningSource.match(/async function finalizeSalesAct
 // provisioning gate, but delayed payment methods may send a first-access link.
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
 assert.match(processPaid, /preparePaidDirectorSessionBootstrap\(/);
-assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /const activationEmail = await prepareSalesActivationAccess\(/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 assert.doesNotMatch(processPaid, /buildSalesPostPaymentActivationEmail|sendTransactionalEmailWithResultSafe|resend\.emails\.send/);
 
@@ -42,14 +42,12 @@ assert.match(paymentStatus, /directorSessionReady/);
 assert.match(paymentStatus, /sessionClaimed/);
 assert.match(paymentStatus, /"director_ready"/);
 assert.match(paymentStatus, /"account_activated"/);
-assert.doesNotMatch(paymentStatus, /activation_email_sent_at|activationEmailSent|emailDeliveryState/);
+assert.match(paymentStatus, /activation_email_sent_at/);
+assert.match(paymentStatus, /activationEmailSent/);
 
-// Browser session issuance is one-time and only after the Director + exact modules are revalidated.
-assert.match(directorSession, /verifySalesDirectorContractAccess\(/);
-assert.match(directorSession, /provisioning_status[\s\S]*?"completed"/);
-assert.match(directorSession, /generateLink\(\{[\s\S]*?type:\s*"magiclink"/);
-assert.match(directorSession, /hashed_token/);
-assert.doesNotMatch(directorSession, /emails\.send|sendTransactionalEmail/);
+// A public Checkout URL can never issue a privileged Auth session.
+assert.match(directorSession, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
+assert.doesNotMatch(directorSession, /generateLink|hashed_token/);
 
 assert.match(verification, /from\("users"\)[\s\S]*?select\("id,role,clinic_id"\)/);
 assert.match(verification, /from\("clinic_memberships"\)/);
@@ -69,9 +67,9 @@ assert.match(finalize, /activation_channel:\s*requireActivationRecord\s*\?\s*"le
 // Historical activation URLs remain readable for already-issued links, but are not used by new paid checkout.
 assert.match(activationUi, /Diretor da clínica/);
 assert.match(publicOffer, /'director_ready'/);
-assert.match(publicOffer, /Diretor e módulos contratados liberados/);
-assert.match(publicOffer, /Entrar na Verto e continuar onboarding/);
+assert.match(publicOffer, /E-mail de ativação disponível/);
+assert.match(publicOffer, /Ative seu acesso pelo e-mail/);
 assert.match(publicOffer, /Atualizar status/);
-assert.doesNotMatch(publicOffer, /Reenviar e-mail|E-mail de ativação enviado|activation_ready/);
+assert.doesNotMatch(publicOffer, /Entrar na Verto e continuar onboarding/);
 
 console.log('salesDirectorContractActivation20260831.regression.test.mjs: OK');
