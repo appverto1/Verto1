@@ -58,10 +58,10 @@ assert.match(creation,/patient_professional_links/,'case membership still requir
 assert.match(creation,/clinic_memberships/,'clinic membership and specialty still required');
 const start=server.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-programs'");
 const end=server.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId/status'",start);
-const program=server.slice(start,end);
+const program=readFileSync('services/therapeuticProgramWriteHandlers.ts','utf8');
 assert.match(program,/specialistCanActivate \? 'teaching' : 'draft'/,'new authorized specialist programs become active, not awaiting_approval');
 assert.doesNotMatch(program,/requestedStatus === 'draft' \? 'draft' : 'awaiting_approval'/);
-const statusRoute=server.slice(end,server.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-programs/:programId'",end));
+const statusRoute=program;
 assert.match(statusRoute,/canActivateSpecialtyPlanForCase/,'previous awaiting_approval may be activated by owning specialist only');
 assert.match(statusRoute,/if \(parentPlanStatus !== 'active'\)/,'parent must already be active');
 assert.match(statusRoute,/THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED/);

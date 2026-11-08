@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const programWrites = fs.readFileSync(new URL('../services/therapeuticProgramWriteHandlers.ts', import.meta.url), 'utf8');
 const plan = fs.readFileSync(new URL('../src/components/TherapeuticPlanPanel.tsx', import.meta.url), 'utf8');
 const settings = fs.readFileSync(new URL('../src/components/ClinicGlobalSettingsPanel.tsx', import.meta.url), 'utf8');
 const coordinator = fs.readFileSync(new URL('../src/components/CoordinatorDashboard.tsx', import.meta.url), 'utf8');
@@ -60,13 +61,13 @@ assert.match(plan, /!border-l-emerald-500/);
 assert.match(plan, /!border-l-red-500/);
 assert.match(server, /SESSION_THERAPEUTIC_PLAN_NOT_ACTIVE/);
 assert.match(server, /planStatus !== 'active'/);
-assert.match(server, /Programa configurado no rascunho; ativação clínica após publicação do plano/);
+assert.match(programWrites, /Programa configurado no rascunho; ativação clínica após publicação do plano/);
 assert.match(server, /THERAPEUTIC_PLAN_STATUS_TRANSITION_INVALID/);
 assert.match(server, /paused: \['paused', 'active', 'completed', 'archived'\]/);
-assert.match(server, /THERAPEUTIC_PROGRAM_STATUS_TRANSITION_INVALID/);
-assert.match(server, /paused: \['paused', 'teaching', 'maintenance', 'completed'\]/);
-assert.match(server, /THERAPEUTIC_PROGRAM_PARENT_PLAN_NOT_ACTIVE/);
-assert.match(server, /select\('id,status,version,therapeutic_plan_id'\)/);
+assert.match(programWrites, /THERAPEUTIC_PROGRAM_STATUS_TRANSITION_INVALID/);
+assert.match(programWrites, /paused: \['paused', 'teaching', 'maintenance', 'completed'\]/);
+assert.match(programWrites, /THERAPEUTIC_PROGRAM_PARENT_PLAN_NOT_ACTIVE/);
+assert.match(programWrites, /select\('id,status,version,therapeutic_plan_id'\)/);
 
 for (const [name, source] of [
   ['CoordinatorDashboard', coordinator],

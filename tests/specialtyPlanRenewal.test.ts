@@ -26,7 +26,7 @@ assert.equal(currentSpecialtyPlanScope([{...fono,specialty:'ABA'}],'Fonoaudiolog
 assert.equal(currentSpecialtyPlanScope(null,'Fonoaudiologia'),null);
 
 const panel=fs.readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
-const server=fs.readFileSync('server.ts','utf8');
+const programWrites=fs.readFileSync('services/therapeuticProgramWriteHandlers.ts','utf8');
 const createPlanHandler=fs.readFileSync('services/therapeuticPlanCreateHandler.ts','utf8');
 const editPlanHandler=fs.readFileSync('services/therapeuticPlanEditHandler.ts','utf8');
 assert.match(panel,/const startAsDraft = scopeDraft\.mode === 'specialty'/,
@@ -43,7 +43,7 @@ assert.doesNotMatch(panel,/setWorkspaceScopeId\(String\(existingScope\.id\)\)/,
 assert.match(createPlanHandler,/startAsDraft = mode === 'specialty' && req\.body\?\.startAsDraft === true/);
 assert.match(editPlanHandler,/activate_patient_specialty_plan_v1/,
   'plan activation must select the transactionally safe DB RPC');
-assert.match(server,/therapeuticPlanScope\?\.status !== 'active'/,
+assert.match(programWrites,/therapeuticPlanScope\?\.status !== 'active'/,
   'no teaching status in a future draft plan');
 assert.match(createPlanHandler,/THERAPEUTIC_PLAN_SCOPE_EXISTS/,
   'simultaneous active cycles remain blocked server-side');

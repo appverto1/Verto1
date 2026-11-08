@@ -22,7 +22,7 @@ assert.deepEqual(pendingSpecialistProgramActivations({...input,programs:[{...pen
 assert.deepEqual(pendingSpecialistProgramActivations({...input,programs:[{...pending,version:0}]}),[], 'no unsafe unversioned mutation');
 
 const panel=fs.readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
-const server=fs.readFileSync('server.ts','utf8');
+const programWriters=fs.readFileSync('services/therapeuticProgramWriteHandlers.ts','utf8');
 const createPlanHandler=fs.readFileSync('services/therapeuticPlanCreateHandler.ts','utf8');
 assert.match(panel,/pendingSpecialistProgramActivations\(/);
 assert.match(panel,/updateTherapeuticProgramStatus\(patientId, next\.id, \{/);
@@ -32,8 +32,8 @@ assert.match(panel,/if \(result\?\.success === false\)[\s\S]*?setError\(/);
 assert.match(panel,/await loadPlan\(true\)/);
 assert.match(createPlanHandler,/status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft \? 'active' : 'draft'/,
   'new therapist-authored specialty scope is active unless deliberately prepared as draft');
-assert.match(server,/const specialistCanActivate = !canApprove && therapeuticPlanScope\?\.status === 'active'/);
-assert.match(server,/specialistCanActivate \? 'teaching' : 'draft'/);
-assert.match(server,/if \(!isTherapeuticPlanManager\(role\) && status === 'teaching'\)[\s\S]*?canActivateSpecialtyPlanForCase\(/,
+assert.match(programWriters,/const specialistCanActivate = !canApprove && therapeuticPlanScope\?\.status === 'active'/);
+assert.match(programWriters,/specialistCanActivate \? 'teaching' : 'draft'/);
+assert.match(programWriters,/if \(!isTherapeuticPlanManager\(role\) && status === 'teaching'\)[\s\S]*?canActivateSpecialtyPlanForCase\(/,
   'server remains authoritative over transitions');
 console.log('specialistProgramImmediateActivation.test.ts: PASS');
