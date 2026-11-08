@@ -43,13 +43,13 @@ const cases = [
 for (const item of cases) {
   const header = "  app.post('" + item.path + "', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {";
   const start = previous.indexOf(header);
-  const end = previous.indexOf('\\n  });', start + header.length);
+  const end = previous.indexOf('\n  });', start + header.length);
   assert.ok(start >= 0 && end > start, 'previous route found: ' + item.path);
   const originalBody = previous.slice(start + header.length, end);
   const factory = 'export function ' + item.exportName + '(getDeps: () => any) {';
   const factoryStart = extracted.indexOf(factory);
-  const beginBody = extracted.indexOf('\\n    try {', factoryStart);
-  const finishBody = extracted.indexOf('\\n  };', beginBody);
+  const beginBody = extracted.indexOf('\n    try {', factoryStart);
+  const finishBody = extracted.indexOf('\n  };', beginBody);
   assert.ok(factoryStart >= 0 && beginBody > factoryStart && finishBody > beginBody);
   assert.equal(extracted.slice(beginBody, finishBody), originalBody, 'literal byte-parity for ' + item.path);
   const register = "  app.post('" + item.path + "', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), " + item.exportName + '(() => ({ ' + item.deps.join(', ') + ' })));';
