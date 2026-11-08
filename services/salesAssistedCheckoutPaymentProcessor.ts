@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import crypto from 'crypto';
+import { resolveSalesSettledCheckoutMethod } from './salesCheckoutSettledMethod';
 // Item 09: Stripe paid; original audited statements retained unchanged.
 export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string, any>) => {
   const { buildSalesModuleSetHash, isUuid, persistActivityLog, preparePaidDirectorSessionBootstrap, prepareSalesActivationAccess, provisionPaidSalesDirectorAccount, resolveStripeEnvironment, sanitizeEmail, sanitizeString, supabase, syncSalesSubscriptionDiscount, validateStripeSecretForEnvironment } = deps;
@@ -160,6 +161,11 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       return { paymentConfirmed: false, activationPrepared: false };
     }
 
+    // Checkout lists card and boleto as *available* methods, not selected.
+    // The successful invoice PaymentIntent is the only authoritative rail.
+    const settledMethod = await resolveSalesSettledCheckoutMethod(stripe, session);
+    if (!settledMethod) throw new Error("SALES_CHECKOUT_SETTLED_METHOD_UNVERIFIED");
+
     const { data: paymentConfirmation, error: paymentConfirmationError } =
       await supabase.rpc("confirm_sales_assisted_checkout_payment", {
         p_offer_id: offerId,
@@ -302,7 +308,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
           email: directorEmail,
           clinicLabel:
             sanitizeString(lead.clinic_name || lead.name, 180) || null,
-          attemptEmail: true,
+          attemptEmail: settledMethod === 'boleto',
           // For delayed payment methods (for example boleto), the Director and
           // contracted modules are already provisioned before this message is sent.
           // The e-mail is only a durable first-access path, so it must never move
@@ -331,7 +337,15 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       directorClinicId: directorProvisioning.clinicId,
       activationPrepared: Boolean(activationEmail?.activationReady),
       activationEmailSent: Boolean(activationEmail?.activationEmailSent),
-      activationPath: activationEmail?.activationPath || null,
+      // A card purchaser may proceed immediately to the *credential choice*
+      // with the one-time activation capability; it is NOT a login session.
+      // Never return the activation token for a boleto.
+      cardActivationPath:
+        settledMethod === 'card' && bootstrap.bootstrapReady && activationEmail?.activationReady
+          ? activationEmail.activationPath
+          : null,
+      settledPaymentMethod: settledMethod,
+      activationPath: settledMethod === 'card' ? activationEmail?.activationPath || null : null,
       emailErrorCode: activationEmail?.emailErrorCode || null,
     };
   };
