@@ -10,7 +10,7 @@ export const requestPublicSalesCardCheckout = async (
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      credentials: 'omit',
+      credentials: 'same-origin',
       body: JSON.stringify({ acceptTerms: true })
     }
   );
