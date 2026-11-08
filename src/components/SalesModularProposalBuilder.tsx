@@ -495,7 +495,7 @@ export const SalesModularProposalBuilder = ({
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
           offerValidityDays: 14,
-          trialDays: 7,
+          trialDays: 0,
           onboardingInstallments: 1,
           usageProfile: 'intensive',
           driverOverrides: {},
@@ -1201,19 +1201,9 @@ export const SalesModularProposalBuilder = ({
   if (useLegacyFallback) return <>{legacyFallback}</>;
 
   const updateInput = (patch: Partial<SalesModularProposalInput>) => {
-    const changesFrozenTrial =
-      Object.prototype.hasOwnProperty.call(patch, 'trialDays') &&
-      selectedSimulationId.length > 0;
     setInput((current) => (current ? { ...current, ...patch } : current));
-    if (changesFrozenTrial) {
-      setSelectedSimulationId('');
-    }
     setPreparedOffer(null);
-    setNotice(
-      changesFrozenTrial
-        ? 'Período de teste alterado. Salve e selecione um novo cenário para congelar essa condição antes de gerar a proposta.'
-        : ''
-    );
+    setNotice('');
   };
 
   const changePatientQuantity = (patientQuantity: number) => {
@@ -1499,7 +1489,7 @@ export const SalesModularProposalBuilder = ({
   };
 
   const duplicateSimulation = (simulation: SavedModularSimulation) => {
-    setInput(buildSalesModularProposalDuplicateDraft(simulation, catalog));
+    setInput({ ...buildSalesModularProposalDuplicateDraft(simulation, catalog), trialDays: 0 });
     setScenarioName(
       `Cópia de ${simulation.scenario_name || 'cenário modular'}`
     );
@@ -3498,30 +3488,12 @@ export const SalesModularProposalBuilder = ({
                       ))}
                     </select>
                   </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Período de teste
-                    <select
-                      value={input.trialDays ?? 0}
-                      onChange={(event) =>
-                        updateInput({
-                          trialDays: Number(event.target.value) as 0 | 7 | 14 | 30
-                        })
-                      }
-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
-                    >
-                      <option value={0}>Sem teste</option>
-                      <option value={7}>7 dias</option>
-                      <option value={14}>14 dias</option>
-                      <option value={30}>30 dias</option>
-                    </select>
-                    {selectedSimulationTrialDays !== null ? (
-                      <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
-                        Cenário selecionado: {selectedSimulationTrialDays > 0
-                          ? `${selectedSimulationTrialDays} dias de teste`
-                          : 'sem período de teste'}.
-                      </span>
-                    ) : null}
-                  </label>
+                  {selectedSimulationTrialDays !== null && selectedSimulationTrialDays > 0 ? (
+                    <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                      Este cenário antigo contém período grátis, que não é mais permitido em novas contratações.
+                      Duplique o cenário e salve uma nova versão sem teste antes de gerar o link de pagamento.
+                    </div>
+                  ) : null}
                   <label className="text-sm font-medium text-slate-700">
                     Validade
                     <select
