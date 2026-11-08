@@ -287,6 +287,7 @@ const criticalTests = [
   'tests/abaM10SessionOutcomeEvaluationExtraction.regression.test.mjs',
   'tests/abaM11PeiMaintenanceTargetEnsureExtraction.regression.test.mjs',
   'tests/abaM12MaintenanceScheduleCreateExtraction.regression.test.mjs',
+  'tests/abaM13MaintenanceScheduleMutationExtraction.regression.test.mjs',
   'tests/abaM05TherapeuticPlanCreateHandler.test.ts',
   'tests/therapeuticPlanClinicalMembershipHotfix.test.mjs',
   'tests/clinicalSpecialtyTherapeuticPlans.test.ts',
