@@ -67,7 +67,7 @@ assert.match(finalize, /activation_channel:\s*requireActivationRecord\s*\?\s*"le
 // Historical activation URLs remain readable for already-issued links, but are not used by new paid checkout.
 assert.match(activationUi, /Diretor da clínica/);
 assert.match(publicOffer, /'director_ready'/);
-assert.match(publicOffer, /E-mail de ativação disponível/);
+assert.match(publicOffer, /Ativação autorizada \(cartão imediato \/ boleto por e-mail\)/);
 assert.match(publicOffer, /Ative seu acesso pelo e-mail/);
 assert.match(publicOffer, /Atualizar status/);
 assert.doesNotMatch(publicOffer, /Entrar na Verto e continuar onboarding/);
