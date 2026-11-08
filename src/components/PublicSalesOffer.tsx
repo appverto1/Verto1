@@ -11,7 +11,7 @@ import { ModularOfferDetails } from './ModularPublicOfferDetails';
 export { ModularOfferDetails } from './ModularPublicOfferDetails';
 import { loadPublicSalesOfferResponse, requireConfirmedPublicSalesOffer } from '../services/publicSalesOfferTransport';
 import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
-import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse } from '../services/publicSalesPostPaymentTransport';
+import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse, requestPaidSalesCardActivation } from '../services/publicSalesPostPaymentTransport';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -162,6 +162,7 @@ type PaymentReturnState =
   | 'payment_confirmed'
   | 'provisioning'
   | 'director_ready'
+  | 'card_ready'
   | 'account_activated'
   | 'review_required'
   | 'unavailable';
@@ -220,6 +221,26 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         return true;
       }
       if (state === 'review_required') return true;
+      if (state === 'card_ready') {
+        try {
+          const { response, data: cardAccess } = await requestPaidSalesCardActivation(token, checkoutSessionId);
+          if (!response.ok || cardAccess?.success !== true ||
+              typeof cardAccess.activationPath !== 'string' ||
+              !cardAccess.activationPath.startsWith('/ativacao-comercial/')) {
+            throw new Error(cardAccess?.message || 'Não foi possível verificar o acesso imediato neste navegador.');
+          }
+          // A payment return URL is NOT an auth session. The existing
+          // one-use first-access screen still requires Google or a password.
+          if (!cancelled) window.location.replace(cardAccess.activationPath);
+          return true;
+        } catch (cardError: any) {
+          if (!cancelled) {
+            setError(cardError?.message || 'Não foi possível validar o navegador do pagamento.');
+            setPaymentReturnState('unavailable');
+          }
+          return true;
+        }
+      }
       if (state === 'director_ready') {
         // The payment page cannot authenticate a Director. Their first login
         // is completed with Google or a password on the emailed activation link.
@@ -391,6 +412,8 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                       ? 'Pagamento aguardando confirmação'
                     : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
                       ? 'Preparando sua clínica'
+                      : paymentReturnState === 'card_ready'
+                        ? 'Configure seu acesso agora'
                       : paymentReturnState === 'director_ready'
                         ? 'Ative seu acesso pelo e-mail'
                         : paymentReturnState === 'account_activated'
@@ -404,22 +427,24 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                     ? 'Se você escolheu Boleto, pague o documento na Stripe e aguarde a compensação. A emissão do boleto não confirma a quitação. Sua clínica só será liberada após confirmação do pagamento pela Stripe. Não inicie outro Checkout; use Atualizar status para consultar novamente.'
                     : paymentReturnState === 'confirming'
                       ? 'A Stripe ainda está verificando o resultado da transação. Não inicie outro Checkout enquanto a confirmação estiver pendente.'
+                    : paymentReturnState === 'card_ready'
+                      ? 'Seu cartão foi confirmado. Abrindo a escolha de senha ou Google para iniciar o onboarding imediatamente.'
                     : paymentReturnState === 'director_ready'
-                    ? 'A Stripe confirmou o pagamento. Enviamos um link de ativação para o e-mail contratual. Abra o link e escolha Google ou e-mail e senha antes do onboarding. Verifique também a pasta de spam.'
+                    ? 'Seu boleto foi confirmado. O link de ativação será enviado ao e-mail contratual. Verifique também a pasta de spam.'
                     : paymentReturnState === 'account_activated'
                       ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
                       : paymentReturnState === 'review_required'
                         ? 'Seu pagamento foi preservado. Os dados comerciais precisam de revisão antes de liberar o acesso.'
                         : paymentReturnState === 'unavailable'
-                          ? 'Ainda não conseguimos consultar o estado final. Atualize esta página em alguns instantes; nenhuma nova cobrança será criada.'
-                          : 'Pagamento confirmado. A Verto está preparando e enviando o e-mail seguro para definir suas credenciais e iniciar o onboarding.'}
+                          ? 'Não foi possível concluir a verificação neste navegador. Não pague novamente; atualize o status ou solicite ajuda à equipe da Verto.'
+                          : 'A Verto está identificando o método de pagamento e preparando o acesso correspondente.'}
               </p>
 
               {paymentReturnState !== 'confirming' && paymentReturnState !== 'payment_pending' && paymentReturnState !== 'unavailable' ? (
                 <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
                   {[
-                    { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
-                    { label: 'E-mail de ativação disponível', done: ['director_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'card_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Ativação autorizada (cartão imediato / boleto por e-mail)', done: ['director_ready', 'card_ready', 'account_activated'].includes(paymentReturnState) },
                     { label: 'Acesso por Google ou senha configurado', done: paymentReturnState === 'account_activated' }
                   ].map((step) => (
                     <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">
@@ -430,7 +455,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 </div>
               ) : null}
 
-              {['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) ? (
+              {['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready', 'card_ready', 'unavailable'].includes(paymentReturnState) ? (
                 <button
                   type="button"
                   onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}
