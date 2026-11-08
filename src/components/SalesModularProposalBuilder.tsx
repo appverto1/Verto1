@@ -1876,9 +1876,35 @@ export const SalesModularProposalBuilder = ({
                     value={contractEmail}
                     maxLength={254}
                     autoComplete="email"
-                    disabled={contractEmailLocked}
+                    disabled={Boolean(busy)}
                     onChange={(event) => {
-                      setContractEmail(event.target.value);
+                      const nextEmail = event.target.value;
+                      // Editing a frozen contract email starts a new unsaved version.
+                      // Neither a prior proposal nor its Checkout/activation identity is modified.
+                      if (
+                        contractEmailLocked &&
+                        normalizeContractEmail(nextEmail) !== frozenOfferContractEmail &&
+                        selectedSimulation
+                      ) {
+                        setInput({
+                          ...buildSalesModularProposalDuplicateDraft(selectedSimulation, catalog),
+                          trialDays: 0
+                        });
+                        setScenarioName(
+                          `Cópia de ${selectedSimulation.scenario_name || 'cenário modular'}`
+                        );
+                        setInternalJustification(selectedSimulation.internal_justification || '');
+                        setApproveCommercialException(false);
+                        setInternalNotes(selectedSimulation.internal_notes || '');
+                        setPublicNotes(selectedSimulation.public_notes || '');
+                        setSelectedSimulationId('');
+                        setCheckoutLink(null);
+                        setOfferAccepted(false);
+                        setNotice(
+                          'E-mail editável em uma nova versão. Clique em Salvar cenário e selecione-a antes de gerar a proposta. O link anterior permanece intacto.'
+                        );
+                      }
+                      setContractEmail(nextEmail);
                       setPreparedOffer(null);
                       setError('');
                     }}
@@ -1901,7 +1927,7 @@ export const SalesModularProposalBuilder = ({
                   </p>
                 ) : contractEmailLocked ? (
                   <p className="mt-2 text-xs font-normal text-emerald-700">
-                    E-mail congelado nesta proposta: {frozenOfferContractEmail}
+                    E-mail desta proposta: {frozenOfferContractEmail}. Para alterar, edite o campo: será preparado um novo cenário, que precisa ser salvo antes de gerar um novo link. O contrato anterior não será alterado.
                   </p>
                 ) : historicalOfferMissingContractIdentity ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">

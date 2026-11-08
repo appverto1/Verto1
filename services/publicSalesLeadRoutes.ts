@@ -111,18 +111,21 @@ export function registerPublicSalesLeadRoute(app: any, deps: any): void {
         const identityConflict = errorMessage.includes(
           "SALES_LEAD_IDENTITY_CONFLICT",
         );
+        const existingCustomer = errorMessage.includes(
+          "SALES_LEAD_ALREADY_CUSTOMER",
+        );
         console.error("[Sales Leads] Falha ao persistir lead:", {
           code: sanitizeString(error?.code, 80),
           message: sanitizeString(errorMessage || String(error), 240),
         });
         return res
-          .status(missingSchema ? 503 : identityConflict ? 409 : 500)
+          .status(missingSchema ? 503 : identityConflict || existingCustomer ? 409 : 500)
           .json({
             success: false,
             error: missingSchema
               ? "Estrutura comercial ainda não aplicada no banco."
-              : identityConflict
-                ? "Os dados informados já estão associados a contatos comerciais diferentes. Fale com a equipe da Verto para atualizar o cadastro."
+              : identityConflict || existingCustomer
+                ? "Não foi possível concluir este cadastro pelo formulário. Confira os dados ou fale com a equipe da Verto."
                 : "Não foi possível registrar seu interesse agora.",
           });
       }
