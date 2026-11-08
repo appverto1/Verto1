@@ -27,7 +27,7 @@ assert.match(processPaid, /paymentStatus === "paid"/);
 assert.match(processPaid, /confirm_sales_assisted_checkout_payment/);
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
 assert.doesNotMatch(processPaid, /buildSalesPostPaymentActivationEmail|sendTransactionalEmail|resend\.emails\.send/);
-assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /const activationEmail = await prepareSalesActivationAccess\(/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
 const createUserBlock = provision.match(/supabase\.auth\.admin\.createUser\(\{[^]*?\}\);/)?.[0] || '';
@@ -50,18 +50,17 @@ assert.match(finalize, /provisioning_status:\s*"completed"/);
 assert.match(verification, /exactModules/);
 assert.match(verification, /everyActiveModuleComesFromContract/);
 
-assert.match(sessionRoute, /SALES_DIRECTOR_SESSION_ALREADY_CLAIMED/);
-assert.match(sessionRoute, /verifySalesDirectorContractAccess\(/);
-assert.match(sessionRoute, /supabase\.auth\.admin\.generateLink/);
-assert.match(sessionRoute, /hashed_token/);
+assert.match(sessionRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
+assert.doesNotMatch(sessionRoute, /auth\.admin\.generateLink|hashed_token/);
 assert.doesNotMatch(sessionRoute, /emails\.send|sendTransactionalEmail/);
 
 assert.match(directorSession, /supabase\.auth\.verifyOtp/);
 assert.match(directorSession, /provider:\s*'sales_checkout'/);
 assert.match(directorSession, /intendedRole:\s*'director'/);
 assert.match(publicOffer, /window\.location\.replace\('\/'\)/);
-assert.match(publicOffer, /Entrada no onboarding da clínica/);
-assert.doesNotMatch(publicOffer, /E-mail de ativação enviado|Reenviar e-mail/);
+assert.match(publicOffer, /Acesso por Google ou senha configurado/);
+assert.match(publicOffer, /Enviamos um link de ativação/);
+assert.doesNotMatch(publicOffer, /openDirectorSession\(|establishPublicSalesDirectorSession/);
 
 // Existing paid-Director onboarding remains the destination after automatic session establishment.
 assert.match(onboarding, /director/i);

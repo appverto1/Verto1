@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { resolveSalesPostPaymentState, resolveSalesPostPaymentRetryDelayMs } from '../utils/salesPostPaymentState.mjs';
 import {
   AlertCircle,
@@ -9,7 +9,6 @@ import {
 import { LogoVerto } from './Common';
 import { ModularOfferDetails } from './ModularPublicOfferDetails';
 export { ModularOfferDetails } from './ModularPublicOfferDetails';
-import { establishPublicSalesDirectorSession } from '../services/publicSalesDirectorSession';
 import { loadPublicSalesOfferResponse, requireConfirmedPublicSalesOffer } from '../services/publicSalesOfferTransport';
 import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
 import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse } from '../services/publicSalesPostPaymentTransport';
@@ -178,33 +177,6 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offerUnavailable, setOfferUnavailable] = useState(false);
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
   const [paymentStatusRefreshKey, setPaymentStatusRefreshKey] = useState(0);
-  const [directorOpening, setDirectorOpening] = useState(false);
-  const directorOpeningRef = useRef(false);
-
-  const openDirectorSession = async (checkoutSessionId: string) => {
-    if (!checkoutSessionId || directorOpeningRef.current) return false;
-    directorOpeningRef.current = true;
-    setDirectorOpening(true);
-    setError('');
-    try {
-      const result = await establishPublicSalesDirectorSession(token, checkoutSessionId);
-      if (result === 'already_claimed') {
-        window.location.replace('/');
-        return true;
-      }
-      setPaymentReturnState('account_activated');
-      window.history.replaceState({}, document.title, '/');
-      window.location.replace('/');
-      return true;
-    } catch (sessionError: any) {
-      setError(sessionError?.message || 'Não foi possível abrir sua conta agora. Tente novamente.');
-      return false;
-    } finally {
-      directorOpeningRef.current = false;
-      setDirectorOpening(false);
-    }
-  };
-
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
@@ -249,7 +221,8 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       }
       if (state === 'review_required') return true;
       if (state === 'director_ready') {
-        await openDirectorSession(checkoutSessionId);
+        // The payment page cannot authenticate a Director. Their first login
+        // is completed with Google or a password on the emailed activation link.
         return true;
       }
       return false;
@@ -404,7 +377,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
           {paymentReturnState !== 'idle' ? (
             <div className="flex min-h-72 flex-col items-center justify-center text-center">
-              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' || directorOpening ? (
+              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' ? (
                 <Loader2 className="mb-4 animate-spin text-violet-600" size={30} />
               ) : paymentReturnState === 'unavailable' || paymentReturnState === 'review_required' ? (
                 <AlertCircle className="mb-4 text-amber-600" size={32} />
@@ -412,16 +385,14 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 <CheckCircle2 className="mb-4 text-emerald-600" size={32} />
               )}
               <h1 className="text-xl font-semibold text-slate-900">
-                {directorOpening
-                  ? 'Abrindo sua Verto'
-                  : paymentReturnState === 'confirming'
+                {paymentReturnState === 'confirming'
                     ? 'Verificando o pagamento'
                     : paymentReturnState === 'payment_pending'
                       ? 'Pagamento aguardando confirmação'
                     : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
                       ? 'Preparando sua clínica'
                       : paymentReturnState === 'director_ready'
-                        ? 'Acesso de Diretor liberado'
+                        ? 'Ative seu acesso pelo e-mail'
                         : paymentReturnState === 'account_activated'
                           ? 'Conta de Diretor ativada'
                           : paymentReturnState === 'review_required'
@@ -429,29 +400,27 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                             : 'Confirmação em andamento'}
               </h1>
               <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
-                {directorOpening
-                  ? 'Seu pagamento já foi confirmado. Estamos abrindo a sessão segura do Diretor e levando você para a configuração inicial da clínica.'
-                  : paymentReturnState === 'payment_pending'
+                {paymentReturnState === 'payment_pending'
                     ? 'Se você escolheu Boleto, pague o documento na Stripe e aguarde a compensação. A emissão do boleto não confirma a quitação. Sua clínica só será liberada após confirmação do pagamento pela Stripe. Não inicie outro Checkout; use Atualizar status para consultar novamente.'
                     : paymentReturnState === 'confirming'
                       ? 'A Stripe ainda está verificando o resultado da transação. Não inicie outro Checkout enquanto a confirmação estiver pendente.'
                     : paymentReturnState === 'director_ready'
-                    ? 'A Stripe confirmou o pagamento. A Verto já criou o acesso de Diretor e liberou exatamente os módulos contratados. Você pode seguir direto para o onboarding.'
+                    ? 'A Stripe confirmou o pagamento. Enviamos um link de ativação para o e-mail contratual. Abra o link e escolha Google ou e-mail e senha antes do onboarding. Verifique também a pasta de spam.'
                     : paymentReturnState === 'account_activated'
                       ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
                       : paymentReturnState === 'review_required'
                         ? 'Seu pagamento foi preservado. Os dados comerciais precisam de revisão antes de liberar o acesso.'
                         : paymentReturnState === 'unavailable'
                           ? 'Ainda não conseguimos consultar o estado final. Atualize esta página em alguns instantes; nenhuma nova cobrança será criada.'
-                          : 'A Stripe confirmou a transação e a Verto está concluindo automaticamente a criação da conta, da clínica e dos módulos contratados.'}
+                          : 'Pagamento confirmado. A Verto está preparando e enviando o e-mail seguro para definir suas credenciais e iniciar o onboarding.'}
               </p>
 
               {paymentReturnState !== 'confirming' && paymentReturnState !== 'payment_pending' && paymentReturnState !== 'unavailable' ? (
                 <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
                   {[
                     { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
-                    { label: 'Diretor e módulos contratados liberados', done: ['director_ready', 'account_activated'].includes(paymentReturnState) || directorOpening },
-                    { label: 'Entrada no onboarding da clínica', done: paymentReturnState === 'account_activated' || directorOpening }
+                    { label: 'E-mail de ativação disponível', done: ['director_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Acesso por Google ou senha configurado', done: paymentReturnState === 'account_activated' }
                   ].map((step) => (
                     <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">
                       <span className={step.done ? 'text-emerald-600' : 'text-slate-300'}>{step.done ? '✓' : '○'}</span>
@@ -461,20 +430,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 </div>
               ) : null}
 
-              {paymentReturnState === 'director_ready' && !directorOpening ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const sessionId = new URLSearchParams(window.location.search).get('session_id') || '';
-                    void openDirectorSession(sessionId);
-                  }}
-                  className="mt-5 min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-                >
-                  Entrar na Verto e continuar onboarding
-                </button>
-              ) : null}
-
-              {['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) && !directorOpening ? (
+              {['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) ? (
                 <button
                   type="button"
                   onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}
@@ -543,7 +499,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                         <div>
                           <p className="font-medium">Proposta aceita</p>
                           <p className="mt-1 font-normal leading-5 text-slate-600">
-                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o cadastro do cartão.
+                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o pagamento seguro por cartão ou boleto.
                           </p>
                         </div>
                       </div>
@@ -583,7 +539,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                       {continuing
                         ? 'Preparando Checkout...'
                         : offer.modularCheckoutEnabled && offer.stripeReady
-                          ? 'Continuar para cadastro do cartão'
+                          ? 'Continuar para pagamento (cartão ou boleto)'
                           : 'Configuração Stripe pendente'}
                     </button>
                   ) : null}

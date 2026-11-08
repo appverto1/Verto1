@@ -412,10 +412,11 @@ export const ModularOfferDetails = ({
       </div>
 
       {offer.trialDays > 0 ? (
-        <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-          <p className="text-sm font-semibold text-emerald-900">{offer.trialDays} dias gratuitos</p>
-          <p className="mt-1 text-xs font-normal leading-5 text-emerald-800">
-            O cartão é cadastrado na Stripe e a primeira cobrança ocorre após o período de teste, conforme esta proposta.
+        <div role="alert" className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-semibold text-amber-900">Proposta com condição comercial antiga</p>
+          <p className="mt-1 text-xs font-normal leading-5 text-amber-800">
+            Esta proposta contém um período gratuito que não é mais oferecido.
+            Para contratar, solicite uma nova proposta sem período de teste à Verto.
           </p>
         </div>
       ) : null}

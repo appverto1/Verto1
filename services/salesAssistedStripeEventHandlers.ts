@@ -120,11 +120,9 @@ export function createSalesAssistedStripeEventHandlers(
         stripe,
         completedSession,
         {
-          // Card payments keep the current immediate browser handoff. Delayed
-          // payment methods complete later, so the activation e-mail becomes the
-          // durable path back to first access and onboarding.
-          sendActivationEmail:
-            event.type === "checkout.session.async_payment_succeeded",
+          // A positive paid Checkout (card or boleto) sends the
+          // verified first-access email. Pending/zero payments are rejected.
+          sendActivationEmail: true,
         },
       );
       if (

@@ -35,7 +35,7 @@ assert.match(statusRoute, /accountProvisioned/);
 assert.match(statusRoute, /directorSessionReady/);
 assert.match(statusRoute, /sessionClaimed/);
 assert.match(statusRoute, /"director_ready"/);
-assert.doesNotMatch(statusRoute, /activationPath|emailDeliveryState|activationEmailSent/);
+assert.match(statusRoute, /activationEmailSent/);
 
 // The retained prepare-activation URL is now a reconciliation endpoint: it reads Stripe,
 // reuses the canonical paid processor and does not create a new Checkout/subscription.
@@ -45,14 +45,12 @@ assert.doesNotMatch(reconcileRoute, /req\.body\?\.email|req\.body\.email/);
 assert.doesNotMatch(reconcileRoute, /checkout\.sessions\.create|subscriptions\.update/);
 assert.doesNotMatch(reconcileRoute, /emails\.send|sendTransactionalEmail/);
 
-// Session is issued without sending mail. It is backed by the frozen contract identity.
-assert.match(sessionRoute, /sanitizeEmail\(offer\.contract_email\)/);
-assert.match(sessionRoute, /generateLink\(\{[\s\S]*?type:\s*"magiclink"/);
-assert.match(sessionRoute, /properties\?\.hashed_token/);
-assert.doesNotMatch(sessionRoute, /emails\.send|sendTransactionalEmail/);
+// A Checkout URL alone cannot issue a magic link or Director session.
+assert.match(sessionRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
+assert.doesNotMatch(sessionRoute, /generateLink|hashed_token/);
 
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
-assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /const activationEmail = await prepareSalesActivationAccess\(/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
 assert.match(directorSession, /director-session/);
@@ -60,6 +58,7 @@ assert.match(directorSession, /supabase\.auth\.verifyOtp/);
 assert.match(directorSession, /provider:\s*'sales_checkout'/);
 assert.match(directorSession, /\/api\/auth\/login/);
 assert.match(publicOffer, /A Stripe confirmou o pagamento/);
-assert.doesNotMatch(publicOffer, /Reenviar e-mail|activation_ready|\/ativacao-comercial\//);
+assert.match(publicOffer, /Ative seu acesso pelo e-mail/);
+assert.doesNotMatch(publicOffer, /openDirectorSession\(|Entrar na Verto e continuar onboarding/);
 
 console.log('salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs: OK');

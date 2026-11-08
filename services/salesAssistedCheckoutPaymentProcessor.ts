@@ -7,7 +7,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
   const processSalesAssistedCheckoutCompleted = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
-    options: { sendActivationEmail?: boolean } = {},
+    _options: { sendActivationEmail?: boolean } = {},
   ) => {
     const metadata = (session.metadata || {}) as Record<string, string>;
     if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
@@ -96,21 +96,14 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
     }
     if (!paymentIdentityEmail) throw new Error("SALES_CHECKOUT_EMAIL_MISSING");
     let subscription: Stripe.Subscription | null = null;
-    // A paid Checkout is already authoritative for the financial transition.
-    // Only no-payment sessions need the subscription status before persistence.
-    if (paymentStatus === "no_payment_required" && subscriptionId) {
-      subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-        expand: ["discounts", "items.data.price"],
-      } as any);
-    }
-    const subscriptionStatus = sanitizeString(
-      subscription?.status,
-      40,
-    ).toLowerCase();
+    // A zero-value invoice (including a trial Checkout) can be marked "paid"
+    // by Stripe without collecting money. Only a positive, settled Checkout
+    // may provision a paid Director; boleto remains pending until settlement.
+    const paidAmountCents = Number(session.amount_total);
     const paymentConfirmed =
-      paymentStatus === "paid" ||
-      (paymentStatus === "no_payment_required" &&
-        ["active", "trialing"].includes(subscriptionStatus));
+      paymentStatus === "paid" &&
+      Number.isSafeInteger(paidAmountCents) &&
+      paidAmountCents > 0;
 
     if (!paymentConfirmed) {
       const pendingResults = await Promise.all([
@@ -300,8 +293,9 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       email: directorEmail,
     });
 
-    const activationEmail = options.sendActivationEmail
-      ? await prepareSalesActivationAccess({
+    // Both card and boleto use the same verified email-first activation.
+    // The Checkout return URL never authorizes a Director session.
+    const activationEmail = await prepareSalesActivationAccess({
           offerId,
           leadId,
           checkoutSessionId: session.id,
@@ -314,8 +308,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
           // The e-mail is only a durable first-access path, so it must never move
           // provisioning_status backwards from the completed state.
           preserveProvisioningStatus: true,
-        })
-      : null;
+        });
 
     if (subscription) {
       try {

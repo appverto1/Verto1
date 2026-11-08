@@ -8,6 +8,7 @@ const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinanc
 const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
 const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
 const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
+const eventHandlersSource = readItem09Source('services/salesAssistedStripeEventHandlers.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 
@@ -16,12 +17,8 @@ const activationFlow = server.match(
 )?.[0] || '';
 const processPaid = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted =[^]*?ITEM09_SOURCE_END/,
 )?.[0] || '';
-const eventRecognizer = server.match(
-  /const isSalesAssistedStripeEvent = async[^]*?ITEM09_SOURCE_END/,
-)?.[0] || '';
-const eventProcessor = server.match(
-  /const processSalesAssistedStripeEvent = async[^]*?\/\/ Stripe Payment Link activation webhook/,
-)?.[0] || '';
+const eventRecognizer = eventHandlersSource;
+const eventProcessor = eventHandlersSource;
 
 assert.match(
   eventRecognizer,
@@ -35,7 +32,7 @@ assert.match(
 );
 assert.match(
   eventProcessor,
-  /sendActivationEmail:[\s\S]*?event\.type === "checkout\.session\.async_payment_succeeded"/,
+  /sendActivationEmail:\s*true/,
   'pagamento assíncrono liquidado deve habilitar o e-mail de primeiro acesso',
 );
 assert.match(
@@ -46,11 +43,11 @@ assert.match(
 
 assert.match(
   processPaid,
-  /options:\s*\{\s*sendActivationEmail\?: boolean\s*\}\s*=\s*\{\}/,
+  /_options:\s*\{\s*sendActivationEmail\?: boolean\s*\}\s*=\s*\{\}/,
 );
 assert.match(
   processPaid,
-  /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/,
+  /const activationEmail = await prepareSalesActivationAccess\(/,
 );
 assert.match(
   processPaid,

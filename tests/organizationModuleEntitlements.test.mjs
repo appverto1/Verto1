@@ -80,8 +80,10 @@ assert.match(server, /Retry an interrupted paid modular activation on a later lo
 
 assert.match(migration, /trial_days integer not null default 0/);
 assert.match(migration, /check \(trial_days in \(0, 7, 14, 30\)\)/);
-assert.match(checkoutCoreSource, /trial_period_days/);
-assert.match(server, /payment_method_collection: "always"/);
+assert.match(checkoutCoreSource, /MODULAR_CHECKOUT_TRIAL_DISABLED/);
+assert.match(checkoutCoreSource, /MODULAR_CHECKOUT_INITIAL_PAYMENT_REQUIRED/);
+assert.doesNotMatch(checkoutCoreSource, /trial_period_days/);
+assert.doesNotMatch(checkoutCoreSource, /payment_method_collection: "always"/);
 assert.match(checkoutCoreSource, /MODULAR_OFFER_ACCEPTANCE_REQUIRED/);
 assert.match(server, /createOrReuseModularCheckout/);
 assert.match(checkoutCoreSource, /moduleSetHash/);

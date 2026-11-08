@@ -64,7 +64,7 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           ? "review_required"
           : result.sessionClaimed
             ? "account_activated"
-            : result.directorSessionReady
+            : result.directorSessionReady && result.activationEmailSent
               ? "director_ready"
               : result.paymentConfirmed
                 ? "provisioning"
@@ -74,14 +74,15 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           state,
           paymentConfirmed: result.paymentConfirmed === true,
           accountProvisioned: result.accountActivated === true,
-          directorSessionReady: result.directorSessionReady === true,
+          directorSessionReady: result.directorSessionReady === true && result.activationEmailSent === true,
+          activationEmailSent: result.activationEmailSent === true,
           sessionClaimed: result.sessionClaimed === true,
           accountActivated: result.sessionClaimed === true,
           reviewRequired: result.reviewRequired === true,
-          message: result.directorSessionReady
-            ? "Pagamento confirmado. A Verto liberou o acesso de Diretor e os módulos contratados."
+          message: result.directorSessionReady && result.activationEmailSent
+            ? "Pagamento confirmado. Confira o e-mail contratual para ativar seu acesso de Diretor."
             : result.paymentConfirmed
-              ? "Pagamento confirmado. A Verto está concluindo a liberação do acesso de Diretor."
+              ? "Pagamento confirmado. A Verto está preparando o e-mail seguro de ativação."
               : "Aguardando confirmação final da Stripe.",
         });
       } catch (error: any) {
