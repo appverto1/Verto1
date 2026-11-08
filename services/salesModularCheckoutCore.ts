@@ -1,4 +1,5 @@
 import type Stripe from 'stripe';
+import { issueSalesCardCheckoutBrowserProof } from './salesCardCheckoutBrowserProof';
 import type { SalesSimulationInput, SalesUsageProfile } from '../src/utils/salesProfitability';
 // Item 07: extract existing checkout core unchanged; server remains authoritative.
 export function createModularCheckoutCore(deps: Record<string, any>) {
@@ -24,8 +25,11 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
       publicOfferToken,
     } = params;
     try {
-      const respondWithLink = (link: any, idempotent: boolean, statusCode = 200) => {
+      const respondWithLink = async (link: any, idempotent: boolean, statusCode = 200) => {
         if (publicMode) {
+          await issueSalesCardCheckoutBrowserProof(
+            supabase, res, offerId, sanitizeString(link?.stripe_checkout_session_id, 200),
+          );
           return res.status(statusCode).json({
             success: true,
             url: sanitizeString(link?.checkout_url, 2000),
@@ -369,7 +373,7 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
             });
           }
           if (!regenerate && ["active", "sent", "opened", "payment_pending"].includes(sanitizeString(sameKey.status, 40))) {
-            return respondWithLink(sameKey, true);
+            return await respondWithLink(sameKey, true);
           }
         }
         const { data: activeLink, error: activeLinkError } = await supabase
@@ -381,7 +385,7 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
           .maybeSingle();
         if (activeLinkError) throw activeLinkError;
         if (activeLink && !regenerate) {
-          return respondWithLink(activeLink, true);
+          return await respondWithLink(activeLink, true);
         }
         if (!activeLink) {
           const { data: completedSubscriptionLink, error: completedSubscriptionError } = await supabase
@@ -552,7 +556,7 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
               .maybeSingle();
             if (racedLinkError) throw racedLinkError;
             if (racedLink) {
-              return respondWithLink(racedLink, true);
+              return await respondWithLink(racedLink, true);
             }
           }
           throw storeError;
@@ -583,7 +587,7 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
             .eq("lead_id", offer.lead_id)
             .in("status", ["ready", "sent", "opened", "checkout_created"]),
         ]);
-        return respondWithLink(storedLink, false, 201);
+        return await respondWithLink(storedLink, false, 201);
       } catch (error: any) {
         console.error("[Sales Modular Checkout] Falha ao gerar link.", {
           offerId,
