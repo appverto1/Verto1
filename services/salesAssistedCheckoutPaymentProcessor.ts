@@ -7,7 +7,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
   const processSalesAssistedCheckoutCompleted = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
-    options: { sendActivationEmail?: boolean } = {},
+    _options: { sendActivationEmail?: boolean } = {},
   ) => {
     const metadata = (session.metadata || {}) as Record<string, string>;
     if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
@@ -293,8 +293,9 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       email: directorEmail,
     });
 
-    const activationEmail = options.sendActivationEmail
-      ? await prepareSalesActivationAccess({
+    // Both card and boleto use the same verified email-first activation.
+    // The Checkout return URL never authorizes a Director session.
+    const activationEmail = await prepareSalesActivationAccess({
           offerId,
           leadId,
           checkoutSessionId: session.id,
@@ -307,8 +308,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
           // The e-mail is only a durable first-access path, so it must never move
           // provisioning_status backwards from the completed state.
           preserveProvisioningStatus: true,
-        })
-      : null;
+        });
 
     if (subscription) {
       try {
