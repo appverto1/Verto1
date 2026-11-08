@@ -28,6 +28,7 @@ assert.equal(currentSpecialtyPlanScope(null,'Fonoaudiologia'),null);
 const panel=fs.readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
 const server=fs.readFileSync('server.ts','utf8');
 const createPlanHandler=fs.readFileSync('services/therapeuticPlanCreateHandler.ts','utf8');
+const editPlanHandler=fs.readFileSync('services/therapeuticPlanEditHandler.ts','utf8');
 assert.match(panel,/const startAsDraft = scopeDraft\.mode === 'specialty'/,
   'new independent plan may be prepared while the old active cycle continues');
 assert.match(panel,/planLabel: newScopeName\.trim\(\)/,
@@ -40,7 +41,7 @@ assert.match(panel,/startEditingScope\(response\.data\)/,
 assert.doesNotMatch(panel,/setWorkspaceScopeId\(String\(existingScope\.id\)\)/,
   'new plan must not silently convert into an edit of the old plan');
 assert.match(createPlanHandler,/startAsDraft = mode === 'specialty' && req\.body\?\.startAsDraft === true/);
-assert.match(server,/activate_patient_specialty_plan_v1/,
+assert.match(editPlanHandler,/activate_patient_specialty_plan_v1/,
   'plan activation must select the transactionally safe DB RPC');
 assert.match(server,/therapeuticPlanScope\?\.status !== 'active'/,
   'no teaching status in a future draft plan');
