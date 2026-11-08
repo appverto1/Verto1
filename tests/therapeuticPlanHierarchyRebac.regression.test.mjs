@@ -5,6 +5,7 @@ import fs from 'node:fs';
 const panel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
 const access = fs.readFileSync('src/utils/therapeuticPlanAccess.ts', 'utf8');
 const server = readPatientPlanServerSource();
+const ptsHandlers = fs.readFileSync('services/ptsVersionWriteHandlers.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260826152500_therapeutic_plan_rebac_hierarchy_v1.sql', 'utf8');
 
 assert.match(panel, /Planos terapêuticos/);
@@ -76,7 +77,7 @@ assert.match(
   'a validação opcional deve ser aplicada no banco, não somente no frontend',
 );
 assert.match(
-  server,
+  ptsHandlers,
   /PTS_DRAFT_VALIDATION_FAILED'[\s\S]*blockingScope: 'activation_only'[\s\S]*draftPreserved: true/,
   'o contrato da API deve declarar que a validação bloqueia apenas ativação e preserva o draft',
 );
