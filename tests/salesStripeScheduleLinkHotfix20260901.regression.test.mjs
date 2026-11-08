@@ -82,9 +82,9 @@ assert.match(checkoutEventBlock, /reconcileSalesAssistedCheckout\(/);
 assert.match(invoicePaidBlock, /reconcileSalesAssistedCheckout\(/);
 assert.match(prepareActivationBlock, /reconcileSalesAssistedCheckout\(stripe, session\)/);
 
-// Escopo cirúrgico: esta entrega corrige o link/pós-pagamento e não antecipa a
-// mudança comercial posterior de remoção de trial/precificação.
+// O Checkout comercial novo não oferece trial; schedules antigos permanecem intactos.
 assert.match(checkoutCoreSource, /resolveFrozenSalesOfferTrialDays\(offer\)/);
-assert.match(checkoutCoreSource, /trial_period_days: frozenTrialDays/);
+assert.match(checkoutCoreSource, /MODULAR_CHECKOUT_TRIAL_DISABLED/);
+assert.doesNotMatch(checkoutCoreSource, /trial_period_days: frozenTrialDays/);
 
 console.log('salesStripeScheduleLinkHotfix20260901.regression.test.mjs: ok');
