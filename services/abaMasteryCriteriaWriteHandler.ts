@@ -1,3 +1,11 @@
+// Compare jsonb criteria irrespective of object-key ordering; never emit a success without returning the stored field.
+const canonicalMasteryCriteriaJson = (value: any): string =>
+  JSON.stringify(value, (_key, entry) =>
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))
+      : entry
+  );
+
 // ABA-M09: literal extraction of mastery-criteria PATCH. No calculation, storage or authorization semantics changed.
 // Auth, patient access and clinic capability middleware stay in server.ts in their original order.
 // Dependency injection is lazy to preserve request-time initialization and avoid circular imports.
@@ -46,13 +54,27 @@ export function createAbaMasteryCriteriaWriteHandler(getDeps: () => any) {
         },
         clinicId,
         organizationId,
-        patientId
+        patientId,
+        'mastery_criteria'
       );
       if (update.error) {
         if (hasMissingFinancialSchema(update.error) || isMissingRelationError(update.error)) {
           return res.status(503).json({ success: false, error: 'Schema ABA ainda nao aplicado.' });
         }
         throw update.error;
+      }
+
+      const persistedCriteria = update.data?.mastery_criteria;
+      if (
+        update.data?.id !== targetId ||
+        !persistedCriteria ||
+        canonicalMasteryCriteriaJson(persistedCriteria) !== canonicalMasteryCriteriaJson(built.criteria)
+      ) {
+        return res.status(409).json({
+          success: false,
+          error: 'MASTERY_CRITERIA_NOT_PERSISTED',
+          message: 'A gravação do critério não foi confirmada. Tente novamente.'
+        });
       }
 
       void persistActivityLog({
