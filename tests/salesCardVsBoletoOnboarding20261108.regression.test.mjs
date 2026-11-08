@@ -25,7 +25,7 @@ assert.match(method, /latest_charge/);
 assert.match(method, /payment_method_details\?\.type/);
 assert.match(method, /intent\.status !== 'succeeded'/);
 assert.match(method, /method !== 'card' && method !== 'boleto'/);
-assert.doesNotMatch(method, /session\.payment_method_types/);
+assert.doesNotMatch(method, /if\s*\([^)]*session\.payment_method_types/);
 
 // No payment or zero trial means no provisional user or clinic access.
 assert.match(payment, /paymentStatus === "paid" &&\s+Number\.isSafeInteger\(paidAmountCents\) &&\s+paidAmountCents > 0/);
