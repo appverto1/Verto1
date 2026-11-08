@@ -7,6 +7,7 @@ const panel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8')
 const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const editor = fs.readFileSync('src/components/PtsWorkspaceEditor.tsx', 'utf8');
 const server = readPatientPlanServerSource();
+const programWrites = fs.readFileSync('services/therapeuticProgramWriteHandlers.ts', 'utf8');
 
 for (const label of [
   'Projeto Terapêutico Singular',
@@ -67,6 +68,6 @@ assert.match(server, /explicitlyShared = program\?\.advanced_settings\?\.shareWi
 assert.match(server, /sourcePlanId: canOpenSourcePlan \? sourcePlanId : null/);
 assert.match(server, /canOpenSourcePlan,/);
 assert.match(server, /ptsSharedEvidence,/);
-assert.match(server, /shareWithPts:[\s\S]*advancedSettings\?\.shareWithPts === true/);
+assert.match(programWrites, /shareWithPts:[\s\S]*advancedSettings\?\.shareWithPts === true/);
 
 console.log('ptsTherapeuticDashboard.test.mjs: ok');
