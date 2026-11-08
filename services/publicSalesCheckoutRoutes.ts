@@ -1,8 +1,38 @@
 import type Stripe from 'stripe';
+import { issueSalesCardCheckoutBrowserProof } from './salesCardCheckoutBrowserProof';
 import type { SalesSimulationInput, SalesUsageProfile } from '../src/utils/salesProfitability';
 // Item 07: original public accept and card Checkout handlers, in original registration order.
 export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
   const { MODULAR_COMMERCIAL_CONSENT_TEXT, MODULAR_COMMERCIAL_CONSENT_VERSION, app, buildSalesOfferPublicUrl, createOrReuseModularCheckout, crypto, getStripe, isCouponDurationMonths, isSalesOfferStripeReady, isUuid, loadPublicSalesOffer, publicSalesLeadIpLimiter, resolveSalesStripeConfiguration, resolveStripeEnvironment, sanitizeEmail, sanitizeString, supabase, validateStripeSecretForEnvironment } = deps;
+  // The public payment link is registered later by the legacy bridge.
+  // This indexed lookup binds its *first browser* to the existing Checkout
+  // before the bridge redirects to Stripe. No extra Stripe request or account
+  // creation occurs.
+  app.use('/api/public/sales-checkouts/:token', async (req: any, res: any, next: any) => {
+    if (req.method !== 'GET') return next();
+    const token = sanitizeString(req.params?.token, 300);
+    if (token.length < 32) return next();
+    try {
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      const { data: link, error } = await supabase.from('sales_checkout_links')
+        .select('offer_id,stripe_checkout_session_id,status,expires_at,logically_expired_at')
+        .eq('public_token_hash', tokenHash).maybeSingle();
+      if (error) throw error;
+      if (link && !link.logically_expired_at &&
+          ['active','sent','opened','payment_pending'].includes(String(link.status)) &&
+          Date.parse(String(link.expires_at)) > Date.now()) {
+        await issueSalesCardCheckoutBrowserProof(
+          supabase, res, String(link.offer_id), String(link.stripe_checkout_session_id),
+        );
+      }
+      return next();
+    } catch {
+      // Never mint a credential on lookup failure. The original checkout
+      // handler still performs authorization; an email fallback remains.
+      return next();
+    }
+  });
+
   app.post(
     "/api/public/sales-offers/:token/accept",
     publicSalesLeadIpLimiter,
@@ -231,6 +261,9 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
             );
             if (existingSession.status === "open" && existingSession.url) {
               await persistCheckoutSession(existingSession);
+              await issueSalesCardCheckoutBrowserProof(
+                supabase, res, String(offer.id), existingSession.id,
+              );
               return res.json({ success: true, url: existingSession.url });
             }
             return res.status(409).json({
@@ -318,6 +351,9 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
         );
         if (!session.url) throw new Error("STRIPE_CHECKOUT_URL_MISSING");
         await persistCheckoutSession(session);
+        await issueSalesCardCheckoutBrowserProof(
+          supabase, res, String(offer.id), session.id,
+        );
         return res.json({ success: true, url: session.url });
       } catch (error: any) {
         console.error("[Sales Offer] Falha ao criar checkout autorizado:", {
