@@ -22,8 +22,8 @@ import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './servi
 import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';
 import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
-import { createTherapeuticPlanCreateHandler } from './services/therapeuticPlanCreateHandler';
 import { createClinicalOutcomesDashboardHandler } from './services/clinicalOutcomesDashboardHandler';
+import { createTherapeuticPlanCreateHandler } from './services/therapeuticPlanCreateHandler';
 import { createProtocolImportRequestHandler, createClinicProtocolImportsReadHandler, createClinicProtocolGrantRevokeHandler, createClinicProtocolRequestDeleteHandler } from './services/protocolImportClinicHandlers';
 import { createAdminProtocolImportsReadHandler, createAdminProtocolAccessWriteHandler, createAdminProtocolImportApproveHandler, createAdminProtocolImportRejectHandler, createAdminProtocolImportScanHandler } from './services/protocolImportAdminHandlers';
 import { createSessionMaintenanceProbesReadHandler, createMaintenanceOverviewReadHandler, createPeiMaintenanceDiagnosticsHandler, createLinkableMaintenanceTargetsHandler, createMaintenanceSchedulesReadHandler, createFutureMaintenanceAppointmentsHandler, createNextMaintenanceProbeHandler, createMaintenanceRecommendationsHandler, createMaintenancePlanItemsHandler } from './services/abaMaintenanceReadHandlers';
