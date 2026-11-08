@@ -3,7 +3,19 @@ import type { Express, RequestHandler } from 'express';
 // The public Checkout return is not proof of email ownership or chosen login
 // method. Keep the legacy route fail-closed; use the verified email activation.
 export interface PublicSalesDirectorSessionRouteDeps {
+  supabase: Pick<import('@supabase/supabase-js').SupabaseClient, 'from' | 'auth'>;
   publicSalesPostPaymentLimiter: RequestHandler;
+  sanitizeString: (value: unknown, maxLength?: number) => string;
+  sanitizeEmail: (value: unknown) => string | null;
+  isUuid: (value: string | null | undefined) => boolean;
+  resolveSalesPostPaymentContextToken: (
+    token: unknown, checkoutSessionId: string,
+  ) => Promise<{ offerId: string; leadId: string } | null>;
+  hashSalesOfferToken: (token: string) => string;
+  deriveSalesActivationToken: (checkoutSessionId: string) => string;
+  verifySalesDirectorContractAccess: (params: {
+    offerId: string; userId: string; organizationId: string; stripeSubscriptionId: string;
+  }) => Promise<unknown>;
 }
 
 export function registerPublicSalesDirectorSessionRoute(
