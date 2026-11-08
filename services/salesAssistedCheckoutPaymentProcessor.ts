@@ -329,7 +329,9 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
           email: directorEmail,
           clinicLabel:
             sanitizeString(lead.clinic_name || lead.name, 180) || null,
-          attemptEmail: settledPaymentMethod === 'boleto',
+          // Older non-modular contracts retain their existing email fallback.
+          // Modular card payments use immediate in-browser credential setup.
+          attemptEmail: settledPaymentMethod === 'boleto' || !isModularSalesFlow,
           // For delayed payment methods (for example boleto), the Director and
           // contracted modules are already provisioned before this message is sent.
           // The e-mail is only a durable first-access path, so it must never move
@@ -357,6 +359,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       directorUserId: directorProvisioning.userId,
       directorClinicId: directorProvisioning.clinicId,
       settledPaymentMethod,
+      cardImmediateEligible: settledPaymentMethod === 'card' && isModularSalesFlow,
       activationPrepared: Boolean(activationEmail?.activationReady),
       activationEmailSent: Boolean(activationEmail?.activationEmailSent),
       activationPath: activationEmail?.activationPath || null,
