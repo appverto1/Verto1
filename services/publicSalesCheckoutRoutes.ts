@@ -10,6 +10,14 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
   // creation occurs.
   app.use('/api/public/sales-checkouts/:token', async (req: any, res: any, next: any) => {
     if (req.method !== 'GET') return next();
+    // E-mail clients and social preview bots often visit payment URLs before
+    // the recipient clicks. They must not reserve the sole browser proof.
+    const purpose = String(req.get('purpose') || '') + ' ' +
+      String(req.get('sec-purpose') || '');
+    const agent = String(req.get('user-agent') || '');
+    if (/prefetch|prerender/i.test(purpose) ||
+        /(?:bot|crawler|spider|facebookexternalhit|Slackbot|Discordbot)/i.test(agent))
+      return next();
     const token = sanitizeString(req.params?.token, 300);
     if (token.length < 32) return next();
     try {
