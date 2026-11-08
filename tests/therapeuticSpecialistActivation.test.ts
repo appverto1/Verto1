@@ -51,7 +51,8 @@ assert.equal(await check({actorRole:'coordinator'}),false,'manager approval poli
 
 const server=readFileSync('server.ts','utf8');
 const panel=readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
-const creation=server.slice(server.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-plans'"),server.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'"));
+// Check the extracted implementation, while route authorization remains in server.ts.
+const creation=readFileSync('services/therapeuticPlanCreateHandler.ts','utf8');
 assert.match(creation,/role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft \? 'active' : 'draft'/,'self-authored specialist plan activates immediately unless deliberately preparing a future draft');
 assert.match(creation,/patient_professional_links/,'case membership still required at plan creation');
 assert.match(creation,/clinic_memberships/,'clinic membership and specialty still required');
