@@ -59,6 +59,8 @@ assert.match(
   /preserveProvisioningStatus:\s*true/,
   'o envio tardio não pode regredir o provisioning_status da conta já provisionada',
 );
+assert.match(processPaid, /attemptEmail: settledMethod === 'boleto'/,
+  'somente boleto quitado deve enviar e-mail de ativação');
 
 assert.match(
   activationFlow,
