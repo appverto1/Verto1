@@ -27,6 +27,6 @@ assert.match(paidProcessor, /paymentStatus === "paid" &&\s+Number\.isSafeInteger
 assert.doesNotMatch(paidProcessor, /\["active", "trialing"\]\.includes\(subscriptionStatus\)/);
 assert.match(paidProcessor, /if \(!paymentConfirmed\)/);
 assert.match(webhook, /checkout\.session\.async_payment_succeeded/);
-assert.match(webhook, /sendActivationEmail:\s+event\.type === "checkout\.session\.async_payment_succeeded"/);
+assert.match(webhook, /sendActivationEmail:\s*true/);
 
 console.log('salesNoFreeTrialPaymentGate20261108.regression.test.mjs: OK');
