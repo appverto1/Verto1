@@ -27,6 +27,7 @@ assert.equal(currentSpecialtyPlanScope(null,'Fonoaudiologia'),null);
 
 const panel=fs.readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
 const server=fs.readFileSync('server.ts','utf8');
+const createPlanHandler=fs.readFileSync('services/therapeuticPlanCreateHandler.ts','utf8');
 assert.match(panel,/const startAsDraft = scopeDraft\.mode === 'specialty'/,
   'new independent plan may be prepared while the old active cycle continues');
 assert.match(panel,/planLabel: newScopeName\.trim\(\)/,
@@ -38,12 +39,12 @@ assert.match(panel,/startEditingScope\(response\.data\)/,
   'creating a new plan opens its own editor, not the preceding plan');
 assert.doesNotMatch(panel,/setWorkspaceScopeId\(String\(existingScope\.id\)\)/,
   'new plan must not silently convert into an edit of the old plan');
-assert.match(server,/startAsDraft = mode === 'specialty' && req\.body\?\.startAsDraft === true/);
+assert.match(createPlanHandler,/startAsDraft = mode === 'specialty' && req\.body\?\.startAsDraft === true/);
 assert.match(server,/activate_patient_specialty_plan_v1/,
   'plan activation must select the transactionally safe DB RPC');
 assert.match(server,/therapeuticPlanScope\?\.status !== 'active'/,
   'no teaching status in a future draft plan');
-assert.match(server,/THERAPEUTIC_PLAN_SCOPE_EXISTS/,
+assert.match(createPlanHandler,/THERAPEUTIC_PLAN_SCOPE_EXISTS/,
   'simultaneous active cycles remain blocked server-side');
 assert.doesNotMatch(panel,/\.delete\(['"]patient_therapeutic_plans['"]\)/,
   'never delete clinical records to bypass specialty uniqueness');

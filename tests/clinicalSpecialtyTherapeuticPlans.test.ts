@@ -215,7 +215,7 @@ assert.match(planReadRoute, /filterTherapeuticPlanProgramsForActor/);
 assert.match(planReadRoute, /\.in\('user_id', linkedProfessionalIds\)/);
 assert.match(
   planReadRoute,
-  /queryCount: 7 \+ \(linkedProfessionalIds\.length \? 2 : 0\)/,
+  /queryCount: 8 \+ \(linkedProfessionalIds\.length \? 3 : 0\) \+ \(ptsWorkspaceSchemaMissing \? 0 : 1\)/,
 );
 assert.match(planReadRoute, /visibleObjectiveIds/);
 assert.match(planReadRoute, /objectives: visibleObjectiveRows/);
@@ -226,10 +226,8 @@ assert.match(planReadRoute, /\.lte\('created_at', historicalCutoff\.updatedAt\)[
 assert.match(planReadRoute, /from\('aba_program_versions'\)/);
 assert.match(planReadRoute, /historicalPrograms/);
 
-const planCreateRoute = routeSection(
-  "app.post('/api/aba/patients/:patientId/therapeutic-plans'",
-  "app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'",
-);
+// Creation logic moved in ABA-M05; the original security assertions stay intact.
+const planCreateRoute = fs.readFileSync('services/therapeuticPlanCreateHandler.ts', 'utf8');
 assert.doesNotMatch(
   planCreateRoute,
   /req\.body\?\.(?:specialty|specialty_name|specialtyName)(?![A-Za-z_])/,
@@ -287,8 +285,14 @@ assert.doesNotMatch(
   'a navegação principal já separa Programas, Manutenção, Generalização e Histórico',
 );
 assert.doesNotMatch(planPanel, /Plano interdisciplinar/);
-assert.match(planPanel, /Especialidade obtida do cadastro profissional/);
-assert.match(planPanel, /Objetivos comuns do PTS/);
+assert.match(planPanel, /specialty: current\.mode === 'specialty' \? String\(responsible\?\.specialty \|\| ''\) : ''/,
+  'a especialidade exibida no formulário continua derivada do profissional selecionado');
+assert.match(planPanel, /scopeDraft\.specialty \|\| 'Selecione um responsável com especialidade cadastrada'/,
+  'especialidade derivada é exibida somente para leitura');
+assert.match(planPanel, /hydratePtsClinicalPayloadFromPlan\(primaryPtsScope\)/,
+  'o painel continua hidratando o PTS da equipe');
+assert.match(planPanel, /onSave=\{\(payload\) => savePtsScope\(String\(selectedPtsScope\.id\), payload\)\}/,
+  'a edição dos objetivos do PTS permanece vinculada ao Salvar autorizado');
 assert.match(planPanel, /Esta versão não possui objetivos registrados/);
 assert.match(planPanel, /Programas e alvos preservados/);
 assert.match(

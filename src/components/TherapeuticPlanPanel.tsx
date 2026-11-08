@@ -2853,6 +2853,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
         <button type="button" className={secondaryButton} onClick={() => setScopeFormOpen(false)}>Fechar</button>
       </div>
 
+      <p className={`mt-4 rounded-xl border px-3.5 py-3 text-xs leading-relaxed ${isDark ? 'border-slate-700 bg-slate-900/60 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}>
+        Escolha o responsável, confirme a equipe participante e salve. O plano só será registrado depois da confirmação do servidor.
+      </p>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <label className={`text-xs ${muted}`}>
           Responsável principal · também participa do plano
@@ -2930,6 +2933,9 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
             {scopeDraft.mode === 'interdisciplinary'
               ? 'Equipe participante (responsável incluído · 2 a 5 profissionais)'
               : 'Colaboradores da mesma especialidade (opcional)'}
+            <span className={`ml-2 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${isDark ? 'border-violet-400/30 text-violet-200' : 'border-violet-200 bg-violet-50 text-violet-700'}`}>
+              {scopeDraft.participantProfessionalIds.length}/5 selecionados
+            </span>
           </legend>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             {linkedProfessionals
@@ -3065,15 +3071,33 @@ export const TherapeuticPlanPanel = ({ patient, protocols = [], professionals = 
     const canCreateSpecialty = canCreatePlanScope && selectableResponsibleProfessionals.length > 0;
     const ptsDraftNumber = primaryPtsScope ? scopeDraftVersionNumber(primaryPtsScope) : 0;
     const ptsActiveNumber = Number(primaryPtsScope?.pts_lineage?.activeVersion?.versionNumber || 0);
+    const specialtyDraftCount = specialtyScopes.filter((scope: any) => String(scope?.status || '').toLowerCase() === 'draft').length;
 
     return (
       <div className="space-y-6" data-testid="therapeutic-plan-hub">
-        <header className={`rounded-2xl border p-4 sm:p-5 ${subpanel}`}>
-          <p className={`text-xs uppercase tracking-[0.16em] ${isDark ? 'text-violet-300' : 'text-violet-600'}`}>Planejamento terapêutico</p>
-          <h2 className={`mt-1 text-xl font-semibold tracking-tight ${text}`}>Planos terapêuticos</h2>
-          <p className={`mt-1 max-w-3xl text-sm leading-relaxed ${muted}`}>
-            Acesse o plano compartilhado da equipe e os planos clínicos sob sua responsabilidade ou supervisão.
-          </p>
+        <header className={`rounded-2xl border p-4 sm:p-6 ${subpanel}`}>
+          <div className="flex items-start gap-3 sm:gap-4">
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${isDark ? 'bg-violet-400/15 text-violet-200' : 'bg-violet-100 text-violet-700'}`} aria-hidden="true"><ClipboardList size={22} /></span>
+            <div className="min-w-0">
+              <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${isDark ? 'text-violet-300' : 'text-violet-600'}`}>Planejamento terapêutico</p>
+              <h2 className={`mt-1 text-xl font-semibold tracking-tight sm:text-2xl ${text}`}>Planos terapêuticos</h2>
+              <p className={`mt-1 max-w-3xl text-sm leading-relaxed ${muted}`}>Acesse o PTS compartilhado e os planos por especialidade autorizados para este paciente.</p>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3 sm:grid-cols-3" aria-label="Resumo dos planos clínicos" data-testid="therapeutic-plan-hub-overview">
+            <div className={`rounded-xl border p-3.5 ${isDark ? 'border-violet-400/20 bg-violet-400/5' : 'border-violet-100 bg-violet-50/80'}`}>
+              <div className="flex items-center gap-2"><BookOpen size={15} className="text-violet-500" aria-hidden="true" /><span className={`text-xs ${muted}`}>PTS da equipe</span></div>
+              <p className={`mt-2 truncate text-base font-semibold ${text}`}>{primaryPtsScope ? statusLabelForScope(primaryPtsScope) : 'Não criado'}</p>
+            </div>
+            <div className={`rounded-xl border p-3.5 ${isDark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-white'}`}>
+              <div className="flex items-center gap-2"><Target size={15} className="text-sky-500" aria-hidden="true" /><span className={`text-xs ${muted}`}>Planos por especialidade</span></div>
+              <p className={`mt-2 text-xl font-semibold tabular-nums ${text}`}>{specialtyScopes.length}</p>
+            </div>
+            <div className={`rounded-xl border p-3.5 ${isDark ? 'border-slate-700 bg-slate-800/60' : 'border-slate-200 bg-white'}`}>
+              <div className="flex items-center gap-2"><Clock3 size={15} className="text-amber-500" aria-hidden="true" /><span className={`text-xs ${muted}`}>Planos em rascunho</span></div>
+              <p className={`mt-2 text-xl font-semibold tabular-nums ${text}`}>{specialtyDraftCount}</p>
+            </div>
+          </div>
         </header>
 
         {renderScopeCreationForm()}

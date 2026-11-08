@@ -46,9 +46,7 @@ assert.match(server, /const graphVisiblePlanScopes = filterClinicalGraphPlanScop
 assert.match(server, /filterTherapeuticPlanProgramsForActor\(programResult\.data \|\| \[\], graphVisiblePlanScopes, accessContext\)/);
 assert.match(server, /!planId\s*&&\s*!clinicalGraphLegacySnapshotVisibleToActor\(point\.specialty, graphActorScope\)/);
 
-const createPlanStart = server.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-plans'");
-const createPlanEnd = server.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'", createPlanStart);
-const createPlanRoute = server.slice(createPlanStart, createPlanEnd);
+const createPlanRoute = fs.readFileSync('services/therapeuticPlanCreateHandler.ts', 'utf8');
 assert.match(createPlanRoute, /THERAPEUTIC_PLAN_SPECIALTY_MISMATCH/);
 assert.match(createPlanRoute, /participantSpecialties\.some/);
 

@@ -72,6 +72,7 @@ assert.equal(roleHasDefaultCapability('therapist', 'aba.program.create'), false,
 assert.equal(roleHasDefaultCapability('receptionist', 'treatment_plan.create'), false);
 
 const server = fs.readFileSync('server.ts', 'utf8');
+const planCreateHandler = fs.readFileSync('services/therapeuticPlanCreateHandler.ts', 'utf8');
 const routes = [
   ["app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'", "'treatment_plan.edit', 'treatment_plan.create', 'treatment_plan.view'"],
   ["app.post('/api/aba/patients/:patientId/therapeutic-programs'", "'aba.program.create', 'treatment_plan.create'"],
@@ -85,10 +86,10 @@ for (const [endpoint, permission] of routes) {
   assert.ok(route.includes(endpoint.includes('therapeutic-plans/:planId') ? "requireScopedTherapeuticPlanCapability('edit')" : "requireAnyClinicCapability(" + permission + ")"), 'Route capability mismatch: ' + endpoint);
   assert.ok(route.includes('checkPatientAccess'), 'Missing backend patient scope: ' + endpoint);
 }
-assert.match(server, /mode === 'interdisciplinary' && String\(req\.effectiveClinicRole \|\| ''\)\.toLowerCase\(\) === 'therapist'/);
-assert.match(server, /if \(!canManageAny && responsibleProfessionalId !== actorId\)/);
-assert.match(server, /if \(participantProfessionalIds\.some\(\(id\) => !activeByProfessional\.has\(id\)\)\)/);
-assert.match(server, /if \(participantSpecialties\.some\(\(specialty\) => !specialty\)\)/);
+assert.match(planCreateHandler, /mode === 'interdisciplinary' && String\(req\.effectiveClinicRole \|\| ''\)\.toLowerCase\(\) === 'therapist'/);
+assert.match(planCreateHandler, /if \(!canManageAny && responsibleProfessionalId !== actorId\)/);
+assert.match(planCreateHandler, /if \(participantProfessionalIds\.some\(\(id\) => !activeByProfessional\.has\(id\)\)\)/);
+assert.match(planCreateHandler, /if \(participantSpecialties\.some\(\(specialty\) => !specialty\)\)/);
 assert.match(server, /\/api\/protocol-import-requests\/:requestId\/revoke'[\s\S]{0,180}requireClinicCapability\('aba.program.edit'\)/);
 assert.match(server, /\/api\/aba\/patients\/:patientId\/therapeutic-plans\/:planId\/pts-draft'[\s\S]{0,180}requireClinicCapability\('treatment_plan.edit'\)/);
 
