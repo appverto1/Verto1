@@ -59,7 +59,8 @@ assert.match(directorSession, /provider:\s*'sales_checkout'/);
 assert.match(directorSession, /intendedRole:\s*'director'/);
 assert.match(publicOffer, /window\.location\.replace\('\/'\)/);
 assert.match(publicOffer, /Acesso por Google ou senha configurado/);
-assert.match(publicOffer, /Enviamos um link de ativação/);
+assert.match(publicOffer, /window\.location\.replace\(path\)/);
+assert.match(processPaid, /attemptEmail: settledMethod === 'boleto'/);
 assert.doesNotMatch(publicOffer, /openDirectorSession\(|establishPublicSalesDirectorSession/);
 
 // Existing paid-Director onboarding remains the destination after automatic session establishment.

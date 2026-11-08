@@ -221,8 +221,13 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       }
       if (state === 'review_required') return true;
       if (state === 'director_ready') {
-        // The payment page cannot authenticate a Director. Their first login
-        // is completed with Google or a password on the emailed activation link.
+        const path = String(data?.cardActivationPath || '');
+        if (/^\/ativacao-comercial\/[A-Za-z0-9_-]{43,80}$/.test(path)) {
+          // A validated card purchase unlocks a one-time activation route,
+          // never an Auth session. Google/password selection is still required.
+          window.location.replace(path);
+        }
+        // Boleto has no browser activation path; it must use the e-mail.
         return true;
       }
       return false;
@@ -392,7 +397,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                     : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
                       ? 'Preparando sua clínica'
                       : paymentReturnState === 'director_ready'
-                        ? 'Ative seu acesso pelo e-mail'
+                        ? 'Configure seu acesso à Verto'
                         : paymentReturnState === 'account_activated'
                           ? 'Conta de Diretor ativada'
                           : paymentReturnState === 'review_required'
@@ -405,21 +410,21 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                     : paymentReturnState === 'confirming'
                       ? 'A Stripe ainda está verificando o resultado da transação. Não inicie outro Checkout enquanto a confirmação estiver pendente.'
                     : paymentReturnState === 'director_ready'
-                    ? 'A Stripe confirmou o pagamento. Enviamos um link de ativação para o e-mail contratual. Abra o link e escolha Google ou e-mail e senha antes do onboarding. Verifique também a pasta de spam.'
+                    ? 'A Stripe confirmou o pagamento. Se você pagou por cartão, escolha agora Google ou senha. Para boleto, utilize o link enviado ao e-mail contratual após a compensação.'
                     : paymentReturnState === 'account_activated'
                       ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
                       : paymentReturnState === 'review_required'
                         ? 'Seu pagamento foi preservado. Os dados comerciais precisam de revisão antes de liberar o acesso.'
                         : paymentReturnState === 'unavailable'
                           ? 'Ainda não conseguimos consultar o estado final. Atualize esta página em alguns instantes; nenhuma nova cobrança será criada.'
-                          : 'Pagamento confirmado. A Verto está preparando e enviando o e-mail seguro para definir suas credenciais e iniciar o onboarding.'}
+                          : 'Pagamento confirmado. A Verto está preparando o primeiro acesso: imediato para cartão, ou por e-mail para boleto compensado.'}
               </p>
 
               {paymentReturnState !== 'confirming' && paymentReturnState !== 'payment_pending' && paymentReturnState !== 'unavailable' ? (
                 <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
                   {[
                     { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
-                    { label: 'E-mail de ativação disponível', done: ['director_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Primeiro acesso liberado com segurança', done: ['director_ready', 'account_activated'].includes(paymentReturnState) },
                     { label: 'Acesso por Google ou senha configurado', done: paymentReturnState === 'account_activated' }
                   ].map((step) => (
                     <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">

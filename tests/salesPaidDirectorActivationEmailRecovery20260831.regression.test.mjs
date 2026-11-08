@@ -58,7 +58,8 @@ assert.match(directorSession, /supabase\.auth\.verifyOtp/);
 assert.match(directorSession, /provider:\s*'sales_checkout'/);
 assert.match(directorSession, /\/api\/auth\/login/);
 assert.match(publicOffer, /A Stripe confirmou o pagamento/);
-assert.match(publicOffer, /Ative seu acesso pelo e-mail/);
+assert.match(publicOffer, /Configure seu acesso à Verto/);
+assert.match(reconcileRoute, /immediateCardActivation \|\| boletoEmailReady/);
 assert.doesNotMatch(publicOffer, /openDirectorSession\(|Entrar na Verto e continuar onboarding/);
 
 console.log('salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs: OK');
