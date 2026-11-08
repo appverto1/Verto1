@@ -8,6 +8,9 @@ import ts from 'typescript';
 const before = execFileSync('git', ['cat-file', 'blob', '1a3e27f6e4a33def790c3f1cd324c263417403ec'], { encoding: 'utf8', maxBuffer: 8_000_000 });
 const server = readFileSync('server.ts', 'utf8');
 const moduleSource = readFileSync('services/abaMasteryCriteriaWriteHandler.ts', 'utf8');
+assert.ok(moduleSource.includes('canonicalMasteryCriteriaJson(persistedCriteria)'), 'real persisted JSONB content must match');
+assert.ok(server.includes("requiredPersistedField?: 'mastery_criteria'"), 'schema fallback helper requires field on M09');
+assert.ok(server.includes("missingColumn !== requiredPersistedField"), 'required criteria field cannot be dropped silently');
 const path = '/api/aba/patients/:patientId/targets/:targetId/mastery-criteria';
 const originalHeader = "  app.patch('" + path + "', checkAuth, checkPatientAccess, requireClinicCapability('aba.program.edit'), async (req: any, res) => {";
 const oldStart = before.indexOf(originalHeader);
@@ -16,7 +19,11 @@ assert.ok(oldStart > -1 && oldEnd > oldStart, 'previous PATCH body must exist');
 const bodyStart = moduleSource.indexOf('\n    try {');
 const bodyEnd = moduleSource.lastIndexOf('\n  };');
 assert.ok(bodyStart >= 0 && bodyEnd > bodyStart, 'extracted handler must contain its original body');
-assert.equal(moduleSource.slice(bodyStart, bodyEnd), before.slice(oldStart + originalHeader.length, oldEnd), 'literal clinical handler parity');
+const originalBody = before.slice(oldStart + originalHeader.length, oldEnd);
+const intendedBody = originalBody
+  .replace("        organizationId,\n        patientId\n      );", "        organizationId,\n        patientId,\n        'mastery_criteria'\n      );")
+  .replace('      void persistActivityLog({', "      const persistedCriteria = update.data?.mastery_criteria;\n      if (\n        update.data?.id !== targetId ||\n        !persistedCriteria ||\n        canonicalMasteryCriteriaJson(persistedCriteria) !== canonicalMasteryCriteriaJson(built.criteria)\n      ) {\n        return res.status(409).json({\n          success: false,\n          error: 'MASTERY_CRITERIA_NOT_PERSISTED',\n          message: 'A gravação do critério não foi confirmada. Tente novamente.'\n        });\n      }" + '\n\n      void persistActivityLog({');
+assert.equal(moduleSource.slice(bodyStart, bodyEnd), intendedBody, 'original handler remains byte-identical except required write ACK and returned field');
 const registration = "app.patch('" + path + "', checkAuth, checkPatientAccess, requireClinicCapability('aba.program.edit'), createAbaMasteryCriteriaWriteHandler(() => ({";
 assert.equal(server.split(registration).length, 2, 'original middleware and route registered exactly once');
 assert.ok(server.indexOf("app.patch('/api/aba/program-templates/:templateId'") < server.indexOf(registration), 'preserve route order after templates');
@@ -54,7 +61,7 @@ const fakeRequest = (overrides = {}) => ({
   ...overrides
 });
 const isUuid = (v) => /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(v));
-function harness({ target = validTarget, readError = null, writeError = null, invalidCriteria = false } = {}) {
+function harness({ target = validTarget, readError = null, writeError = null, invalidCriteria = false, returnedWriteData = undefined } = {}) {
   const reads = []; const writes = [];
   const deps = {
     sanitizeString: (value, max) => String(value ?? '').slice(0, max),
@@ -81,7 +88,7 @@ function harness({ target = validTarget, readError = null, writeError = null, in
       : { criteria: { ...body.criteria, updated_by: actorId }, normalized: body.criteria },
     async updateAbaTargetWithSchemaFallback(...args) {
       writes.push(args);
-      return { data: writeError ? null : { id: args[0] }, error: writeError };
+      return { data: writeError ? null : (returnedWriteData === undefined ? { id: args[0], mastery_criteria: args[1].mastery_criteria } : returnedWriteData), error: writeError };
     },
     persistActivityLog: () => Promise.resolve(),
     formatAbaMasteryCriterion: () => '3 tentativas independentes',
@@ -132,6 +139,19 @@ for (const key of ['organization_id', 'clinic_id', 'patient_id']) {
   await h.handler(fakeRequest(), r);
   assert.equal(r.statusCode, 500, 'write conflict cannot masquerade as success');
 }
+for (const returnedWriteData of [null, { id: ids.other, mastery_criteria: { requiredIndependentCorrectTrials: 3 } }, { id: ids.target }, { id: ids.target, mastery_criteria: { requiredIndependentCorrectTrials: 999 } }]) {
+  const h = harness({ returnedWriteData }), r = fakeResponse();
+  await h.handler(fakeRequest(), r);
+  assert.equal(r.statusCode, 409, 'no authoritative persisted ACK must fail closed');
+  assert.equal(r.payload.success, false);
+  assert.equal(r.payload.error, 'MASTERY_CRITERIA_NOT_PERSISTED');
+  assert.equal(h.writes.length, 1, 'no extra reads or retries');
+}
+{
+  const h = harness({ returnedWriteData: { id: ids.target, mastery_criteria: { updated_by: ids.actor, requiredIndependentCorrectTrials: 3 } } }), r = fakeResponse();
+  await h.handler(fakeRequest(), r);
+  assert.equal(r.statusCode, 200, 'canonical object key reordering is accepted');
+}
 {
   const h = harness(), r = fakeResponse();
   await h.handler(fakeRequest(), r);
@@ -145,6 +165,7 @@ for (const key of ['organization_id', 'clinic_id', 'patient_id']) {
   assert.equal(h.writes[0][2], ids.clinic);
   assert.equal(h.writes[0][3], ids.clinic);
   assert.equal(h.writes[0][4], ids.patient);
+  assert.equal(h.writes[0][5], 'mastery_criteria', 'critical field must not be dropped by schema fallback');
   assert.equal(h.writes[0][1].mastery_criteria.updated_by, ids.actor);
 }
 console.log('ABA-M09: literal parity, middleware, API-direct cross-tenant, bad IDs, invalid data, write errors and no extra requests PASS');
