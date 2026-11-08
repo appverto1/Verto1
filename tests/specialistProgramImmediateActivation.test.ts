@@ -23,13 +23,14 @@ assert.deepEqual(pendingSpecialistProgramActivations({...input,programs:[{...pen
 
 const panel=fs.readFileSync('src/components/TherapeuticPlanPanel.tsx','utf8');
 const server=fs.readFileSync('server.ts','utf8');
+const createPlanHandler=fs.readFileSync('services/therapeuticPlanCreateHandler.ts','utf8');
 assert.match(panel,/pendingSpecialistProgramActivations\(/);
 assert.match(panel,/updateTherapeuticProgramStatus\(patientId, next\.id, \{/);
 assert.match(panel,/status: 'teaching',[\s\S]*?expectedVersion: next\.version/);
 assert.match(panel,/idempotencyKey: `specialist-plan-activation:/);
 assert.match(panel,/if \(result\?\.success === false\)[\s\S]*?setError\(/);
 assert.match(panel,/await loadPlan\(true\)/);
-assert.match(server,/status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft \? 'active' : 'draft'/,
+assert.match(createPlanHandler,/status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft \? 'active' : 'draft'/,
   'new therapist-authored specialty scope is active unless deliberately prepared as draft');
 assert.match(server,/const specialistCanActivate = !canApprove && therapeuticPlanScope\?\.status === 'active'/);
 assert.match(server,/specialistCanActivate \? 'teaching' : 'draft'/);
