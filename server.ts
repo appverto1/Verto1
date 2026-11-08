@@ -1,3 +1,5 @@
+import { createPeiMaintenanceTargetResolver } from './services/peiMaintenanceTargetResolver';
+import { createPeiMaintenanceTargetEnsureHandler } from './services/peiMaintenanceTargetEnsureHandler';
 import { createAbaSessionOutcomeEvaluators } from './services/abaSessionOutcomeEvaluators';
 import { createAbaMasteryCriteriaWriteHandler } from './services/abaMasteryCriteriaWriteHandler';
 import { registerPublicSalesOfferReadRoute } from './services/publicSalesOfferReadRoute';
@@ -48590,79 +48592,7 @@ async function startServer() {
     return eventId;
   };
 
-  const ensurePeiMaintenanceTargetForPatient = async (params: {
-    patientId: string;
-    clinicId: string;
-    organizationId: string;
-    sessionUser: any;
-    payload: any;
-  }) => {
-    const patientId = sanitizeString(params.patientId, 120);
-    const clinicId = sanitizeString(params.clinicId, 120);
-    const organizationId = sanitizeString(params.organizationId || clinicId, 120);
-    if (!isUuid(patientId) || !clinicId) {
-      return { ok: false, status: 400, error: 'Dados insuficientes para preparar a habilidade.' };
-    }
-    const candidate = readPeiMaintenanceEnsureSource(params.payload || {});
-    let targetQuery = supabase
-      .from('aba_targets')
-      .select(ABA_TARGET_RECOMMENDATION_SELECT)
-      .eq('organization_id', organizationId)
-      .eq('patient_id', patientId)
-      .limit(500);
-    targetQuery = applyAbaTenantScope(targetQuery, params.sessionUser, clinicId, organizationId);
-    const targetResult = await targetQuery;
-    if (targetResult.error && !hasMissingFinancialSchema(targetResult.error) && !isMissingRelationError(targetResult.error)) throw targetResult.error;
-    const existingTargets = targetResult.error ? [] : (Array.isArray(targetResult.data) ? targetResult.data : []);
-    const requestedTargetId = sanitizeString(candidate?.targetId, 180);
-    const existingTarget = isUuid(requestedTargetId)
-      ? existingTargets.find((target: any) => sanitizeString(target?.id, 180) === requestedTargetId) || null
-      : null;
-    if (existingTarget?.id) {
-      const eventId = await persistPeiSkillAcquiredMasteryEvent({
-        organizationId,
-        clinicId,
-        patientId,
-        targetId: sanitizeString(existingTarget.id, 180),
-        source: { ...candidate, targetName: candidate?.targetName || existingTarget?.name },
-        changedBy: sanitizeString(params.sessionUser?.id || params.sessionUser?.user_id, 120)
-      });
-      return { ok: true, status: 200, target: existingTarget, targetId: sanitizeString(existingTarget.id, 180), masteryEvaluationId: eventId, materialized: false };
-    }
-
-    const peiTargets = await getPatientPeiTargets(patientId, clinicId, organizationId, params.sessionUser);
-    const matchedPeiTarget = resolvePeiMaintenanceSourceTarget(peiTargets, candidate);
-    const sourceTarget = matchedPeiTarget || (candidate?.eligibleForMaintenance && candidate?.targetName ? candidate : null);
-    if (!sourceTarget?.targetName) {
-      return { ok: false, status: 404, error: 'Habilidade adquirida não encontrada no PEI do paciente.' };
-    }
-    const materialized = await materializePeiTargetsForMaintenance({
-      patientId,
-      clinicId,
-      organizationId,
-      sessionUser: params.sessionUser,
-      peiTargets: [sourceTarget],
-      existingTargets
-    });
-    const hydrated = Array.isArray(materialized.peiTargets) ? materialized.peiTargets[0] : null;
-    const targetId = sanitizeString(hydrated?.targetId || hydrated?.target_id || materialized.materializedTargets?.[0]?.id, 180);
-    let target = (Array.isArray(materialized.targets) ? materialized.targets : []).find((item: any) => sanitizeString(item?.id, 180) === targetId) || null;
-    if (!target?.id && isUuid(targetId)) {
-      target = await fetchTargetForMaintenance({ targetId, patientId, clinicId, organizationId });
-    }
-    if (!isUuid(targetId) || !target?.id) {
-      return { ok: false, status: 500, error: 'Não foi possível materializar a habilidade adquirida.' };
-    }
-    const eventId = await persistPeiSkillAcquiredMasteryEvent({
-      organizationId,
-      clinicId,
-      patientId,
-      targetId,
-      source: { ...sourceTarget, targetName: sourceTarget?.targetName || target?.name },
-      changedBy: sanitizeString(params.sessionUser?.id || params.sessionUser?.user_id, 120)
-    });
-    return { ok: true, status: 200, target, targetId, masteryEvaluationId: eventId, materialized: Boolean(materialized.materializedTargets?.length) };
-  };
+  const ensurePeiMaintenanceTargetForPatient = createPeiMaintenanceTargetResolver(() => ({ sanitizeString, isUuid, readPeiMaintenanceEnsureSource, supabase, ABA_TARGET_RECOMMENDATION_SELECT, applyAbaTenantScope, hasMissingFinancialSchema, isMissingRelationError, persistPeiSkillAcquiredMasteryEvent, getPatientPeiTargets, resolvePeiMaintenanceSourceTarget, materializePeiTargetsForMaintenance, fetchTargetForMaintenance }));
 
   const logAbaPlanningEgress = (details: Record<string, any>) => {
     if (process.env.NODE_ENV !== 'production') {
@@ -72921,67 +72851,7 @@ async function startServer() {
 
   app.get('/api/aba/patients/:patientId/future-appointments', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.next_session.view'), checkPatientAccess, createFutureMaintenanceAppointmentsHandler(() => ({ sanitizeString, currentClinicId, isUuid, parseAbaRecordListLimit, fetchFutureAppointmentsForMaintenance, sanitizeIsoDateTime, countCalendarMaintenanceProbesByAppointment, getMaintenanceAppointmentResponseStatus, getMaintenanceAppointmentStatusLabel })));
 
-  app.post('/api/aba/patients/:patientId/maintenance-targets/ensure', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), checkPatientAccess, async (req: any, res) => {
-    try {
-      if (!enforcePayloadLimit(req, res, 64 * 1024, 'Payload de habilidade adquirida para manutenção')) return;
-      const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId || req.body?.patient_id || req.body?.patientId, 120);
-      const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
-      const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
-      if (!isUuid(patientId) || !(await canAccessPatientInCurrentClinic(patientId, req.session.user))) {
-        return res.status(403).json({ success: false, error: 'FORBIDDEN', message: 'Paciente fora do escopo da clínica.' });
-      }
-      const result = await ensurePeiMaintenanceTargetForPatient({
-        patientId,
-        clinicId,
-        organizationId,
-        sessionUser: req.session.user,
-        payload: req.body || {}
-      });
-      if (!result.ok) {
-        return res.status((result as any).status || 400).json({
-          success: false,
-          error: (result as any).status === 404 ? 'PEI_SKILL_NOT_FOUND' : 'TARGET_ENSURE_FAILED',
-          message: (result as any).error || 'Não foi possível preparar a habilidade para manutenção.'
-        });
-      }
-      const target = (result as any).target || {};
-      const targetId = sanitizeString((result as any).targetId || target?.id, 180);
-      if (process.env.NODE_ENV !== 'production') {
-        console.debug('[pei-maintenance-target]', { ensureTargetId: targetId || null, patientIdPresent: Boolean(patientId) });
-      }
-      const masteryCriteria = target?.mastery_criteria && typeof target.mastery_criteria === 'object' ? target.mastery_criteria : {};
-      const peiGoalId = sanitizeString(masteryCriteria?.peiGoalId || masteryCriteria?.pei_goal_id || req.body?.peiGoalId || req.body?.goalId || req.body?.goal_id, 180);
-      const skillId = sanitizeString(masteryCriteria?.skillId || masteryCriteria?.skill_id || req.body?.skillId || req.body?.skill_id, 180);
-      const localTargetRef = sanitizeString(masteryCriteria?.localTargetRef || masteryCriteria?.local_target_ref || req.body?.localTargetRef || peiGoalId, 180);
-      const responseTarget = cleanObject({
-        ...target,
-        id: targetId,
-        targetId,
-        target_id: targetId,
-        targetName: sanitizeString(target?.targetName || target?.name, 240) || null,
-        target_name: sanitizeString(target?.target_name || target?.name, 240) || null,
-        protocolName: sanitizeString(target?.protocolName || target?.protocol_title, 240) || null,
-        domainName: sanitizeString(target?.domainName || target?.domain_name, 240) || null,
-        peiGoalId: peiGoalId || null,
-        goalId: peiGoalId || null,
-        goal_id: peiGoalId || null,
-        skillId: skillId || null,
-        skill_id: skillId || null,
-        localTargetRef: localTargetRef || null
-      });
-      return res.json({
-        success: true,
-        message: 'Habilidade pronta para manutenção.',
-        targetId,
-        masteryEvaluationId: (result as any).masteryEvaluationId || null,
-        materialized: Boolean((result as any).materialized),
-        target: responseTarget,
-        data: responseTarget
-      });
-    } catch (error: any) {
-      return res.status(500).json({ success: false, error: 'UNEXPECTED_ERROR', message: error?.message || 'Não foi possível preparar a habilidade para manutenção.' });
-    }
-  });
+  app.post('/api/aba/patients/:patientId/maintenance-targets/ensure', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), checkPatientAccess, createPeiMaintenanceTargetEnsureHandler(() => ({ enforcePayloadLimit, sanitizeString, currentClinicId, isUuid, canAccessPatientInCurrentClinic, ensurePeiMaintenanceTargetForPatient, cleanObject })));
 
   app.post('/api/aba/targets/:targetId/maintenance-schedules', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.maintenance.manage'), async (req: any, res) => {
     try {
