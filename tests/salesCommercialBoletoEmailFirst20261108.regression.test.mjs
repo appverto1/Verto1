@@ -29,24 +29,28 @@ assert.doesNotMatch(processor, /paymentStatus === "no_payment_required"/);
 assert.match(processor, /if \(!paymentConfirmed\)/);
 assert.match(processor, /return \{ paymentConfirmed: false, activationPrepared: false \}/);
 
-// Card and boleto use the SAME email-first activation and the same frozen identity.
+// The frozen contracting identity is shared, but the payment rails activate differently.
 assert.match(webhook, /event\.type === "checkout\.session\.completed"/);
 assert.match(webhook, /event\.type === "checkout\.session\.async_payment_succeeded"/);
 assert.match(webhook, /sendActivationEmail:\s*true/);
 assert.match(processor, /paymentIdentityEmail = frozenContractEmail/);
 assert.match(processor, /const activationEmail = await prepareSalesActivationAccess\(/);
+assert.match(processor, /attemptEmail: settledMethod === 'boleto'/);
+assert.match(processor, /settledMethod = await resolveSalesSettledCheckoutMethod\(stripe, session\)/);
 assert.match(processor, /preserveProvisioningStatus:\s*true/);
 assert.match(processor, /activationEmailSent: Boolean\(activationEmail\?\.activationEmailSent\)/);
 assert.match(status, /Boolean\(bootstrap\.activation_email_sent_at\)/);
-assert.match(reconciliation, /result\.directorSessionReady && result\.activationEmailSent/);
+assert.match(reconciliation, /const immediateCardActivation = Boolean\(/);
+assert.match(reconciliation, /const boletoEmailReady = Boolean\(/);
+assert.match(reconciliation, /cardActivationPath: immediateCardActivation \? result\.cardActivationPath : null/);
 
 // Prevent a public Checkout return URL from issuing a Director login token.
 assert.match(sessionRoute, /res\.status\(410\)/);
 assert.match(sessionRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
 assert.doesNotMatch(sessionRoute, /generateLink|hashed_token|verifyOtp/);
 assert.doesNotMatch(publicOffer, /openDirectorSession|establishPublicSalesDirectorSession/);
-assert.match(publicOffer, /Ative seu acesso pelo e-mail/);
-assert.match(publicOffer, /escolha Google ou e-mail e senha/);
+assert.match(publicOffer, /window\.location\.replace\(path\)/);
+assert.match(publicOffer, /escolha agora Google ou senha/);
 assert.match(activationUi, /beginSalesActivationGoogleOAuth\(/);
 assert.match(activationUi, /persistPublicSalesActivationPassword\(/);
 
