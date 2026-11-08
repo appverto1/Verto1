@@ -499,7 +499,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                         <div>
                           <p className="font-medium">Proposta aceita</p>
                           <p className="mt-1 font-normal leading-5 text-slate-600">
-                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o cadastro do cartão.
+                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o pagamento seguro por cartão ou boleto.
                           </p>
                         </div>
                       </div>
@@ -539,7 +539,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                       {continuing
                         ? 'Preparando Checkout...'
                         : offer.modularCheckoutEnabled && offer.stripeReady
-                          ? 'Continuar para cadastro do cartão'
+                          ? 'Continuar para pagamento (cartão ou boleto)'
                           : 'Configuração Stripe pendente'}
                     </button>
                   ) : null}
