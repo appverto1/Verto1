@@ -64,8 +64,10 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           ? "review_required"
           : result.sessionClaimed
             ? "account_activated"
-            : result.directorSessionReady && result.activationEmailSent
-              ? "director_ready"
+            : result.directorSessionReady && result.settledPaymentMethod === 'card'
+              ? "card_ready"
+              : result.directorSessionReady && result.activationEmailSent && result.settledPaymentMethod === 'boleto'
+                ? "director_ready"
               : result.paymentConfirmed
                 ? "provisioning"
                 : "payment_pending";
@@ -74,15 +76,18 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           state,
           paymentConfirmed: result.paymentConfirmed === true,
           accountProvisioned: result.accountActivated === true,
-          directorSessionReady: result.directorSessionReady === true && result.activationEmailSent === true,
+          directorSessionReady: result.directorSessionReady === true && result.settledPaymentMethod === 'boleto' && result.activationEmailSent === true,
+          cardActivationReady: result.directorSessionReady === true && result.settledPaymentMethod === 'card',
           activationEmailSent: result.activationEmailSent === true,
           sessionClaimed: result.sessionClaimed === true,
           accountActivated: result.sessionClaimed === true,
           reviewRequired: result.reviewRequired === true,
-          message: result.directorSessionReady && result.activationEmailSent
+          message: result.directorSessionReady && result.settledPaymentMethod === 'card'
+            ? "Cartão confirmado. Configure seu login agora neste navegador."
+            : result.directorSessionReady && result.activationEmailSent
             ? "Pagamento confirmado. Confira o e-mail contratual para ativar seu acesso de Diretor."
             : result.paymentConfirmed
-              ? "Pagamento confirmado. A Verto está preparando o e-mail seguro de ativação."
+              ? "Pagamento confirmado. Concluindo a preparação do acesso conforme a forma de pagamento."
               : "Aguardando confirmação final da Stripe.",
         });
       } catch (error: any) {
