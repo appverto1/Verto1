@@ -215,7 +215,7 @@ assert.match(planReadRoute, /filterTherapeuticPlanProgramsForActor/);
 assert.match(planReadRoute, /\.in\('user_id', linkedProfessionalIds\)/);
 assert.match(
   planReadRoute,
-  /queryCount: 7 \+ \(linkedProfessionalIds\.length \? 2 : 0\)/,
+  /queryCount: 8 \+ \(linkedProfessionalIds\.length \? 3 : 0\) \+ \(ptsWorkspaceSchemaMissing \? 0 : 1\)/,
 );
 assert.match(planReadRoute, /visibleObjectiveIds/);
 assert.match(planReadRoute, /objectives: visibleObjectiveRows/);
