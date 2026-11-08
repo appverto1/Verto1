@@ -4,7 +4,7 @@ import fs from 'node:fs';
 const editor = fs.readFileSync(new URL('../src/components/PtsWorkspaceEditor.tsx', import.meta.url), 'utf8');
 const panel = fs.readFileSync(new URL('../src/components/TherapeuticPlanPanel.tsx', import.meta.url), 'utf8');
 const workspace = fs.readFileSync(new URL('../src/utils/ptsClinicalWorkspace.ts', import.meta.url), 'utf8');
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const ptsHandlers = fs.readFileSync(new URL('../services/ptsVersionWriteHandlers.ts', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260826190000_pts_draft_persistence_activation_v3.sql', import.meta.url), 'utf8');
 
 assert.match(editor, /expectedDraftRevision: confirmedRevisionRef\.current/,
@@ -21,8 +21,8 @@ for (const pattern of [
   /risks:[\s\S]*?\.filter\(\(item\) => item\.id\);/,
 ]) assert.match(workspace, pattern);
 
-assert.match(server, /activate_patient_pts_draft_v3/);
-assert.match(server, /validationFailed === true[\s\S]*draftPreserved: true[\s\S]*data: \(data as any\)\.version/);
+assert.match(ptsHandlers, /activate_patient_pts_draft_v3/);
+assert.match(ptsHandlers, /validationFailed === true[\s\S]*draftPreserved: true[\s\S]*data: \(data as any\)\.version/);
 assert.match(panel, /draftPreserved === true && response\?\.data\?\.id[\s\S]*setPtsDraftOverride/);
 
 assert.match(migration, /create or replace function public\.patient_pts_snapshot_ready_for_activation_v3/);

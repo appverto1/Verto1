@@ -279,6 +279,7 @@ const criticalTests = [
   'tests/therapeuticPlanCaseProfessionalCapability.regression.test.ts',
   'tests/abaM05PlanCreateExtraction.regression.test.mjs',
   'tests/abaM06PlanEditExtraction.regression.test.mjs',
+  'tests/abaM07PtsVersionWriteExtraction.regression.test.mjs',
   'tests/abaM05TherapeuticPlanCreateHandler.test.ts',
   'tests/therapeuticPlanClinicalMembershipHotfix.test.mjs',
   'tests/clinicalSpecialtyTherapeuticPlans.test.ts',
