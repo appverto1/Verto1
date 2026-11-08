@@ -285,8 +285,14 @@ assert.doesNotMatch(
   'a navegação principal já separa Programas, Manutenção, Generalização e Histórico',
 );
 assert.doesNotMatch(planPanel, /Plano interdisciplinar/);
-assert.match(planPanel, /Especialidade obtida do cadastro profissional/);
-assert.match(planPanel, /Objetivos comuns do PTS/);
+assert.match(planPanel, /specialty: current\.mode === 'specialty' \? String\(responsible\?\.specialty \|\| ''\) : ''/,
+  'a especialidade exibida no formulário continua derivada do profissional selecionado');
+assert.match(planPanel, /scopeDraft\.specialty \|\| 'Selecione um responsável com especialidade cadastrada'/,
+  'especialidade derivada é exibida somente para leitura');
+assert.match(planPanel, /hydratePtsClinicalPayloadFromPlan\(primaryPtsScope\)/,
+  'o painel continua hidratando o PTS da equipe');
+assert.match(planPanel, /onSave=\{\(payload\) => savePtsScope\(String\(selectedPtsScope\.id\), payload\)\}/,
+  'a edição dos objetivos do PTS permanece vinculada ao Salvar autorizado');
 assert.match(planPanel, /Esta versão não possui objetivos registrados/);
 assert.match(planPanel, /Programas e alvos preservados/);
 assert.match(
