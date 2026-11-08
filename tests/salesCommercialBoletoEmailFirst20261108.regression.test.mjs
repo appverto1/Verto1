@@ -29,7 +29,7 @@ assert.doesNotMatch(processor, /paymentStatus === "no_payment_required"/);
 assert.match(processor, /if \(!paymentConfirmed\)/);
 assert.match(processor, /return \{ paymentConfirmed: false, activationPrepared: false \}/);
 
-// Card and boleto use the SAME email-first activation and the same frozen identity.
+// The frozen identity is common, but modular card is immediate and boleto is email-only.
 assert.match(webhook, /event\.type === "checkout\.session\.completed"/);
 assert.match(webhook, /event\.type === "checkout\.session\.async_payment_succeeded"/);
 assert.match(webhook, /sendActivationEmail:\s*true/);
@@ -46,7 +46,9 @@ assert.match(sessionRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
 assert.doesNotMatch(sessionRoute, /generateLink|hashed_token|verifyOtp/);
 assert.doesNotMatch(publicOffer, /openDirectorSession|establishPublicSalesDirectorSession/);
 assert.match(publicOffer, /Ative seu acesso pelo e-mail/);
-assert.match(publicOffer, /escolha Google ou e-mail e senha/);
+assert.match(publicOffer, /escolha de senha ou Google/);
+assert.match(publicOffer, /requestPaidSalesCardActivation/);
+assert.match(processor, /attemptEmail: settledPaymentMethod === 'boleto' \|\| !isModularSalesFlow/);
 assert.match(activationUi, /beginSalesActivationGoogleOAuth\(/);
 assert.match(activationUi, /persistPublicSalesActivationPassword\(/);
 
