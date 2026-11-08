@@ -22,8 +22,8 @@ assert.ok(server.includes('const ensurePeiMaintenanceTargetForPatient = createPe
 const resolverSource = readFileSync('services/peiMaintenanceTargetResolver.ts', 'utf8');
 assert.ok(server.includes("import { createPeiMaintenanceTargetResolver } from './services/peiMaintenanceTargetResolver';"));
 const helperHead = "  const ensurePeiMaintenanceTargetForPatient = async (params: {\n    patientId: string;\n    clinicId: string;\n    organizationId: string;\n    sessionUser: any;\n    payload: any;\n  }) => {";
-const helperStart = original.indexOf(helperHead), helperEnd = original.indexOf('\\n  };', helperStart + helperHead.length);
-const extractedStart = resolverSource.indexOf('\\n    const patientId ='), extractedEnd = resolverSource.lastIndexOf('\\n  };');
+const helperStart = original.indexOf(helperHead), helperEnd = original.indexOf('\n  };', helperStart + helperHead.length);
+const extractedStart = resolverSource.indexOf('\n    const patientId ='), extractedEnd = resolverSource.lastIndexOf('\n  };');
 assert.ok(helperStart >= 0 && helperEnd > helperStart && extractedStart > 0 && extractedEnd > extractedStart);
 assert.equal(resolverSource.slice(extractedStart, extractedEnd), original.slice(helperStart + helperHead.length, helperEnd), 'PEI target resolution helper must remain byte exact');
 assert.ok(!resolverSource.includes("from '../server'"));
