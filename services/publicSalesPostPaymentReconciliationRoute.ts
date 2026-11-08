@@ -64,9 +64,9 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           ? "review_required"
           : result.sessionClaimed
             ? "account_activated"
-            : result.directorSessionReady && result.settledPaymentMethod === 'card'
+            : result.directorSessionReady && result.cardImmediateEligible === true
               ? "card_ready"
-              : result.directorSessionReady && result.activationEmailSent && result.settledPaymentMethod === 'boleto'
+              : result.directorSessionReady && result.activationEmailSent && result.cardImmediateEligible !== true
                 ? "director_ready"
               : result.paymentConfirmed
                 ? "provisioning"
@@ -76,13 +76,13 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           state,
           paymentConfirmed: result.paymentConfirmed === true,
           accountProvisioned: result.accountActivated === true,
-          directorSessionReady: result.directorSessionReady === true && result.settledPaymentMethod === 'boleto' && result.activationEmailSent === true,
-          cardActivationReady: result.directorSessionReady === true && result.settledPaymentMethod === 'card',
+          directorSessionReady: result.directorSessionReady === true && result.cardImmediateEligible !== true && result.activationEmailSent === true,
+          cardActivationReady: result.directorSessionReady === true && result.cardImmediateEligible === true,
           activationEmailSent: result.activationEmailSent === true,
           sessionClaimed: result.sessionClaimed === true,
           accountActivated: result.sessionClaimed === true,
           reviewRequired: result.reviewRequired === true,
-          message: result.directorSessionReady && result.settledPaymentMethod === 'card'
+          message: result.directorSessionReady && result.cardImmediateEligible === true
             ? "Cartão confirmado. Configure seu login agora neste navegador."
             : result.directorSessionReady && result.activationEmailSent
             ? "Pagamento confirmado. Confira o e-mail contratual para ativar seu acesso de Diretor."
