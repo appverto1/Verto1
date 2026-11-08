@@ -114,7 +114,7 @@ for (const index of [1, 2, 3, 4, 5]) {
   assert.equal(res.statusCode, 403, 'patient authorization: ' + index);
   assert.equal(denied.trace.decisions.length + denied.trace.rpc.length, 0, 'no write when patient unauthorized');
   const missing = makeHarness({ recommendationRow: null });
-  assert.equal((await missing.invoke(index)).statusCode, 404, 'missing recommendation: ' + index);
+  assert.equal((await missing.invoke(index, index === 3 ? { targetId: ids.target } : {})).statusCode, 404, 'missing recommendation: ' + index);
   assert.equal(missing.trace.decisions.length + missing.trace.rpc.length, 0);
   const forged = makeHarness();
   const ret = await forged.invoke(index, index === 2 ? { reason: 'No' } : index === 3 ? { targetId: ids.target } : {});
