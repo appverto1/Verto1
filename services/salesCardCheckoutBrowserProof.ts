@@ -16,6 +16,16 @@ export async function issueSalesCardCheckoutBrowserProof(
   if (!/^[a-f0-9-]{36}$/i.test(offerId) ||
       !/^cs_(test|live)_[A-Za-z0-9]+$/.test(checkoutSessionId)) return false;
 
+  // Never mint a new browser proof after Stripe settlement or for a
+  // different Checkout. Public links remain readable, not reusable as Auth.
+  const { data: offer, error: offerError } = await supabase.from('sales_offers')
+    .select('id,status,stripe_checkout_session_id,payment_confirmed_at')
+    .eq('id', offerId).maybeSingle();
+  if (offerError) throw offerError;
+  if (!offer || offer.payment_confirmed_at ||
+      ['paid','cancelled','expired'].includes(String(offer.status)) ||
+      String(offer.stripe_checkout_session_id) !== checkoutSessionId) return false;
+
   const secret = crypto.randomBytes(32).toString('base64url');
   const { data, error } = await supabase
     .from('sales_card_checkout_handoffs')
