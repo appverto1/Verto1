@@ -18,7 +18,15 @@ assert.equal(server.split(header).length, 1, 'inline handler removed');
 assert.ok(server.includes("import { createPeiMaintenanceTargetEnsureHandler } from './services/peiMaintenanceTargetEnsureHandler';"));
 assert.ok(server.indexOf("'/api/aba/patients/:patientId/future-appointments'") < server.indexOf(registration));
 assert.ok(server.indexOf(registration) < server.indexOf("'/api/aba/targets/:targetId/maintenance-schedules'"));
-assert.ok(server.includes('const ensurePeiMaintenanceTargetForPatient = async'), 'shared helper untouched');
+assert.ok(server.includes('const ensurePeiMaintenanceTargetForPatient = createPeiMaintenanceTargetResolver(() => ({'), 'same helper binding remains at the original position');
+const resolverSource = readFileSync('services/peiMaintenanceTargetResolver.ts', 'utf8');
+assert.ok(server.includes("import { createPeiMaintenanceTargetResolver } from './services/peiMaintenanceTargetResolver';"));
+const helperHead = "  const ensurePeiMaintenanceTargetForPatient = async (params: {\n    patientId: string;\n    clinicId: string;\n    organizationId: string;\n    sessionUser: any;\n    payload: any;\n  }) => {";
+const helperStart = original.indexOf(helperHead), helperEnd = original.indexOf('\\n  };', helperStart + helperHead.length);
+const extractedStart = resolverSource.indexOf('\\n    const patientId ='), extractedEnd = resolverSource.lastIndexOf('\\n  };');
+assert.ok(helperStart >= 0 && helperEnd > helperStart && extractedStart > 0 && extractedEnd > extractedStart);
+assert.equal(resolverSource.slice(extractedStart, extractedEnd), original.slice(helperStart + helperHead.length, helperEnd), 'PEI target resolution helper must remain byte exact');
+assert.ok(!resolverSource.includes("from '../server'"));
 assert.ok(!source.includes("from '../server'"), 'no circular dependency');
 
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -98,4 +106,79 @@ for(const [status,code] of [[404,'PEI_SKILL_NOT_FOUND'],[409,'TARGET_ENSURE_FAIL
  const h=harness({throwWrite:true}),res=response();await h.handler(request(),res);
  assert.equal(res.statusCode,500);assert.equal(res.payload.success,false);
 }
+
+const resolverCompiled = ts.transpileModule(resolverSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+const resolverScope = { exports: {} };
+vm.runInNewContext(resolverCompiled, resolverScope);
+const resolverFactory = resolverScope.exports.createPeiMaintenanceTargetResolver;
+assert.equal(typeof resolverFactory, 'function');
+function resolverHarness({ existingTarget = null, requestedTargetId = ids.target, sourceEligible = true, queryError = null } = {}) {
+ const trace={queries:[], events:[], materializations:[], peiReads:[]};
+ const deps={
+   sanitizeString: (v,max) => String(v??'').trim().slice(0,max),
+   isUuid,
+   readPeiMaintenanceEnsureSource: () => ({targetId:requestedTargetId,targetName:'Meta sintética',eligibleForMaintenance:sourceEligible}),
+   supabase: { from(table) {
+     const conditions=[];
+     const chain={
+       select() {return this;}, eq(key,value){ conditions.push([key,value]);return this;},limit(){return this;},
+       then(resolve,reject) {
+         trace.queries.push({table,conditions});
+         const filtered=existingTarget && conditions.every(([key,value])=>String(existingTarget[key])===String(value)) ? [existingTarget] : [];
+         return Promise.resolve({error:queryError,data:filtered}).then(resolve,reject);
+       }
+     };
+     return chain;
+   }},
+   ABA_TARGET_RECOMMENDATION_SELECT:'id,organization_id,clinic_id,patient_id',
+   applyAbaTenantScope: (query,user,clinicId) => query.eq('clinic_id',clinicId),
+   hasMissingFinancialSchema: err => err?.code==='MISSING_SCHEMA',
+   isMissingRelationError: err => err?.code==='MISSING_RELATION',
+   async persistPeiSkillAcquiredMasteryEvent(value) { trace.events.push(value);return ids.other; },
+   async getPatientPeiTargets(patientId,clinicId) { trace.peiReads.push({patientId,clinicId});return []; },
+   resolvePeiMaintenanceSourceTarget: () => null,
+   async materializePeiTargetsForMaintenance(value) {
+     trace.materializations.push(value);
+     return {peiTargets:[{targetId:ids.target}],targets:[{id:ids.target,name:'Meta sintética'}],materializedTargets:[{id:ids.target}]};
+   },
+   async fetchTargetForMaintenance() { throw Error('unexpected extra read'); }
+ };
+ return {resolve:resolverFactory(()=>deps),trace};
+}
+const params={patientId:ids.patient,clinicId:ids.clinic,organizationId:ids.clinic,sessionUser:{id:ids.actor,clinicId:ids.clinic},payload:{}};
+{
+ const row={id:ids.target,patient_id:ids.patient,clinic_id:ids.clinic,organization_id:ids.clinic,name:'Meta sintética'};
+ const h=resolverHarness({existingTarget:row}),result=await h.resolve(params);
+ assert.equal(result.ok,true);
+ assert.equal(result.targetId,ids.target);
+ assert.equal(result.materialized,false,'existing PEI target is reused');
+ assert.equal(h.trace.materializations.length,0,'no duplicate target materialization');
+ assert.equal(h.trace.queries.length,1);
+ assert.deepEqual(h.trace.queries[0].conditions,[['organization_id',ids.clinic],['patient_id',ids.patient],['clinic_id',ids.clinic]]);
+ assert.equal(h.trace.events.length,1);
+}
+{
+ const h=resolverHarness(),result=await h.resolve(params);
+ assert.equal(result.ok,true);
+ assert.equal(result.targetId,ids.target);
+ assert.equal(result.materialized,true);
+ assert.equal(h.trace.materializations.length,1);
+ assert.equal(h.trace.events.length,1);
+}
+{
+ const h=resolverHarness({requestedTargetId:'invalid',sourceEligible:false}),result=await h.resolve(params);
+ assert.equal(result.status,404);
+ assert.equal(h.trace.materializations.length,0);
+}
+{
+ const h=resolverHarness(),result=await h.resolve({...params,patientId:'invalid'});
+ assert.equal(result.status,400);
+ assert.equal(h.trace.queries.length,0);
+}
+{
+ const h=resolverHarness({queryError:{code:'READ_DENIED'}});
+ await assert.rejects(()=>h.resolve(params),/READ_DENIED|object Object/);
+ assert.equal(h.trace.materializations.length,0);
+}
+
 console.log('ABA-M11: literal parity, middleware, negative clinic/patient/payload and response contracts PASS');
