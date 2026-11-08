@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import crypto from 'crypto';
+import { resolveSalesSettledCheckoutMethod } from './salesSettledCheckoutMethod';
 // Item 09: Stripe paid; original audited statements retained unchanged.
 export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string, any>) => {
   const { buildSalesModuleSetHash, isUuid, persistActivityLog, preparePaidDirectorSessionBootstrap, prepareSalesActivationAccess, provisionPaidSalesDirectorAccount, resolveStripeEnvironment, sanitizeEmail, sanitizeString, supabase, syncSalesSubscriptionDiscount, validateStripeSecretForEnvironment } = deps;
@@ -44,7 +45,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
     ] = await Promise.all([
       supabase
         .from("sales_offers")
-        .select("id,lead_id,status,revoked_at,expires_at,offer_type,contract_email")
+        .select("id,lead_id,status,revoked_at,expires_at,offer_type,contract_email,stripe_checkout_session_id,settled_payment_method,payment_confirmed_at")
         .eq("id", offerId)
         .eq("lead_id", leadId)
         .maybeSingle(),
@@ -160,6 +161,20 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       return { paymentConfirmed: false, activationPrepared: false };
     }
 
+    // The Stripe charge, not the browser or the offered methods list, is
+    // authoritative about whether this paid Checkout used card or boleto.
+    const persistedMethod = sanitizeString((offer as any).settled_payment_method, 20);
+    const settledPaymentMethod =
+      offer.status === 'paid' &&
+      Boolean((offer as any).payment_confirmed_at) &&
+      sanitizeString((offer as any).stripe_checkout_session_id, 200) === session.id &&
+      ['card', 'boleto'].includes(persistedMethod)
+        ? persistedMethod
+        : await resolveSalesSettledCheckoutMethod(stripe, session);
+    if (persistedMethod && persistedMethod !== settledPaymentMethod) {
+      throw new Error('SALES_SETTLED_PAYMENT_METHOD_CONFLICT');
+    }
+
     const { data: paymentConfirmation, error: paymentConfirmationError } =
       await supabase.rpc("confirm_sales_assisted_checkout_payment", {
         p_offer_id: offerId,
@@ -172,6 +187,18 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
         p_idempotency_key: `payment-completed:${session.id}`,
       });
     if (paymentConfirmationError) throw paymentConfirmationError;
+    const methodSave = await supabase.from('sales_offers')
+      .update({ settled_payment_method: settledPaymentMethod })
+      .eq('id', offerId).eq('lead_id', leadId).eq('status', 'paid')
+      .is('settled_payment_method', null)
+      .select('id').maybeSingle();
+    if (methodSave.error) throw methodSave.error;
+    if (!methodSave.data && !persistedMethod) {
+      const fresh = await supabase.from('sales_offers')
+        .select('settled_payment_method').eq('id', offerId).maybeSingle();
+      if (fresh.error || fresh.data?.settled_payment_method !== settledPaymentMethod)
+        throw fresh.error || new Error('SALES_SETTLED_PAYMENT_METHOD_CONFLICT');
+    }
 
     if (!subscription && subscriptionId) {
       try {
@@ -293,8 +320,8 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       email: directorEmail,
     });
 
-    // Both card and boleto use the same verified email-first activation.
-    // The Checkout return URL never authorizes a Director session.
+    // Card uses a unique, first-browser handoff; boleto sends an activation
+    // email after settlement. The public Checkout URL is not an Auth token.
     const activationEmail = await prepareSalesActivationAccess({
           offerId,
           leadId,
@@ -302,7 +329,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
           email: directorEmail,
           clinicLabel:
             sanitizeString(lead.clinic_name || lead.name, 180) || null,
-          attemptEmail: true,
+          attemptEmail: settledPaymentMethod === 'boleto',
           // For delayed payment methods (for example boleto), the Director and
           // contracted modules are already provisioned before this message is sent.
           // The e-mail is only a durable first-access path, so it must never move
@@ -329,6 +356,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       sessionClaimed: bootstrap.sessionClaimed,
       directorUserId: directorProvisioning.userId,
       directorClinicId: directorProvisioning.clinicId,
+      settledPaymentMethod,
       activationPrepared: Boolean(activationEmail?.activationReady),
       activationEmailSent: Boolean(activationEmail?.activationEmailSent),
       activationPath: activationEmail?.activationPath || null,
