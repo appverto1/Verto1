@@ -3,6 +3,7 @@
 export function resolveSalesPostPaymentState(data) {
   if (data?.state === 'review_required' || data?.reviewRequired === true) return 'review_required';
   if (data?.state === 'account_activated' || data?.sessionClaimed === true) return 'account_activated';
+  if (data?.state === 'card_ready' || data?.cardActivationReady === true) return 'card_ready';
   if (data?.state === 'director_ready' || data?.directorSessionReady === true) return 'director_ready';
   if (data?.state === 'provisioning' || data?.accountProvisioned === true) return 'provisioning';
   if (data?.state === 'payment_confirmed' || data?.paymentConfirmed === true) return 'payment_confirmed';
