@@ -51,10 +51,10 @@ assert.match(activationUi, /beginSalesActivationGoogleOAuth\(/);
 assert.match(activationUi, /persistPublicSalesActivationPassword\(/);
 
 // Webhook replays must NOT reset the save-authoritative onboarding or clinic name.
-assert.match(director, /const onboardingCompleted = existingProfile\.data\?\.first_login_completed === true/);
-assert.match(director, /first_login_completed: onboardingCompleted/);
-assert.match(director, /clinicName && !onboardingCompleted/);
-assert.match(director, /name: onboardingCompleted \? \(profile\.name \|\| ownerName\)/);
+assert.match(director, /if \(clinicName && !existingProfile\.data\)/);
+assert.match(director, /The clinical\/cadastral Save operation is authoritative/);
+assert.doesNotMatch(director, /first_login_completed: onboardingCompleted/);
+assert.doesNotMatch(director, /name: onboardingCompleted \? \(profile\.name \|\| ownerName\)/);
 
 const cases = [
   ['paid', 149400, true],
