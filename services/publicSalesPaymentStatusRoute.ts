@@ -115,9 +115,10 @@ export function registerPublicSalesPaymentStatusRoute(
           && (!bootstrap.expires_at || new Date(bootstrap.expires_at).getTime() > Date.now()),
         );
         const settledMethod = sanitizeString(offer.settled_payment_method, 20);
-        const cardActivationReady = activationUnclaimed && settledMethod === 'card';
+        const cardActivationReady = activationUnclaimed && settledMethod === 'card'
+          && offer.offer_type === 'modular';
         const directorSessionReady = activationUnclaimed
-          && settledMethod === 'boleto'
+          && (settledMethod === 'boleto' || offer.offer_type !== 'modular')
           && Boolean(bootstrap.activation_email_sent_at);
         const sessionClaimed = Boolean(accountProvisioned && bootstrap?.used === true);
         const state = reviewRequired
