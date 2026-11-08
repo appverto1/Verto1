@@ -61,6 +61,15 @@ test('public link + session ID alone cannot mint first access; original browser 
   let row:any=null;
   const db = {
     from(table:string) {
+      if (table === 'sales_offers') return {
+        select() { return {
+          eq() { return this; },
+          async maybeSingle() { return {data:{
+            id:offerId,status:'checkout_created',payment_confirmed_at:null,
+            stripe_checkout_session_id:checkoutSessionId,
+          },error:null}; },
+        }; },
+      };
       assert.equal(table,'sales_card_checkout_handoffs');
       return {
         insert(value:any) {
