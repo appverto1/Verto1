@@ -27,3 +27,23 @@ export const loadPublicSalesPaymentStatusResponse = async (
   const data = await response.json().catch(() => ({}));
   return { response, data };
 };
+
+// A card payment does not require email. Return only the first-access chooser
+// URL after the server verifies Stripe, the frozen clinic and the HttpOnly
+// proof from the browser that initiated Checkout.
+export const requestPaidSalesCardActivation = async (
+  token: string, checkoutSessionId: string, request: typeof fetch = fetch
+) => {
+  const response = await request(
+    `/api/public/sales-offers/${encodeURIComponent(token)}/card-activation`,
+    {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: checkoutSessionId }),
+    },
+  );
+  const data = await response.json().catch(() => ({}));
+  return { response, data };
+};
