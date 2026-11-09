@@ -33,9 +33,25 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     const patientId = sanitizeString(req.params.patientId, 120);
     const clinicId = sanitizeString(currentClinicId(user), 120);
     if (![actorId, patientId, clinicId].every(isUuid)) return res.status(403).json({ success: false, error: 'SHARED_CHART_SCOPE_DENIED' });
-    const check = await supabase.rpc('patient_file_actor_has_patient_access_v1', { p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId });
-    if (check.error) return res.status(503).json({ success: false, error: 'SHARED_CHART_ACCESS_UNAVAILABLE' });
-    if (check.data !== true) return res.status(403).json({ success: false, error: 'SHARED_CHART_SCOPE_DENIED' });
+    // The capability middleware already verified the active clinic membership.
+    // Chart management is governed by the case-specific DB authority, not by
+    // the separate patient-file access policy.
+    const authority = await supabase.rpc('patient_shared_chart_case_authority_v1', {
+      p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
+    });
+    if (authority.error) return res.status(503).json({ success: false, error: 'SHARED_CHART_ACCESS_UNAVAILABLE' });
+    const canPublish = authority.data?.canPublish === true;
+    const canDelegate = authority.data?.canDelegate === true;
+    if (!canPublish && !canDelegate) {
+      // Preserve read-only governance visibility for an assigned professional
+      // who can view the patient but has not been delegated chart publication.
+      const check = await supabase.rpc('patient_file_actor_has_patient_access_v1', {
+        p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
+      });
+      if (check.error) return res.status(503).json({ success: false, error: 'SHARED_CHART_ACCESS_UNAVAILABLE' });
+      if (check.data !== true) return res.status(403).json({ success: false, error: 'SHARED_CHART_SCOPE_DENIED' });
+    }
+    req.sharedChartCaseAuthority = { canPublish, canDelegate };
     req.resolvedPatientId = patientId;
     req.resolvedPatientClinicId = clinicId;
     return next();
@@ -694,20 +710,14 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         if (!isUuid(patientId) || !isUuid(clinicId)) {
           return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
         }
-        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-        const [row, authority] = await Promise.all([
-          readSharedChartSelection(clinicId, patientId),
-          supabase.rpc('patient_shared_chart_case_authority_v1', {
-            p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
-          }),
-        ]);
-        if (authority.error) throw authority.error;
+        const row = await readSharedChartSelection(clinicId, patientId);
+        const authority = req.sharedChartCaseAuthority;
         const descriptor = normalizeSharedChartDescriptor(row?.chart_reference);
         return res.json({
           success: true,
           governance: {
-            canPublish: authority.data?.canPublish === true,
-            canDelegate: authority.data?.canDelegate === true,
+            canPublish: authority?.canPublish === true,
+            canDelegate: authority?.canDelegate === true,
           },
           data: row && descriptor ? {
             chartKey: sanitizeString(row.chart_key, 256),
@@ -737,6 +747,9 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
         if (![patientId, clinicId, actorId].every(isUuid)) {
           return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
+        }
+        if (req.sharedChartCaseAuthority?.canPublish !== true) {
+          return res.status(403).json({ success: false, error: 'SHARED_CHART_CASE_PUBLISH_DENIED' });
         }
         const descriptor = normalizeSharedChartDescriptor(req.body?.descriptor);
         if (!descriptor) return res.status(400).json({ success: false, error: 'SHARED_CHART_DESCRIPTOR_INVALID' });
@@ -800,6 +813,9 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         if (![patientId, clinicId, actorId].every(isUuid)) {
           return res.status(400).json({ success: false, error: 'SHARED_CHART_SCOPE_INVALID' });
         }
+        if (req.sharedChartCaseAuthority?.canPublish !== true) {
+          return res.status(403).json({ success: false, error: 'SHARED_CHART_CASE_PUBLISH_DENIED' });
+        }
         const { data, error } = await supabase.rpc('clear_patient_shared_chart_selection_v2', {
           p_actor_id: actorId,
           p_clinic_id: clinicId,
@@ -824,12 +840,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
       try {
         const clinicId = sanitizeString(req.resolvedPatientClinicId, 120);
         const patientId = sanitizeString(req.resolvedPatientId, 120);
-        const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
-        const authority = await supabase.rpc('patient_shared_chart_case_authority_v1', {
-          p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,
-        });
-        if (authority.error) throw authority.error;
-        if (authority.data?.canDelegate !== true) {
+        if (req.sharedChartCaseAuthority?.canDelegate !== true) {
           return res.status(403).json({ success: false, error: 'SHARED_CHART_CASE_LEAD_REQUIRED' });
         }
         const links = await supabase.from('patient_professional_links')
@@ -880,6 +891,9 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         const allow = req.body?.allow;
         if (!isUuid(professionalId) || typeof allow !== 'boolean') {
           return res.status(400).json({ success: false, error: 'SHARED_CHART_DELEGATION_INVALID' });
+        }
+        if (req.sharedChartCaseAuthority?.canDelegate !== true) {
+          return res.status(403).json({ success: false, error: 'SHARED_CHART_CASE_LEAD_REQUIRED' });
         }
         const result = await supabase.rpc('set_patient_shared_chart_case_delegation_v2', {
           p_actor_id: actorId, p_clinic_id: clinicId, p_patient_id: patientId,

@@ -25,7 +25,10 @@ const supabase = {
         && params.p_patient_id === patientId, error: null };
     }
     if (name === 'patient_shared_chart_case_authority_v1') {
-      return { data: { canDelegate: true, canPublish: true }, error: null };
+      const inScope = params.p_actor_id === actorId && params.p_clinic_id === clinicId
+        && params.p_patient_id === patientId;
+      const isLead = inScope && currentActorRole === 'director';
+      return { data: { canDelegate: isLead, canPublish: isLead }, error: null };
     }
     if (name === 'set_patient_shared_chart_case_delegation_v2') {
       if (currentActorRole !== 'director' || params.p_actor_id !== actorId || params.p_clinic_id !== clinicId
