@@ -33,6 +33,7 @@ import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksRead
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
 import { createClinicalOutcomesDashboardHandler } from './services/clinicalOutcomesDashboardHandler';
 import { createTherapeuticPlanCreateHandler } from './services/therapeuticPlanCreateHandler';
+import { createPeiAssessmentPlanHandlers } from './services/peiAssessmentPlanRoutes';
 import { createTherapeuticPlanEditHandler } from './services/therapeuticPlanEditHandler';
 import { createPtsVersionWriteHandlers } from './services/ptsVersionWriteHandlers';
 import { createTherapeuticProgramWriteHandlers } from './services/therapeuticProgramWriteHandlers';
@@ -70168,6 +70169,21 @@ async function startServer() {
         });
       }
     };
+
+  // Independent PEI evaluation plans. PTS routes and patient.pei legacy entries
+  // are intentionally unchanged. Existing capability/patient middlewares are
+  // followed by case/specialty checks in the module and atomic DB RPC.
+  const peiAssessmentPlanHandlers = createPeiAssessmentPlanHandlers(() => ({
+    supabase, currentClinicId, sanitizeString, isUuid, enforcePayloadLimit, sendRouteDbError,
+  }));
+  app.get('/api/pei/patients/:patientId/assessment-plans',
+    checkAuth, requireClinicCapability('treatment_plan.view'), checkPatientAccess, peiAssessmentPlanHandlers.list);
+  app.get('/api/pei/patients/:patientId/assessment-plans/:planId',
+    checkAuth, requireClinicCapability('treatment_plan.view'), checkPatientAccess, peiAssessmentPlanHandlers.detail);
+  app.post('/api/pei/patients/:patientId/assessment-plans',
+    checkAuth, requireScopedTherapeuticPlanCapability('create'), checkPatientAccess, peiAssessmentPlanHandlers.create);
+  app.patch('/api/pei/patients/:patientId/assessment-plans/:planId',
+    checkAuth, requireScopedTherapeuticPlanCapability('edit'), checkPatientAccess, peiAssessmentPlanHandlers.write);
 
   app.post('/api/aba/patients/:patientId/therapeutic-plans', checkAuth, requireScopedTherapeuticPlanCapability('create'), checkPatientAccess, createTherapeuticPlanCreateHandler(() => ({
       enforcePayloadLimit,
