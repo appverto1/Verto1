@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readModularServerSource();
 const app = fs.readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const patientDashboard = fs.readFileSync(new URL('../src/components/PatientDashboard.tsx', import.meta.url), 'utf8');
 const patientDetail = fs.readFileSync(new URL('../src/components/PatientDetailView.tsx', import.meta.url), 'utf8');

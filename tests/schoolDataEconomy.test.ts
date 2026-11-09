@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -7,7 +8,7 @@ const enrollmentDialog = fs.readFileSync('src/components/SchoolEnrollmentDialog.
 const schoolsManagement = fs.readFileSync('src/components/SchoolsManagement.tsx', 'utf8');
 const schoolMeetingWorkspace = fs.readFileSync('src/components/SchoolMeetingWorkspace.tsx', 'utf8');
 const coordinatorDashboard = fs.readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const schemaFallbacks = fs.readFileSync('src/utils/routeSchemaFallbacks.ts', 'utf8');
 
 const routeStart = routes.indexOf("app.get('/api/schools/:schoolId/enrollment-options'");

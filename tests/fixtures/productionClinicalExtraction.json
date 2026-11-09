@@ -1,0 +1,156 @@
+[
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans",
+    "module": "services/therapeuticPlanCreateHandler.ts",
+    "factory": "createTherapeuticPlanCreateHandler",
+    "property": null,
+    "bodySha256": "92aa67057f6a5b0e9ae9e516a561345e33d1be99a9d28ea029fc2a2efc2f8810",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans'",
+      "checkAuth",
+      "requireScopedTherapeuticPlanCapability('create')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId",
+    "module": "services/therapeuticPlanEditHandler.ts",
+    "factory": "createTherapeuticPlanEditHandler",
+    "property": null,
+    "bodySha256": "fafb6a14d627b2894a94285e1b2e131c16ffa1c3e5b4e68cd4307486e5eb796c",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId'",
+      "checkAuth",
+      "requireScopedTherapeuticPlanCapability('edit')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft",
+    "module": "services/ptsVersionWriteHandlers.ts",
+    "factory": "createPtsVersionWriteHandlers",
+    "property": "createDraft",
+    "bodySha256": "08388a81296cfe395eb434a381038fbaf416e8895c4715d4d9ef9d70c25d824e",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId",
+    "module": "services/ptsVersionWriteHandlers.ts",
+    "factory": "createPtsVersionWriteHandlers",
+    "property": "saveDraft",
+    "bodySha256": "23d09e7849a59c94e52d52d1fad822cf029a888a5b8a8a58cd460c3426a080d9",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate",
+    "module": "services/ptsVersionWriteHandlers.ts",
+    "factory": "createPtsVersionWriteHandlers",
+    "property": "activateDraft",
+    "bodySha256": "d15cd790000e8e81b9f2a7ebf7dbb2ac2de3a535919738572b90925248f0024c",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events",
+    "module": "services/ptsVersionWriteHandlers.ts",
+    "factory": "createPtsVersionWriteHandlers",
+    "property": "appendEvent",
+    "bodySha256": "4368f56baaedd89f258239556a040367aa524c4a36de3f3b21e242a63dacc3d5",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs",
+    "module": "services/therapeuticProgramWriteHandlers.ts",
+    "factory": "createTherapeuticProgramWriteHandlers",
+    "property": "createProgram",
+    "bodySha256": "6d7529ef5716cb17f7cec359f6d7790bef99141cf12bdfb648243530cb605b11",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.create', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs/:programId/status",
+    "module": "services/therapeuticProgramWriteHandlers.ts",
+    "factory": "createTherapeuticProgramWriteHandlers",
+    "property": "updateStatus",
+    "bodySha256": "39c623f60e4174741e249f75bb30fbe43321324384f00f248d07f903b5975b0a",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs/:programId/status'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs/:programId",
+    "module": "services/therapeuticProgramWriteHandlers.ts",
+    "factory": "createTherapeuticProgramWriteHandlers",
+    "property": "updateProgram",
+    "bodySha256": "0d1bb3c49660aabd19122567cdc71c0196228d920ce93f1b3aad93e22e466d3f",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs/:programId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ]
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs/:programId/targets",
+    "module": "services/therapeuticProgramWriteHandlers.ts",
+    "factory": "createTherapeuticProgramWriteHandlers",
+    "property": "addTarget",
+    "bodySha256": "3619be4b264812fcf3a9e81fda16976cf8ac5964fbddc01b871e5a4f8d7c9271",
+    "signature": "async (req: any, res) => ",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs/:programId/targets'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ]
+  }
+]

@@ -1,0 +1,1552 @@
+[
+  {
+    "method": "post",
+    "path": "/api/webhook/stripe",
+    "middleware": [
+      "\"/api/webhook/stripe\"",
+      "express.raw({ type: \"application/json\" })"
+    ],
+    "sha256": "24730270140aabfbb7df1e2eb3ddc09f2f1e7cef427e82c2b8eca42c4f6d1564"
+  },
+  {
+    "method": "post",
+    "path": "/api/stripe/webhook",
+    "middleware": [
+      "\"/api/stripe/webhook\"",
+      "express.raw({ type: \"application/json\" })"
+    ],
+    "sha256": "d6c1eed73615096c0c641dc19d453f44926ac2d89474dfd4fa91f57ec339b48a"
+  },
+  {
+    "method": "post",
+    "path": "/api/public/sales-leads",
+    "middleware": [
+      "\"/api/public/sales-leads\"",
+      "publicSalesLeadIpLimiter",
+      "publicSalesLeadIdentityLimiter"
+    ],
+    "sha256": "09d1f187afc3d4f9d76e4cac03ca75fc8586f27e54885054377f46d038911364"
+  },
+  {
+    "method": "get",
+    "path": "/api/public/sales-offers/:token",
+    "middleware": [
+      "\"/api/public/sales-offers/:token\"",
+      "publicSalesLeadIpLimiter"
+    ],
+    "sha256": "828fbe8873e7650a6da4712943bd42a26fd3eaa2307b606d2d4de416288ddba5"
+  },
+  {
+    "method": "post",
+    "path": "/api/public/sales-offers/:token/accept",
+    "middleware": [
+      "\"/api/public/sales-offers/:token/accept\"",
+      "publicSalesLeadIpLimiter"
+    ],
+    "sha256": "d063df81a971844911334498b799272cd35e9dc73d544abf5ce6af2d01327431"
+  },
+  {
+    "method": "post",
+    "path": "/api/public/sales-offers/:token/checkout",
+    "middleware": [
+      "\"/api/public/sales-offers/:token/checkout\"",
+      "publicSalesLeadIpLimiter"
+    ],
+    "sha256": "24d274de7cad4d317a6baa7d8cd33c58d71a2a4ca3e5e394f20492fa691483bd"
+  },
+  {
+    "method": "get",
+    "path": "/api/public/sales-offers/:token/payment-status",
+    "middleware": [
+      "\"/api/public/sales-offers/:token/payment-status\"",
+      "publicSalesPaymentStatusLimiter"
+    ],
+    "sha256": "95abc6898d39a95c18a5c4a3d6e081b3229c911c6841389bd98128a236f447e0"
+  },
+  {
+    "method": "post",
+    "path": "/api/public/sales-offers/:token/prepare-activation",
+    "middleware": [
+      "\"/api/public/sales-offers/:token/prepare-activation\"",
+      "publicSalesPostPaymentLimiter"
+    ],
+    "sha256": "97d084bf18867880d929b8b19ad276d8614afdf7be45668f4020ac38db6dfbe6"
+  },
+  {
+    "method": "post",
+    "path": "/api/public/sales-offers/:token/director-session",
+    "middleware": [
+      "\"/api/public/sales-offers/:token/director-session\"",
+      "publicSalesPostPaymentLimiter"
+    ],
+    "sha256": "04c57e9ee68d2a4fd740ec9b4a16632baa64bff48e0d6b72469de988e40ba826"
+  },
+  {
+    "method": "post",
+    "path": "/api/public/sales-activations/:token/password",
+    "middleware": [
+      "\"/api/public/sales-activations/:token/password\"",
+      "publicSalesActivationLimiter"
+    ],
+    "sha256": "20b551d038de4f41b91ad85fee446f2d12f116116d30bcfc3442bfb723bdf3da"
+  },
+  {
+    "method": "get",
+    "path": "/api/health",
+    "middleware": [
+      "'/api/health'"
+    ],
+    "sha256": "01de8088899e4990ec4079234035ea671d63f40234c1fac26d4d61c71379ebe0"
+  },
+  {
+    "method": "get",
+    "path": "/api/ready",
+    "middleware": [
+      "'/api/ready'"
+    ],
+    "sha256": "8458678200ca2b143eea40648e27a6813b8e145e6eddb81f6dd800abac218fb9"
+  },
+  {
+    "method": "get",
+    "path": "/api/internal/schema-status",
+    "middleware": [
+      "'/api/internal/schema-status'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "a83ce06cf6986479f39f1f7f9f42ec246182a5b2845b5e36bd56700efec70214"
+  },
+  {
+    "method": "get",
+    "path": "/api/clinic/authorization/me",
+    "middleware": [
+      "'/api/clinic/authorization/me'",
+      "checkAuth"
+    ],
+    "sha256": "62ead9374de705542594fbdf55921ba2dfed5aa05b8b92b6e8037d16bf283fc4"
+  },
+  {
+    "method": "get",
+    "path": "/api/user/feature-access",
+    "middleware": [
+      "'/api/user/feature-access'",
+      "checkAuth"
+    ],
+    "sha256": "fcb1a9ddacff70def0b51793445e778139dae998e85c9aa60d5cd09bb98b8403"
+  },
+  {
+    "method": "post",
+    "path": "/api/user/feature-access/:featureKey",
+    "middleware": [
+      "'/api/user/feature-access/:featureKey'",
+      "checkAuth"
+    ],
+    "sha256": "7dee95bcc762fdefbbce92f0ba8b530007b0c8dc82f19e3486db3f22a54d2d15"
+  },
+  {
+    "method": "get",
+    "path": "/api/clinic/authorization/capabilities/:permissionKey/members",
+    "middleware": [
+      "'/api/clinic/authorization/capabilities/:permissionKey/members'",
+      "checkAuth",
+      "requireClinicCapability('team.permissions.manage')"
+    ],
+    "sha256": "646580ec960fa6d764f29cc7a795d4a3251ee08855c4c4eaa23d17aa8a7fd609"
+  },
+  {
+    "method": "patch",
+    "path": "/api/clinic/authorization/capabilities/:permissionKey/members",
+    "middleware": [
+      "'/api/clinic/authorization/capabilities/:permissionKey/members'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireClinicCapability('team.permissions.manage')"
+    ],
+    "sha256": "022da2cdc879d48c3ed5199f94f658c6c37314edc5d69c93f1228cf1e4b54a31"
+  },
+  {
+    "method": "get",
+    "path": "/api/clinic/members/:memberId/authorization",
+    "middleware": [
+      "'/api/clinic/members/:memberId/authorization'",
+      "checkAuth",
+      "requireClinicCapability('team.permissions.manage')"
+    ],
+    "sha256": "e74fd9ce92369b0cba3a558fe9bca3212943a17c1ea0db2dbe9cdc35d53945a9"
+  },
+  {
+    "method": "patch",
+    "path": "/api/clinic/members/:memberId/authorization",
+    "middleware": [
+      "'/api/clinic/members/:memberId/authorization'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireClinicCapability('team.permissions.manage')"
+    ],
+    "sha256": "12a07b43cfa9ca5fce1936a7073b187d5813bc112d9cc338894f980e43fc59ac"
+  },
+  {
+    "method": "get",
+    "path": "/api/clinic/members",
+    "middleware": [
+      "'/api/clinic/members'",
+      "checkAuth",
+      "requireClinicCapability('team.view')"
+    ],
+    "sha256": "09721eeeffff7426b4266f81731cded41f5a8a0e0485dd100a4f0849609a8b83"
+  },
+  {
+    "method": "patch",
+    "path": "/api/clinic/members/:memberId/supervision-eligibility",
+    "middleware": [
+      "'/api/clinic/members/:memberId/supervision-eligibility'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireClinicCapability('team.supervision.manage')"
+    ],
+    "sha256": "1710ba67cf38bec19d46d2ab2f64bedcd53a626b186def05f835c4d12fda6fd9"
+  },
+  {
+    "method": "get",
+    "path": "/api/clinic/members/:memberId/work-schedule",
+    "middleware": [
+      "'/api/clinic/members/:memberId/work-schedule'",
+      "checkAuth",
+      "requireAnyClinicCapability('calendar.team.view', 'calendar.own.view')"
+    ],
+    "sha256": "93b82eeabbe2a466e8563fbfaa0b960e58dcff8b56a9a560a7b025ffdbc7f49f"
+  },
+  {
+    "method": "patch",
+    "path": "/api/clinic/members/:memberId/work-schedule",
+    "middleware": [
+      "'/api/clinic/members/:memberId/work-schedule'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireAnyClinicCapability('team.edit', 'calendar.own.view')"
+    ],
+    "sha256": "db608da7e4fc5e82287a4db1593bb909d4750947ce60e67b7d31652ec4c06ac3"
+  },
+  {
+    "method": "post",
+    "path": "/api/clinic/members/:memberId/work-schedule/apply",
+    "middleware": [
+      "'/api/clinic/members/:memberId/work-schedule/apply'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireClinicCapability('team.edit')"
+    ],
+    "sha256": "f6c763932dc8005d54bec6b6077ef036b7f1e54f7dd05c138c4f895722467660"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/:patientId/professional-links",
+    "middleware": [
+      "'/api/patients/:patientId/professional-links'",
+      "checkAuth",
+      "checkPatientAccess",
+      "requireClinicCapability('team.view')"
+    ],
+    "sha256": "da5b87cb4fb84d7dc38c2356144c520aeed98bd7ff79d2828fd356bf6b0f151a"
+  },
+  {
+    "method": "get",
+    "path": "/api/patient-files/:patientId",
+    "middleware": [
+      "'/api/patient-files/:patientId'",
+      "checkAuth",
+      "requireClinicCapabilityOrPatientPortal('clinical.documents.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "fe0c8097f6514e9cb09a0f85ce86194f0f5889eb6a7154ddff0726a92fbfbfed"
+  },
+  {
+    "method": "get",
+    "path": "/api/notes/:patientId",
+    "middleware": [
+      "'/api/notes/:patientId'",
+      "checkAuth",
+      "requireClinicCapabilityOrPatientPortal('clinical.history.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "84f07c5495a82311af1724905c28def8022d4598070e6afb476d4506fd0d25dd"
+  },
+  {
+    "method": "get",
+    "path": "/api/patient/self/history",
+    "middleware": [
+      "'/api/patient/self/history'",
+      "checkAuth",
+      "requireRoles('patient')"
+    ],
+    "sha256": "ea64f0bfdf294d80ae99b127d2380935332a5e747a9d40c5de53058c8b04000b"
+  },
+  {
+    "method": "get",
+    "path": "/api/patient/self/assigned-tasks",
+    "middleware": [
+      "'/api/patient/self/assigned-tasks'",
+      "checkAuth",
+      "requireRoles('patient')"
+    ],
+    "sha256": "cef39a26e3920e99e13963557a63e44c0bdfc5e2f3dd70ac065a54ff81ad4762"
+  },
+  {
+    "method": "get",
+    "path": "/api/portal/appointments",
+    "middleware": [
+      "'/api/portal/appointments'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requirePatientPortalModule('appointments_communication')"
+    ],
+    "sha256": "2d1fad6e6885145f6f91d59f9e16039739ed51bfa63ae14b184c31e1b84fe034"
+  },
+  {
+    "method": "get",
+    "path": "/api/portal/appointments/:appointmentId",
+    "middleware": [
+      "'/api/portal/appointments/:appointmentId'",
+      "checkAuth",
+      "requirePatientPortalModule('appointments_communication')"
+    ],
+    "sha256": "36bfdabb0409f108c0c73aed6d1677e86c3223cae0afd1fc6712956a9bef2066"
+  },
+  {
+    "method": "get",
+    "path": "/api/portal/appointments/:appointmentId/reschedule-slots",
+    "middleware": [
+      "'/api/portal/appointments/:appointmentId/reschedule-slots'",
+      "portalActionLimiter",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requirePatientPortalModule('appointments_communication')"
+    ],
+    "sha256": "938a620fb72ea726764a7240f737e7133920e1f3a646932e246b56b3ca1aee09"
+  },
+  {
+    "method": "get",
+    "path": "/api/reports/time/patient",
+    "middleware": [
+      "'/api/reports/time/patient'",
+      "checkAuth",
+      "requireClinicCapability('reports.view')"
+    ],
+    "sha256": "e3e3bc54c5908ae9959bb0ded7dcdcbbf6846ee0fa3e1acf90c1e06b45ba7224"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/tiss/provider-profile",
+    "middleware": [
+      "'/api/admin/tiss/provider-profile'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "b03fc56068d03ad16d4b1bc8777fa713d28e0100e90c0bb00f8f7d7e0c4be61b"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/tiss/payer-profiles",
+    "middleware": [
+      "'/api/admin/tiss/payer-profiles'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "b630ac4f4c9a5e5e067196ba925d6c2237ca54af339ec604153d0508a4b4a141"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/tiss/payer-profiles/:payerId",
+    "middleware": [
+      "'/api/admin/tiss/payer-profiles/:payerId'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "9aae2575258267d68c56e25c76a1c0dc79d48d62c1e983a2fe1088dad6a4e253"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/tiss-authorizations",
+    "middleware": [
+      "'/api/patients/tiss-authorizations'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('patient.insurance.authorization.view')"
+    ],
+    "sha256": "cfed000e0da882e79679423f5d658b00aca87146129d9224dc3ba5196c9ad8b3"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/:patientId/tiss-authorizations",
+    "middleware": [
+      "'/api/patients/:patientId/tiss-authorizations'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('patient.insurance.authorization.view')"
+    ],
+    "sha256": "5b000132390ae01f241c9423885d726c998dd0fa834d30da48b04fd98b440672"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/professional-profile/me",
+    "middleware": [
+      "'/api/tiss/professional-profile/me'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')"
+    ],
+    "sha256": "afc739cf9189c03d56c2dcf96de37dc6cff0790c396aa886e780159718d12530"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/tiss/professional-profiles",
+    "middleware": [
+      "'/api/admin/tiss/professional-profiles'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "9a651dc1e9f394bf15bb900bc0225ed4ec38ca45f5a734fb7c1df1c663152300"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/tiss/professional-profiles/:professionalId",
+    "middleware": [
+      "'/api/admin/tiss/professional-profiles/:professionalId'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "e5ff14b548cebbfde8b57f6e2d0c598b51ff04b7fb560ee03c3be48769ac271e"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/pre-guides",
+    "middleware": [
+      "'/api/tiss/pre-guides'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.preguide.view')"
+    ],
+    "sha256": "129ef6a7d2cc16dec4601da772e08356952c24c19dbed3f25ae5e8ac8b724548"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/official-documents",
+    "middleware": [
+      "'/api/tiss/official-documents'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.xml.export')"
+    ],
+    "sha256": "0de00458b5a296bfa44f55ab0ce21268baa754ce448bb6d3f6506d45106a8bc7"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/official-documents/tracking",
+    "middleware": [
+      "'/api/tiss/official-documents/tracking'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.xml.export')"
+    ],
+    "sha256": "504c1f7ace929798eb700f6fe01f7eba5edd2b5ce2cb8d12e3400cf35d980298"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/xml-drafts",
+    "middleware": [
+      "'/api/tiss/xml-drafts'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.xml.export')"
+    ],
+    "sha256": "1b089616e1f670cd1e62dc35caec9b0ff1381888e1938bb3942eb7e6888ff8f9"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/xml-drafts/:draftId",
+    "middleware": [
+      "'/api/tiss/xml-drafts/:draftId'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.xml.export')"
+    ],
+    "sha256": "80a816a96af00b097fff4e4b2963fd7f2c89a71354cd4ee7f4b4740604f4160b"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/revenue-cycle/events",
+    "middleware": [
+      "'/api/tiss/revenue-cycle/events'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.preguide.view')"
+    ],
+    "sha256": "b3f30838fe3b64cb547b328b0d0c943796a8eb20a71b606ca0dc5e304e29b5f4"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/billing-batch-drafts",
+    "middleware": [
+      "'/api/tiss/billing-batch-drafts'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.preguide.view')"
+    ],
+    "sha256": "721b94117cafc7124530d8a7206758e05e810475de64f37ba8fcb978cc031dc2"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/billing-batch-drafts/:batchId",
+    "middleware": [
+      "'/api/tiss/billing-batch-drafts/:batchId'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.preguide.view')"
+    ],
+    "sha256": "805350f107be1900de7946a77294406ecd2fdd3b522a583d6659ad5f3003ca3f"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/pre-guides/coverage",
+    "middleware": [
+      "'/api/tiss/pre-guides/coverage'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.preguide.view')"
+    ],
+    "sha256": "8f88652bf380088dcc26194dd2fbe4e8f85d3fcffbbd50cbacab61b87364bb38"
+  },
+  {
+    "method": "get",
+    "path": "/api/tiss/pre-guides/:appointmentId",
+    "middleware": [
+      "'/api/tiss/pre-guides/:appointmentId'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.preguide.view')"
+    ],
+    "sha256": "b8324970b18cb54e44ef82b09c475e45fad884ec77975e0322e26dc7e8182f6e"
+  },
+  {
+    "method": "get",
+    "path": "/api/payer-options",
+    "middleware": [
+      "'/api/payer-options'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireAnyClinicCapability('finance.payments.view', 'patient.insurance.view')"
+    ],
+    "sha256": "06d95ec40fcf7a4a075b2ded465644ce384222613646d8b6d2414813c00bf7cc"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/payers",
+    "middleware": [
+      "'/api/admin/payers'",
+      "checkAuth",
+      "requireAnyClinicCapability('finance.payments.view', 'billing.mapping.manage')"
+    ],
+    "sha256": "cd779f6adc9cf30316b70017b38e46597bd96e927adc9de36fc00f8acb81ade6"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/payers/:payerId/requirements",
+    "middleware": [
+      "'/api/admin/payers/:payerId/requirements'",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.antiglosa.view')"
+    ],
+    "sha256": "e31bcb2acf8e9ea33bfb86fbca2cd6cc089ece654e04bd7b054d9085a217d0a2"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/tuss/mappings",
+    "middleware": [
+      "'/api/admin/tuss/mappings'",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "affc2a8f43bba4e00eac9e08f8adfadf1915a9a1a070854e4e18d9a3ec0253dc"
+  },
+  {
+    "method": "post",
+    "path": "/api/admin/tuss/mappings",
+    "middleware": [
+      "'/api/admin/tuss/mappings'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "f1f716b7007de7e31b6cb9edfcd3b343ea8abeec03f29e57e76b48ed7b357121"
+  },
+  {
+    "method": "patch",
+    "path": "/api/admin/tuss/mappings/:mappingId",
+    "middleware": [
+      "'/api/admin/tuss/mappings/:mappingId'",
+      "portalActionLimiter",
+      "checkAuth",
+      "requireClinicModule('insurance_tiss')",
+      "requireClinicCapability('billing.mapping.manage')"
+    ],
+    "sha256": "6c0944bd3b2ba8c6be2ab4d795b1edba14133d0986bb935df65c47b9be13635a"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/therapeutic-plan",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plan'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "35bea74865867da4b9284e40bdaee66701c8e84dedeaebbfbefdb5df9c7a2335"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans'",
+      "checkAuth",
+      "requireScopedTherapeuticPlanCapability('create')",
+      "checkPatientAccess"
+    ],
+    "sha256": "486cdae72c1f590b719ac2f450eed65fe53ac8373095edd40528b1efa2dc33e7"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId'",
+      "checkAuth",
+      "requireScopedTherapeuticPlanCapability('edit')",
+      "checkPatientAccess"
+    ],
+    "sha256": "be93423a9a7e5cb7fbd986b79d4eae1e9279242808729cb8d016ffe97b43942a"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ],
+    "sha256": "54c69898201f2fcc456a871c5b01302bdb03d886d8899d4a4908e4d21db9f542"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ],
+    "sha256": "52652e129f5df9834e64da1e61e01ca55c8b49d08ab3851d7ed583c4438424be"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-draft/:versionId/activate'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ],
+    "sha256": "51c688425e57158282673ee79e9ff074c6de464fc8701a5bd7c0aacd20382587"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-plans/:planId/pts-events'",
+      "checkAuth",
+      "requireClinicCapability('treatment_plan.edit')",
+      "checkPatientAccess"
+    ],
+    "sha256": "27557ba67ca4d85045aa3f7fe51f8662c70d75174e9832a9e4df13e4a1530ca4"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/program-templates",
+    "middleware": [
+      "'/api/aba/program-templates'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.program.view')"
+    ],
+    "sha256": "98dd1eaa49ed6fb935f9fec0b16d092cccf169039ab36156b6840b7c66753977"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.create', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ],
+    "sha256": "009dde21e8fff954ce6b7b86779ebd3c2d190bc8120925fb90ff276df4345cc7"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs/:programId/status",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs/:programId/status'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ],
+    "sha256": "2c4c5d8f8e0b3e4f28b8033629fe108c295e314e70a14336e2e961317c96d803"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs/:programId",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs/:programId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ],
+    "sha256": "cfdb65165020ddbacbd8b4ad8252f9c0d68e09b25cebf73fdb2216289d3c2806"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/therapeutic-programs/:programId/targets",
+    "middleware": [
+      "'/api/aba/patients/:patientId/therapeutic-programs/:programId/targets'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
+      "checkPatientAccess"
+    ],
+    "sha256": "cf182e0f962bc97c4b4c0057bda246c82c474c713a175ae66147ac03fd882038"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/patients/:patientId/targets/:targetId/mastery-criteria",
+    "middleware": [
+      "'/api/aba/patients/:patientId/targets/:targetId/mastery-criteria'",
+      "checkAuth",
+      "checkPatientAccess",
+      "requireClinicCapability('aba.program.edit')"
+    ],
+    "sha256": "db64bb6540fd693fa49326cc9f17c1cfce120a8a6e20cd5d9c75fba460d41906"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/v3/admin/drain-status",
+    "middleware": [
+      "'/api/aba/v3/admin/drain-status'",
+      "requireAbaV3PreflightFeature",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "0f057a65e5636df02908b7ed288d88ad623b9de70be253922913672f4cfb9a27"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/session-live-summaries/:sessionId",
+    "middleware": [
+      "'/api/aba/session-live-summaries/:sessionId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')"
+    ],
+    "sha256": "4095d9b78b8ae327f9b27665e2b416b974fe9e98e6e4b74accd5740c8b94c94f"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/session-reports/:sessionId",
+    "middleware": [
+      "'/api/aba/session-reports/:sessionId'",
+      "requireAbaCollectionFeature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')"
+    ],
+    "sha256": "5b5b91de92273f0c8f70cc6ffaf76a80e37e7e5319be95b23e67e6b64652b8c2"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/session-reports/:sessionId/records",
+    "middleware": [
+      "'/api/aba/session-reports/:sessionId/records'",
+      "requireAbaCollectionFeature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')"
+    ],
+    "sha256": "06585b5f53f55f858a2e3f9bc2e6826c3cb917fd59d44ac6e7e5ff2b0ab7d322"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/recent-session-events/:sessionId",
+    "middleware": [
+      "'/api/aba/recent-session-events/:sessionId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')"
+    ],
+    "sha256": "3e09806dfb8b20e4ae59990389e5c3db16e06216f3f4129210d17780c33a42fe"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/sessions/:sessionId/maintenance-probes",
+    "middleware": [
+      "'/api/aba/sessions/:sessionId/maintenance-probes'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')"
+    ],
+    "sha256": "439a09e48b3316e197dba58fc0bb76ce341a29154692e2af8e399cd7784490a4"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patient-summary/:patientId",
+    "middleware": [
+      "'/api/aba/patient-summary/:patientId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "3d47f9c80f90fa678cac23ecf5a4c48a32fa741a363ed2d4260f277dd4de3b7f"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/maintenance-overview/:patientId",
+    "middleware": [
+      "'/api/aba/maintenance-overview/:patientId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "aaf3b3ce9126b00e6ab4bb33bea1b66afed7aab1daa350b660c7cc292705bdad"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/:patientId/aba/maintenance-panel",
+    "middleware": [
+      "'/api/patients/:patientId/aba/maintenance-panel'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "8d2ff926ef116460748c63e40a035f1858fa9f2cc26830a4230923f652669e50"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/:patientId/debug/pei-maintenance-goals",
+    "middleware": [
+      "'/api/patients/:patientId/debug/pei-maintenance-goals'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "4dd2898bc38caf562a286d28de30269feb00cc716aa1929026d744461db418b3"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/:patientId/aba/targets/linkable",
+    "middleware": [
+      "'/api/patients/:patientId/aba/targets/linkable'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "b23fce4f1f7c4f26d55844236ba4acbe0070cbc31d21a5641805d2219f39d299"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/maintenance-schedules",
+    "middleware": [
+      "'/api/aba/patients/:patientId/maintenance-schedules'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')",
+      "checkPatientAccess"
+    ],
+    "sha256": "815b3ef522c0888656d0be24cb25f9ba553a5c9007c661b4554055fb23637de5"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/future-appointments",
+    "middleware": [
+      "'/api/aba/patients/:patientId/future-appointments'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.next_session.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "a1d1f8c53884fe340d2f6ff8cc21b386de6be1a22b6612cf6344bd39c7cf0623"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/maintenance-targets/ensure",
+    "middleware": [
+      "'/api/aba/patients/:patientId/maintenance-targets/ensure'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')",
+      "checkPatientAccess"
+    ],
+    "sha256": "bfa162030188cd4999f71af90549fe5ff8d47d2d4ecf76729cf4d3c3bac8c10b"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/targets/:targetId/maintenance-schedules",
+    "middleware": [
+      "'/api/aba/targets/:targetId/maintenance-schedules'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "3909bc18bd33ed81b3de9bdb2217e03ac72e3c6dd8e28a98590a8123a690e3cd"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/targets/:targetId/maintenance-schedules/next-session",
+    "middleware": [
+      "'/api/aba/targets/:targetId/maintenance-schedules/next-session'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "12b36413325091fdbe64ba114d49262febee18329e6a1d14b3b4cf52d7a47aa5"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/maintenance-schedules/:scheduleId",
+    "middleware": [
+      "'/api/aba/maintenance-schedules/:scheduleId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "620beab380f5bc08fdddd8300701beb21fcefae399fd5d2e64de0d36370970cf"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/maintenance-schedules/:scheduleId/cancel",
+    "middleware": [
+      "'/api/aba/maintenance-schedules/:scheduleId/cancel'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "eb3fe95d950ab86616fb2e388c5e4913175122b8832fb00efb6e29637a22a1e9"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/targets/:targetId/next-maintenance-probe",
+    "middleware": [
+      "'/api/aba/targets/:targetId/next-maintenance-probe'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')"
+    ],
+    "sha256": "01155202a54acaf3de5abc58799a741e25b675a1a158685f93422b9173e77246"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/maintenance-schedules/:scheduleId/complete",
+    "middleware": [
+      "'/api/aba/maintenance-schedules/:scheduleId/complete'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "0dabedc9880bf7ac3afa3e8cac5c9277e22b18435b2d36238122871bc94c8b0e"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/maintenance-schedules/:scheduleId/confirm-link",
+    "middleware": [
+      "'/api/aba/maintenance-schedules/:scheduleId/confirm-link'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "1adf5a8d5f7fe5686ac55d2b4a6178f305912f58f31b4b3d58340abaadfc02f3"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/maintenance-schedules/:scheduleId/skip-link",
+    "middleware": [
+      "'/api/aba/maintenance-schedules/:scheduleId/skip-link'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.maintenance.manage')"
+    ],
+    "sha256": "35b5b1801cf8e4b1f61aee9105909808504c711a62222720007ca5d391b248dd"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/next-session/recommendations",
+    "middleware": [
+      "'/api/aba/patients/:patientId/next-session/recommendations'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "b0980efbc6714914b734d664c2103c51bf8deeb6dd660b7d8addba1c94e9b131"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/patients/:patientId/next-session/recommendations/generate",
+    "middleware": [
+      "'/api/aba/patients/:patientId/next-session/recommendations/generate'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')",
+      "checkPatientAccess"
+    ],
+    "sha256": "ac86d8c02aa862d546f1385efc0996ee78a070622a21252f2b703a16428eaabe"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/recommendations/:recommendationId/accept",
+    "middleware": [
+      "'/api/aba/recommendations/:recommendationId/accept'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')"
+    ],
+    "sha256": "9807869d0a7b21d6a56a0f50cbaac4041cc09363ed85d937e4c30242c1f0e7fb"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/recommendations/:recommendationId/reject",
+    "middleware": [
+      "'/api/aba/recommendations/:recommendationId/reject'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')"
+    ],
+    "sha256": "60d7b87c46101eb513f2722cbe57440cb9bbebae8d39cad802e3f901e48739d7"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/recommendations/:recommendationId/link-target",
+    "middleware": [
+      "'/api/aba/recommendations/:recommendationId/link-target'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')"
+    ],
+    "sha256": "d716a66bc88a136712ca96954c110ca2f9dc42480fa51af7c21b2a73159aff36"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/recommendations/:recommendationId",
+    "middleware": [
+      "'/api/aba/recommendations/:recommendationId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')"
+    ],
+    "sha256": "4b87faaa71b93b1272ceaa1a0626148c98808ae14851879298889a42e258ff41"
+  },
+  {
+    "method": "post",
+    "path": "/api/aba/recommendations/:recommendationId/apply-to-next-session",
+    "middleware": [
+      "'/api/aba/recommendations/:recommendationId/apply-to-next-session'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')"
+    ],
+    "sha256": "48da95b9f52812e252f1779c3d0a8f0a47c547f02297a77f66e3b15209c34f63"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/next-session/plan-items",
+    "middleware": [
+      "'/api/aba/patients/:patientId/next-session/plan-items'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.next_session.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "8f62b1683ae2f72082d3b1f689c1fdfde169522c69b56653abbfa8b5c9917a8d"
+  },
+  {
+    "method": "patch",
+    "path": "/api/aba/next-session-plan-items/:planItemId",
+    "middleware": [
+      "'/api/aba/next-session-plan-items/:planItemId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.suggestions.apply')"
+    ],
+    "sha256": "7d1f48b299076ddab06ce8e75acdd3842265661e8a192a3b80755fb581e129b6"
+  },
+  {
+    "method": "get",
+    "path": "/api/patients/:patientId/clinical-outcomes-dashboard",
+    "middleware": [
+      "'/api/patients/:patientId/clinical-outcomes-dashboard'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('reports.clinical.indicators')",
+      "checkPatientAccess"
+    ],
+    "sha256": "2fb2def07f4d203bbadc85d79d786e8bdbe22549d4e723dc5553b9dd76614b2d"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/charts/targets",
+    "middleware": [
+      "'/api/aba/patients/:patientId/charts/targets'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "b13355180ead1eea020e8b26b76d24571ad7459b137004cf970c0be3dc01d9ec"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/charts/behaviors",
+    "middleware": [
+      "'/api/aba/patients/:patientId/charts/behaviors'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "96f08ef3be4cad4343e6445d0c4eb9528f52632b6faadfba79e8d6957a58b6d0"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/charts/mastery",
+    "middleware": [
+      "'/api/aba/patients/:patientId/charts/mastery'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.mastery.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "fabb088319ab39c52a8ded2a6237e8d66f2f58a1b0cb893c012800dc583fa4d8"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/charts/maintenance",
+    "middleware": [
+      "'/api/aba/patients/:patientId/charts/maintenance'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "a6b6139ed0831a3599a4e746e24fe6b83f58a3778885f3873713e2f14c1a58e9"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/charts/session-changes",
+    "middleware": [
+      "'/api/aba/patients/:patientId/charts/session-changes'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "a742baf915c149b46d3cf2c08f775eef792c734c164bb2ef4be33e13ed564573"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/patients/:patientId/charts/overview",
+    "middleware": [
+      "'/api/aba/patients/:patientId/charts/overview'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "34dbc9e1d6c9347b8f7cbc2d59bda92a3a5d79aac7611155d3c18e402fbdf429"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/sessions/:patientId",
+    "middleware": [
+      "'/api/aba/sessions/:patientId'",
+      "requireAbaCollectionFeature",
+      "checkAuth",
+      "requireClinicCapability('session.history.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "799d0c0d2893b8700c7abecb72d62880a16583589818f4e739c8bbd0636bb80a"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/trials/:patientId",
+    "middleware": [
+      "'/api/aba/trials/:patientId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "ea702c7d8d1f6cc5747e158a29c135cf70345075a034465223ee2e12221ad4f6"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/behavior-events/:patientId",
+    "middleware": [
+      "'/api/aba/behavior-events/:patientId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.analytics.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "d3004599028034f282f1054922798c9cfd46a33491de668a48b6fbeff91fbfa2"
+  },
+  {
+    "method": "get",
+    "path": "/api/aba/mastery-evaluations/:patientId",
+    "middleware": [
+      "'/api/aba/mastery-evaluations/:patientId'",
+      "requireAbaV2Feature",
+      "checkAuth",
+      "requireClinicCapability('aba.mastery.view')",
+      "checkPatientAccess"
+    ],
+    "sha256": "5bfd87112fab9fa4653905ba4905c14692725abf883cd48dff8739967aac99f8"
+  },
+  {
+    "method": "get",
+    "path": "/api/private-pricing/catalog",
+    "middleware": [
+      "'/api/private-pricing/catalog'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('finance.payments.view')"
+    ],
+    "sha256": "17494756c1bdc6c81f5add0468079363bd2ea75bbd022ef73913a69a91a7e89d"
+  },
+  {
+    "method": "get",
+    "path": "/api/private-pricing/appointments/:appointmentId/snapshot",
+    "middleware": [
+      "'/api/private-pricing/appointments/:appointmentId/snapshot'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('finance.payments.view')"
+    ],
+    "sha256": "5fb0e03185ce0fefa7bbac734cbf74b9618a0a8d525a2a23dfe84c66e0103a88"
+  },
+  {
+    "method": "get",
+    "path": "/api/patient-finance/ledger",
+    "middleware": [
+      "'/api/patient-finance/ledger'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('finance.payments.view')"
+    ],
+    "sha256": "1cd834a5cdd8ae10f04a1a8fbb8c9d78709e2e2b6e787dde91801013f0224185"
+  },
+  {
+    "method": "get",
+    "path": "/api/patient-finance/transactions/:transactionId/document",
+    "middleware": [
+      "'/api/patient-finance/transactions/:transactionId/document'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('finance.payments.view')"
+    ],
+    "sha256": "f5956adce1ff3d453a376ab7233206de42d2e54bff0549cd4d10b4958ed6c710"
+  },
+  {
+    "method": "get",
+    "path": "/api/patient-finance/policy",
+    "middleware": [
+      "'/api/patient-finance/policy'",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('finance.payments.view')"
+    ],
+    "sha256": "90f1c840ebccf092483ed62a7866d2a94a4ccb9d9cf8a59a31bbb7ca92698909"
+  },
+  {
+    "method": "get",
+    "path": "/api/payments",
+    "middleware": [
+      "'/api/payments'",
+      "checkAuth",
+      "requireClinicCapability('finance.payments.view')"
+    ],
+    "sha256": "7217530ebe4904cd203a51dc53056b2eefd76ad07cea61cd5cb6d3c833d94a42"
+  },
+  {
+    "method": "get",
+    "path": "/api/financial/professional-payments",
+    "middleware": [
+      "'/api/financial/professional-payments'",
+      "checkAuth",
+      "requireClinicCapability('finance.entries.view')"
+    ],
+    "sha256": "43d8d0b7495c6c01a34e02abbd7eb675e51c39626ff0e87d553d69d85d110f61"
+  },
+  {
+    "method": "get",
+    "path": "/api/financial/expenses",
+    "middleware": [
+      "'/api/financial/expenses'",
+      "checkAuth",
+      "requireClinicCapability('finance.entries.view')"
+    ],
+    "sha256": "84b1913c4293812550d028f14d4fabda26ca1e0ae950c5b3dc35a6ffaadde5f0"
+  },
+  {
+    "method": "get",
+    "path": "/api/financial/entries",
+    "middleware": [
+      "'/api/financial/entries'",
+      "checkAuth",
+      "requireClinicCapability('finance.entries.view')"
+    ],
+    "sha256": "cc444dad6e65e3d1df649276fea3f289902e35377c32b402bb2a4a46128f3199"
+  },
+  {
+    "method": "get",
+    "path": "/api/financial/feature-survey",
+    "middleware": [
+      "'/api/financial/feature-survey'",
+      "checkAuth",
+      "requireClinicCapability('finance.reports.view')"
+    ],
+    "sha256": "68a31cb414b72e6ff1f2ee826c61d40662468cec1aa5f37d3b8b6b8826c73f3b"
+  },
+  {
+    "method": "get",
+    "path": "/api/owner/stats",
+    "middleware": [
+      "'/api/owner/stats'",
+      "checkAuth",
+      "checkOwner"
+    ],
+    "sha256": "33d967182b097aae2f07a005fe6d5893c7069a5252561014b11e9f64415ae891"
+  },
+  {
+    "method": "get",
+    "path": "/api/owner/clients",
+    "middleware": [
+      "'/api/owner/clients'",
+      "checkAuth",
+      "checkOwner"
+    ],
+    "sha256": "f8455cde2ad12e2b99ed898059390bca68bc6ec44ba3199d6b807786e00ef94f"
+  },
+  {
+    "method": "get",
+    "path": "/api/owner/financial-overview",
+    "middleware": [
+      "'/api/owner/financial-overview'",
+      "checkAuth",
+      "checkOwner"
+    ],
+    "sha256": "0bf015edfadf9773752d42091206fbe9e4a0da706e27d6cb17c22a210afc6722"
+  },
+  {
+    "method": "get",
+    "path": "/api/owner/financial-feature-surveys",
+    "middleware": [
+      "'/api/owner/financial-feature-surveys'",
+      "checkAuth",
+      "checkOwner"
+    ],
+    "sha256": "f77b7b40ea2d66207db04ac27ee03b817b5d451eabdc470aecc71f78a82bbd0b"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/demo/sandboxes",
+    "middleware": [
+      "'/api/admin/demo/sandboxes'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "3b37da71dc214faa122eca86e0278d388a9a9b9bdf21b3491b2d6fb7bb8e3f68"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/stats",
+    "middleware": [
+      "'/api/admin/stats'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "ff9d5aeb26e0b38550bf544d8a98ee33e0b825d64fd352de3b1d309b456d5a5c"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/clients",
+    "middleware": [
+      "'/api/admin/clients'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "1b13fefbb6e6b3a3ab7ab1482f7845a2d9ae43030d57ec06d7e7c9f3b74eb2b6"
+  },
+  {
+    "method": "post",
+    "path": "/api/protocol-import-requests",
+    "middleware": [
+      "'/api/protocol-import-requests'",
+      "checkAuth"
+    ],
+    "sha256": "ced82802d32ccfdbc787b671a862d3e9624f465a62f772bc4a1519d6c4ed5f01"
+  },
+  {
+    "method": "get",
+    "path": "/api/protocol-import-requests",
+    "middleware": [
+      "'/api/protocol-import-requests'",
+      "noStoreDynamicResponse",
+      "checkAuth"
+    ],
+    "sha256": "9d6d403cbab2091f1424cb11835f4ff43e1ce17de157c3392adfae83fdfdbd31"
+  },
+  {
+    "method": "post",
+    "path": "/api/protocol-import-requests/:requestId/revoke",
+    "middleware": [
+      "'/api/protocol-import-requests/:requestId/revoke'",
+      "portalActionLimiter",
+      "noStoreDynamicResponse",
+      "checkAuth",
+      "requireClinicCapability('aba.program.edit')"
+    ],
+    "sha256": "638873bd6eb126ffeb0663bfbe3eab5244a13b7cde0ae93e344bdcd6d318cbf1"
+  },
+  {
+    "method": "delete",
+    "path": "/api/protocol-import-requests/:requestId",
+    "middleware": [
+      "'/api/protocol-import-requests/:requestId'",
+      "checkAuth"
+    ],
+    "sha256": "54f3af0ddd6bc0c1331b31e01c4f6cd74e12d2b30e7edf01e8f0b305378f087a"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/protocol-import-requests",
+    "middleware": [
+      "'/api/admin/protocol-import-requests'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "0f534e9541fa1fdb2b0fa1975a395fd36bd403e0da54219a53d68db6f1679c54"
+  },
+  {
+    "method": "post",
+    "path": "/api/admin/protocol-access",
+    "middleware": [
+      "'/api/admin/protocol-access'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "d9191d161eba2efc92e4876d31b62b5a53b2d22671e0b59a95aa65caeea8bf90"
+  },
+  {
+    "method": "post",
+    "path": "/api/admin/protocol-import-requests/:requestId/approve",
+    "middleware": [
+      "'/api/admin/protocol-import-requests/:requestId/approve'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "0f11c2c819d4ef21379db7e3360aa8358e281d849ed49010de307b6058bd0ef5"
+  },
+  {
+    "method": "post",
+    "path": "/api/admin/protocol-import-requests/:requestId/reject",
+    "middleware": [
+      "'/api/admin/protocol-import-requests/:requestId/reject'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "8cc4551ab08de2264fd49a2b0919368c0b955aba44de43cce8ee529755177275"
+  },
+  {
+    "method": "post",
+    "path": "/api/admin/protocol-import-requests/:requestId/scan",
+    "middleware": [
+      "'/api/admin/protocol-import-requests/:requestId/scan'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "4f083aefe69dc22776ccd320960262dc6376140c0adfeceaf5c49afcbb9cc9f2"
+  },
+  {
+    "method": "get",
+    "path": "/api/admin/verto-protocols",
+    "middleware": [
+      "'/api/admin/verto-protocols'",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "3a22b4a01577eae50556c5b35d5b94dba9cd83c657f971028c5712671b0beca2"
+  },
+  {
+    "method": "get",
+    "path": "/api/clinic/dre",
+    "middleware": [
+      "'/api/clinic/dre'",
+      "checkAuth"
+    ],
+    "sha256": "76383f30fa0c7cdd3c1e1d56184a1b37628d5db2c105d1406d9cb8183fd5d525"
+  },
+  {
+    "method": "get",
+    "path": "/api/owner/leads/recovery",
+    "middleware": [
+      "'/api/owner/leads/recovery'",
+      "checkAuth",
+      "checkOwner"
+    ],
+    "sha256": "0ed6297b38c43b074fb1075cfccb5d21961380c2c2bbeddf09586412ea7905fd"
+  },
+  {
+    "method": "post",
+    "path": "/api/owner/sales/offers",
+    "middleware": [
+      "\"/api/owner/sales/offers\"",
+      "checkAuth",
+      "checkPlatformAdmin"
+    ],
+    "sha256": "83e3f90386b92f6bb7f31dee6da93b3421fde9bb6e5518aaea61ae919dd8412b"
+  }
+]

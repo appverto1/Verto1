@@ -1,9 +1,10 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const migrationPath = 'supabase/migrations/20260802170000_professional_portable_templates.sql';
 const migration = fs.readFileSync(migrationPath, 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 
 assert.match(migration, /^begin;/im);
 assert.match(migration, /commit;\s*$/im);

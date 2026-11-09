@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -126,7 +127,7 @@ assert.equal(consumeTissAuthorizationBalance({
 }), false, 'a ultima unidade nao pode ser reservada por duas sessoes no mesmo lote');
 assert.equal(authorizationBalance.reserved, 1);
 
-const serverSource = fs.readFileSync('server.ts', 'utf8');
+const serverSource = readModularServerSource();
 const economyMigration = fs.readFileSync('supabase/migrations/20260813150000_database_economy_indexes.sql', 'utf8');
 assert.match(serverSource, /rpc\('get_patient_financial_plans_batch_v1'/,
   'planos ativos precisam ser limitados por paciente no banco');

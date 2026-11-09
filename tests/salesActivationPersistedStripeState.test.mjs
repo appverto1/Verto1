@@ -1,11 +1,21 @@
+import {readFileSync as readItem10Source} from 'node:fs';
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const item10ProvisioningSource = readItem10Source('services/salesPaidDirectorAccountProvisioning.ts','utf8');
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
+
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
-const start = server.indexOf('async function finalizeSalesActivationForUser');
-const end = server.indexOf('const mutationActionLabel', start);
+const start = item10ProvisioningSource.indexOf('async function finalizeSalesActivationForUser');
+const end = item10ProvisioningSource.indexOf('ITEM10_SOURCE_END', start);
 assert.ok(start >= 0 && end > start, 'finalizeSalesActivationForUser section not found');
-const section = server.slice(start, end);
+const section = item10ProvisioningSource.slice(start, end);
 
 assert.match(
   section,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const server = readFileSync('server.ts', 'utf8');
+const offerRoutes = readFileSync('services/ownerSalesOfferCreationRoutes.ts', 'utf8');
 const migration = readFileSync(
   'supabase/migrations/20260830183000_sales_offer_owner_finance_schema_repair.sql',
   'utf8'
@@ -10,7 +11,7 @@ const migration = readFileSync(
 const ownerFinanceLoader = server.match(
   /const loadOwnerSaasClients = async[\s\S]*?const loadOwnerAssumptionSets = async/
 )?.[0] || '';
-const modularOfferPreparation = server.match(
+const modularOfferPreparation = offerRoutes.match(
   /const prepareSalesModularOffer = async[\s\S]*?const prepareSalesOfferFromSimulation = async/
 )?.[0] || '';
 

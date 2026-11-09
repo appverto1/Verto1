@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
 const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 

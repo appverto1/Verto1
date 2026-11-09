@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const server = readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const protocols = readFileSync('src/components/Protocols.tsx', 'utf8');
 const admin = readFileSync('src/components/SuperAdminDashboard.tsx', 'utf8');
 

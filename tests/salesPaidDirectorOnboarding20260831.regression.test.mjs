@@ -1,11 +1,21 @@
+import {readFileSync as readItem10Source} from 'node:fs';
+import {readFileSync as readItem09Source} from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+
+const item10ProvisioningSource = readItem10Source('services/salesPaidDirectorAccountProvisioning.ts','utf8');
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 
 const resolver = server.match(/async function resolveOnboardingContextForUser[\s\S]*?async function persistSpecialtyFromOnboardingContext/)?.[0] || '';
-const finalize = server.match(/async function finalizeSalesActivationForUser[\s\S]*?const mutationActionLabel/)?.[0] || '';
+const finalize = item10ProvisioningSource.match(/async function finalizeSalesActivationForUser[\s\S]*?ITEM10_SOURCE_END/)?.[0] || '';
 const completeRoute = server.match(/'\/api\/profile\/:userId\/complete-onboarding'[\s\S]*?app\.get\('\/api\/profile\/:userId'/)?.[0] || '';
 
 assert.match(resolver, /requiresPayment: onboardingMode === 'clinic_owner' \? !canAccessDashboard : false/);

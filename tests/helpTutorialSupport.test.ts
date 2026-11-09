@@ -18,7 +18,7 @@ for(const role of ['director','coordinator','therapist','supervisor','receptioni
 }
 assert.equal(publishedTutorialHelpProjection('patient',caps,modules).length,0);
 assert.equal(publishedTutorialHelpProjection('receptionist',caps,modules).some(a=>a.articleId==='atendimento-evolucao'),false);
-assert.equal(publishedTutorialHelpProjection('director',caps,[]).some(a=>a.articleId==='recebimento-registrar'),false);
+assert.equal(publishedTutorialHelpProjection('director',caps,[]).some(a=>a.articleId==='recebimento-registrar'),true,'tutorials are informational and do not grant financial access');
 const director=publishedTutorialHelpProjection('director',caps,modules);
 assert.equal(findSupportTopics(director,'quero aprender a registrar pagamento parcial','Módulo financeiro')[0].articleId,'recebimento-parcial');
 assert.equal(pausedSupportQuery('quero fazer agendamentos recorrentes'),true);

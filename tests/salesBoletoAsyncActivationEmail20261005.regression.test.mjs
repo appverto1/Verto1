@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 
 const activationFlow = server.match(
   /const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS[\s\S]*?const preparePaidDirectorSessionBootstrap/,

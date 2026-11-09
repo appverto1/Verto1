@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const migration = fs.readFileSync('supabase/migrations/20260813130000_organization_module_entitlements.sql', 'utf8');
 const modules = fs.readFileSync('src/constants/organizationModules.ts', 'utf8');
 const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');

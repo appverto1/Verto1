@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -6,7 +7,7 @@ const migration = fs.readFileSync(
   'supabase/migrations/20260818101500_patient_case_team_supervision_member_management_v2.sql',
   'utf8',
 );
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 
 assert.match(
   utility,

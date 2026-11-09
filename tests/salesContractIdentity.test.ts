@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
 const migration = fs.readFileSync(
   'supabase/migrations/20260814100000_sales_offer_contract_identity.sql',
