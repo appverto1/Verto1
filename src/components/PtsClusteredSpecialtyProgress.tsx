@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from 'recharts';
 import type { ClinicalOutcomeSeriesSummary } from '../utils/clinicalOutcomeAnalytics';
 import type { ClinicalOutcomePlanScopeIndex } from '../utils/clinicalOutcomePlanScope';
@@ -15,14 +15,15 @@ const EXTRA_COLORS = ['#8B5CF6', '#0891B2', '#E11D48', '#65A30D', '#C026D3', '#4
 const labelForWeek = (week: string) => week.slice(8, 10) + '/' + week.slice(5, 7);
 
 export function PtsClusteredSpecialtyProgress({
-  plans, series, planScopeIndex, isDark = false,
+  plans, series, planScopeIndex, isDark = false, selectedMetricId = '', onSelectedMetricIdChange,
 }: {
   plans: PtsChartSpecialtyPlan[];
   series: ClinicalOutcomeSeriesSummary[];
   planScopeIndex: ClinicalOutcomePlanScopeIndex;
   isDark?: boolean;
+  selectedMetricId?: string;
+  onSelectedMetricIdChange?: (metricId: string) => void;
 }) {
-  const [selectedMetricId, setSelectedMetricId] = useState('');
   const metrics = useMemo(
     () => buildPtsClusteredSpecialtyMetrics(plans, series, planScopeIndex),
     [plans, series, planScopeIndex],
@@ -58,7 +59,7 @@ export function PtsClusteredSpecialtyProgress({
           <select
             aria-label="Métrica para comparar especialidades"
             value={selected.id}
-            onChange={(event) => setSelectedMetricId(event.target.value)}
+            onChange={(event) => onSelectedMetricIdChange?.(event.target.value)}
             className={`mt-1 block min-h-10 w-full max-w-lg rounded-xl border px-3 text-sm ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-900'}`}
           >
             {metrics.map((metric) => <option key={metric.id} value={metric.id}>{metric.label} · {metric.unit || 'unidade informada'} · {metric.specialtyCount} plano(s)</option>)}
