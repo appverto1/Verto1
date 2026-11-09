@@ -109,7 +109,7 @@ export function createPeiAssessmentPlanHandlers(getDeps: () => Deps) {
     ctx.manager || ctx.supervisorWrite ||
     (ctx.membershipRole === 'therapist' && String(plan?.specialty || '').toLocaleLowerCase('pt-BR') === ctx.membershipSpecialty.toLocaleLowerCase('pt-BR') &&
       String(plan?.responsible_professional_id) === ctx.actorId &&
-      ctx.actorLinks.some((link: any) => String(link.specialty).toLocaleLowerCase('pt-BR') === String(plan.specialty).toLocaleLowerCase('pt-BR') && link.permissions?.write !== false));
+      ctx.actorLinks.some((link: any) => String(link.specialty).toLocaleLowerCase('pt-BR') === String(plan.specialty).toLocaleLowerCase('pt-BR') && link.permissions?.read !== false && link.permissions?.write !== false));
 
   const sendError = (res: any, error: any, route: string) => {
     const message = String(error?.message || '');
