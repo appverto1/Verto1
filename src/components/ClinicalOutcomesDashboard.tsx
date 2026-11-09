@@ -37,7 +37,6 @@ import {
   compareClinicalOutcomePeriods,
   formatClinicalValue,
   formatClinicalOutcomeValue,
-  isClinicalOutcomeInterferingBehaviorSeries,
   summarizeClinicalOutcomePeriod,
   summarizeClinicalOutcomeSeries,
   type ClinicalOutcomeObservation,
