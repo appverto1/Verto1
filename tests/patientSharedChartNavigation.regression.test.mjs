@@ -75,12 +75,18 @@ assert.match(shell, /PtsClusteredSpecialtyProgress/, 'PTS overview compares spec
 // Compact clinical publication controls must remain accessible and draft-only.
 // Visual changes must not move the Save authority or the case-delegation gate.
 const delegationPanel = read('src/components/PatientSharedChartDelegationPanel.tsx');
-assert.match(control, /data-professional-shared-chart className=\{\`rounded-2xl border px-3 py-3 sm:px-4/,
-  'publication card uses compact spacing on desktop and mobile');
-assert.match(control, /mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between/,
-  'checkbox and actions share one row on desktop but stack on narrow screens');
-assert.match(control, /flex shrink-0 flex-wrap items-center justify-end gap-2/,
-  'Save and removal controls remain grouped instead of stacking vertically');
+assert.match(control, /data-professional-shared-chart className=\{\`min-w-0 space-y-3 px-1 py-1/,
+  'the dropdown must not contain another large bordered publication card');
+assert.match(control, /flex min-h-10 w-full cursor-pointer items-center gap-2\.5 rounded-lg border/,
+  'publish checkbox has a full-width row rather than competing with the actions');
+assert.match(control, /<span className="whitespace-nowrap">Exibir no portal do paciente<\/span>/,
+  'shortened publication label must not wrap');
+assert.match(control, /flex flex-wrap items-center justify-end gap-2/,
+  'Save and removal controls stay aligned in their own action row');
+assert.match(control, /grid grid-cols-1 gap-y-1 sm:grid-cols-\[minmax\(0,1fr\)_minmax\(0,1\.55fr\)\]/,
+  'domains use one column on mobile and balanced columns on desktop');
+assert.match(control, /min-w-0 cursor-pointer items-center gap-2 whitespace-nowrap text-xs/,
+  'domain labels must not break into multiple lines');
 assert.match(control, /aria-live="polite"/, 'published-state indicator announces status changes');
 assert.match(control, /disabled=\{busy \|\| !dirty\} onClick=\{\(\) => void save\(\)\}/,
   'the explicit Save remains the only authority for publication changes');
@@ -91,6 +97,14 @@ assert.match(control, /confirm\('Retirar o gráfico do painel do paciente/,
 assert.match(control, /governance\.canDelegate && <PatientSharedChartDelegationPanel/,
   'case permissions remain visible only when authorized');
 assert.match(delegationPanel, /!open\) return;/, 'authorization details load only when explicitly opened');
+assert.match(delegationPanel, /min-h-10 w-full cursor-pointer items-center justify-between gap-2 rounded-lg border/,
+  'case authorization must look like an actual button');
+assert.match(delegationPanel, /border-slate-300 bg-white text-slate-700 shadow-sm/,
+  'case authorization must have visible border, background and text');
+assert.match(delegationPanel, /focus-visible:ring-2 focus-visible:ring-violet-500/,
+  'authorization must be keyboard accessible');
+assert.match(control, /<PatientSharedChartDelegationPanel key=\{patientId\} patientId=\{patientId\} isDark=\{isDark\}/,
+  'case authorization uses current theme and current patient');
 assert.doesNotMatch(control, /border-violet-100 bg-violet-50\/40/,
   'full-width tinted legacy sharing panel must not return');
 

@@ -3976,8 +3976,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                         <p className="text-lg font-extrabold text-green-700">{kidsGamification.weekPhotos}</p>
                       </div>
                     </div>
+                    <PortalSharedClinicalChart patientId={String(portalPatientId || user?.patientId || user?.id || '')} embedded />
                 </div>
-                <PortalSharedClinicalChart patientId={String(portalPatientId || user?.patientId || user?.id || '')} />
 
                 <div className="bg-white p-4 sm:p-6 rounded-[28px] shadow-lg border border-blue-100 mb-6">
                   <div className="flex items-center justify-between mb-4">

@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { ChevronDown, ShieldCheck } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
 type ProfessionalPermission = { id: string; name: string; delegated: boolean };
 
 /** Loaded only by case leadership on explicit interaction, not on every chart render. */
-export function PatientSharedChartDelegationPanel({ patientId }: { key?: React.Key; patientId: string }) {
+export function PatientSharedChartDelegationPanel({ patientId, isDark = false }: { key?: React.Key; patientId: string; isDark?: boolean }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [people, setPeople] = useState<ProfessionalPermission[]>([]);
@@ -61,11 +61,17 @@ export function PatientSharedChartDelegationPanel({ patientId }: { key?: React.K
   };
 
   return (
-    <div className="mt-2 border-t border-slate-200/80 pt-1.5 dark:border-slate-700" data-shared-chart-case-delegations>
+    <div className={`border-t pt-2 ${isDark ? 'border-slate-700' : 'border-slate-200'}`} data-shared-chart-case-delegations>
       <button type="button" onClick={() => setOpen((value) => !value)}
-        aria-expanded={open} className="inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-xs font-medium text-slate-600 transition hover:text-violet-600 dark:text-slate-300 dark:hover:text-violet-300">
-        <ShieldCheck size={16} aria-hidden />
-        {open ? 'Fechar autorizações do caso' : 'Gerenciar autorizações do caso'}
+        aria-expanded={open}
+        className={`flex min-h-10 w-full cursor-pointer items-center justify-between gap-2 rounded-lg border px-3 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${isDark
+          ? 'border-slate-600 bg-slate-800 text-slate-100 hover:bg-slate-700'
+          : 'border-slate-300 bg-white text-slate-700 shadow-sm hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700'}`}>
+        <span className="inline-flex min-w-0 items-center gap-2 whitespace-nowrap">
+          <ShieldCheck size={16} className="shrink-0" aria-hidden />
+          {open ? 'Fechar autorizações do caso' : 'Gerenciar autorizações do caso'}
+        </span>
+        <ChevronDown size={15} className={`shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden />
       </button>
       {open && (
         <div className="mt-3 space-y-3">
