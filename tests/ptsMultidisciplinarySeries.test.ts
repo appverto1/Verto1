@@ -81,4 +81,18 @@ assert.deepEqual(selectPtsMultidisciplinarySeries({
   isHistoricalOnly: () => false,
 }), [], 'um plano estranho à visão autorizada não pode entrar por semelhança de nome');
 
+
+// A behavioral metric from a different explicit plan must not be included by
+// the broad PTS behavior fallback. Nor may unlinked label-only contributions.
+const foreignBehavior = makeSeries('Foreign behavior', 'other-plan', 'BEHAVIOR_FREQUENCY');
+const blocked = selectPtsMultidisciplinarySeries({
+  allSeries: [foreignBehavior],
+  ptsSeries: [],
+  ptsGoalRows: [{ contributions: [{ specialtyPlan: { id: 'other-plan' }, series: [foreignBehavior] }] }],
+  specialtyPlanIds: ['fono-plan'],
+  planScopeIndex: index,
+  isHistoricalOnly: () => false,
+});
+assert.deepEqual(blocked, [], 'no cross-plan behavior or label-only contribution may enter PTS');
+
 console.log('ptsMultidisciplinarySeries.test.ts: ok');
