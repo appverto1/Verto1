@@ -27,12 +27,12 @@ assert.match(coordinator, /handleFinancialPlanChange\(plan\.id, "groupAmount", e
 assert.match(coordinator, /value=\{plan\.groupAmount\}/);
 assert.match(coordinator, /serializePatientFinancialPlanForGenericFinancialPayload/);
 assert.match(coordinator, /const financialPlans = canManagePatientFinancialPlan/);
-const reconciliation = fs.readFileSync('supabase/migrations/20261015162000_group_session_specialty_rates.sql','utf8');
+const reconciliation = fs.readFileSync('supabase/operations/promotion_staging_sources/20261015162000_group_session_specialty_rates.sql','utf8');
 assert.match(reconciliation, /group_amount_cents integer not null default 0/);
 assert.match(reconciliation, /plan\.group_amount_cents is not distinct from v_group_amount_cents/);
 assert.match(reconciliation, /v_group_amount_cents := coalesce\(v_existing\.group_amount_cents, 0\)/);
 assert.match(reconciliation, /pg_advisory_xact_lock/);
-const authority = fs.readFileSync('supabase/migrations/20261015171000_group_session_private_rate_authority.sql','utf8');
+const authority = fs.readFileSync('supabase/operations/promotion_staging_sources/20261015171000_group_session_private_rate_authority.sql','utf8');
 assert.match(authority, /security invoker/);
 assert.match(authority, /GROUP_RATE_PLAN_AMBIGUOUS/);
 assert.match(authority, /GROUP_RATE_NOT_CONFIGURED/);

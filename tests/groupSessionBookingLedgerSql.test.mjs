@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const migration = readFileSync('supabase/migrations/20261015211500_group_session_booking_ledger.sql', 'utf8');
+const migration = readFileSync('supabase/operations/promotion_staging_sources/20261015211500_group_session_booking_ledger.sql', 'utf8');
 
 assert.match(migration, /\bbegin\s*;/i, 'migration must use a transaction');
 assert.match(migration, /\bcommit\s*;/i);

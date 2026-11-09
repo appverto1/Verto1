@@ -53,7 +53,7 @@ try {
     end;
     $$;
   `);
-  await db.exec(fs.readFileSync('supabase/migrations/20261021223000_patient_financial_plan_professional_binding_v3.sql','utf8'));
+  await db.exec(fs.readFileSync('supabase/operations/promotion_staging_sources/20261021223000_patient_financial_plan_professional_binding_v3.sql','utf8'));
   await query('insert into clinic_memberships(clinic_id,user_id,role,status,specialty) values ($1,$2,\'therapist\',\'active\',\'Fonoaudiólogo\'),($3,$4,\'therapist\',\'active\',\'Fonoaudiólogo\')',
     [clinic,professional,other,otherProfessional]);
   const call=async(key,prof,service='SPEECH_THERAPY',snapshot=service)=>

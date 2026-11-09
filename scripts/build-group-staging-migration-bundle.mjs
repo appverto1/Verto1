@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-export const groupMigrationSources=fs.readdirSync(path.join(root,'supabase/migrations'))
+export const groupMigrationSources=fs.readdirSync(path.join(root,'supabase/operations/promotion_staging_sources'))
   .filter(name=>/^2026101[56].*group_.*\.sql$/.test(name)).sort().slice(3);
 const quote=value=>"'"+String(value).replace(/'/g,"''")+"'";
 const marker='db03af60-8804-49f3-ba45-b47b67712077';
@@ -12,7 +12,7 @@ const marker='db03af60-8804-49f3-ba45-b47b67712077';
 export function buildGroupStagingMigrationBundle(){
   if(groupMigrationSources.length!==9)throw Error('Expected exactly nine reviewed, pending GROUP migrations');
   const sources=groupMigrationSources.map((name,index)=>{
-    const original=fs.readFileSync(path.join(root,'supabase/migrations',name),'utf8');
+    const original=fs.readFileSync(path.join(root,'supabase/operations/promotion_staging_sources',name),'utf8');
     const body=original.replace(/^begin;\s*$/gmi,'').replace(/^commit;\s*$/gmi,'').trim();
     const tag=`$verto_group_source_${index}$`;
     if(original.includes(tag)||original.includes('$verto_group_bundle$'))throw Error('SQL delimiter collision');

@@ -5,7 +5,7 @@ const ui=load('src/components/CoordinatorDashboard.tsx');
 const plan=load('src/utils/patientFinancialPlan.ts');
 const guard=load('services/patientFinancialSpecialtyGuard.ts');
 const server=load('server.ts');
-const sql=load('supabase/migrations/20261021223000_patient_financial_plan_professional_binding_v3.sql');
+const sql=load('supabase/operations/promotion_staging_sources/20261021223000_patient_financial_plan_professional_binding_v3.sql');
 
 assert.match(ui,/FormField label="Profissional responsável pelo plano"/);
 assert.match(ui,/handleFinancialPlanChange\(plan.id, "professionalUserId"/);

@@ -14,8 +14,8 @@ try {
   await db.exec('create role anon; create role authenticated; create role service_role;');
   await db.exec(fs.readFileSync('tests/fixtures/groupSessions/staging-schema.sql','utf8'));
   await db.exec(fs.readFileSync('tests/fixtures/groupSessions/staging-support-functions.sql','utf8'));
-  for (const name of fs.readdirSync('supabase/migrations').filter(name=>/^20261015.*group_/.test(name)).sort()) {
-    await db.exec(fs.readFileSync('supabase/migrations/'+name,'utf8'));
+  for (const name of fs.readdirSync('supabase/operations/promotion_staging_sources').filter(name=>/^20261015.*group_/.test(name)).sort()) {
+    await db.exec(fs.readFileSync('supabase/operations/promotion_staging_sources/'+name,'utf8'));
   }
   await query('insert into clinics(id,name,school_organization_id) values ($1,\'Teste Grupo\',$1),($2,\'Outra clínica fictícia\',$2)',[clinic,otherClinic]);
   await query('insert into users(id,email,clinic_id) values ($1,\'group-actor@example.invalid\',$3),($2,\'group-therapist@example.invalid\',$3)',[actor,therapist,clinic]);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const path = 'supabase/migrations/20261015225500_group_session_transactional_slot_guards.sql';
+const path = 'supabase/operations/promotion_staging_sources/20261015225500_group_session_transactional_slot_guards.sql';
 const sql = readFileSync(path, 'utf8');
 assert.match(sql, /begin;[\s\S]+commit;/i);
 assert.match(sql, /create or replace function public\.guard_group_booking_slot_v1\(\)/);

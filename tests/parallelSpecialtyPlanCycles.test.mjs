@@ -95,7 +95,7 @@ try {
       ('${pts}','${org}','${org}','${patient}','interdisciplinary',null,'active','${fono}');
   `);
   const migration = fs.readFileSync(
-    'supabase/migrations/20261023143000_parallel_specialty_plan_drafts_and_atomic_activation.sql','utf8'
+    'supabase/operations/promotion_staging_sources/20261023143000_parallel_specialty_plan_drafts_and_atomic_activation.sql','utf8'
   );
   assert.match(migration,/coalesce\(public\.clinical_specialty_scope_key_v1\(specialty\)/);
   assert.match(migration,/where mode = 'specialty' and status = 'active'/);
@@ -128,7 +128,7 @@ try {
            ('pts-draft',$1,$1,$2,$6,'draft',1)`,
     [org,patient,old,future,anotherFuture,pts]);
   const migrationPrograms=fs.readFileSync(
-    'supabase/migrations/20261023155000_specialty_cycle_prepared_programs_activation.sql','utf8'
+    'supabase/operations/promotion_staging_sources/20261023155000_specialty_cycle_prepared_programs_activation.sql','utf8'
   );
   assert.match(migrationPrograms,/update_therapeutic_program_status/);
   assert.match(migrationPrograms,/status in \('draft','awaiting_approval'\)/);

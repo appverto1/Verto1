@@ -15,8 +15,8 @@ try{
   for(const file of ['staging-schema.sql','staging-clinic-state.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql']){
     step=file;await db.exec(fs.readFileSync('tests/fixtures/groupSessions/'+file,'utf8'));
   }
-  for(const name of fs.readdirSync('supabase/migrations').filter(name=>/^2026101[56].*group_/.test(name)).sort()){
-    step=name;await db.exec(fs.readFileSync('supabase/migrations/'+name,'utf8'));
+  for(const name of fs.readdirSync('supabase/operations/promotion_staging_sources').filter(name=>/^2026101[56].*group_/.test(name)).sort()){
+    step=name;await db.exec(fs.readFileSync('supabase/operations/promotion_staging_sources/'+name,'utf8'));
   }
   step='fixtures';
   await query("insert into clinics(id,name,school_organization_id) values ($1,'Clínica fictícia atômica',$1)",[clinic]);

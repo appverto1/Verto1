@@ -69,7 +69,7 @@ try {
     ('pts-scope',$1,$2,'scope-pts',$3,'awaiting_approval',1),
     ('wrong-specialty',$1,$2,'scope-wrong-specialty',$3,'awaiting_approval',1)`,
     [clinic,patient,specialist,manager]);
-  const migration=fs.readFileSync('supabase/migrations/20261022130000_specialist_authored_programs_no_approval.sql','utf8');
+  const migration=fs.readFileSync('supabase/operations/promotion_staging_sources/20261022130000_specialist_authored_programs_no_approval.sql','utf8');
   assert.match(migration, /result->'program'->>'status'/, 'read actual program payload envelope');
   assert.match(migration, /clinical_specialty_scope_key_v1\(cm\.specialty\)/,
     'migration must recognize historical aliases through canonical scope keys');

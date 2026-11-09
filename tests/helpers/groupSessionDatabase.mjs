@@ -12,7 +12,7 @@ export async function createGroupSessionTestDatabase({ futureDates = true } = {}
   const scalar=async(sql,args=[]) => Object.values((await query(sql,args))[0])[0];
   await db.exec("create role anon;create role authenticated;create role service_role;create schema auth;create function auth.role() returns text language sql stable as $$select 'service_role'::text$$;");
   for(const file of ['staging-schema.sql','staging-clinic-state.sql','staging-support-functions.sql','staging-finance.sql','staging-finance-triggers.sql','staging-finance-side-triggers.sql'])await db.exec(fs.readFileSync('tests/fixtures/groupSessions/'+file,'utf8'));
-  for(const name of fs.readdirSync('supabase/migrations').filter(name=>/^2026101[56].*group_/.test(name)).sort())await db.exec(fs.readFileSync('supabase/migrations/'+name,'utf8'));
+  for(const name of fs.readdirSync('supabase/operations/promotion_staging_sources').filter(name=>/^2026101[56].*group_/.test(name)).sort())await db.exec(fs.readFileSync('supabase/operations/promotion_staging_sources/'+name,'utf8'));
   await query("insert into clinics(id,name,school_organization_id) values($1,'Lifecycle fictitious clinic',$1)",[clinic]);
   for(const [who,role]of [[actor,'director'],[therapist,'therapist'],[secondary,'therapist']]){
     await query('insert into users(id,email,name,clinic_id) values($1,$2,$3,$4)',[who,who+'@example.invalid','Fictitious '+role,clinic]);

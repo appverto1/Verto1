@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const sql=fs.readFileSync('supabase/migrations/20261015183500_group_financial_rate_atomic_update.sql','utf8');
-const base=fs.readFileSync('supabase/migrations/20261015162000_group_session_specialty_rates.sql','utf8');
+const sql=fs.readFileSync('supabase/operations/promotion_staging_sources/20261015183500_group_financial_rate_atomic_update.sql','utf8');
+const base=fs.readFileSync('supabase/operations/promotion_staging_sources/20261015162000_group_session_specialty_rates.sql','utf8');
 const route=fs.readFileSync('services/groupSessions/groupSessionFinancialRateRoutes.ts','utf8');
 const registry=fs.readFileSync('services/clinicAppointmentPolicyRoutes.ts','utf8');
 
