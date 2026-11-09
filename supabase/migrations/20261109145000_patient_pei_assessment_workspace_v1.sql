@@ -73,6 +73,7 @@ declare
   v_hash text;
   v_is_manager boolean;
   v_authorized_supervisor boolean;
+  v_protocol jsonb;
 begin
   if p_operation not in ('create','save','activate','complete','archive') then
     raise exception 'PEI_OPERATION_INVALID' using errcode = '22023';
@@ -91,13 +92,13 @@ begin
     from public.clinic_memberships cm
     where cm.clinic_id = p_clinic_id and cm.user_id = p_actor_id and cm.status = 'active'
     limit 1;
-  if v_role is null then
+  if v_role is null or v_role not in ('director','coordinator','supervisor','therapist') then
     raise exception 'PEI_MEMBERSHIP_DENIED' using errcode = '42501';
   end if;
   v_is_manager := v_role in ('director','coordinator');
   v_authorized_supervisor := exists (
     select 1 from public.patient_professional_links l
-      where l.patient_id = p_patient_id and l.organization_id = p_clinic_id::text
+      where l.patient_id = p_patient_id and l.clinic_id = p_clinic_id::text
         and l.professional_id = p_actor_id::text and l.status = 'active'
         and l.case_role in ('supervisor','case_supervisor')
         and coalesce(l.permissions->>'write','true') <> 'false'
@@ -118,7 +119,7 @@ begin
       join public.patient_professional_links l
         on l.professional_id = cm.user_id::text
         and l.patient_id = p_patient_id
-        and l.organization_id = p_clinic_id::text
+        and l.clinic_id = p_clinic_id::text
         and l.status = 'active'
         and coalesce(l.permissions->>'write','true') <> 'false'
       where cm.clinic_id = p_clinic_id and cm.user_id = p_responsible_professional_id
@@ -129,9 +130,27 @@ begin
       raise exception 'PEI_RESPONSIBLE_SCOPE_DENIED' using errcode = '42501';
     end if;
     if not v_is_manager and not v_authorized_supervisor then
-      if p_actor_id <> p_responsible_professional_id then
+      if v_role <> 'therapist' or p_actor_id <> p_responsible_professional_id then
         raise exception 'PEI_ACTOR_SCOPE_DENIED' using errcode = '42501';
       end if;
+    end if;
+    -- Bind the uneditable method/reference to the clinic's approved evaluation
+    -- protocol. Even a direct service RPC call cannot forge the source.
+    select value into v_protocol
+      from public.clinic_state cs
+      cross join lateral jsonb_array_elements(
+        case when jsonb_typeof(cs.protocols)='array' then cs.protocols else '[]'::jsonb end
+      ) item(value)
+      where cs.clinic_id=p_clinic_id
+        and (item.value->>'id'=p_protocol_id or item.value->>'canonicalKey'=p_protocol_id)
+        and lower(coalesce(item.value->>'category','evaluation'))='evaluation'
+        and jsonb_typeof(item.value->'data')='array'
+      limit 1;
+    if v_protocol is null or p_protocol_snapshot <> v_protocol then
+      raise exception 'PEI_PROTOCOL_SCOPE_DENIED' using errcode='42501';
+    end if;
+    if p_content <> '{"goals":[]}'::jsonb then
+      raise exception 'PEI_INITIAL_CONTENT_INVALID' using errcode='22023';
     end if;
     v_hash := md5(p_clinic_id::text || p_patient_id::text ||
       p_responsible_professional_id::text || btrim(p_specialty) ||
@@ -168,9 +187,9 @@ begin
       raise exception 'PEI_PLAN_SCOPE_DENIED' using errcode='42501';
     end if;
     if not v_is_manager and not v_authorized_supervisor then
-      if v_row.responsible_professional_id <> p_actor_id or not exists (
+      if v_role <> 'therapist' or v_row.responsible_professional_id <> p_actor_id or not exists (
         select 1 from public.patient_professional_links l
-        where l.patient_id=p_patient_id and l.organization_id=p_clinic_id::text
+        where l.patient_id=p_patient_id and l.clinic_id=p_clinic_id::text
           and l.professional_id=p_actor_id::text and l.status='active'
           and lower(btrim(l.specialty))=lower(btrim(v_row.specialty))
           and coalesce(l.permissions->>'write','true') <> 'false'
