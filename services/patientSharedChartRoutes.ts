@@ -1,5 +1,5 @@
 import type { Express } from 'express';
-import { summarizeClinicalOutcomeSeries, type ClinicalOutcomeObservation } from '../src/utils/clinicalOutcomeAnalytics';
+import { isClinicalOutcomeInterferingBehaviorSeries, summarizeClinicalOutcomeSeries, type ClinicalOutcomeObservation } from '../src/utils/clinicalOutcomeAnalytics';
 import { filterTherapeuticPlanScopesForActor } from '../src/utils/therapeuticPlanAccess';
 
 type SharedChartRouteDeps = {
@@ -319,6 +319,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     axis: 'date' | 'session';
     comparePrevious: boolean;
     seriesKeys?: string[];
+    allowedDomains?: string[];
     seriesRefs?: Array<{
       targetId: string;
       measurementModelVersion: string;
@@ -344,12 +345,21 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
           .filter(Boolean)
       )).slice(0, 4) as string[];
       if (seriesKeys.length < 1 || seriesKeys.length > 3) return null;
+      // The optional navigation permission is a server-enforced allowlist,
+      // never a frontend-only tab visibility setting.
+      const requestedDomains = value.allowedDomains === undefined ? [] : value.allowedDomains;
+      if (!Array.isArray(requestedDomains) || requestedDomains.length > 3) return null;
+      const allowedDomains = requestedDomains.map((item: any) => sanitizeString(item, 40).toLowerCase());
+      if (allowedDomains.some((item: string) =>
+        !['skills', 'behaviors', 'mastery', 'maintenance'].includes(item) || item === domain)
+        || new Set(allowedDomains).size !== allowedDomains.length) return null;
       const normalized: SharedChartDescriptor = {
         schemaVersion: 1,
         family: 'PLAN_PTS',
         domain,
         metricSignature,
         seriesKeys,
+        ...(allowedDomains.length > 0 ? { allowedDomains } : {}),
         axis: axis as 'date' | 'session',
         comparePrevious: value.comparePrevious === true,
       };
@@ -602,6 +612,46 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     );
     const selected = requestedKeys.map((key) => seriesByKey.get(key)).filter(Boolean);
     if (selected.length !== requestedKeys.length) return null;
+
+    // Extra tabs use exactly the same scoped, already-read clinical evidence.
+    // Do not perform a new DB read per tab or send arbitrary targets to the
+    // patient portal. Each extra tab gets at most three compatible series.
+    const classify = (series: any): string => {
+      const key = sanitizeString(series?.metricKey, 160).toUpperCase();
+      const label = sanitizeTextField(series?.metricLabel, 220).toLocaleLowerCase('pt-BR');
+      if (key.includes('MASTERY') || label.includes('maestria') || label.includes('domínio')) return 'mastery';
+      if (key.includes('MAINTENANCE') || key.includes('REGRESSION') || label.includes('manutenção') || label.includes('regress')) return 'maintenance';
+      if (isClinicalOutcomeInterferingBehaviorSeries(series)) return 'behaviors';
+      return 'skills';
+    };
+    const metricSignature = (series: any): string => {
+      const sample = series?.observations?.[0] || {};
+      const instrumentId = sanitizeString(sample.instrumentId, 160);
+      const instrumentVersion = instrumentId === 'ABA_V3_PHASE' ? '' : sanitizeString(sample.instrumentVersion, 160);
+      return [
+        sanitizeString(series?.metricKey, 160),
+        sanitizeString(series?.unit, 80),
+        sanitizeString(series?.direction, 80),
+        instrumentId,
+        instrumentVersion,
+        String(Number(sample.definitionVersion || 1)),
+      ].join('::');
+    };
+    const additionalViews = (descriptor.allowedDomains || []).flatMap((domain) => {
+      const candidates = Array.from(seriesByKey.values()).filter((series: any) =>
+        requestedPlanIds.includes(sanitizeString(series?.observations?.[0]?.planId, 120))
+        && classify(series) === domain);
+      if (!candidates.length) return [];
+      // Mirror the professional metric selector: only series with identical
+      // units, metric semantics, instrument and definition version can share
+      // a chart. Different signatures must not be plotted on one axis.
+      const firstSignature = metricSignature(candidates[0]);
+      const comparable = candidates.filter((series: any) => metricSignature(series) === firstSignature).slice(0, 3);
+      return comparable.length ? [{
+        domain, metricSignature: firstSignature,
+        series: comparable.map(projectSharedClinicalSeries),
+      }] : [];
+    });
     return {
       family: 'PLAN_PTS',
       domain: descriptor.domain,
@@ -609,6 +659,10 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
       axis: descriptor.axis,
       comparePrevious: descriptor.comparePrevious,
       series: selected.map(projectSharedClinicalSeries),
+      ...(additionalViews.length > 0 ? { views: [
+        { domain: descriptor.domain, metricSignature: descriptor.metricSignature, series: selected.map(projectSharedClinicalSeries) },
+        ...additionalViews,
+      ] } : {}),
     };
   };
 
