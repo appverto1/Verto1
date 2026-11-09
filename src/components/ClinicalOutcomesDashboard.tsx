@@ -48,6 +48,7 @@ import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanS
 import { selectPtsMultidisciplinarySeries } from '../utils/ptsMultidisciplinarySeries';
 import { ClinicalPlanAnalyticsShell, type AnalyticsAxis, type ClinicalPlanShareDescriptor } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
+import { PtsSpecialtyClusteredChart } from './PtsSpecialtyClusteredChart';
 
 type ClinicalOutcomesDashboardProps = {
   patientId: string;
@@ -897,6 +898,16 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
             )}
           </div>
         </section>
+      )}
+
+      {scopeId === 'pts' && activePts && (
+        <PtsSpecialtyClusteredChart
+          plans={specialtyPlans.map((plan) => ({ id: String(plan.id), specialty: clean(plan.specialty) || 'Especialidade' }))}
+          series={ptsAnalyticsSeries}
+          programs={data.programs || []}
+          planScopeIndex={planScopeIndex}
+          isDark={isPanelDark}
+        />
       )}
 
       {analyticsSeries.length > 0 && (
