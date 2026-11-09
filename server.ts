@@ -68109,7 +68109,7 @@ async function startServer() {
     return { data: null, error: { message: 'Patch ABA vazio apos fallback de schema.' } };
   };
 
-  const updateAbaTargetWithSchemaFallback = async (targetId: string, patchBase: Record<string, any>, clinicId: string, organizationId?: string, patientId?: string) => {
+  const updateAbaTargetWithSchemaFallback = async (targetId: string, patchBase: Record<string, any>, clinicId: string, organizationId?: string, patientId?: string, requiredPersistedField?: 'mastery_criteria') => {
     let patch: Record<string, any> = { ...patchBase };
     while (Object.keys(patch).length > 0) {
       let query = supabase
@@ -68119,10 +68119,10 @@ async function startServer() {
       if (clinicId) query = query.eq('clinic_id', clinicId);
       if (organizationId) query = query.eq('organization_id', organizationId);
       if (patientId) query = query.eq('patient_id', patientId);
-      const result = await query.select('id').maybeSingle();
+      const result = await query.select(requiredPersistedField ? `id,${requiredPersistedField}` : 'id').maybeSingle();
       if (!result.error) return { data: result.data, error: null };
       const missingColumn = extractMissingColumnName(result.error);
-      if (missingColumn && missingColumn in patch) {
+      if (missingColumn && missingColumn in patch && missingColumn !== requiredPersistedField) {
         delete patch[missingColumn];
         continue;
       }

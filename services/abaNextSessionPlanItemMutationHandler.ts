@@ -49,6 +49,9 @@ export function createAbaNextSessionPlanItemPatchHandler(getDeps: () => any) {
         if (hasMissingFinancialSchema(error)) return res.status(503).json({ success: false, error: 'Schema de planejamento ABA ainda não aplicado.' });
         throw error;
       }
+      if (!data || sanitizeString(data.id, 180) !== planItemId) {
+        return res.status(409).json({ success: false, error: 'PERSISTENCE_NOT_CONFIRMED', message: 'Não foi possível confirmar a persistência do item do plano ABA.' });
+      }
       return res.json({ success: true, data });
     } catch (error: any) {
       return res.status(500).json({ success: false, error: error?.message || 'Não foi possível atualizar o plano sugerido agora.' });

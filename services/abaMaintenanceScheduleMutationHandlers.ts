@@ -155,6 +155,9 @@ export function createAbaMaintenanceScheduleEditHandler(getDeps: () => any) {
         update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now, update.error), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
       }
       if (update.error) throw update.error;
+      if (!update.data || sanitizeString(update.data.id, 180) !== scheduleId) {
+        return res.status(409).json({ success: false, error: 'PERSISTENCE_NOT_CONFIRMED', message: 'Não foi possível confirmar a persistência da sondagem.' });
+      }
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(schedule.clinic_id || clinicId, 120),
@@ -235,6 +238,9 @@ export function createAbaMaintenanceScheduleCancelHandler(getDeps: () => any) {
         update = await updateAbaScheduleWithSchemaFallback(scheduleId, buildLegacyMaintenanceScheduleRow(patch, now, update.error), sanitizeString(schedule.clinic_id || clinicId, 120), sanitizeString(schedule.organization_id || organizationId, 120), patientId);
       }
       if (update.error) throw update.error;
+      if (!update.data || sanitizeString(update.data.id, 180) !== scheduleId) {
+        return res.status(409).json({ success: false, error: 'PERSISTENCE_NOT_CONFIRMED', message: 'Não foi possível confirmar a persistência da sondagem.' });
+      }
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: sanitizeString(schedule.clinic_id || clinicId, 120),
@@ -283,6 +289,9 @@ export function createAbaMaintenanceScheduleCompleteHandler(getDeps: () => any) 
         updated_at: new Date().toISOString()
       }), existing.data.clinic_id, existing.data.organization_id, existing.data.patient_id);
       if (update.error) throw update.error;
+      if (!update.data || sanitizeString(update.data.id, 180) !== scheduleId) {
+        return res.status(409).json({ success: false, error: 'PERSISTENCE_NOT_CONFIRMED', message: 'Não foi possível confirmar a persistência da sondagem.' });
+      }
       const completedSchedule = { ...existing.data, status: 'COMPLETED', completed_at: completedAt, completed_by: sanitizeString(req.session.user?.id, 120) };
       const [enrichedSchedule] = await enrichMaintenanceRowsWithTargetDisplay(
         [completedSchedule],
