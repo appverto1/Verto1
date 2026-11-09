@@ -5,7 +5,7 @@ import { dataService } from '../services/dataService';
 // New evaluation plans are intentionally separate from patient.pei (legacy
 // skill/maintenance tracking) and the therapeutic PTS documents.
 type PeiTarget = {
-  id: string; name: string; instruction: string; observation: string;
+  id: string; name: string; instruction: string; criteria: string; observation: string;
   status: 'pending' | 'in_progress' | 'evaluated' | 'cancelled';
 };
 type PeiGoal = {
@@ -97,7 +97,9 @@ export const PeiAssessmentWorkspace = ({
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedId || !patientId) { setPlan(null); return; }
+    setPlan(null);
+    setServerEditable(false);
+    if (!selectedId || !patientId) return;
     setLoading(true);
     setError(''); setNotice('');
     dataService.getPeiAssessmentPlan(patientId, selectedId).then((r: any) => {
@@ -150,7 +152,7 @@ export const PeiAssessmentWorkspace = ({
       criteria: String(skill.criteria || '').slice(0, 1200),
       notes: '', status: 'pending', targets: [{
         id: newId(), name: String(skill.name || 'Alvo de avaliação').slice(0, 180),
-        instruction: '', observation: '', status: 'pending',
+        instruction: '', criteria: '', observation: '', status: 'pending',
       }],
     }]); setDirty(true); setError('');
   };
@@ -218,19 +220,19 @@ export const PeiAssessmentWorkspace = ({
       {notice && <p role="status" className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-3 text-sm text-emerald-600"><CheckCircle2 size={16}/>{notice}</p>}
       {showCreate && <div className="mt-5 grid gap-3 rounded-xl border border-violet-500/20 p-4 sm:grid-cols-2">
         <label className="text-xs font-medium">Profissional responsável
-          <select className={input + ' mt-1'} value={responsibleId} onChange={e => setResponsibleId(e.target.value)}>
+          <select className={input + ' mt-1'} value={responsibleId} onChange={e => { createKeyRef.current = newId(); setResponsibleId(e.target.value); }}>
             <option value="">Selecione</option>
             {memberOptions.map((p: any) => <option key={p.id} value={p.id}>{p.name} · {p.specialty}</option>)}
           </select>
         </label>
         <label className="text-xs font-medium">Protocolo padronizado de avaliação
-          <select className={input + ' mt-1'} value={protocolId} onChange={e => setProtocolId(e.target.value)}>
+          <select className={input + ' mt-1'} value={protocolId} onChange={e => { createKeyRef.current = newId(); setProtocolId(e.target.value); }}>
             <option value="">Selecione</option>
             {evaluationProtocols.map((p: any) => <option key={p.id} value={String(p.id)}>{p.title}</option>)}
           </select>
         </label>
         <label className="text-xs font-medium sm:col-span-2">Nome do plano
-          <input className={input + ' mt-1'} value={newTitle} maxLength={180} onChange={e => setNewTitle(e.target.value)}
+          <input className={input + ' mt-1'} value={newTitle} maxLength={180} onChange={e => { createKeyRef.current = newId(); setNewTitle(e.target.value); }}
             placeholder="Ex.: Avaliação inicial de comunicação"/>
         </label>
         <div className="flex gap-2 sm:col-span-2">
@@ -339,7 +341,7 @@ export const PeiAssessmentWorkspace = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h5 className="text-sm font-semibold">Alvos de avaliação</h5>
                   {editable && <button className={button + ' border border-violet-400/40'} disabled={goal.targets.length >= 30}
-                    onClick={() => changeGoal(goal.id, { targets: [...goal.targets, { id: newId(), name: 'Novo alvo', instruction: '', observation: '', status: 'pending' }] })}>
+                    onClick={() => changeGoal(goal.id, { targets: [...goal.targets, { id: newId(), name: 'Novo alvo', instruction: '', criteria: '', observation: '', status: 'pending' }] })}>
                     <Plus size={14}/> Novo alvo</button>}
                 </div>
                 {goal.targets.map(target => <div key={target.id} className={'grid gap-2 rounded-xl border p-3 sm:grid-cols-2 ' + (isDark ? 'border-slate-600' : 'border-slate-100')}>
@@ -356,6 +358,10 @@ export const PeiAssessmentWorkspace = ({
                   <label className="text-xs sm:col-span-2">Instrução de avaliação
                     <textarea className={input + ' mt-1'} rows={2} value={target.instruction} maxLength={800} disabled={!editable}
                       onChange={e => changeTarget(goal.id, target.id, { instruction: e.target.value })}/>
+                  </label>
+                  <label className="text-xs sm:col-span-2">Critério do alvo (editável, independente do protocolo)
+                    <textarea className={input + ' mt-1'} rows={2} value={target.criteria || ''} maxLength={1200} disabled={!editable}
+                      onChange={e => changeTarget(goal.id, target.id, { criteria: e.target.value })}/>
                   </label>
                   <label className="text-xs sm:col-span-2">Resultado / observação
                     <textarea className={input + ' mt-1'} rows={2} value={target.observation} maxLength={1200} disabled={!editable}

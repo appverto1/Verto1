@@ -131,6 +131,33 @@ async function test() {
   assert.equal(res.state.statusCode, 200);
   const authorizedWrites = writeCalls;
 
+  // Editable target criteria are plan fields; oversized values never reach the DB.
+  res = response();
+  await handlers.write(request('PATCH', { body: {
+    title: 'Alvo com critério', expectedRevision: 1, action: 'save',
+    content: { goals: [{
+      id: 'goal1', domainId: 'domain-1', sourceSkillId: 'skill-1',
+      title: 'Avaliar', objective: 'Observar', criteria: 'Critério do plano',
+      targets: [{ id: 'target1', name: 'Alvo', instruction: 'Observar', criteria: 'Acertar 3 de 4 itens',
+        observation: '', status: 'in_progress' }],
+    }] },
+  } }), res);
+  assert.equal(res.state.statusCode, 200);
+  assert.equal(writeCalls, authorizedWrites + 1);
+
+  res = response();
+  await handlers.write(request('PATCH', { body: {
+    title: 'Critério longo', expectedRevision: 1, action: 'save',
+    content: { goals: [{
+      id: 'goal1', domainId: 'domain-1', sourceSkillId: 'skill-1',
+      title: 'Avaliar', objective: 'Observar', criteria: '',
+      targets: [{ id: 'target1', name: 'Alvo', criteria: 'x'.repeat(1201), status: 'pending' }],
+    }] },
+  } }), res);
+  assert.equal(res.state.statusCode, 422, 'oversized target criterion blocked');
+  const testedWrites = writeCalls;
+  assert.equal(testedWrites, authorizedWrites + 1);
+
   res = response();
   await handlers.write(request('PATCH', { body: {
     title: 'Tentativa de falsificar protocolo', expectedRevision: 1, action: 'save',
@@ -138,7 +165,7 @@ async function test() {
       title: 'Avaliar', objective: '', criteria: '', status: 'pending', targets: [] }] },
   } }), res);
   assert.equal(res.state.statusCode, 422, 'forged skill must fail');
-  assert.equal(writeCalls, authorizedWrites);
+  assert.equal(writeCalls, testedWrites);
 
   memberRole = 'therapist'; memberSpecialty = 'Outra especialidade';
   res = response(); await handlers.detail(request('GET'), res);
@@ -147,7 +174,7 @@ async function test() {
     title: 'Tentativa de edição', expectedRevision: 1, action: 'save', content: { goals: [] },
   } }), res);
   assert.equal(res.state.statusCode, 404);
-  assert.equal(writeCalls, authorizedWrites);
+  assert.equal(writeCalls, testedWrites);
 
   memberRole = ''; memberSpecialty = 'Fonoaudiologia';
   res = response(); await handlers.list(request('GET'), res);

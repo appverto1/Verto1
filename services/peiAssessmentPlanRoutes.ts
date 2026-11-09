@@ -51,16 +51,17 @@ function cleanGoalPayload(value: unknown, sourceProtocol: any) {
       const targetId = textField(item?.id, 120);
       const name = textField(item?.name, 180);
       const instruction = textField(item?.instruction || '', 800);
+      const criteria = textField(item?.criteria || '', 1200);
       const observation = textField(item?.observation || '', 1200);
       const targetStatus = textField(item?.status || 'pending', 40);
       if (!targetId || targetIds.has(targetId) || !name || name.length > 180 ||
-        instruction.length > 800 || observation.length > 1200 ||
+        instruction.length > 800 || criteria.length > 1200 || observation.length > 1200 ||
         !['pending','in_progress','evaluated','cancelled'].includes(targetStatus)) {
         throw new Error('PEI_TARGET_INVALID');
       }
       targetIds.add(targetId);
       targetsCount++;
-      return { id: targetId, name, instruction, observation, status: targetStatus };
+      return { id: targetId, name, instruction, criteria, observation, status: targetStatus };
     });
     return { id, domainId, sourceSkillId, title, objective, criteria, notes, status, targets };
   });
