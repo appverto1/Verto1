@@ -20,7 +20,11 @@ type ShareDomain = typeof AVAILABLE_DOMAINS[number]['id'];
 const chartIdentity = (chart: ProfessionalChartDescriptor | null): string => {
   if (!chart) return '';
   const { allowedDomains: _ignored, ...base } = chart as ProfessionalChartDescriptor & { allowedDomains?: ShareDomain[] };
-  return JSON.stringify(base);
+  // The server normalizes JSON fields in a different insertion order from
+  // the browser descriptor. Equality must be semantic, not key-order based.
+  return JSON.stringify(Object.fromEntries(
+    Object.entries(base).sort(([left], [right]) => left.localeCompare(right)),
+  ));
 };
 
 export function ProfessionalSharedChartControl({
