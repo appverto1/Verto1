@@ -1,6 +1,8 @@
 import type { Express } from 'express';
 import { isClinicalOutcomeInterferingBehaviorSeries, summarizeClinicalOutcomeSeries, type ClinicalOutcomeObservation } from '../src/utils/clinicalOutcomeAnalytics';
 import { filterTherapeuticPlanScopesForActor } from '../src/utils/therapeuticPlanAccess';
+import { buildPtsClusteredSpecialtyMetrics } from '../src/utils/ptsClusteredSpecialtyProgress';
+import { buildClinicalOutcomePlanScopeIndex } from '../src/utils/clinicalOutcomePlanScope';
 
 type SharedChartRouteDeps = {
   supabase: any;
@@ -319,6 +321,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     axis: 'date' | 'session';
     comparePrevious: boolean;
     seriesKeys?: string[];
+    planIds?: string[];
     allowedDomains?: string[];
     seriesRefs?: Array<{
       targetId: string;
@@ -338,17 +341,27 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     if (!metricSignature || (axis !== 'date' && axis !== 'session')) return null;
 
     if (family === 'PLAN_PTS') {
-      if (!['skills', 'behaviors', 'mastery', 'maintenance'].includes(domain)) return null;
+      const overview = domain === 'overview';
+      if (!['overview', 'skills', 'behaviors', 'mastery', 'maintenance'].includes(domain)) return null;
+      // Overview selects permitted plan identities, never trusts client-side
+      // series or rendered aggregates. The server recomputes every value.
+      const rawPlanIds = Array.isArray(value.planIds) ? value.planIds : [];
+      const planIds = rawPlanIds.map((item: any) => sanitizeString(item, 120));
+      if (overview && (
+        planIds.length < 1 || planIds.length > 12 || new Set(planIds).size !== planIds.length
+        || planIds.some((id: string) => !isUuid(id))
+      )) return null;
+      if (!overview && value.planIds !== undefined) return null;
+      const rawKeys = Array.isArray(value.seriesKeys) ? value.seriesKeys : [];
+      if (rawKeys.length > (overview ? 0 : 3)) return null;
       const seriesKeys = Array.from(new Set(
-        (Array.isArray(value.seriesKeys) ? value.seriesKeys : [])
-          .map((item: any) => sanitizeString(item, 720))
-          .filter(Boolean)
-      )).slice(0, 4) as string[];
-      if (seriesKeys.length < 1 || seriesKeys.length > 3) return null;
+        rawKeys.map((item: any) => sanitizeString(item, 720)).filter(Boolean)
+      )) as string[];
+      if (overview ? seriesKeys.length !== 0 : seriesKeys.length < 1 || seriesKeys.length > 3) return null;
       // The optional navigation permission is a server-enforced allowlist,
       // never a frontend-only tab visibility setting.
       const requestedDomains = value.allowedDomains === undefined ? [] : value.allowedDomains;
-      if (!Array.isArray(requestedDomains) || requestedDomains.length > 3) return null;
+      if (!Array.isArray(requestedDomains) || requestedDomains.length > (overview ? 4 : 3)) return null;
       const allowedDomains = requestedDomains.map((item: any) => sanitizeString(item, 40).toLowerCase());
       if (allowedDomains.some((item: string) =>
         !['skills', 'behaviors', 'mastery', 'maintenance'].includes(item) || item === domain)
@@ -359,6 +372,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         domain,
         metricSignature,
         seriesKeys,
+        ...(overview ? { planIds } : {}),
         ...(allowedDomains.length > 0 ? { allowedDomains } : {}),
         axis: axis as 'date' | 'session',
         comparePrevious: value.comparePrevious === true,
@@ -428,11 +442,14 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
     actorRole?: string | null;
   }) => {
     const { clinicId, patientId, descriptor } = params;
+    const overview = descriptor.domain === 'overview';
     const requestedKeys = Array.isArray(descriptor.seriesKeys) ? descriptor.seriesKeys : [];
-    const requestedPlanIds = Array.from(new Set(
+    const requestedPlanIds = overview ? (descriptor.planIds || []) : Array.from(new Set(
       requestedKeys.map((key) => sanitizeString(String(key).split('::')[0], 120)).filter(isUuid)
     ));
-    if (requestedKeys.length < 1 || requestedPlanIds.length < 1 || requestedPlanIds.length > 3) return null;
+    if (overview
+      ? requestedPlanIds.length < 1 || requestedPlanIds.length > 12 || requestedKeys.length !== 0
+      : requestedKeys.length < 1 || requestedPlanIds.length < 1 || requestedPlanIds.length > 3) return null;
 
     const dateTo = new Date();
     const dateFrom = new Date(dateTo.getTime() - 730 * 86_400_000);
@@ -445,7 +462,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         .eq('organization_id', clinicId)
         .eq('patient_id', patientId)
         .in('id', requestedPlanIds)
-        .limit(3),
+        .limit(overview ? 12 : 3),
       params.actorId
         ? supabase
             .from('patient_professional_links')
@@ -611,7 +628,31 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
       summarizeClinicalOutcomeSeries(mergedRows).map((series: any) => [series.key, series])
     );
     const selected = requestedKeys.map((key) => seriesByKey.get(key)).filter(Boolean);
-    if (selected.length !== requestedKeys.length) return null;
+    if (!overview && selected.length !== requestedKeys.length) return null;
+    const groupedMetric = overview ? buildPtsClusteredSpecialtyMetrics(
+      allowedPlans
+        .filter((plan: any) => plan.mode === 'specialty')
+        .map((plan: any) => ({ id: String(plan.id), specialty: sanitizeTextField(plan.specialty, 180) })),
+      [...seriesByKey.values()],
+      buildClinicalOutcomePlanScopeIndex(programs),
+    ).find((item) => item.id === descriptor.metricSignature) : null;
+    if (overview && !groupedMetric) return null;
+    const groupedPlans = groupedMetric ? allowedPlans.filter((plan: any) =>
+      plan.mode === 'specialty' && groupedMetric.weeks.some((week) =>
+        Object.prototype.hasOwnProperty.call(week.values, String(plan.id)))) : [];
+    const grouped = groupedMetric ? {
+      metricLabel: sanitizeTextField(groupedMetric.label, 220),
+      unit: sanitizeString(groupedMetric.unit, 80),
+      direction: sanitizeString(groupedMetric.direction, 80),
+      plans: groupedPlans.map((plan: any) => ({
+        id: sanitizeString(plan.id, 120),
+        specialty: sanitizeTextField(plan.specialty, 180),
+      })),
+      weeks: groupedMetric.weeks.slice(-104).map((week) => ({
+        week: week.week,
+        values: Object.fromEntries(groupedPlans.map((plan: any) => [String(plan.id), week.values[String(plan.id)]]).filter((item: any) => Number.isFinite(item[1]))),
+      })),
+    } : null;
 
     // Extra tabs use exactly the same scoped, already-read clinical evidence.
     // Do not perform a new DB read per tab or send arbitrary targets to the
@@ -658,9 +699,10 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
       metricSignature: descriptor.metricSignature,
       axis: descriptor.axis,
       comparePrevious: descriptor.comparePrevious,
-      series: selected.map(projectSharedClinicalSeries),
+      series: overview ? [] : selected.map(projectSharedClinicalSeries),
+      ...(grouped ? { grouped } : {}),
       ...(additionalViews.length > 0 ? { views: [
-        { domain: descriptor.domain, metricSignature: descriptor.metricSignature, series: selected.map(projectSharedClinicalSeries) },
+        { domain: descriptor.domain, metricSignature: descriptor.metricSignature, series: overview ? [] : selected.map(projectSharedClinicalSeries) },
         ...additionalViews,
       ] } : {}),
     };
