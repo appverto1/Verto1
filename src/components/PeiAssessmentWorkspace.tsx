@@ -5,7 +5,7 @@ import { dataService } from '../services/dataService';
 // New evaluation plans are intentionally separate from patient.pei (legacy
 // skill/maintenance tracking) and the therapeutic PTS documents.
 type PeiTarget = {
-  id: string; name: string; instruction: string; observation: string;
+  id: string; name: string; instruction: string; criteria: string; observation: string;
   status: 'pending' | 'in_progress' | 'evaluated' | 'cancelled';
 };
 type PeiGoal = {
@@ -97,7 +97,9 @@ export const PeiAssessmentWorkspace = ({
 
   useEffect(() => {
     let cancelled = false;
-    if (!selectedId || !patientId) { setPlan(null); return; }
+    setPlan(null);
+    setServerEditable(false);
+    if (!selectedId || !patientId) return;
     setLoading(true);
     setError(''); setNotice('');
     dataService.getPeiAssessmentPlan(patientId, selectedId).then((r: any) => {
@@ -150,7 +152,7 @@ export const PeiAssessmentWorkspace = ({
       criteria: String(skill.criteria || '').slice(0, 1200),
       notes: '', status: 'pending', targets: [{
         id: newId(), name: String(skill.name || 'Alvo de avaliação').slice(0, 180),
-        instruction: '', observation: '', status: 'pending',
+        instruction: '', criteria: '', observation: '', status: 'pending',
       }],
     }]); setDirty(true); setError('');
   };
@@ -339,7 +341,7 @@ export const PeiAssessmentWorkspace = ({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h5 className="text-sm font-semibold">Alvos de avaliação</h5>
                   {editable && <button className={button + ' border border-violet-400/40'} disabled={goal.targets.length >= 30}
-                    onClick={() => changeGoal(goal.id, { targets: [...goal.targets, { id: newId(), name: 'Novo alvo', instruction: '', observation: '', status: 'pending' }] })}>
+                    onClick={() => changeGoal(goal.id, { targets: [...goal.targets, { id: newId(), name: 'Novo alvo', instruction: '', criteria: '', observation: '', status: 'pending' }] })}>
                     <Plus size={14}/> Novo alvo</button>}
                 </div>
                 {goal.targets.map(target => <div key={target.id} className={'grid gap-2 rounded-xl border p-3 sm:grid-cols-2 ' + (isDark ? 'border-slate-600' : 'border-slate-100')}>
@@ -356,6 +358,10 @@ export const PeiAssessmentWorkspace = ({
                   <label className="text-xs sm:col-span-2">Instrução de avaliação
                     <textarea className={input + ' mt-1'} rows={2} value={target.instruction} maxLength={800} disabled={!editable}
                       onChange={e => changeTarget(goal.id, target.id, { instruction: e.target.value })}/>
+                  </label>
+                  <label className="text-xs sm:col-span-2">Critério do alvo (editável, independente do protocolo)
+                    <textarea className={input + ' mt-1'} rows={2} value={target.criteria || ''} maxLength={1200} disabled={!editable}
+                      onChange={e => changeTarget(goal.id, target.id, { criteria: e.target.value })}/>
                   </label>
                   <label className="text-xs sm:col-span-2">Resultado / observação
                     <textarea className={input + ' mt-1'} rows={2} value={target.observation} maxLength={1200} disabled={!editable}
