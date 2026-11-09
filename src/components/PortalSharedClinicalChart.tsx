@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Line, LineChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts';
+import { Bar, BarChart, Legend, Line, LineChart, CartesianGrid, Tooltip, XAxis, YAxis } from 'recharts';
 import { dataService } from '../services/dataService';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
+import { clinicalSpecialtyScopeKey } from '../utils/clinicalSpecialties';
 
 type PortalChartPoint = {
   observedAt?: string;
@@ -22,7 +23,15 @@ type PortalChartView = {
   domain: string;
   series: PortalChartSeries[];
 };
+type PortalGroupedChart = {
+  metricLabel: string;
+  unit: string;
+  direction: string;
+  plans: Array<{ id: string; specialty: string }>;
+  weeks: Array<{ week: string; values: Record<string, number | null> }>;
+};
 type PortalSharedChart = {
+  grouped?: PortalGroupedChart;
   family: 'PLAN_PTS' | 'ABA_V3';
   domain: string;
   series: PortalChartSeries[];
@@ -30,6 +39,7 @@ type PortalSharedChart = {
 };
 
 const DOMAIN_LABELS: Record<string, string> = {
+  overview: 'PTS geral',
   skills: 'Habilidades',
   behaviors: 'Comportamentos interferentes',
   mastery: 'Maestria',
@@ -84,11 +94,26 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
       const views = serverViews.length > 0
         ? [primaryView, ...serverViews.filter((view) => view.domain !== primaryView.domain)]
         : [primaryView];
+      // Never fetch a different graph from a patient-side ID. The grouped
+      // comparison is already calculated and scoped by the server projection.
+      const grouped: PortalGroupedChart | undefined = chart.family === 'PLAN_PTS'
+        && primaryView.domain === 'overview'
+        && Array.isArray(chart.grouped?.plans)
+        && Array.isArray(chart.grouped?.weeks)
+        ? {
+          metricLabel: String(chart.grouped.metricLabel || ''),
+          unit: String(chart.grouped.unit || ''),
+          direction: String(chart.grouped.direction || ''),
+          plans: chart.grouped.plans.slice(0, 12),
+          weeks: chart.grouped.weeks.slice(-104),
+        }
+        : undefined;
       setSharedChart({
         family: chart.family,
         domain: primaryView.domain,
         series: primaryView.series,
         views,
+        grouped,
       });
       setSelectedDomain(primaryView.domain);
       setStatus('ready');
@@ -100,6 +125,18 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
 
   const activeView = useMemo(() => sharedChart?.views.find((view) => view.domain === selectedDomain)
     || sharedChart?.views[0] || null, [selectedDomain, sharedChart]);
+
+  const groupedRows = useMemo(() => {
+    if (!sharedChart?.grouped) return [];
+    return sharedChart.grouped.weeks.map((week) => ({
+      week: week.week.slice(8, 10) + '/' + week.week.slice(5, 7),
+      fullWeek: week.week,
+      ...Object.fromEntries(sharedChart.grouped!.plans.map((plan, index) => {
+        const raw = week.values?.[plan.id];
+        return ['plan' + index, raw === null || raw === undefined || !Number.isFinite(Number(raw)) ? null : Number(raw)];
+      })),
+    }));
+  }, [sharedChart]);
 
   const chartRows = useMemo(() => {
     if (!activeView) return [];
@@ -147,7 +184,34 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
               ))}
             </nav>
           )}
-          {chartRows.every((row) => activeView.series.every((_, index) => row['series' + index] === null || row['series' + index] === undefined))
+          {activeView.domain === 'overview' && sharedChart.grouped ? (
+            groupedRows.length === 0
+              ? <p role="status" className="mt-5 text-sm text-slate-500">Sem evolução multidisciplinar comparável neste período.</p>
+              : (
+                <div className="mt-4 h-[295px] min-w-0 overflow-x-auto" role="region" tabIndex={0} aria-label="PTS geral com barras agrupadas por especialidade">
+                  <div className="h-full" style={{ minWidth: Math.max(540, groupedRows.length * Math.max(80, sharedChart.grouped.plans.length * 30)) }}>
+                    <SafeResponsiveContainer width="100%" height="100%" minHeight={250}>
+                      <BarChart data={groupedRows} margin={{ top: 12, right: 12, left: 0, bottom: 25 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                        <XAxis dataKey="week" tick={{ fontSize: 10 }} interval={0} />
+                        <YAxis width={53} tick={{ fontSize: 10 }} domain={sharedChart.grouped.unit === '%' ? [0, 100] : ['auto', 'auto']} />
+                        <Tooltip labelFormatter={(_value: any, payload: any) => 'Semana de ' + String(payload?.[0]?.payload?.fullWeek || '')} />
+                        <Legend wrapperStyle={{ fontSize: 11 }} />
+                        {sharedChart.grouped.plans.map((plan, index) => {
+                          const color = ({
+                            speech_therapy: '#2563EB',
+                            occupational_therapy: '#F59E0B',
+                            psychotherapy: '#16A34A',
+                          } as Record<string, string>)[clinicalSpecialtyScopeKey(plan.specialty) || ''] || ['#8B5CF6', '#0891B2', '#E11D48', '#65A30D'][index % 4];
+                          return <Bar key={plan.id} dataKey={'plan' + index} name={plan.specialty} fill={color} maxBarSize={34} isAnimationActive={false} />;
+                        })}
+                      </BarChart>
+                    </SafeResponsiveContainer>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">{sharedChart.grouped.metricLabel} · {sharedChart.grouped.unit || 'unidade clínica'}. Cada cor representa uma especialidade, sem média geral de critérios.</p>
+                </div>
+              )
+          ) : chartRows.every((row) => activeView.series.every((_, index) => row['series' + index] === null || row['series' + index] === undefined))
             ? <p role="status" className="mt-5 text-sm text-slate-500">Ainda não há dados disponíveis para esta visualização.</p>
             : (
               <div className="mt-4 h-72 w-full min-w-0" role="img" aria-label={`Gráfico clínico compartilhado: ${DOMAIN_LABELS[activeView.domain] || 'evolução'}`}>
