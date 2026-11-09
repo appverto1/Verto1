@@ -46,7 +46,17 @@ assert.match(control, /setPatientSharedChartSelection\(patientId, nextDescriptor
 assert.match(control, /clearPatientSharedChartSelection\(patientId\)/);
 assert.match(control, /result\?\.success !== true/);
 assert.doesNotMatch(control, /setPatientSharedChartSelection\(patientId, descriptor\);\s*setConfirmed/, 'do not fake save success');
-assert.match(workspace, /shareControl=\{<ProfessionalSharedChartControl/, 'publication control belongs to plan chart');
+assert.match(workspace, /data-testid="chart-sharing-dropdown"/, 'publication settings must live in a discreet top-of-charts dropdown');
+assert.match(workspace, /aria-expanded=\{sharingMenuOpen\}/, 'dropdown must announce expanded state');
+assert.match(workspace, /aria-controls="chart-sharing-dropdown-panel"/, 'dropdown must expose the controlled panel');
+assert.match(workspace, /sharingMenuOpen \? 'absolute' : 'hidden'/, 'sharing controls are hidden without taking graph space when closed');
+assert.match(workspace, /document\.addEventListener\('pointerdown', onPointerDown\)/, 'dropdown must close on click outside');
+assert.match(workspace, /event\.key === 'Escape'/, 'dropdown must close with Escape');
+assert.match(workspace, /<ProfessionalSharedChartControl key=\{patientId\} patientId=\{patientId\} descriptor=\{descriptor\}/,
+  'the same authorized publication control must be used for PTS and ABA V3');
+assert.doesNotMatch(workspace, /shareControl=\{<ProfessionalSharedChartControl/, 'publication card must not remain beneath the graph');
+assert.doesNotMatch(workspace, /view === 'aba-v3' && showAbaV3Details && \(\s*<ProfessionalSharedChartControl/,
+  'ABA V3 publication control must not create another full-width row');
 assert.match(dashboard, /shareControl=\{shareControl\}/, 'current graph renders its control');
 assert.match(shell, /data-testid="clinical-chart-sharing-controls"/);
 
