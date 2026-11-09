@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readModularServerSource();
 const cron = fs.readFileSync(new URL('../services/cronService.ts', import.meta.url), 'utf8');
 const runtime = fs.readFileSync(new URL('../services/distributedRuntimeState.ts', import.meta.url), 'utf8');
 const schema = fs.readFileSync(new URL('../supabase/migrations/20260804024000_distributed_runtime_state.sql', import.meta.url), 'utf8');

@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -5,7 +6,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const utilSource = fs.readFileSync('src/utils/patientFinancialPlan.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260905101500_monthly_session_patient_billing.sql', 'utf8');

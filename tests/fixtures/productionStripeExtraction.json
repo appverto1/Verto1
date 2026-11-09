@@ -1,0 +1,102 @@
+[
+  {
+    "module": "services/stripeWebhookEventState.ts",
+    "name": "reserveStripeWebhookEvent",
+    "sha256": "c3e2eaf44e5a24432cb67215d944660a9cdda0fbf58f32e0fb0130d11beb7fb4"
+  },
+  {
+    "module": "services/stripeWebhookEventState.ts",
+    "name": "markStripeWebhookEventStatus",
+    "sha256": "ccab1ea2d308e241c0152d61bbd4ccadde03beaa66a588a49d33050bb916ecbb"
+  },
+  {
+    "module": "services/salesSubscriptionDiscountSync.ts",
+    "name": "syncSalesSubscriptionDiscount",
+    "sha256": "0694cf72233c5846fffeef0e3019faadf369ea7761f6a4bf08591cbcccefedbd"
+  },
+  {
+    "module": "services/salesSubscriptionDiscountSync.ts",
+    "name": "eventTypeSubscriptionIsActive",
+    "sha256": "3aa4d0fd6660d024933504d1fa61d93c0e924f2c06ed59bb2e1b6b2421f84d13"
+  },
+  {
+    "module": "services/salesAssistedCheckoutPaymentProcessor.ts",
+    "name": "processSalesAssistedCheckoutCompleted",
+    "sha256": "1362633555a1b7606cbd4a3c0a8424fbddd470844cd9c35e051765a5a4a462c5"
+  },
+  {
+    "module": "services/salesSubscriptionFinancialReconciliation.ts",
+    "name": "stripeInvoiceSubscriptionId",
+    "sha256": "209ffeb9b78b06b260e62c29cd48003aabd968998b2064f1393d64820d27addb"
+  },
+  {
+    "module": "services/salesSubscriptionFinancialReconciliation.ts",
+    "name": "stripeTimestampToIso",
+    "sha256": "dc169e77976c7533883778c4b05ebbc7f29b459d38742ea7a4c48f99c4e0d4fb"
+  },
+  {
+    "module": "services/salesSubscriptionFinancialReconciliation.ts",
+    "name": "stripeInvoicePeriodBounds",
+    "sha256": "9fc250d7536a8202a6ca8e5595ae73e84229d8b1de72345e2f16f957af99e1e9"
+  },
+  {
+    "module": "services/salesSubscriptionFinancialReconciliation.ts",
+    "name": "persistPlatformSubscriptionFinancialState",
+    "sha256": "c0cda9fbd87fd04c39858a31861385778de014106bdbde87fbad83bf47417086"
+  },
+  {
+    "module": "services/salesSubscriptionFinancialReconciliation.ts",
+    "name": "persistPlatformBillingInvoiceLedger",
+    "sha256": "80720ea54c07ca4deb534b5d0767b92b26440eec3ceb18911119a8045ec6967d"
+  },
+  {
+    "module": "services/salesSubscriptionFinancialReconciliation.ts",
+    "name": "salesAssistedFlowType",
+    "sha256": "1bf35da8cfbcf0b4ee163b435ccddc18c0eabc331f27ba2c04b51999a81196c8"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "stripeExpandableId",
+    "sha256": "d761e3679edfc40d7be87b283e92766ac504b74569d666cc3742080f6671ca98"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "sanitizeStripeScheduleMetadata",
+    "sha256": "a11698cf97ce0fb9104af69ac70447e6d0f5d69b48f2716d32645edc84402518"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "preserveStripeSchedulePhaseForUpdate",
+    "sha256": "5d37dc8563235a1b5bb0c93e892156fcd790b811f2f08203525ff98ef36f173b"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "buildStripeScheduleContinuationPhase",
+    "sha256": "3742d0fc8c170c80762a2f9fa8bd5f69711cc4993737ddbdac36a3a3176d1762"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "normalizeModularSchedulePhaseBoundaries",
+    "sha256": "bd7327137506161109aa73067a0d514782f6aa3f7742081a85ac875a141b2cb8"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "ensureModularSubscriptionSchedule",
+    "sha256": "c4e4b47d54c29a2429bc559273817b3864f0d520f85d424579d7a493b02f9bea"
+  },
+  {
+    "module": "services/salesModularSubscriptionSchedule.ts",
+    "name": "reconcileSalesAssistedCheckout",
+    "sha256": "dc660ff8fb9345a7749d4141608accbc26e60a51dec42997c5d8fb4a07e886a7"
+  },
+  {
+    "module": "services/salesSubscriptionEntitlementTransitions.ts",
+    "name": "stripeSubscriptionToEntitlementStatus",
+    "sha256": "7f6bf9df79b08606f2b4b87b6cdbd8f00806ea431f9b1d496e01d84707ecae43"
+  },
+  {
+    "module": "services/salesSubscriptionEntitlementTransitions.ts",
+    "name": "applyModularEntitlementsForOrganization",
+    "sha256": "a709eb33467ff042a3d2d346e6aac0d7240e7d40121f757ecd83b299272329be"
+  }
+]

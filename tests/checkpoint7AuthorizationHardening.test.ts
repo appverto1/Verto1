@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const migration = fs.readFileSync('supabase/migrations/20260811230000_authorization_override_rpc_v1.sql', 'utf8');
 
 const mustUseCapability = [

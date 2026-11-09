@@ -42,7 +42,7 @@ assert.match(builder, /catalog\.items\.some\(\(item\) => item\.itemKey === line\
 // The backend must derive Stripe seat quantities from the frozen exact model;
 // mere UI wording must never replace the server-side payment contract.
 assert.match(server, /exactPerPatientBilling: source\.exactPerPatientBilling === true/);
-assert.match(server, /quantity: Number\(line\.quantity \|\| 1\)/);
+assert.match(fs.readFileSync('services/salesModularCheckoutCore.ts', 'utf8'), /quantity: Number\(line\.quantity \|\| 1\)/);
 assert.match(calculator, /contractedCapacityPatients: exactPerPatientBilling \? input\.patientQuantity/);
 assert.match(stripePlan, /exactPerPatientBilling === true/);
 console.log('salesExactPatientCheckoutUiP0000.regression.test.mjs: PASS');

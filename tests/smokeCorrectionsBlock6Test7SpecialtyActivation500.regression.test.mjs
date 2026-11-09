@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readModularServerSource();
 
 const routeStart = server.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'");
 assert.notEqual(routeStart, -1, 'therapeutic plan PATCH route must exist');

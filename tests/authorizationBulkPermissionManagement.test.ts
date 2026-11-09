@@ -1,9 +1,10 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const matrix = fs.readFileSync('src/components/RoleCapabilityMatrix.tsx', 'utf8');
 const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const migration = fs.readFileSync('supabase/migrations/20260814120000_authorization_bulk_override_v1.sql', 'utf8');
 
 assert.match(matrix, /Gerenciar profissionais/, 'cada capability delegável deve abrir gestão por profissionais');

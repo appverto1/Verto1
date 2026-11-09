@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const fallback = fs.readFileSync('src/utils/routeSchemaFallbacks.ts', 'utf8');
 const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 

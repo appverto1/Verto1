@@ -4,9 +4,7 @@ import fs from 'node:fs';
 const ui = fs.readFileSync('src/components/SalesActivationAccess.tsx', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 
-const passwordRoute = server.match(
-  /app\.post\(\s*"\/api\/public\/sales-activations\/:token\/password"[\s\S]*?const stripeSubscriptionToEntitlementStatus/
-)?.[0] || '';
+const passwordRoute = fs.readFileSync('services/publicSalesActivationPasswordRoute.ts', 'utf8');
 
 assert.match(ui, /Eye, EyeOff/);
 assert.match(ui, /aria-label=\{showPassword \? 'Ocultar senha' : 'Mostrar senha'\}/);

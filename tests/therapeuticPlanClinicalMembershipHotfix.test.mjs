@@ -1,7 +1,8 @@
+import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readPatientPlanServerSource();
 const panel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
 const caseTeam = fs.readFileSync('src/utils/patientProfessionalLinks.ts', 'utf8');
 
@@ -26,9 +27,7 @@ assert.match(readRoute, /membershipSpecialty = normalizeClinicalSpecialty\(membe
 assert.match(readRoute, /planEligible =[\s\S]*?hasActiveClinicalMembership[\s\S]*?Boolean\(membershipSpecialty\)[\s\S]*?canWritePlan/);
 assert.doesNotMatch(readRoute, /hasActiveTherapistMembership/);
 
-const createStart = server.indexOf("app.post('/api/aba/patients/:patientId/therapeutic-plans'");
-const createEnd = server.indexOf("app.patch('/api/aba/patients/:patientId/therapeutic-plans/:planId'", createStart);
-const createRoute = server.slice(createStart, createEnd);
+const createRoute = fs.readFileSync('services/therapeuticPlanCreateHandler.ts', 'utf8');
 assert.match(
   createRoute,
   /participantProfessionalIds = Array\.from\(new Set\(\[responsibleProfessionalId, \.\.\.requestedParticipants\]\)\)\.filter\(Boolean\)/,

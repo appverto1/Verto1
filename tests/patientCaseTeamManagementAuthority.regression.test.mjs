@@ -1,9 +1,10 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const authModel = fs.readFileSync('src/constants/authorizationModel.ts', 'utf8');
 const utility = fs.readFileSync('src/utils/patientProfessionalLinks.ts', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const panel = fs.readFileSync('src/components/PatientProfessionalLinksPanel.tsx', 'utf8');
 const detail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const migration = fs.readFileSync(
