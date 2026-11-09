@@ -33,7 +33,7 @@ const isEvaluation = (value: any) => ['evaluation', 'assessment'].includes(
 
 export const PeiAssessmentWorkspace = ({
   patientId, protocols = [], professionals = [], caseTeamLinks = [],
-  currentUserId, isDark = false,
+  isDark = false,
 }: any) => {
   const [rows, setRows] = useState<Plan[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -158,7 +158,7 @@ export const PeiAssessmentWorkspace = ({
   const applySavedPlan = (next: Plan, kind: string) => {
     setPlan(next); setTitle(next.title);
     setDraft(structuredClone(next.content?.goals || []));
-    setDirty(false); setBusy(false);
+    setDirty(false);
     setRows(current => current.map(row => row.id === next.id ? { ...row, ...next } : row));
     setHistory(current => [{ revision: next.revision, event_kind: kind, created_at: new Date().toISOString() }, ...current]);
     setNotice('Alterações confirmadas pelo servidor e salvas no prontuário.');
@@ -235,7 +235,7 @@ export const PeiAssessmentWorkspace = ({
         </label>
         <div className="flex gap-2 sm:col-span-2">
           <button type="button" className={button + ' bg-violet-600 text-white'} disabled={busy} onClick={() => void create()}>
-            {busy ? 'Criando...' : 'Criar plano de avaliação'}
+            {busy ? 'Salvando...' : 'Salvar novo plano'}
           </button>
           <button type="button" className={button + ' border'} disabled={busy} onClick={() => setShowCreate(false)}>Cancelar</button>
         </div>
@@ -269,11 +269,11 @@ export const PeiAssessmentWorkspace = ({
                 <button type="button" className={button + ' bg-violet-600 text-white'}
                   onClick={() => void save('save')} disabled={!editable || busy || !dirty}><Save size={15}/> Salvar</button>
                 {plan.status === 'draft' && <button type="button" className={button + ' border border-violet-500 text-violet-500'}
-                  onClick={() => void save('activate')} disabled={busy || !draft.length}>Iniciar avaliação</button>}
+                  onClick={() => void save('activate')} disabled={busy || !draft.length}>Salvar e iniciar avaliação</button>}
                 {plan.status === 'active' && <button type="button" className={button + ' border'}
-                  onClick={() => { if (window.confirm('Concluir a avaliação?')) void save('complete'); }} disabled={busy}>Concluir</button>}
+                  onClick={() => { if (window.confirm('Concluir a avaliação?')) void save('complete'); }} disabled={busy}>Salvar e concluir</button>}
                 {(plan.status === 'draft' || plan.status === 'active') && <button type="button"
-                  className={button + ' border'} onClick={() => { if (window.confirm('Arquivar este plano?')) void save('archive'); }} disabled={busy}>Arquivar</button>}
+                  className={button + ' border'} onClick={() => { if (window.confirm('Arquivar este plano?')) void save('archive'); }} disabled={busy}>Salvar e arquivar</button>}
                 <button type="button" className={button + ' border'} onClick={() => setShowHistory(h => !h)}>
                   <Clock3 size={15}/> Histórico <ChevronDown size={14}/>
                 </button>
