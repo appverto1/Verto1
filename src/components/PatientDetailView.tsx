@@ -71,6 +71,7 @@ import { decodeClinicalTextEntities } from '../utils/clinicalText';
 import { isPatientCaseTeamMembershipRole, resolvePatientPrimaryProfessionalId } from '../utils/patientProfessionalLinks';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { appointmentClinicalSpecialtyKey, sessionPlanMatchesAppointmentSpecialty, sessionSpecialtyPlanCandidates } from '../utils/sessionSpecialtyIsolation';
+import { sessionTabSpecialtyOptions, type SessionTabSpecialtyOption } from '../utils/sessionTabSpecialtyOptions';
 import { isConfirmedAbaSessionAppointmentLink } from '../utils/sessionAutoFinalization';
 import { scheduledAbaSessionScopeMismatch } from '../utils/scheduledAbaSessionScope';
 
@@ -1744,11 +1745,19 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     [configuredDefaultSessionMinutes, scheduledSessionForPatient],
   );
   const [activeSession, setActiveSession] = useState<any>(null);
+  const activeSessionLiveRef = useRef<any>(null);
   const [sessionDurationInput, setSessionDurationInput] = useState(String(configuredDefaultSessionMinutes));
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState(0);
   const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
   const [pendingSessionAction, setPendingSessionAction] = useState<'tab' | 'fullscreen'>('tab');
   const [pendingSessionPlanContext, setPendingSessionPlanContext] = useState<{ therapeuticPlanId: string; specialty: string | null } | null>(null);
+  const [sessionTabPickerOpen, setSessionTabPickerOpen] = useState(false);
+  const [sessionTabPickerLoading, setSessionTabPickerLoading] = useState(false);
+  const [sessionTabPickerSaving, setSessionTabPickerSaving] = useState(false);
+  const [sessionTabPickerError, setSessionTabPickerError] = useState('');
+  const [sessionTabPlanOptions, setSessionTabPlanOptions] = useState<SessionTabSpecialtyOption[]>([]);
+  const [sessionTabSelectedPlanId, setSessionTabSelectedPlanId] = useState('');
+  const sessionTabPickerRequestRef = useRef(0);
   const [restoreSessionData, setRestoreSessionData] = useState(false);
   const [clearMaintenanceOnSessionRestore, setClearMaintenanceOnSessionRestore] = useState(false);
   const [noShowReopenPrompt, setNoShowReopenPrompt] = useState<{
@@ -1846,6 +1855,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     completedSessionReportsLoadedForRef.current = '';
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
+    sessionTabPickerRequestRef.current += 1;
+    setSessionTabPickerOpen(false);
+    setSessionTabPickerLoading(false);
+    setSessionTabPickerSaving(false);
+    setSessionTabPickerError('');
+    setSessionTabPlanOptions([]);
+    setSessionTabSelectedPlanId('');
     setActivePeiPlanSubtab('assessment');
     setHasLoadedPeiMaintenancePanel(false);
     setPeiMaintenancePanelMessage('');
@@ -2087,12 +2103,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const persistActiveSession = (session: any) => {
+    activeSessionLiveRef.current = session;
     localStorage.setItem(sessionStorageKey, JSON.stringify(session));
     setActiveSession(session);
     setRemainingSessionSeconds(calculateRemainingSessionSeconds(session));
   };
 
   const clearActiveSession = () => {
+    activeSessionLiveRef.current = null;
     localStorage.removeItem(sessionStorageKey);
     setActiveSession(null);
     setRemainingSessionSeconds(0);
@@ -2101,6 +2119,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     const syncSession = () => {
       const persisted = readPersistedSession();
+      activeSessionLiveRef.current = persisted;
       setActiveSession(persisted);
       setRemainingSessionSeconds(persisted ? calculateRemainingSessionSeconds(persisted) : 0);
     };
@@ -2217,6 +2236,111 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
     setShowSessionStartConfirm(true);
+  };
+
+  // The Sessão tab must ask for a specialty from live patient plan scopes
+  // before opening any new collector. Plan-panel and Agenda starts retain
+  // their existing server-authoritative paths and appointment validation.
+  const openSessionFromTab = async () => {
+    if (hasAbaSessionSurface && activeSession) {
+      void requestSessionStart('fullscreen');
+      return;
+    }
+    if (hasConventionalSessionSurface && conventionalSession?.startedAt && !conventionalSession?.endedAt) {
+      setActiveTab('session');
+      return;
+    }
+    const patientId = String(patient?.id || '').trim();
+    if (!patientId) return;
+    const requestId = ++sessionTabPickerRequestRef.current;
+    setSessionTabPickerOpen(true);
+    setSessionTabPickerLoading(true);
+    setSessionTabPickerError('');
+    setSessionTabPlanOptions([]);
+    setSessionTabSelectedPlanId('');
+    try {
+      const result = await dataService.getPatientTherapeuticPlan(patientId, { force: true });
+      const hasConfirmedScopes = result?.success !== false && Array.isArray(result?.data?.planScopes);
+      if (!hasConfirmedScopes && hasAbaSessionSurface) {
+        throw new Error(result?.message || result?.error || 'Não foi possível conferir os planos do paciente.');
+      }
+      let options = hasConfirmedScopes
+        ? sessionTabSpecialtyOptions(result.data.planScopes, scheduledSessionForPatient)
+        : [];
+      // Existing conventional adult appointments may have no PTS/specialty
+      // plan (legacy adult workflow). Preserve that authorized appointment
+      // path, but never invent a clinical plan or allow an invalid specialty.
+      const hasSpecialtyPlan = hasConfirmedScopes && result.data.planScopes.some((plan: any) =>
+        String(plan?.mode || '').toLowerCase() === 'specialty');
+      if (!hasAbaSessionSurface && !hasSpecialtyPlan && options.length === 0 && scheduledSessionForPatient) {
+        const appointmentKey = appointmentClinicalSpecialtyKey(scheduledSessionForPatient);
+        const appointmentSpecialty = String(
+          scheduledSessionForPatient?.specialty || scheduledSessionForPatient?.service_type ||
+          scheduledSessionForPatient?.serviceType || scheduledSessionForPatient?.approach || ''
+        ).trim();
+        if (appointmentKey && appointmentSpecialty) {
+          options = [{ id: `appointment:${appointmentKey}`, specialty: appointmentSpecialty,
+            label: `${appointmentSpecialty} · agendamento (sem plano ativo)` }];
+        }
+      }
+      if (requestId !== sessionTabPickerRequestRef.current) return;
+      setSessionTabPlanOptions(options);
+      if (options.length === 1) setSessionTabSelectedPlanId(options[0].id);
+      if (options.length === 0) {
+        setSessionTabPickerError(scheduledSessionForPatient
+          ? 'Não há plano ativo e autorizado para a especialidade deste agendamento. Confira o plano ou a Agenda.'
+          : 'Nenhum plano de intervenção por especialidade ativo e autorizado foi encontrado para este paciente. Ative o plano da especialidade antes da coleta.');
+      }
+    } catch (error: any) {
+      if (requestId === sessionTabPickerRequestRef.current) {
+        setSessionTabPickerError(error?.message || 'Não foi possível carregar as especialidades. Tente novamente.');
+      }
+    } finally {
+      if (requestId === sessionTabPickerRequestRef.current) setSessionTabPickerLoading(false);
+    }
+  };
+
+  const confirmSessionSpecialtyFromTab = async () => {
+    const selected = sessionTabPlanOptions.find((option) => option.id === sessionTabSelectedPlanId);
+    if (!selected || sessionTabPickerSaving) return;
+    if (hasAbaSessionSurface) {
+      setSessionTabPickerOpen(false);
+      await requestSessionStart('fullscreen', { therapeuticPlanId: selected.id, specialty: selected.specialty });
+      return;
+    }
+    // The conventional adult writer requires a persisted appointment. Do not
+    // forge an appointment, session or plan ID in order to bypass billing scope.
+    const appointmentId = String(
+      scheduledSessionForPatient?.appointment_id ||
+      scheduledSessionForPatient?.appointmentId ||
+      scheduledSessionForPatient?.id || ''
+    ).trim();
+    if (!isUuidLike(appointmentId)) {
+      setSessionTabPickerError('Para iniciar a coleta do adulto convencional, abra o atendimento agendado pela Agenda. O agendamento deve estar salvo no servidor.');
+      return;
+    }
+    if (!sessionPlanMatchesAppointmentSpecialty(selected, scheduledSessionForPatient)) {
+      setSessionTabPickerError('A especialidade selecionada não corresponde à do agendamento. Nenhuma sessão foi iniciada.');
+      return;
+    }
+    setSessionTabPickerSaving(true);
+    setSessionTabPickerError('');
+    try {
+      const result = await dataService.startConventionalSession(String(patient?.id || ''), appointmentId, {
+        idempotencyKey: `conventional-session-start:${appointmentId}`,
+      });
+      if (!result?.success || !result?.data?.startedAt) {
+        throw new Error(result?.error || 'O servidor não confirmou o início da sessão.');
+      }
+      setConventionalSession(result.data);
+      setConventionalSessionNote(String(result.data.note || ''));
+      setActiveTab('session');
+      setSessionTabPickerOpen(false);
+    } catch (error: any) {
+      setSessionTabPickerError(error?.message || 'Não foi possível iniciar a sessão. Nenhum início foi confirmado.');
+    } finally {
+      setSessionTabPickerSaving(false);
+    }
   };
 
   const handleConfirmSessionStart = async (options?: {
@@ -3106,10 +3230,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const incrementActiveSessionRecordCount = () => {
-    if (!activeSession) return;
+    // Independent V2/V3 clicks can finish network synchronization in the same
+    // render. Read the latest persisted session, never a stale React closure,
+    // so concurrent acknowledgements cannot lose the accumulated count.
+    const latest = activeSessionLiveRef.current || activeSession;
+    if (!latest) return;
     persistActiveSession({
-      ...activeSession,
-      recordCount: Number(activeSession.recordCount || 0) + 1
+      ...latest,
+      recordCount: Number(latest.recordCount || 0) + 1
     });
   };
 
@@ -10128,6 +10256,42 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           </div> 
         </div> 
       )} 
+      {sessionTabPickerOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[125] flex items-start justify-center bg-black/40 p-4 pt-6 backdrop-blur-sm sm:pt-10" role="dialog" aria-modal="true" aria-labelledby="session-specialty-title">
+          <div className="w-full max-w-md rounded-[28px] border border-violet-200 bg-white p-6 shadow-2xl dark:border-violet-500/30 dark:bg-[#101b2e]">
+            <h3 id="session-specialty-title" className="text-xl font-semibold text-slate-900 dark:text-slate-50">Qual especialidade será atendida?</h3>
+            <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
+              As opções vêm dos planos ativos por especialidade deste paciente.
+              {isKidsProfile ? ' A coleta infantil será estruturada por alvos e tentativas.' : isAdultAbaProfile
+                ? ' A coleta ABA do adulto seguirá os alvos do plano.' : ' O adulto convencional seguirá com a evolução clínica descritiva.'}
+            </p>
+            {sessionTabPickerLoading ? (
+              <p role="status" className="mt-5 text-sm text-slate-500">Conferindo planos e permissões no servidor...</p>
+            ) : (
+              <label className="mt-5 block text-sm font-semibold text-slate-700 dark:text-slate-200">
+                Especialidade do plano
+                <select value={sessionTabSelectedPlanId} onChange={(event) => { setSessionTabSelectedPlanId(event.target.value); setSessionTabPickerError(''); }}
+                  className="mt-2 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-50">
+                  <option value="">Selecione a especialidade...</option>
+                  {sessionTabPlanOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+              </label>
+            )}
+            {sessionTabPickerError && <p role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">{sessionTabPickerError}</p>}
+            <div className="mt-6 flex gap-3">
+              <button type="button" disabled={sessionTabPickerSaving} onClick={() => {
+                sessionTabPickerRequestRef.current += 1;
+                setSessionTabPickerOpen(false);
+              }} className="flex-1 rounded-xl bg-slate-100 px-4 py-3 text-sm font-semibold text-slate-700 disabled:opacity-50 dark:bg-slate-800 dark:text-slate-100">Cancelar</button>
+              <button type="button" disabled={sessionTabPickerLoading || sessionTabPickerSaving || !sessionTabSelectedPlanId}
+                onClick={() => void confirmSessionSpecialtyFromTab()}
+                className="flex-1 rounded-xl bg-violet-600 px-4 py-3 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
+                {sessionTabPickerSaving ? 'Iniciando...' : 'Continuar'}
+              </button>
+            </div>
+          </div>
+        </div>, document.body
+      )}
       {showSessionStartConfirm && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[120] flex items-start justify-center p-4 pt-6 sm:pt-10 bg-black/30 backdrop-blur-sm animate-fade-in">
           <div className="bg-white dark:bg-[#101b2e] rounded-[32px] p-7 shadow-2xl max-h-[calc(100vh-2rem)] max-w-md w-full overflow-y-auto animate-pop border border-violet-100 dark:border-violet-500/30">
@@ -11141,7 +11305,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
             </button>
           )}
           {canAccessTab('session') && hasAnySessionSurface && (
-            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => hasAbaSessionSurface ? requestSessionStart('fullscreen') : setActiveTab('session')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
+            <button id="tab-session" aria-current={activeTab === 'session' ? 'page' : undefined} onClick={() => void openSessionFromTab()} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'session' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Sessão</button>
           )}
           {canAccessTab('aba-charts') && (
             <button id="tab-aba-charts" aria-current={activeTab === 'aba-charts' ? 'page' : undefined} onClick={() => setActiveTab('aba-charts')} className={`min-h-12 min-w-[7.5rem] shrink-0 border-b-2 px-4 py-3 text-sm sm:min-w-0 sm:flex-1 font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#7551FF]/40 ${activeTab === 'aba-charts' ? (isPanelDark ? 'border-violet-400 text-violet-300' : 'border-[#7551FF] text-[#6542a8]') : (isPanelDark ? 'border-transparent text-slate-300 hover:text-white' : 'border-transparent text-slate-600 hover:text-slate-900')}`}>Gráficos</button>
