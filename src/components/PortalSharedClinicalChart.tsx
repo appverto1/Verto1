@@ -18,20 +18,30 @@ type PortalChartSeries = {
   unit?: string;
   points?: PortalChartPoint[];
 };
-type PortalChartView = { domain: string; series: PortalChartSeries[] };
+type PortalChartView = {
+  domain: string;
+  series: PortalChartSeries[];
+};
 type PortalSharedChart = {
   family: 'PLAN_PTS' | 'ABA_V3';
   domain: string;
   series: PortalChartSeries[];
-  /** Only the explicit, backend-authorized navigation views are supplied. */
-  views?: PortalChartView[];
+  views: PortalChartView[];
 };
+
+const DOMAIN_LABELS: Record<string, string> = {
+  skills: 'Habilidades',
+  behaviors: 'Comportamentos interferentes',
+  mastery: 'Maestria',
+  maintenance: 'Manutenção',
+};
+const ALLOWED_PLAN_DOMAINS = new Set(Object.keys(DOMAIN_LABELS));
 
 /** Patient-self, read-only projection. Never reuse raw professional observations. */
 export function PortalSharedClinicalChart({ patientId }: { patientId: string }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
   const [sharedChart, setSharedChart] = useState<PortalSharedChart | null>(null);
-  const [activeDomain, setActiveDomain] = useState('');
+  const [selectedDomain, setSelectedDomain] = useState('');
   const [refresh, setRefresh] = useState(0);
   const retry = useCallback(() => setRefresh((current) => current + 1), []);
 
@@ -44,7 +54,7 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
     }
     setStatus('loading');
     setSharedChart(null);
-    setActiveDomain('');
+    setSelectedDomain('');
     void dataService.getPortalSharedChart(patientId).then((response: any) => {
       if (cancelled) return;
       if (!response || response.success === false) {
@@ -56,19 +66,31 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
         setStatus('empty');
         return;
       }
-      const authorizedViews: PortalChartView[] = (Array.isArray(chart.views) ? chart.views : [])
-        .filter((view: any) => view && typeof view.domain === 'string' && Array.isArray(view.series))
-        .slice(0, 4)
-        .map((view: any) => ({
-          domain: view.domain,
-          series: view.series.slice(0, 3),
-        }));
-      setSharedChart({
-        family: chart.family,
+      const primaryView: PortalChartView = {
         domain: String(chart.domain || ''),
         series: chart.series.slice(0, 3),
-        ...(authorizedViews.length > 0 ? { views: authorizedViews } : {}),
+      };
+      // These views come ONLY from the patient-authorized, filtered projection
+      // returned by the server. Never derive tabs from professional chart data.
+      const serverViews = chart.family === 'PLAN_PTS' && Array.isArray(chart.views)
+        ? chart.views.filter((view: any) => ALLOWED_PLAN_DOMAINS.has(String(view?.domain || ''))
+          && Array.isArray(view?.series) && view.series.length > 0)
+          .slice(0, 4)
+          .map((view: any) => ({
+            domain: String(view.domain),
+            series: view.series.slice(0, 3),
+          })) as PortalChartView[]
+        : [];
+      const views = serverViews.length > 0
+        ? [primaryView, ...serverViews.filter((view) => view.domain !== primaryView.domain)]
+        : [primaryView];
+      setSharedChart({
+        family: chart.family,
+        domain: primaryView.domain,
+        series: primaryView.series,
+        views,
       });
+      setSelectedDomain(primaryView.domain);
       setStatus('ready');
     }).catch(() => {
       if (!cancelled) setStatus('error');
@@ -76,9 +98,9 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
     return () => { cancelled = true; };
   }, [patientId, refresh]);
 
-  const activeView = sharedChart?.views?.find((view) => view.domain === activeDomain)
-    || sharedChart?.views?.[0]
-    || (sharedChart ? { domain: sharedChart.domain, series: sharedChart.series } : null);
+  const activeView = useMemo(() => sharedChart?.views.find((view) => view.domain === selectedDomain)
+    || sharedChart?.views[0] || null, [selectedDomain, sharedChart]);
+
   const chartRows = useMemo(() => {
     if (!activeView) return [];
     // Join only points already projected by the server. No clinical math or
@@ -108,45 +130,51 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
           <button type="button" onClick={retry} className="min-h-11 rounded-xl bg-violet-100 px-4 text-sm font-semibold text-violet-700">Tentar novamente</button>
         </div>
       )}
-      {status === 'ready' && sharedChart && sharedChart.views && sharedChart.views.length > 1 && (
-        <nav className="mt-4 flex flex-wrap gap-2" aria-label="Categorias autorizadas pela equipe clínica">
-          {sharedChart.views.map((view) => (
-            <button key={view.domain} type="button" aria-pressed={activeView?.domain === view.domain}
-              onClick={() => setActiveDomain(view.domain)}
-              className={`min-h-10 rounded-xl border px-3 text-xs font-medium ${activeView?.domain === view.domain ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-slate-200 bg-white text-slate-600'}`}>
-              {({ skills: 'Habilidades', behaviors: 'Comportamentos interferentes', mastery: 'Maestria', maintenance: 'Manutenção' } as Record<string, string>)[view.domain] || 'Indicadores'}
-            </button>
-          ))}
-        </nav>
-      )}
-      {status === 'ready' && activeView && (
-        chartRows.every((row) => activeView.series.every((_, index) => row['series' + index] === null || row['series' + index] === undefined))
-          ? <p role="status" className="mt-5 text-sm text-slate-500">Ainda não há dados disponíveis para esta visualização.</p>
-          : (
-            <div className="mt-4 h-72 w-full min-w-0" role="img" aria-label="Gráfico clínico compartilhado">
-              <SafeResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartRows} margin={{ top: 8, right: 12, bottom: 8, left: -12 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="observedAt" tick={{ fontSize: 10 }} tickFormatter={(date: string) => date.slice(5, 10)} minTickGap={24} />
-                  <YAxis tick={{ fontSize: 11 }} width={40} />
-                  <Tooltip labelFormatter={(label: any) => String(label)} />
-                  {activeView.series.map((series, index) => (
-                    <Line
-                      key={String(series.key || series.seriesKey || index)}
-                      type="linear"
-                      dataKey={'series' + index}
-                      name={String(series.itemLabel || series.targetLabel || series.metricLabel || series.seriesLabel || 'Indicador ' + (index + 1))}
-                      stroke={['#7a32fc', '#059669', '#0284c7'][index]}
-                      strokeWidth={2}
-                      dot={{ r: 2 }}
-                      connectNulls={false}
-                      isAnimationActive={false}
-                    />
-                  ))}
-                </LineChart>
-              </SafeResponsiveContainer>
-            </div>
-          )
+      {status === 'ready' && sharedChart && activeView && (
+        <>
+          {sharedChart.views.length > 1 && (
+            <nav aria-label="Abas autorizadas do gráfico" className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {sharedChart.views.map((view) => (
+                <button
+                  type="button"
+                  key={view.domain}
+                  aria-pressed={view.domain === activeView.domain}
+                  onClick={() => setSelectedDomain(view.domain)}
+                  className={`min-h-11 shrink-0 rounded-xl border px-3 py-2 text-xs font-medium ${view.domain === activeView.domain ? 'border-violet-600 bg-violet-50 text-violet-800' : 'border-slate-200 bg-white text-slate-600'}`}
+                >
+                  {DOMAIN_LABELS[view.domain] || 'Evolução clínica'}
+                </button>
+              ))}
+            </nav>
+          )}
+          {chartRows.every((row) => activeView.series.every((_, index) => row['series' + index] === null || row['series' + index] === undefined))
+            ? <p role="status" className="mt-5 text-sm text-slate-500">Ainda não há dados disponíveis para esta visualização.</p>
+            : (
+              <div className="mt-4 h-72 w-full min-w-0" role="img" aria-label={`Gráfico clínico compartilhado: ${DOMAIN_LABELS[activeView.domain] || 'evolução'}`}>
+                <SafeResponsiveContainer width="100%" height="100%">
+                  <LineChart data={chartRows} margin={{ top: 8, right: 12, bottom: 8, left: -12 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="observedAt" tick={{ fontSize: 10 }} tickFormatter={(date: string) => date.slice(5, 10)} minTickGap={24} />
+                    <YAxis tick={{ fontSize: 11 }} width={40} />
+                    <Tooltip labelFormatter={(label: any) => String(label)} />
+                    {activeView.series.map((series, index) => (
+                      <Line
+                        key={String(series.key || series.seriesKey || index)}
+                        type="linear"
+                        dataKey={'series' + index}
+                        name={String(series.itemLabel || series.targetLabel || series.metricLabel || series.seriesLabel || 'Indicador ' + (index + 1))}
+                        stroke={['#7a32fc', '#059669', '#0284c7'][index]}
+                        strokeWidth={2}
+                        dot={{ r: 2 }}
+                        connectNulls={false}
+                        isAnimationActive={false}
+                      />
+                    ))}
+                  </LineChart>
+                </SafeResponsiveContainer>
+              </div>
+            )}
+        </>
       )}
     </section>
   );
