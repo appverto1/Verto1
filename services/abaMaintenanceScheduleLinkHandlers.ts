@@ -79,6 +79,9 @@ export function createAbaMaintenanceConfirmLinkHandler(getDeps: () => any) {
         updated_at: now
       }), schedule.clinic_id || clinicId, schedule.organization_id || organizationId, schedule.patient_id);
       if (update.error) throw update.error;
+      if (!update.data || sanitizeString(update.data.id, 180) !== scheduleId) {
+        return res.status(409).json({ success: false, error: 'PERSISTENCE_NOT_CONFIRMED', message: 'Não foi possível confirmar a persistência da sondagem.' });
+      }
       void persistActivityLog({
         userId: confirmedBy || '',
         clinicId: schedule.clinic_id || clinicId,
@@ -386,6 +389,9 @@ export function createAbaMaintenanceSkipLinkHandler(getDeps: () => any) {
         updated_at: now
       }), schedule.clinic_id || clinicId, schedule.organization_id || organizationId, schedule.patient_id);
       if (update.error) throw update.error;
+      if (!update.data || sanitizeString(update.data.id, 180) !== scheduleId) {
+        return res.status(409).json({ success: false, error: 'PERSISTENCE_NOT_CONFIRMED', message: 'Não foi possível confirmar a persistência da sondagem.' });
+      }
       void persistActivityLog({
         userId: sanitizeString(req.session.user?.id, 120),
         clinicId: schedule.clinic_id || clinicId,

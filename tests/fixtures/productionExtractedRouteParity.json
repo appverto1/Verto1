@@ -759,7 +759,7 @@
       "checkPatientAccess",
       "requireClinicCapability('aba.program.edit')"
     ],
-    "sha256": "db64bb6540fd693fa49326cc9f17c1cfce120a8a6e20cd5d9c75fba460d41906"
+    "sha256": "8cc999348762c80df71f07891cbe896388d05f28178a3ec1a6e68c61a66d93e4"
   },
   {
     "method": "get",
@@ -954,7 +954,7 @@
       "checkAuth",
       "requireClinicCapability('aba.maintenance.manage')"
     ],
-    "sha256": "620beab380f5bc08fdddd8300701beb21fcefae399fd5d2e64de0d36370970cf"
+    "sha256": "33bc459cebbd896b5f4a9452d692a0b0a751acc6c4ffa5f8956de1cad53ec59f"
   },
   {
     "method": "post",
@@ -965,7 +965,7 @@
       "checkAuth",
       "requireClinicCapability('aba.maintenance.manage')"
     ],
-    "sha256": "eb3fe95d950ab86616fb2e388c5e4913175122b8832fb00efb6e29637a22a1e9"
+    "sha256": "836a5662fe346836661f1467498ead8b006f93905f317d4cf464c2f0dcfa3670"
   },
   {
     "method": "get",
@@ -987,7 +987,7 @@
       "checkAuth",
       "requireClinicCapability('aba.maintenance.manage')"
     ],
-    "sha256": "0dabedc9880bf7ac3afa3e8cac5c9277e22b18435b2d36238122871bc94c8b0e"
+    "sha256": "47f03a6a57492f8d682c129537dff335e7cf102ccb2088ca97d189bfed1b5d99"
   },
   {
     "method": "post",
@@ -998,7 +998,7 @@
       "checkAuth",
       "requireClinicCapability('aba.maintenance.manage')"
     ],
-    "sha256": "1adf5a8d5f7fe5686ac55d2b4a6178f305912f58f31b4b3d58340abaadfc02f3"
+    "sha256": "fd16a569b86e908c358acdf0053d3d474e752db7780b768a065fca1a0d7eaf9f"
   },
   {
     "method": "post",
@@ -1009,7 +1009,7 @@
       "checkAuth",
       "requireClinicCapability('aba.maintenance.manage')"
     ],
-    "sha256": "35b5b1801cf8e4b1f61aee9105909808504c711a62222720007ca5d391b248dd"
+    "sha256": "55c773842f3a709410b5743a9c415dcafb8fa5c7f9a8033c0f549620c34a079a"
   },
   {
     "method": "get",
@@ -1111,7 +1111,7 @@
       "checkAuth",
       "requireClinicCapability('aba.suggestions.apply')"
     ],
-    "sha256": "7d1f48b299076ddab06ce8e75acdd3842265661e8a192a3b80755fb581e129b6"
+    "sha256": "80aff958f507e07ba8b01e2dba3bf9c5b9985161b023a9c2ae4af0c5d032566a"
   },
   {
     "method": "get",
