@@ -47,7 +47,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
           {showClinicalMeasurementV3Details && <button type="button" aria-pressed={view === 'clinical-v3'} onClick={() => setView('clinical-v3')} className={`inline-flex min-h-10 flex-1 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 sm:flex-none ${view === 'clinical-v3' ? 'bg-violet-600 text-white shadow-sm' : isPanelDark ? 'text-slate-300 hover:bg-slate-800' : 'text-slate-600 hover:bg-white'}`}><BarChart3 size={16} /> Métricas V3</button>}
         </div>
       )}
-      {(view === 'plans' || (view === 'aba-v3' && showAbaV3Details)) && (
+      {view === 'aba-v3' && showAbaV3Details && (
         <ProfessionalSharedChartControl key={patientId} patientId={patientId} descriptor={descriptor} isDark={isPanelDark} />
       )}
       {view === 'aba' && showAbaDetails
@@ -56,7 +56,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
           ? <AbaV3ClinicalChartPanel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} onShareDescriptorChange={onAbaDescriptorChange} />
           : view === 'clinical-v3' && showClinicalMeasurementV3Details
             ? <ClinicalMeasurementV3Panel patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} />
-            : <ClinicalOutcomesDashboard patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} onOpenSessionReport={onOpenSessionReport} onShareDescriptorChange={onPlanDescriptorChange} />}
+            : <ClinicalOutcomesDashboard patientId={patientId} organizationId={organizationId} isPanelDark={isPanelDark} onOpenSessionReport={onOpenSessionReport} onShareDescriptorChange={onPlanDescriptorChange} shareControl={<ProfessionalSharedChartControl key={patientId} patientId={patientId} descriptor={planDescriptor} isDark={isPanelDark} />} />}
     </div>
   );
 }
