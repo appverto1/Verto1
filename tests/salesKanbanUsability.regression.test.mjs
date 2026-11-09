@@ -3,6 +3,7 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 
 const source=readFileSync('src/components/CommercialKanban.tsx','utf8');
+const acquisitionTransport=readFileSync('src/services/salesKanbanAcquisition.ts','utf8');
 const drawer=source.split('{selected&&<div className="fixed inset-0')[1];
 
 test('opening a card shows editable lead fields and notes with an explicit Save, not an edit toggle',()=>{
@@ -22,7 +23,8 @@ test('acquisition channels are visible and edited in the drawer, but only Save p
   assert.match(drawer,/fieldset disabled=\{savingAcquisition\|\|acquisitionCatalogUnavailable\}/);
   assert.match(drawer,/checked=\{inlineChannelIds\.includes\(channel\.id\)\}/);
   assert.match(drawer,/onClick=\{\(\)=>void saveAcquisition\(\{leadId:selected\.id,channelIds:inlineChannelIds\}\)\}/);
-  assert.match(source,/method:'PUT',headers:\{'X-Idempotency-Key':key\}/);
+  assert.match(source,/persistSalesKanbanAcquisition\(request/);
+  assert.match(acquisitionTransport,/method: 'PUT', headers: \{ 'X-Idempotency-Key': key \}/);
   assert.match(source,/setInlineChannelIds\(\[\.\.\.\(acquisitionByLead\[leadId\]\|\|\[\]\)\]\)/);
 });
 

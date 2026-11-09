@@ -1,4 +1,4 @@
-import { clinicalSpecialtiesMatch } from './clinicalSpecialties';
+import { clinicalSpecialtiesMatch, clinicalSpecialtyScopeKey, normalizeClinicalSpecialty } from './clinicalSpecialties';
 
 export const PATIENT_FINANCIAL_SERVICE_OPTIONS = [
   { value: 'PSYCHOLOGY', label: 'Psicologia' },
@@ -10,6 +10,54 @@ export const PATIENT_FINANCIAL_SERVICE_OPTIONS = [
   { value: 'THERAPY', label: 'Terapia' },
   { value: 'CUSTOM', label: 'Outro' },
 ] as const;
+
+/**
+ * Agenda and financial plans share the same clinic-active specialty boundary.
+ * ABA is a treatment approach, not a profession; generic CUSTOM/THERAPY options
+ * must never allow bypassing an unavailable clinic specialty.
+ */
+const FINANCIAL_SERVICE_BY_CLINICAL_SCOPE: Record<string, string> = {
+  psychotherapy: 'PSYCHOLOGY',
+  speech_therapy: 'SPEECH_THERAPY',
+  occupational_therapy: 'OCCUPATIONAL_THERAPY',
+  psychopedagogy: 'PSYCHOPEDAGOGY',
+  physiotherapy: 'PHYSIOTHERAPY'
+};
+
+const CLINICAL_SCOPE_BY_FINANCIAL_SERVICE: Record<string, string> =
+  Object.fromEntries(Object.entries(FINANCIAL_SERVICE_BY_CLINICAL_SCOPE).map(([scope, service]) => [service, scope]));
+
+export const patientFinancialPlanClinicalScopeKey = (plan: any): string | null => {
+  const type = String(plan?.serviceType || plan?.service_type || '').trim().toUpperCase();
+  if (type === 'CUSTOM') return clinicalSpecialtyScopeKey(
+    plan?.customServiceName || plan?.custom_service_name || plan?.specialty || ''
+  );
+  return CLINICAL_SCOPE_BY_FINANCIAL_SERVICE[type] || null;
+};
+
+export const availableClinicFinancialPlanServiceOptions = (activeSpecialties: string[]) => {
+  const seen = new Set<string>();
+  return (activeSpecialties || []).flatMap((raw) => {
+    const canonical = normalizeClinicalSpecialty(raw);
+    const scope = clinicalSpecialtyScopeKey(canonical);
+    if (!canonical || !scope || seen.has(scope)) return [];
+    seen.add(scope);
+    const serviceType = FINANCIAL_SERVICE_BY_CLINICAL_SCOPE[scope] || 'CUSTOM';
+    return [{
+      value: serviceType === 'CUSTOM' ? `CUSTOM:${canonical}` : serviceType,
+      label: canonical,
+      serviceType,
+      customServiceName: serviceType === 'CUSTOM' ? canonical : ''
+    }];
+  });
+};
+
+export const patientFinancialPlanSelectionValue = (plan: any) => {
+  const serviceType = String(plan?.serviceType || plan?.service_type || '');
+  if (serviceType !== 'CUSTOM') return serviceType;
+  const name = String(plan?.customServiceName || plan?.custom_service_name || plan?.specialty || '').trim();
+  return name ? `CUSTOM:${name}` : 'CUSTOM';
+};
 
 export const PATIENT_FINANCIAL_BILLING_MODE_OPTIONS = [
   { value: 'PRIVATE', label: 'Particular' },
@@ -215,6 +263,9 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
     overrides.amount !== undefined || overrides.monthlyFee !== undefined || overrides.monthly_fee !== undefined
       ? amountToCents(overrides.amount ?? overrides.monthlyFee ?? overrides.monthly_fee)
       : Math.max(0, Math.round(Number(overrides.amountCents ?? overrides.amount_cents) || 0));
+  const groupAmountCents = overrides.groupAmount !== undefined
+    ? amountToCents(overrides.groupAmount)
+    : Math.max(0, Math.round(Number(overrides.groupAmountCents ?? overrides.group_amount_cents) || 0));
   const copaymentAmountCents =
     overrides.copaymentAmount !== undefined || overrides.copayment_amount !== undefined
       ? amountToCents(overrides.copaymentAmount ?? overrides.copayment_amount)
@@ -235,6 +286,7 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
       `plan-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     serviceType,
     customServiceName,
+    professionalUserId: cleanText(overrides.professionalUserId || overrides.professional_user_id, 120),
     billingMode,
     billingFrequency,
     pricingUnit,
@@ -313,6 +365,9 @@ export const createPatientFinancialPlan = (overrides: any = {}) => {
                 ? 'MONTH'
                 : 'SESSION',
     amountCents,
+    // Zero disables group billing; never fall back to the individual rate.
+    groupAmountCents,
+    groupAmount: overrides.groupAmount !== undefined ? String(overrides.groupAmount) : centsToAmountInput(groupAmountCents),
     amount:
       overrides.amount !== undefined
         ? String(overrides.amount)
@@ -464,6 +519,7 @@ const serializePatientFinancialPlanPayload = (
     id: normalized.id,
     serviceType: normalized.serviceType || 'CUSTOM',
     customServiceName: normalized.customServiceName,
+    professionalUserId: normalized.professionalUserId || null,
     serviceNameSnapshot,
     billingMode: normalized.billingMode,
     billingFrequency: normalized.billingFrequency || null,
@@ -485,6 +541,7 @@ const serializePatientFinancialPlanPayload = (
     sessionsQuantity: normalized.sessionsQuantity ? Number(normalized.sessionsQuantity) : null,
     quantityPeriod: normalized.quantityPeriod,
     amountCents: normalized.amountCents,
+    groupAmountCents: normalized.groupAmountCents,
     copaymentAmountCents: normalized.copaymentAmountCents,
     paymentMethod: financialPlanRequiresPaymentMethod(normalized)
       ? normalized.paymentMethod || null

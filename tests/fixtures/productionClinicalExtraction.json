@@ -5,14 +5,15 @@
     "module": "services/therapeuticPlanCreateHandler.ts",
     "factory": "createTherapeuticPlanCreateHandler",
     "property": null,
-    "bodySha256": "92aa67057f6a5b0e9ae9e516a561345e33d1be99a9d28ea029fc2a2efc2f8810",
+    "bodySha256": "b8b73666c32a729a1a20613d64f3677d33154331ec2e4d47202cd3337fd66bac",
     "signature": "async (req: any, res) => ",
     "middleware": [
       "'/api/aba/patients/:patientId/therapeutic-plans'",
       "checkAuth",
       "requireScopedTherapeuticPlanCapability('create')",
       "checkPatientAccess"
-    ]
+    ],
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -20,14 +21,15 @@
     "module": "services/therapeuticPlanEditHandler.ts",
     "factory": "createTherapeuticPlanEditHandler",
     "property": null,
-    "bodySha256": "fafb6a14d627b2894a94285e1b2e131c16ffa1c3e5b4e68cd4307486e5eb796c",
+    "bodySha256": "7745591cd8a110b6a4cbd57775fbfd68cf6bb3a1efa8e30264b74f7df186ffcc",
     "signature": "async (req: any, res) => ",
     "middleware": [
       "'/api/aba/patients/:patientId/therapeutic-plans/:planId'",
       "checkAuth",
       "requireScopedTherapeuticPlanCapability('edit')",
       "checkPatientAccess"
-    ]
+    ],
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -95,7 +97,7 @@
     "module": "services/therapeuticProgramWriteHandlers.ts",
     "factory": "createTherapeuticProgramWriteHandlers",
     "property": "createProgram",
-    "bodySha256": "6d7529ef5716cb17f7cec359f6d7790bef99141cf12bdfb648243530cb605b11",
+    "bodySha256": "b7600c5fd8fc85da5d02ad83286e204b26ba6e308ab3c9e44b059a284e73dd07",
     "signature": "async (req: any, res) => ",
     "middleware": [
       "'/api/aba/patients/:patientId/therapeutic-programs'",
@@ -103,7 +105,8 @@
       "checkAuth",
       "requireAnyClinicCapability('aba.program.create', 'treatment_plan.create')",
       "checkPatientAccess"
-    ]
+    ],
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -111,7 +114,7 @@
     "module": "services/therapeuticProgramWriteHandlers.ts",
     "factory": "createTherapeuticProgramWriteHandlers",
     "property": "updateStatus",
-    "bodySha256": "39c623f60e4174741e249f75bb30fbe43321324384f00f248d07f903b5975b0a",
+    "bodySha256": "bcb3f1a0799340e3ca59a9d1d22b86052b5ebf902a9e35aa883410350d2d20f5",
     "signature": "async (req: any, res) => ",
     "middleware": [
       "'/api/aba/patients/:patientId/therapeutic-programs/:programId/status'",
@@ -119,7 +122,8 @@
       "checkAuth",
       "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
       "checkPatientAccess"
-    ]
+    ],
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -127,7 +131,7 @@
     "module": "services/therapeuticProgramWriteHandlers.ts",
     "factory": "createTherapeuticProgramWriteHandlers",
     "property": "updateProgram",
-    "bodySha256": "0d1bb3c49660aabd19122567cdc71c0196228d920ce93f1b3aad93e22e466d3f",
+    "bodySha256": "9e988116e13bf443d04b635657fc74a77909bc0bcea4ba9fa888d106d9915a4e",
     "signature": "async (req: any, res) => ",
     "middleware": [
       "'/api/aba/patients/:patientId/therapeutic-programs/:programId'",
@@ -135,7 +139,8 @@
       "checkAuth",
       "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
       "checkPatientAccess"
-    ]
+    ],
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -143,7 +148,7 @@
     "module": "services/therapeuticProgramWriteHandlers.ts",
     "factory": "createTherapeuticProgramWriteHandlers",
     "property": "addTarget",
-    "bodySha256": "3619be4b264812fcf3a9e81fda16976cf8ac5964fbddc01b871e5a4f8d7c9271",
+    "bodySha256": "b6f5b89f3f3b10110123bbc7734587cc76039c73c5e5a49e870c8c265143a098",
     "signature": "async (req: any, res) => ",
     "middleware": [
       "'/api/aba/patients/:patientId/therapeutic-programs/:programId/targets'",
@@ -151,6 +156,7 @@
       "checkAuth",
       "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
       "checkPatientAccess"
-    ]
+    ],
+    "stagingFunctionalChange": true
   }
 ]

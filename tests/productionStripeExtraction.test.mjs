@@ -15,6 +15,6 @@ for (const entry of declarations) {
   }
   visit(source);
   assert.equal(matches.length, 1, `${entry.module}: ${entry.name}`);
-  assert.equal(createHash('sha256').update(matches[0].getText(source)).digest('hex'), entry.sha256, `production declaration ${entry.name}`);
+  assert.equal(createHash('sha256').update(matches[0].getText(source)).digest('hex'), entry.sha256, `reviewed declaration ${entry.name}`);
 }
-console.log(`Production Stripe extraction: ${declarations.length} declarations match production`);
+console.log(`Reviewed Stripe extraction: ${declarations.length} declarations match`);

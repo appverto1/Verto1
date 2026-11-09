@@ -1,10 +1,4 @@
 import cron from 'node-cron';
-import crypto from 'crypto';
-import {
-  releaseDistributedJobLease,
-  tryAcquireDistributedJobLease
-} from './distributedRuntimeState';
-
 type NoShowClassificationRow = {
   appointmentId?: string;
   clinicId?: string;
@@ -20,7 +14,7 @@ type AppointmentNoShowServiceOptions = {
 };
 
 type ActiveAppointmentNoShowServiceOptions = Required<
-  Pick<AppointmentNoShowServiceOptions, 'supabase' | 'logger' | 'runtimeOwnerId' | 'requireDistributedLease'>
+  Pick<AppointmentNoShowServiceOptions, 'supabase' | 'logger'>
 > & Pick<AppointmentNoShowServiceOptions, 'onAppointmentsClassified'>;
 
 let started = false;
@@ -36,20 +30,11 @@ export async function runAppointmentNoShowScan(trigger = 'manual_trigger') {
   }
 
   running = true;
-  let leaseAcquired = false;
   try {
-    if (options.requireDistributedLease) {
-      leaseAcquired = await tryAcquireDistributedJobLease({
-        supabase: options.supabase,
-        jobKey: 'appointment-auto-no-show-scan',
-        ownerId: options.runtimeOwnerId,
-        leaseSeconds: 240
-      });
-      if (!leaseAcquired) {
-        return { skipped: true, classifiedCount: 0, flaggedCount: 0, failedCount: 0 };
-      }
-    }
-
+    // The service-role RPC itself locks each eligible appointment with
+    // FOR UPDATE SKIP LOCKED and writes the classification in one transaction.
+    // A second network round-trip to acquire/release a separate job lease is
+    // redundant: parallel instances safely receive disjoint appointment rows.
     const { data, error } = await options.supabase.rpc('classify_overdue_appointments_no_show_v1', {
       p_limit: 250
     });
@@ -89,19 +74,6 @@ export async function runAppointmentNoShowScan(trigger = 'manual_trigger') {
     });
     return { skipped: false, classifiedCount: 0, flaggedCount: 0, failedCount: 1 };
   } finally {
-    if (leaseAcquired) {
-      try {
-        await releaseDistributedJobLease({
-          supabase: options.supabase,
-          jobKey: 'appointment-auto-no-show-scan',
-          ownerId: options.runtimeOwnerId
-        });
-      } catch (leaseError: any) {
-        options.logger.warn('[Appointment No-show Cron] Falha ao liberar lease distribuído.', {
-          message: safeText(leaseError?.message || leaseError, 240)
-        });
-      }
-    }
     running = false;
   }
 }
@@ -121,8 +93,6 @@ export function startAppointmentNoShowCron(options: AppointmentNoShowServiceOpti
   activeOptions = {
     supabase: options.supabase,
     logger,
-    runtimeOwnerId: safeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
-    requireDistributedLease: options.requireDistributedLease === true,
     onAppointmentsClassified: options.onAppointmentsClassified
   };
 
@@ -140,6 +110,6 @@ export function startAppointmentNoShowCron(options: AppointmentNoShowServiceOpti
 
   logger.log('[Appointment No-show Cron] Serviço iniciado no backend Node.js a cada minuto.', {
     timezone: 'UTC',
-    distributedLease: activeOptions.requireDistributedLease
+    atomicClassification: true
   });
 }

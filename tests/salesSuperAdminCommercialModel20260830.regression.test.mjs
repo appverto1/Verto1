@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const builder = readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
+const draftInput = readFileSync('src/utils/salesModularProposalBuilderInput.ts', 'utf8');
 const assumptions = readFileSync('src/components/SalesFinancialAssumptionsPanel.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
 const engine = readFileSync('src/utils/salesModularProposal.ts', 'utf8');
@@ -15,19 +16,19 @@ for (const itemKey of [
   'insurance_tiss',
   'school_management'
 ]) {
-  assert.match(builder, new RegExp(`'${itemKey}'`));
+  assert.match(draftInput, new RegExp(`'${itemKey}'`));
   assert.match(server, new RegExp(`"${itemKey}"`));
 }
 
-assert.match(builder, /SALES_ESSENTIAL_PATIENT_LIMIT = 50/);
-assert.match(builder, /SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50/);
-assert.match(builder, /Math\.ceil\(demand \/ SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS\)/);
+assert.match(draftInput, /SALES_ESSENTIAL_PATIENT_LIMIT = 50/);
+assert.match(draftInput, /SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50/);
+assert.match(draftInput, /Math\.ceil\(demand \/ SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS\)/);
 assert.match(builder, /Enterprise/);
 assert.match(builder, /Plano Essencial · 1 a 50 pacientes/);
 // Historical capacity offers keep their original selector; new exact offers use 50-seat bands.
 assert.match(builder, /input\.exactPerPatientBilling === true \? \(/);
-assert.match(builder, /SALES_PATIENT_CAPACITY_BLOCKS = \[10, 20, 30, 40, 50\]/);
-assert.match(builder, /if \(input\.exactPerPatientBilling !== true\) return input/);
+assert.match(draftInput, /SALES_PATIENT_CAPACITY_BLOCKS = \[10, 20, 30, 40, 50\]/);
+assert.match(draftInput, /if \(input\.exactPerPatientBilling !== true\) return input/);
 const exactPanelStart = builder.indexOf('                {input.exactPerPatientBilling === true ? (');
 const exactCapacityPanel = builder.slice(exactPanelStart, builder.indexOf('                ) : (', exactPanelStart));
 assert.doesNotMatch(exactCapacityPanel, /10, 20, 30, 40 ou 50 pacientes/);

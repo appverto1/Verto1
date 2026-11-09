@@ -4,7 +4,7 @@
 export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
   return {
     createProgram: async (req: any, res: any) => {
-    const { enforcePayloadLimit, sanitizeString, currentClinicId, isUuid, supabase, isTherapeuticPlanManager, sanitizeTextField, sanitizeClinicalPayload, THERAPEUTIC_PROGRAM_ORIGIN_TYPES, fetchAbaRecommendationById, THERAPEUTIC_PROGRAM_SELECT, ABA_TARGET_RECOMMENDATION_SELECT, ABA_RECOMMENDATION_TYPES, THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES, fetchClinicStateWithSchemaFallback, resolveProtocolSkillOriginForRoute, sanitizeIsoDateOnly, crypto, hasMissingFinancialSchema, isMissingRelationError, therapeuticProgramErrorMessage, persistActivityLog, sendRouteDbError } = getDeps();
+      const { enforcePayloadLimit, sanitizeString, currentClinicId, isUuid, supabase, isTherapeuticPlanManager, canActivateSpecialtyPlanForCase, sanitizeTextField, sanitizeClinicalPayload, THERAPEUTIC_PROGRAM_ORIGIN_TYPES, fetchAbaRecommendationById, THERAPEUTIC_PROGRAM_SELECT, ABA_TARGET_RECOMMENDATION_SELECT, ABA_RECOMMENDATION_TYPES, THERAPEUTIC_PROGRAM_CREATION_RECOMMENDATION_TYPES, fetchClinicStateWithSchemaFallback, resolveProtocolSkillOriginForRoute, sanitizeIsoDateOnly, crypto, hasMissingFinancialSchema, isMissingRelationError, therapeuticProgramErrorMessage, persistActivityLog, sendRouteDbError } = getDeps();
     try {
       if (!enforcePayloadLimit(req, res, 96 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -71,9 +71,14 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
       }
       const canApprove = isTherapeuticPlanManager(role);
       const requestedStatus = sanitizeString(req.body?.status, 40).toLowerCase();
-      const status = canApprove
-        ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
-        : (requestedStatus === 'draft' ? 'draft' : 'awaiting_approval');
+      const specialistCanActivate = !canApprove && therapeuticPlanScope?.status === 'active'
+        && await canActivateSpecialtyPlanForCase({ supabase, clinicId, patientId,
+          actorId, actorRole: role, organizationId, plan: therapeuticPlanScope });
+      const status = therapeuticPlanScope?.status !== 'active'
+        ? 'draft' // Future plans are editable, but cannot collect clinical data.
+        : canApprove
+          ? (['draft', 'teaching', 'maintenance'].includes(requestedStatus) ? requestedStatus : 'teaching')
+          : (requestedStatus === 'draft' ? 'draft' : specialistCanActivate ? 'teaching' : 'draft');
       const originType = sanitizeString(req.body?.originType || req.body?.origin_type || 'manual', 40).toLowerCase();
       const originId = sanitizeString(req.body?.originId || req.body?.origin_id, 180) || null;
       let resolvedProtocolId = sanitizeString(req.body?.protocolId || req.body?.protocol_id, 180) || null;
@@ -291,9 +296,9 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
         fallbackMessage: 'Não foi possível criar o programa terapêutico.'
       });
     }
-  },
+    },
     updateStatus: async (req: any, res: any) => {
-    const { sanitizeString, currentClinicId, isTherapeuticPlanManager, canActorEditTherapeuticProgram, supabase, sanitizeTextField, crypto, therapeuticProgramErrorMessage, sendRouteDbError } = getDeps();
+      const { sanitizeString, currentClinicId, isTherapeuticPlanManager, canActorEditTherapeuticProgram, supabase, canActivateSpecialtyPlanForCase, sanitizeTextField, crypto, therapeuticProgramErrorMessage, sendRouteDbError } = getDeps();
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -306,8 +311,8 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
       if (!allowedProgramStatuses.includes(status)) {
         return res.status(400).json({ success: false, error: 'THERAPEUTIC_PROGRAM_STATUS_INVALID' });
       }
-      if (!isTherapeuticPlanManager(role) && status !== 'awaiting_approval') {
-        return res.status(403).json({ success: false, error: 'Somente supervisão ou coordenação pode alterar a fase oficial do programa.' });
+      if (!isTherapeuticPlanManager(role) && !['awaiting_approval', 'teaching'].includes(status)) {
+        return res.status(403).json({ success: false, error: 'Esta fase requer gestão clínica.' });
       }
       if (!isTherapeuticPlanManager(role)) {
         const canEdit = await canActorEditTherapeuticProgram({
@@ -358,10 +363,13 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
       }
 
       const therapeuticPlanId = sanitizeString(currentProgram.therapeutic_plan_id, 120);
+      if (!isTherapeuticPlanManager(role) && status === 'teaching' && !therapeuticPlanId) {
+        return res.status(403).json({ success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED' });
+      }
       if (therapeuticPlanId && ['teaching', 'maintenance'].includes(status)) {
         const { data: parentPlan, error: parentPlanError } = await supabase
           .from('patient_therapeutic_plans')
-          .select('id,status')
+          .select('id,status,mode,specialty,clinic_id,organization_id,patient_id,responsible_professional_id')
           .eq('id', therapeuticPlanId)
           .eq('organization_id', organizationId)
           .eq('patient_id', patientId)
@@ -369,6 +377,15 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
           .maybeSingle();
         if (parentPlanError) throw parentPlanError;
         if (!parentPlan?.id) return res.status(409).json({ success: false, error: 'THERAPEUTIC_PLAN_NOT_FOUND' });
+        if (!isTherapeuticPlanManager(role) && status === 'teaching') {
+          const mayActivate = await canActivateSpecialtyPlanForCase({
+            supabase, clinicId, organizationId, patientId, actorId, actorRole: role, plan: parentPlan
+          });
+          if (!mayActivate) return res.status(403).json({
+            success: false, error: 'THERAPEUTIC_SPECIALIST_ACTIVATION_DENIED',
+            message: 'Apenas o especialista responsável por este plano ativo pode ativar o programa para as sessões.'
+          });
+        }
         const parentPlanStatus = sanitizeString(parentPlan.status, 40).toLowerCase();
         if (parentPlanStatus !== 'active') {
           return res.status(409).json({
@@ -402,9 +419,9 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
         fallbackMessage: 'Não foi possível atualizar o programa.'
       });
     }
-  },
+    },
     updateProgram: async (req: any, res: any) => {
-    const { enforcePayloadLimit, sanitizeString, currentClinicId, canActorEditTherapeuticProgram, supabase, sanitizeTextField, sanitizeClinicalPayload, sanitizeIsoDateOnly, crypto, hasMissingFinancialSchema, isMissingRelationError, therapeuticProgramErrorMessage, sendRouteDbError } = getDeps();
+      const { enforcePayloadLimit, sanitizeString, currentClinicId, canActorEditTherapeuticProgram, supabase, sanitizeTextField, sanitizeClinicalPayload, sanitizeIsoDateOnly, crypto, hasMissingFinancialSchema, isMissingRelationError, therapeuticProgramErrorMessage, sendRouteDbError } = getDeps();
     try {
       if (!enforcePayloadLimit(req, res, 64 * 1024, 'Programa terapêutico')) return;
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
@@ -472,9 +489,9 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
         fallbackMessage: 'Não foi possível atualizar o programa terapêutico.'
       });
     }
-  },
+    },
     addTarget: async (req: any, res: any) => {
-    const { sanitizeString, currentClinicId, canActorEditTherapeuticProgram, supabase, sanitizeTextField, crypto, therapeuticProgramErrorMessage, sendRouteDbError } = getDeps();
+      const { sanitizeString, currentClinicId, canActorEditTherapeuticProgram, supabase, sanitizeTextField, crypto, therapeuticProgramErrorMessage, sendRouteDbError } = getDeps();
     try {
       const patientId = sanitizeString(req.resolvedPatientId || req.params.patientId, 120);
       const programId = sanitizeString(req.params.programId, 180);
@@ -513,6 +530,6 @@ export function createTherapeuticProgramWriteHandlers(getDeps: () => any) {
         fallbackMessage: 'Não foi possível adicionar o alvo.'
       });
     }
-  },
+    },
   };
 }

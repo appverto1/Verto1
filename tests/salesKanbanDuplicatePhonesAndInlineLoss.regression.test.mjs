@@ -2,18 +2,20 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 
-const api=readFileSync(new URL('../services/salesProspectingRoutes.ts',import.meta.url),'utf8');
+const api=readFileSync(new URL('../services/salesKanbanOpportunityCreationRoutes.ts',import.meta.url),'utf8');
+const input=readFileSync(new URL('../services/salesKanbanOpportunityCreationInput.ts',import.meta.url),'utf8');
 const ui=readFileSync(new URL('../src/components/CommercialKanban.tsx',import.meta.url),'utf8');
 const lossRoutes=readFileSync(new URL('../services/salesLossReasonsRoutes.ts',import.meta.url),'utf8');
 const creation=readFileSync(new URL('../supabase/migrations/20261027193000_sales_kanban_opportunity_crud_v1.sql',import.meta.url),'utf8');
 
 test('telephone duplicates are checked server-side, with a single scoped batch query',()=>{
   assert.match(api,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities\/duplicates', \.\.\.salesGuard/);
-  assert.match(api,/phones\.length > 100/);
-  assert.match(api,/value\.length > 40/);
-  assert.match(api,/value\.replace\(\/\[\^0-9\]\/g, ''\)/);
-  assert.match(api,/digits\.length === 10 \|\| digits\.length === 11/);
-  assert.match(api,/new Map<string,number>\(\)/);
+  assert.match(input,/phones\.length > 100/);
+  assert.match(input,/value\.length > 40/);
+  assert.match(input,/value\.replace\(\/\[\^0-9\]\/g, ''\)/);
+  assert.match(input,/digits\.length === 10 \|\| digits\.length === 11/);
+  assert.match(input,/new Map<string,number>\(\)/);
+  assert.match(api,/parseManualOpportunityPreviewInput\(req\.body\?\.phones\)/);
   assert.match(api,/\.in\('normalized_phone',unique\)\.is\('deleted_at',null\)\.limit\(101\)/);
   assert.match(api,/inBatch:phone!==null && \(counts\.get\(phone\)\|\|0\)>1/);
   assert.match(api,/existing:phone===null\?null:existingByPhone\.get\(phone\)\|\|null/);
@@ -22,7 +24,7 @@ test('telephone duplicates are checked server-side, with a single scoped batch q
 });
 
 test('paste and individual creation mark duplicates without auto-deleting or saving them',()=>{
-  assert.match(ui,/request\('\/api\/owner\/sales\/kanban\/opportunities\/duplicates'/);
+  assert.match(ui,/previewOpportunityDuplicates\(request,phonesDraft\)/);
   assert.match(ui,/\},350\);/);
   assert.match(ui,/checkedDuplicates\?\.\[index\]\?\.inBatch/);
   assert.match(ui,/checkedDuplicates\?\.\[index\]\?\.existing/);

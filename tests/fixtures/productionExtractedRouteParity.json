@@ -25,7 +25,8 @@
       "publicSalesLeadIpLimiter",
       "publicSalesLeadIdentityLimiter"
     ],
-    "sha256": "09d1f187afc3d4f9d76e4cac03ca75fc8586f27e54885054377f46d038911364"
+    "sha256": "f13a014b907faba564b1f9f3c1609705a792983e3c3b63a9b0d13af3fc2d810d",
+    "stagingFunctionalChange": true
   },
   {
     "method": "get",
@@ -61,7 +62,8 @@
       "\"/api/public/sales-offers/:token/payment-status\"",
       "publicSalesPaymentStatusLimiter"
     ],
-    "sha256": "95abc6898d39a95c18a5c4a3d6e081b3229c911c6841389bd98128a236f447e0"
+    "sha256": "f36f5eb5283769373d7f69d08d8e0d32f157f78aba69b5aa0a52949faf6b672d",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -70,7 +72,8 @@
       "\"/api/public/sales-offers/:token/prepare-activation\"",
       "publicSalesPostPaymentLimiter"
     ],
-    "sha256": "97d084bf18867880d929b8b19ad276d8614afdf7be45668f4020ac38db6dfbe6"
+    "sha256": "2b3b4e3ea0aeabe6b9cf5bd12c47d6dd9c0eb9a7c5549396a95e963fe0643fa8",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -79,7 +82,8 @@
       "\"/api/public/sales-offers/:token/director-session\"",
       "publicSalesPostPaymentLimiter"
     ],
-    "sha256": "04c57e9ee68d2a4fd740ec9b4a16632baa64bff48e0d6b72469de988e40ba826"
+    "sha256": "4d41eb9a006b9b6a407020a7bc88316e26f1667d1d7753c477688d65ba59be01",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -634,7 +638,8 @@
       "requireScopedTherapeuticPlanCapability('create')",
       "checkPatientAccess"
     ],
-    "sha256": "486cdae72c1f590b719ac2f450eed65fe53ac8373095edd40528b1efa2dc33e7"
+    "sha256": "c13a687dd1818403a9f54b40e095ac6505c6d585f8a11a8ef78d0c70ef9dd883",
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -645,7 +650,8 @@
       "requireScopedTherapeuticPlanCapability('edit')",
       "checkPatientAccess"
     ],
-    "sha256": "be93423a9a7e5cb7fbd986b79d4eae1e9279242808729cb8d016ffe97b43942a"
+    "sha256": "ef2abf8ef4b83952456acfcd98aa4cb1e6243f0e5d9635dd9922cd4477981464",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -712,7 +718,8 @@
       "requireAnyClinicCapability('aba.program.create', 'treatment_plan.create')",
       "checkPatientAccess"
     ],
-    "sha256": "009dde21e8fff954ce6b7b86779ebd3c2d190bc8120925fb90ff276df4345cc7"
+    "sha256": "c5b3832d6afe23a1b53313d35a55bae28ba91b4c9423a8a6deffb4cbe67f17eb",
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -724,7 +731,8 @@
       "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
       "checkPatientAccess"
     ],
-    "sha256": "2c4c5d8f8e0b3e4f28b8033629fe108c295e314e70a14336e2e961317c96d803"
+    "sha256": "b7cab9298e9b092d50b7be22a240110ebf74349fee1ef6563cb691d9c8eabc2f",
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",

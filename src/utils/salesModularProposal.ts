@@ -1225,7 +1225,7 @@ export function validateSalesModularProposalInput(
   ) {
     errors.push('offerValidityDays');
   }
-  if (![0, 7, 14, 30].includes(Number(input.trialDays ?? 0))) {
+  if (Number(input.trialDays ?? 0) !== 0) {
     errors.push('trialDays');
   }
   if (

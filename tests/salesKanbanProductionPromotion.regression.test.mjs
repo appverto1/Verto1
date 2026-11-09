@@ -5,6 +5,7 @@ import {test} from 'node:test';
 const admin=readFileSync('src/components/SuperAdminDashboard.tsx','utf8');
 const kanban=readFileSync('src/components/CommercialKanban.tsx','utf8');
 const routes=readFileSync('services/salesProspectingRoutes.ts','utf8');
+const acquisitionTransport=readFileSync('src/services/salesKanbanAcquisition.ts','utf8');
 
 test('desktop sidebar is fixed, compact only for Kanban, and keeps mobile hamburger',()=>{
   const shell=admin.split('<aside id="super-admin-navigation"')[1]?.split('</aside>')[0];
@@ -45,7 +46,8 @@ test('Kanban mutations remain server-authorized without direct browser database 
   assert.match(routes,/checkAuth, checkPlatformAdmin/);
   assert.match(routes,/user\?\.mfaVerified !== true/);
   assert.match(kanban,/method:'PATCH',headers:\{'X-Idempotency-Key':key\}/);
-  assert.match(kanban,/method:'PUT',headers:\{'X-Idempotency-Key':key\}/);
+  assert.match(kanban,/persistSalesKanbanAcquisition\(request/);
+  assert.match(acquisitionTransport,/method: 'PUT', headers: \{ 'X-Idempotency-Key': key \}/);
   assert.doesNotMatch(kanban,/\.from\('patients'\)|\.from\('clinics'\)|\.from\('auth\.users'\)/);
 });
 

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { AlertCircle, CheckCircle2, Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react';
-import { getSupabase } from '../lib/supabase';
+import { beginSalesActivationGoogleOAuth } from '../services/salesActivationGoogleOAuth';
+import { validateActivationPassword } from '../utils/salesActivationPasswordRules';
+import { loadPublicSalesActivationSummary, persistPublicSalesActivationPassword } from '../services/salesActivationPasswordTransport';
 import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
 
@@ -20,7 +22,6 @@ type SalesActivationAccessProps = {
 };
 
 const ACTIVATION_ERROR_KEY = 'verto_activation_error';
-const SALES_ACTIVATION_OAUTH_PENDING_KEY = 'verto_sales_activation_oauth_pending';
 
 type ActivationSummary = {
   name: string;
@@ -29,16 +30,6 @@ type ActivationSummary = {
   expiresAt: string | null;
   role: 'director';
   modules: Array<{ itemKey: string; publicName: string }>;
-};
-
-const validateActivationPassword = (value: string): string | null => {
-  if (value.length < 12) return 'A senha deve ter no mínimo 12 caracteres.';
-  if (value.length > 128) return 'A senha deve ter no máximo 128 caracteres.';
-  if (!/[A-Z]/.test(value)) return 'Inclua ao menos uma letra maiúscula.';
-  if (!/[a-z]/.test(value)) return 'Inclua ao menos uma letra minúscula.';
-  if (!/\d/.test(value)) return 'Inclua ao menos um número.';
-  if (!/[^A-Za-z0-9]/.test(value)) return 'Inclua ao menos um símbolo.';
-  return null;
 };
 
 const formatDate = (value: string | null) => {
@@ -72,11 +63,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       setLoading(true);
       setError('');
       try {
-        const response = await fetch(
-          `/api/public/sales-activations/${encodeURIComponent(token)}`,
-          { credentials: 'omit', signal: controller.signal },
-        );
-        const payload = await response.json().catch(() => ({}));
+        const { response, payload } = await loadPublicSalesActivationSummary(token, controller.signal);
         if (!response.ok || payload?.success === false) {
           throw new Error(payload?.message || 'Este link de ativação não está disponível.');
         }
@@ -125,25 +112,8 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     setError('');
     setMessage('');
     try {
-      localStorage.setItem('verto_intended_role', 'director');
-      localStorage.setItem('verto_activation_email', activation.email.toLowerCase());
-      localStorage.setItem(SALES_ACTIVATION_OAUTH_PENDING_KEY, token);
-      const supabase = await getSupabase();
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/ativacao-comercial/${encodeURIComponent(token)}`,
-          scopes: 'https://www.googleapis.com/auth/userinfo.email',
-          queryParams: { prompt: 'select_account' },
-        },
-      });
-      if (oauthError) throw oauthError;
+      await beginSalesActivationGoogleOAuth(token, activation.email, window.location.origin);
     } catch (oauthError: any) {
-      try {
-        localStorage.removeItem(SALES_ACTIVATION_OAUTH_PENDING_KEY);
-      } catch {
-        // Storage is optional.
-      }
       setError(oauthError?.message || 'Não foi possível iniciar o acesso com Google.');
       setSubmitting(false);
     }
@@ -186,6 +156,9 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
     setSubmitting(true);
     setError('');
     setMessage('');
+    // React state updates only on the next render. Remember a password persisted
+    // by this request when reporting a subsequent login/provisioning failure.
+    let passwordPersisted = passwordSaved;
     try {
       const passwordValidationError = validateActivationPassword(password);
       if (passwordValidationError) throw new Error(passwordValidationError);
@@ -194,22 +167,14 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       }
 
       if (!passwordSaved) {
-        const response = await fetch(
-          `/api/public/sales-activations/${encodeURIComponent(token)}/password`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'omit',
-            body: JSON.stringify({ password }),
-          },
-        );
-        const payload = await response.json().catch(() => ({}));
+        const { response, payload } = await persistPublicSalesActivationPassword(token, password);
 
         // Provisioning happens after Auth persistence. If a downstream step is
         // temporarily unavailable, never make the user think the password was
         // rejected and never force a second password creation against a used
         // activation link. The server explicitly tells us when Auth persisted.
         if (payload?.passwordSaved === true) {
+          passwordPersisted = true;
           setPasswordSaved(true);
         }
         if (!response.ok || payload?.success === false) {
@@ -218,6 +183,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
           }
           setMessage('Senha registrada. Concluindo a preparação da sua clínica...');
         } else {
+          passwordPersisted = true;
           setPasswordSaved(true);
           setMessage('Senha registrada. Concluindo seu acesso...');
         }
@@ -228,7 +194,7 @@ export const SalesActivationAccess = ({ token, onLogin }: SalesActivationAccessP
       setMessage('Acesso ativado com sucesso. Abrindo sua clínica...');
     } catch (activationError: any) {
       setError(
-        passwordSaved
+        passwordPersisted
           ? activationError?.message ||
               'Sua senha foi salva. Tente novamente para concluir a entrada.'
           : activationError?.message || 'Não foi possível concluir a ativação.',

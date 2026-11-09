@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import {createGroupSessionTestDatabase} from './helpers/groupSessionDatabase.mjs';
+const {db,clinic,actor,therapist,secondary,room,patients,query,scalar,book}=await createGroupSessionTestDatabase();
+let step='canonical read model';
+try{
+  await scalar("select verto_save_clinic_state_sections(p_clinic_id=>$1,p_updated_by=>$2,p_appointments=>$3::jsonb,p_protocols=>$4::jsonb,p_expected_section_versions=>jsonb_build_object('appointments',0,'protocols',0),p_idempotency_key=>$5)",[clinic,actor,JSON.stringify([{id:'legacy-individual',patientId:'legacy',sessionModality:'INDIVIDUAL'}]),JSON.stringify([{id:'preserved-protocol'}]),'test-legacy-initial']);
+  const first=await book('state-first-group-booking');
+  const state=async()=>Object.values((await query('select jsonb_build_object(\'data\',jsonb_build_object(\'appointments\',appointments,\'protocols\',protocols),\'versions\',section_versions) from clinic_state where clinic_id=$1',[clinic]))[0])[0];
+  const persisted=await state();
+  assert.ok(persisted.data.appointments.some(a=>a.id==='legacy-individual'));
+  assert.deepEqual(persisted.data.protocols,[{id:'preserved-protocol'}]);
+  const grouped=persisted.data.appointments.filter(a=>a.sessionGroupId===first.bookings[0].id);
+  assert.equal(grouped.length,2);assert.ok(grouped.every(a=>a.sessionModality==='GROUP'&&a.professionalIds.length===2));
+  assert.ok(grouped.every(a=>!('privatePricingResolution' in a)&&!('groupFinancialPlanId' in a)));
+  assert.equal(first.sectionVersions.appointments,persisted.versions.appointments);
+  const events=await scalar('select count(*)::int from appointment_domain_events');assert.equal(events,2);
+  await book('state-first-group-booking');assert.deepEqual(await state(),persisted);assert.equal(await scalar('select count(*)::int from appointment_domain_events'),events);
+  await query('update patient_financial_plans set group_amount_cents=0 where patient_id=$1',[patients[1]]);
+  await assert.rejects(()=>book('state-failed-group-booking','2026-11-03'),/GROUP_RATE_NOT_CONFIGURED/);
+  assert.deepEqual(await state(),persisted);assert.equal(await scalar('select count(*)::int from appointment_domain_events'),events);
+  await query('update patient_financial_plans set group_amount_cents=7000 where patient_id=$1',[patients[1]]);
+  step='professional buffers and restrictions';
+  const schedule={active:true,sessionBufferMinutes:20,days:Object.fromEntries(['monday','tuesday','wednesday','thursday','friday','saturday','sunday'].map(day=>[day,{enabled:true,periods:[{start:'08:00',end:'18:00'}],intervals:[]}]))};
+  await query('update clinic_memberships set work_schedule=$1::jsonb where clinic_id=$2 and user_id=$3',[JSON.stringify(schedule),clinic,secondary]);
+  await assert.rejects(()=>book('state-buffer-group','2026-11-02',patients.slice(2),'10:55'),/GROUP_PROFESSIONAL_BUFFER_UNAVAILABLE/);
+  await assert.rejects(()=>query("insert into appointments(clinic_id,organization_id,patient_id,therapist_id,scheduled_at,service_type,approach,care_setting,source_payload) values($1,$1,$2,$3,'2026-11-02T13:55:00Z','Fonoaudiólogo','Fonoaudiólogo','ONLINE','{}')",[clinic,patients[2],secondary]),/GROUP_BOOKING_SLOT_BUSY/);
+  await assert.rejects(()=>book('state-buffer-endday','2026-11-03',patients.slice(2),'17:00'),/GROUP_PROFESSIONAL_SCHEDULE_UNAVAILABLE/);
+  await query('update clinic_memberships set work_schedule=$1::jsonb where clinic_id=$2 and user_id=$3',[JSON.stringify({...schedule,allowedLocationTypes:['online']}),clinic,secondary]);
+  await assert.rejects(()=>book('state-location-group','2026-11-03'),/GROUP_PROFESSIONAL_LOCATION_UNAVAILABLE/);
+  await query('update clinic_memberships set work_schedule=$1::jsonb where clinic_id=$2 and user_id=$3',[JSON.stringify({...schedule,allowedRoomIds:['not-this-room']}),clinic,secondary]);
+  await assert.rejects(()=>book('state-room-policy-group','2026-11-03'),/GROUP_PROFESSIONAL_ROOM_UNAVAILABLE/);
+  console.log('groupSessionStateAndSchedule: durable calendar CAS/version, preserved individual/protocol state, no quote, atomic events/replay/rollback, buffers and room/location policies passed');
+}catch(error){console.error('groupSessionStateAndSchedule failed at',step,':',error.message,error.detail||'');process.exitCode=1;}finally{await db.close();}

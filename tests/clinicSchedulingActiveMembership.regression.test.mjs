@@ -31,13 +31,16 @@ assert.equal(clinicalSpecialtyScopeKey('Terapia Ocupacional'), 'occupational_the
 const dashboard = fs.readFileSync('src/components/CoordinatorDashboard.tsx','utf8');
 const ds = fs.readFileSync('src/services/dataService.ts','utf8');
 const migration = fs.readFileSync('supabase/migrations/20261009234000_clinic_schedulable_specialties_v1.sql','utf8');
-assert.match(dashboard,/Promise\.all\(\[\s*dataService\.getClinicMembers\(\),\s*dataService\.getClinicSchedulingSpecialties\(workspaceId\)/);
+assert.match(dashboard,/Promise\.all\(\[\s*canReadTeam \? dataService\.getClinicMembers\(\) : Promise\.resolve\(\{ success: true, data: \[\] \}\),\s*dataService\.getClinicSchedulingSpecialties\(workspaceId\)/);
 assert.match(dashboard,/clinicSpecialty: activeSpecialtiesById\.get/);
 assert.match(dashboard,/const clinicSessionSpecialtyOptions = useMemo\([\s\S]*?activeClinicAppointmentSpecialty\(member\)/);
 assert.match(dashboard,/const appointmentProfessionalOptions = useMemo\([\s\S]*?activeClinicAppointmentSpecialty\(member\)/);
 assert.match(dashboard,/appointmentProfessionalOptions[\s\S]*?filter\(\(member\) => !sessionApproach \|\| clinicalSpecialtiesMatch/);
 assert.match(dashboard,/sessionWeeklySlots\.some\(\(slot\) => !clinicalSpecialtiesMatch/);
-assert.match(ds,/\.rpc\('clinic_scheduling_specialties_v1', \{ p_clinic_id: clinicId \}\)/);
+assert.match(ds,/fetch\('\/api\/clinic\/scheduling-specialties'/);
+const schedulingRoute = fs.readFileSync('services/groupSessions/clinicSchedulingSpecialtyRoute.ts','utf8');
+assert.match(schedulingRoute,/currentClinicId\(req\.session\?\.user\)/);
+assert.match(schedulingRoute,/\.eq\('clinic_id',clinicId\)\.eq\('status','active'\)\.eq\('role','therapist'\)/);
 assert.match(migration,/SECURITY DEFINER SET search_path = ''/);
 assert.match(migration,/caller\.user_id = auth\.uid\(\)/);
 assert.match(migration,/member\.role = 'therapist'/);

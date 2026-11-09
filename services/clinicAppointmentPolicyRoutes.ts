@@ -1,3 +1,8 @@
+import { registerGroupSessionRoutes } from './groupSessions/groupSessionRoutes';
+import { registerClinicSchedulingSpecialtyRoute } from './groupSessions/clinicSchedulingSpecialtyRoute';
+import { registerGroupSessionPricePreviewRoute } from './groupSessions/groupSessionPricePreviewRoute';
+import { registerGroupSessionBookingPreviewRoute } from './groupSessions/groupSessionBookingPreviewRoute';
+import { registerGroupSessionFinancialRateRoutes } from './groupSessions/groupSessionFinancialRateRoutes';
 import crypto from 'crypto';
 import type { Express } from 'express';
 import { registerModulePurchaseEligibilityRoutes } from './modulePurchaseEligibilityRoutes';
@@ -14,6 +19,8 @@ type ClinicAppointmentPolicyRouteDeps = {
   enforcePayloadLimit: (req: any, res: any, maxBytes: number, label?: string) => boolean;
   sanitizeString: (value: any, max?: number) => string;
   currentClinicId: (user: any) => string | null;
+  serializeGroupAppointment?: (row: any) => any;
+  onGroupAppointmentsPersisted?: (params: any) => Promise<void>;
 };
 
 const stableValue = (value: any): any => {
@@ -34,6 +41,8 @@ export function registerClinicAppointmentPolicyRoutes(
   app: Express,
   deps: ClinicAppointmentPolicyRouteDeps
 ) {
+  registerClinicSchedulingSpecialtyRoute(app, deps);
+  if (deps.serializeGroupAppointment) registerGroupSessionRoutes(app, deps);
   const {
     supabase,
     noStoreDynamicResponse,
@@ -237,5 +246,42 @@ export function registerClinicAppointmentPolicyRoutes(
     requireAnyClinicCapability,
     currentClinicId,
     actionLimiter: portalActionLimiter
+  });
+
+  // The server's existing clinic-calendar route registrar delegates to this
+  // isolated read-only module. No change to its 4.6 MB entrypoint is required.
+  registerGroupSessionPricePreviewRoute(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    requireClinicModule,
+    portalActionLimiter,
+    enforcePayloadLimit,
+    currentClinicId
+  });
+
+  registerGroupSessionBookingPreviewRoute(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    requireClinicModule,
+    portalActionLimiter,
+    enforcePayloadLimit,
+    currentClinicId
+  });
+
+  // Group-rate edits are separately authorized, and the DB's single RPC
+  // owns history-safe persistence; the large entrypoint remains untouched.
+  registerGroupSessionFinancialRateRoutes(app, {
+    supabase,
+    noStoreDynamicResponse,
+    checkAuth,
+    requireClinicCapability,
+    requireClinicModule,
+    portalActionLimiter,
+    enforcePayloadLimit,
+    currentClinicId
   });
 }

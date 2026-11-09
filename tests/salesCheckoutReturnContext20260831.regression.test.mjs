@@ -32,13 +32,15 @@ assert.match(modularCheckout, /session_id=\{CHECKOUT_SESSION_ID\}/);
 for (const [name, route] of [
   ['status', statusRoute],
   ['reconcile', reconcileRoute],
-  ['director session', directorRoute],
 ]) {
   assert.match(route, /resolveSalesPostPaymentContextToken\(token, checkoutSessionId\)/, `${name} must resolve offer or checkout return context`);
   assert.match(route, /\.eq\("id", context\.offerId\)/, `${name} must bind the resolved offer`);
   assert.match(route, /\.eq\("lead_id", context\.leadId\)/, `${name} must bind the resolved lead`);
   assert.match(route, /\.eq\("stripe_checkout_session_id", checkoutSessionId\)/, `${name} must bind the returned Stripe session`);
 }
+assert.match(directorRoute, /status\(410\)/);
+assert.match(directorRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
+assert.doesNotMatch(directorRoute, /req\.session|signInWith|setSession/);
 
 assert.match(publicOffer, /legacyPaymentReturnWithoutContext/);
 assert.match(publicOffer, /token\.toLowerCase\(\) === 'pagamento'/);

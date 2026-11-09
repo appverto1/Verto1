@@ -299,6 +299,37 @@ export function getAppointmentDurationOption(value: any, fallback = DEFAULT_SESS
   return SESSION_DURATION_QUICK_OPTIONS.includes(duration) ? String(duration) : 'custom';
 }
 
+/**
+ * Move a recurring series while preserving the calendar-day gaps that were
+ * actually scheduled. Index * 7 breaks biweekly/monthly and multi-slot weekly
+ * series. UTC date-only arithmetic avoids daylight-saving offsets.
+ * This is presentation math only; the backend still validates each write.
+ */
+export function shiftRecurringAppointmentDatePreservingCadence(
+  originalAnchorDate: any,
+  originalOccurrenceDate: any,
+  updatedAnchorDate: any,
+): string {
+  const anchorKey = normalizeAppointmentDate(originalAnchorDate);
+  const occurrenceKey = normalizeAppointmentDate(originalOccurrenceDate);
+  const updatedKey = normalizeAppointmentDate(updatedAnchorDate);
+  if (!anchorKey || !occurrenceKey || !updatedKey) return String(updatedAnchorDate || '');
+
+  const utcDay = (dateKey: string): number | null => {
+    const [year, month, day] = dateKey.split('-').map(Number);
+    const value = Date.UTC(year, month - 1, day);
+    return Number.isFinite(value) && new Date(value).toISOString().slice(0, 10) === dateKey
+      ? value
+      : null;
+  };
+  const anchor = utcDay(anchorKey);
+  const occurrence = utcDay(occurrenceKey);
+  const updated = utcDay(updatedKey);
+  if (anchor === null || occurrence === null || updated === null) return String(updatedAnchorDate || '');
+
+  return new Date(updated + (occurrence - anchor)).toISOString().slice(0, 10);
+}
+
 export function buildRecurrenceDateKeys(params: {
   startDate: any;
   count?: any;
@@ -615,8 +646,17 @@ export function getAppointmentLocationType(appointment: any): ScheduleLocationTy
       );
 }
 
+import { canShareGroupBooking } from './groupSessionRules';
+
 export function getAppointmentPatientId(appointment: any): string {
   return String(appointment?.patient_id || appointment?.patientId || '').trim();
+}
+
+// Patient names are display labels, not unique scheduling identities.
+export function isSameSchedulePatient(patientId: any, appointment: any): boolean {
+  const selectedPatientId = String(patientId || '').trim();
+  const existingPatientId = getAppointmentPatientId(appointment);
+  return Boolean(selectedPatientId && existingPatientId && selectedPatientId === existingPatientId);
 }
 
 export function getAppointmentPatientName(appointment: any): string {
@@ -731,6 +771,11 @@ export function checkLocalScheduleConflicts(input: {
   service_type?: any;
   serviceType?: any;
   specialty?: any;
+  session_modality?: 'INDIVIDUAL' | 'GROUP';
+  session_group_id?: string;
+  clinic_id?: string;
+  /** Only trusted server-side validation may authorize sharing this group slot. */
+  group_booking_authorized?: boolean;
 }): ScheduleConflictResult {
   const appointments = Array.isArray(input.appointments) ? input.appointments : [];
   const recurrenceDates = Array.isArray(input.recurrence_dates) && input.recurrence_dates.length > 0
@@ -821,6 +866,22 @@ export function checkLocalScheduleConflicts(input: {
           relatedEventId: String(appointment?.id || '')
         });
       }
+
+      // Patient overlap is never waived. Only the exact same server-verified
+      // group slot can share its professional(s) and physical room.
+      const sharedGroupSlot = !samePatient && input.group_booking_authorized === true && canShareGroupBooking({
+        clinic_id: input.clinic_id,
+        session_modality: input.session_modality,
+        session_group_id: input.session_group_id,
+        date: dateKey,
+        time: startTime,
+        duration_minutes: durationMinutes,
+        room_id: roomId,
+        location_type: locationType,
+        service_type: serviceType,
+        professional_ids: [...professionalIds],
+      }, appointment);
+      if (sharedGroupSlot) continue;
 
       if (locationType === 'clinica' && roomId && getAppointmentRoomId(appointment) === roomId) {
         const existingRoomPolicySource = {

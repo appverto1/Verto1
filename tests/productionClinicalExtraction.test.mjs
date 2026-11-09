@@ -17,8 +17,8 @@ for (const route of productionClinicalWrites) {
   assert.equal(found.length, 1, `registration: ${route.path}`);
   assert.deepEqual(found[0].arguments.slice(0, -1).map(node => node.getText(source)), route.middleware, `middleware: ${route.path}`);
   const body = productionClinicalHandler(route);
-  assert.equal(createHash('sha256').update(body).digest('hex'), route.bodySha256, `production body: ${route.path}`);
+  assert.equal(createHash('sha256').update(body).digest('hex'), route.bodySha256, `reviewed body: ${route.path}`);
   const handler = found[0].arguments.at(-1).getText(source);
   assert.ok(route.property ? handler.endsWith(`.${route.property}`) : handler.startsWith(`${route.factory}(`), `handler wiring: ${route.path}`);
 }
-console.log(`Production clinical extraction: ${productionClinicalWrites.length} bodies, middleware and registrations match production`);
+console.log(`Reviewed clinical extraction: ${productionClinicalWrites.length} bodies, middleware and registrations match`);

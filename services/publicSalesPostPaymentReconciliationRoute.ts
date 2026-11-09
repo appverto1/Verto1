@@ -60,11 +60,26 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           });
         }
         const result: any = await reconcileSalesAssistedCheckout(stripe, session);
+        const immediateCardActivation = Boolean(
+          result.paymentConfirmed === true
+          && result.accountActivated === true
+          && result.sessionClaimed !== true
+          && result.settledPaymentMethod === "card"
+          && typeof result.cardActivationPath === "string"
+          && /^\/ativacao-comercial\/[A-Za-z0-9_-]{43,80}$/.test(result.cardActivationPath),
+        );
+        const boletoEmailReady = Boolean(
+          result.paymentConfirmed === true
+          && result.accountActivated === true
+          && result.settledPaymentMethod === "boleto"
+          && result.directorSessionReady === true
+          && result.activationEmailSent === true,
+        );
         const state = result.reviewRequired
           ? "review_required"
           : result.sessionClaimed
             ? "account_activated"
-            : result.directorSessionReady
+            : immediateCardActivation || boletoEmailReady
               ? "director_ready"
               : result.paymentConfirmed
                 ? "provisioning"
@@ -74,15 +89,19 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           state,
           paymentConfirmed: result.paymentConfirmed === true,
           accountProvisioned: result.accountActivated === true,
-          directorSessionReady: result.directorSessionReady === true,
+          directorSessionReady: immediateCardActivation || boletoEmailReady,
+          cardActivationPath: immediateCardActivation ? result.cardActivationPath : null,
+          activationEmailSent: result.activationEmailSent === true,
           sessionClaimed: result.sessionClaimed === true,
           accountActivated: result.sessionClaimed === true,
           reviewRequired: result.reviewRequired === true,
-          message: result.directorSessionReady
-            ? "Pagamento confirmado. A Verto liberou o acesso de Diretor e os módulos contratados."
-            : result.paymentConfirmed
-              ? "Pagamento confirmado. A Verto está concluindo a liberação do acesso de Diretor."
-              : "Aguardando confirmação final da Stripe.",
+          message: immediateCardActivation
+            ? "Cartão confirmado. Escolha agora Google ou senha para ativar sua clínica."
+            : boletoEmailReady
+              ? "Boleto confirmado. Confira o e-mail contratual para ativar seu acesso."
+              : result.paymentConfirmed
+                ? "Pagamento confirmado. A Verto está preparando seu primeiro acesso."
+                : "Aguardando confirmação final da Stripe.",
         });
       } catch (error: any) {
         console.error("[Sales Director] Falha ao reconciliar provisionamento pós-pagamento.", {

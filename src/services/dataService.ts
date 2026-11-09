@@ -1,3 +1,4 @@
+import { groupSessionErrorMessage } from '../utils/groupSessionApiErrors';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
 import {
   generateId,
@@ -1296,6 +1297,24 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   }
 }
 
+async function requestGroupSession(endpoint: string, method = 'GET', payload?: any) {
+  try {
+    const response = await fetch(endpoint, {
+      method, credentials: 'include', cache: 'no-store', headers: await getAuthHeaders(),
+      ...(payload === undefined ? {} : { body: JSON.stringify(payload) }),
+    });
+    const result = await safeJson(response);
+    if (!response.ok || result?.success === false) return {
+      ...result, success: false, status: response.status,
+      error: result?.error || groupSessionErrorMessage(String(result?.code || 'GROUP_OPERATION_FAILED')),
+    };
+    return result;
+  } catch {
+    return { success: false, code: 'GROUP_NETWORK_UNCONFIRMED',
+      error: 'Não foi possível confirmar a operação. Tente novamente com os mesmos dados.' };
+  }
+}
+
 export const dataService = {
   async getFeatureAccess(featureKeys: NewFeatureKey[]) {
     const keys = Array.from(new Set((featureKeys || []).map((key) => String(key || '').trim()).filter(Boolean))).slice(0, 20);
@@ -1686,7 +1705,8 @@ export const dataService = {
       convenioTitularCpf: insuranceEligibility.convenioTitularCpf,
       convenioTitularRelacao: insuranceEligibility.convenioTitularRelacao,
       convenioElegibilidadeObs: insuranceEligibility.convenioElegibilidadeObs,
-      group: recordPayload?.grupo || patient?.patient_group || patient?.group || null,
+      // Server-confirmed patient category wins over stale anamnesis/offline snapshots.
+      group: patient?.patient_group || patient?.group || recordPayload?.grupo || null,
       source: recordPayload?.comoConheceu || patient?.lead_source || patient?.source || null,
       rg: recordPayload?.rg || patient?.rg || null,
       cep: recordPayload?.cep || patient?.cep || null,
@@ -8416,6 +8436,40 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  async getOwnProfessionalReceivables() {
+    try {
+      const response = await fetchWithAuthRetry('/api/professional-finance/receivables', {
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      });
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error loading own professional receivables:', error);
+      return { success: false, data: [], error: 'Não foi possível carregar seus recebimentos.' };
+    }
+  },
+
+  async recordOwnProfessionalReceipt(paymentId: string, payload: any) {
+    try {
+      const response = await fetchWithAuthRetry(
+        '/api/professional-finance/receivables/' + encodeURIComponent(paymentId) + '/record',
+        {
+          method: 'POST',
+          headers: {
+            ...(await getAuthHeaders()),
+            'X-Idempotency-Key': String(payload?.idempotencyKey || '')
+          },
+          credentials: 'include',
+          body: JSON.stringify(payload)
+        }
+      );
+      return await safeJson(response);
+    } catch (error) {
+      console.error('Error recording own professional receipt:', error);
+      return { success: false, error: 'Não foi possível confirmar o recebimento.' };
+    }
+  },
+
   async getPatientFinanceLedger(month?: string) {
     try {
       const endpoint = endpointWithQuery('/api/patient-finance/ledger', { month });
@@ -9158,13 +9212,14 @@ export const dataService = {
       return { success: false, error: 'Clínica inválida.' };
     }
     try {
-      const client = await getSupabase();
-      if (!client) return { success: false, error: 'Sessão de autenticação indisponível.' };
-      const { data, error } = await client.rpc('clinic_scheduling_specialties_v1', { p_clinic_id: clinicId });
-      if (error || !Array.isArray(data)) {
+      const response = await fetch('/api/clinic/scheduling-specialties', {
+        credentials: 'include', cache: 'no-store', headers: await getAuthHeaders(),
+      });
+      const result = await safeJson(response);
+      if (!response.ok || !result?.success || result.clinicId !== clinicId || !Array.isArray(result.data)) {
         return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
       }
-      return { success: true, data };
+      return { success: true, data: result.data };
     } catch {
       return { success: false, error: 'Não foi possível confirmar as especialidades ativas da clínica.' };
     }
@@ -9863,6 +9918,31 @@ export const dataService = {
       console.error('Error saving clinic state:', error);
       return { success: false, error: String(error) };
     }
+  },
+
+  async getGroupSessions(from: string, to: string) {
+    return requestGroupSession(`/api/appointments/groups?${new URLSearchParams({from, to})}`);
+  },
+  async getGroupSession(bookingId: string) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}`);
+  },
+  async createGroupSessions(payload: any) {
+    return requestGroupSession('/api/appointments/groups', 'POST', payload);
+  },
+  async addGroupSessionParticipants(bookingId: string, payload: any) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}/participants`, 'POST', payload);
+  },
+  async rescheduleGroupSession(bookingId: string, payload: any) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}`, 'PATCH', payload);
+  },
+  async cancelGroupSession(bookingId: string, payload: any) {
+    return requestGroupSession(`/api/appointments/groups/${encodeURIComponent(bookingId)}/cancel`, 'POST', payload);
+  },
+  async previewGroupSession(payload: any) {
+    return requestGroupSession('/api/appointments/groups/booking-preview', 'POST', payload);
+  },
+  async previewGroupSessionRates(payload: any) {
+    return requestGroupSession('/api/appointments/groups/price-preview', 'POST', payload);
   },
 
   async createAppointments(appointments: any[], clientRequestId?: string) {

@@ -1,3 +1,5 @@
+import {GroupSessionDialog} from "./GroupSessionDialog";
+import {getAppointmentGroupId} from "../utils/groupSessionRules";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import {
   LayoutDashboard,
@@ -247,6 +249,7 @@ type NavigationNode = {
   newFeatureKey?: NewFeatureKey;
 };
 
+const GROUP_FINANCIAL_PLAN_EDITOR_ENABLED = true;
 const MAX_WEEKLY_SCHEDULE_OCCURRENCES = 120;
 const GUIDED_TUTORIAL_REVISION = "p0-contextual-v1";
 
@@ -259,6 +262,9 @@ import {
   PATIENT_FINANCIAL_PAYMENT_METHOD_OPTIONS,
   PATIENT_FINANCIAL_QUANTITY_PERIOD_OPTIONS,
   PATIENT_FINANCIAL_SERVICE_OPTIONS,
+  availableClinicFinancialPlanServiceOptions,
+  patientFinancialPlanSelectionValue,
+  patientFinancialPlanClinicalScopeKey,
   createPatientFinancialPlan,
   financialPlanRequiresPaymentMethod,
   getFinancialPlanMonthlyProjectionValue,
@@ -620,6 +626,7 @@ interface CoordinatorDashboardProps {
   onScheduleSession: (session: any) => Promise<any> | any;
   onUpdateAppointment: (id: any, updates: any) => Promise<any> | any;
   onAppointmentActionResolved?: (appointment: any) => Promise<any> | any;
+  onGroupAppointmentsResolved?: (result: any) => void;
   onUpdateAgendaStatus: (id: any, status: string, details?: any) => Promise<any> | any;
   onDeleteAppointment?: (id: any, details?: any) => Promise<any> | any;
   onAddPatient: (patient: any) => Promise<any> | any;
@@ -756,6 +763,7 @@ export function CoordinatorDashboard({
   onScheduleSession,
   onUpdateAppointment,
   onAppointmentActionResolved,
+  onGroupAppointmentsResolved,
   onUpdateAgendaStatus,
   onDeleteAppointment,
   onAddPatient,
@@ -891,6 +899,10 @@ export function CoordinatorDashboard({
   const canViewPatientInsurance = hasCapability("patient.insurance.view");
   const canViewPatientTissAuthorizations = hasCapability("patient.insurance.authorization.view");
   const canCreatePatients = hasCapability("patient.create");
+  const canViewGroups = hasCapability("calendar.clinic.view") && hasCapability("patient.demographics.edit") && hasCapability("finance.entries.view");
+  const canCreateGroups = canViewGroups && hasCapability("finance.entries.manage") && hasCapability("calendar.appointment.create");
+  const canEditGroups = canViewGroups && hasCapability("finance.entries.manage") && hasCapability("calendar.appointment.edit");
+  const canCancelGroups = canViewGroups && hasCapability("finance.entries.manage") && hasCapability("calendar.appointment.cancel");
   const canManageRooms = hasCapability("clinic.rooms.manage");
   const [roomMutationPending, setRoomMutationPending] = useState(false);
   const roomCanonicalRequestSeqRef = useRef(0);
@@ -1287,12 +1299,16 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     const workspaceId = String(user?.activeWorkspaceId || user?.clinicId || "").trim();
+    // Server-issued capabilities gate reads; a denied team.view must never trigger /clinic/members.
+    const canReadTeam = hasCapability("team.view");
+    const canReadCalendar = ["calendar.own.view", "calendar.team.view", "calendar.clinic.view", "patient.demographics.edit"]
+      .some((capability) => hasCapability(capability));
     const requestSeq = therapistMembersRequestSeqRef.current + 1;
     therapistMembersRequestSeqRef.current = requestSeq;
     therapistMembersWorkspaceRef.current = workspaceId;
     setTherapistMembersById({});
     setClinicSpecialtiesError("");
-    if (!workspaceId) {
+    if (!workspaceId || !authorizationHydrated || !canReadCalendar) {
       setTherapistMembersLoading(false);
       return;
     }
@@ -1300,7 +1316,7 @@ export function CoordinatorDashboard({
     const loadTherapistMembers = async () => {
       try {
         const [result, clinicSpecialtiesResult] = await Promise.all([
-          dataService.getClinicMembers(),
+          canReadTeam ? dataService.getClinicMembers() : Promise.resolve({ success: true, data: [] }),
           dataService.getClinicSchedulingSpecialties(workspaceId),
         ]);
         if (
@@ -1322,7 +1338,15 @@ export function CoordinatorDashboard({
           setClinicSpecialtiesError(clinicSpecialtiesResult?.error || "Especialidades indisponíveis.");
         }
         const byId: Record<string, any> = {};
-        result.data.forEach((member: any) => {
+        // The scheduling endpoint is tenant-scoped and returns active therapists only.
+        // When team.view is denied, retain the agenda's active professional options
+        // without requesting the protected team directory or exposing private profiles.
+        const schedulingMembers = canReadTeam ? result.data : (Array.isArray(clinicSpecialtiesResult?.data)
+          ? clinicSpecialtiesResult.data.map((row: any) => ({
+              id: row.user_id, user_id: row.user_id, role: "therapist", status: "active",
+              specialty: row.specialty, name: "Profissional",
+            })) : []);
+        schedulingMembers.forEach((member: any) => {
           const ids = collectProfessionalIdentifierCandidates(member);
           const id = ids[0] || "";
           if (isPatientCareProfessionalMember(member) && id) {
@@ -1352,7 +1376,7 @@ export function CoordinatorDashboard({
       }
     };
     void loadTherapistMembers();
-  }, [user?.activeWorkspaceId, user?.clinicId]);
+  }, [user?.activeWorkspaceId, user?.clinicId, authorizationHydrated, hasCapability]);
 
   const therapistFilterOptions = useMemo(() => {
     const entries = Object.entries(therapistMembersById as Record<string, any>)
@@ -1419,6 +1443,11 @@ export function CoordinatorDashboard({
     });
     return Array.from(available).sort((a, b) => a.localeCompare(b, "pt-BR"));
   }, [therapistMembersById]);
+
+  const clinicFinancialPlanServiceOptions = useMemo(
+    () => availableClinicFinancialPlanServiceOptions(clinicSessionSpecialtyOptions),
+    [clinicSessionSpecialtyOptions],
+  );
 
   const patientCareProfessionals = useMemo(() => {
     const unique = new Map<string, any>();
@@ -1806,7 +1835,7 @@ export function CoordinatorDashboard({
 
   const [loading, setLoading] = useState(false);
   const [isEditingRooms, setIsEditingRooms] = useState(false);
-  const [newRoom, setNewRoom] = useState({ name: "", specialties: "", preventOverlappingAppointments: true });
+  const [newRoom, setNewRoom] = useState({ name: "", specialties: "", capacity: "", preventOverlappingAppointments: true });
   const [editingRoom, setEditingRoom] = useState<any>(null);
 
   const agendaViewPreferenceKey = useMemo(
@@ -1882,6 +1911,7 @@ export function CoordinatorDashboard({
   );
   const [professionalFilter, setProfessionalFilter] = useState("all");
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
+  const [groupSessionDialog,setGroupSessionDialog] = useState<any>(null);
   const [isQuickRegisterModalOpen, setIsQuickRegisterModalOpen] = useState(false);
   const [isPatientRegistrationModalOpen, setIsPatientRegistrationModalOpen] =
     useState(false);
@@ -6730,6 +6760,23 @@ export function CoordinatorDashboard({
   };
 
   const handleFinancialPlanChange = (planId: string, field: string, value: any) => {
+    const selectedProfessional = field === "professionalUserId"
+      ? appointmentProfessionalOptions.find((member: any) => String(member.id) === String(value))
+      : null;
+    const professionalSpecialty = selectedProfessional && clinicFinancialPlanServiceOptions.find(
+      (option) => clinicalSpecialtiesMatch(option.label, selectedProfessional.clinicSpecialty)
+    );
+    if (field === "professionalUserId" && value && !professionalSpecialty) {
+      showToast("Selecione um profissional ativo e vinculado à especialidade desta clínica.", "error");
+      return;
+    }
+    const selectedSpecialty = field === "serviceType"
+      ? clinicFinancialPlanServiceOptions.find((option) => option.value === value)
+      : null;
+    if (field === "serviceType" && !selectedSpecialty) {
+      showToast("Selecione uma especialidade com profissional ativo nesta clínica.", "error");
+      return;
+    }
     setNewPatientForm((prev: any) => {
       const nextPlans = normalizePatientFinancialPlans(prev.financialPlans, prev).map((plan: any) => {
         if (plan.id !== planId) {
@@ -6744,7 +6791,16 @@ export function CoordinatorDashboard({
         }
         return createPatientFinancialPlan({
           ...plan,
-          [field]: value,
+          ...(field === "professionalUserId"
+            ? {
+                professionalUserId: value,
+                ...(professionalSpecialty
+                  ? { serviceType: professionalSpecialty.serviceType, customServiceName: professionalSpecialty.customServiceName }
+                  : { serviceType: "", customServiceName: "" }),
+              }
+            : field === "serviceType" && selectedSpecialty
+              ? { serviceType: selectedSpecialty.serviceType, customServiceName: selectedSpecialty.customServiceName }
+              : { [field]: value }),
           ...(field === "billingMode" && value === "INSURANCE"
             ? {
                 payerId: plan.payerId || prev.convenioPayerId || "",
@@ -6846,6 +6902,10 @@ export function CoordinatorDashboard({
   };
 
   const addFinancialPlanRow = () => {
+    if (therapistMembersLoading || clinicSpecialtiesError || !clinicFinancialPlanServiceOptions.length) {
+      showToast("Vincule um profissional ativo à especialidade antes de cadastrar um plano financeiro.", "error");
+      return;
+    }
     setNewPatientForm((prev: any) => ({
       ...prev,
       financialPlans: [
@@ -6978,6 +7038,30 @@ export function CoordinatorDashboard({
       showToast("Selecione um convênio ativo cadastrado pela clínica.", "error");
       setActivePatientRegistrationTab("insurance");
       return;
+    }
+    if (canManagePatientFinancialPlan) {
+      const existing = editingPatientId
+        ? allPatients.find((patient: any) => String(patient?.id) === String(editingPatientId))
+        : null;
+      const previous = normalizePatientFinancialPlans(existing?.financialPlans || existing?.financial_plans || [], existing || {});
+      const available = new Set(clinicFinancialPlanServiceOptions.map((option) => patientFinancialPlanClinicalScopeKey({
+        serviceType: option.serviceType,
+        customServiceName: option.customServiceName,
+      })));
+      const newInvalidPlan = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm)
+        .some((plan: any) => {
+          if (!plan?.serviceType) return false;
+          const scope = patientFinancialPlanClinicalScopeKey(plan);
+          if (scope && available.has(scope)) return false;
+          // A historical plan remains readable and saveable without silently deleting it.
+          const old = previous.find((item: any) => String(item.id) === String(plan.id));
+          return !old || patientFinancialPlanClinicalScopeKey(old) !== scope;
+        });
+      if (newInvalidPlan) {
+        showToast("Não é possível cadastrar plano de especialidade sem profissional ativo na clínica.", "error");
+        setActivePatientRegistrationTab("financial");
+        return;
+      }
     }
     showProcessing(
       editingPatientId
@@ -7427,6 +7511,12 @@ export function CoordinatorDashboard({
   };
 
   const handleEditAppointment = (appointment: any) => {
+    const groupId=getAppointmentGroupId(appointment);
+    if(groupId){
+      if(canViewGroups)setGroupSessionDialog({bookingId:groupId});
+      else showToast("Solicite a remarcação da sessão em grupo à coordenação.","error");
+      return;
+    }
     const appointmentInsurancePlanSnapshot = String(
       appointment.insurancePlanName || appointment.insurance_plan_name || "",
     );
@@ -8066,6 +8156,12 @@ export function CoordinatorDashboard({
 
   const handleCancelAppointmentFromAgenda = useCallback(
     (appointment: any) => {
+      const groupId = getAppointmentGroupId(appointment);
+      if (groupId) {
+        if (canCancelGroups) setGroupSessionDialog({ bookingId: groupId, initialAction: "cancel" });
+        else showToast("Solicite o cancelamento da sessão em grupo à coordenação.", "error");
+        return;
+      }
       if (!agendaAppointmentObservation.trim()) {
         showToast("Informe o motivo do cancelamento na observação da sessão.", "error");
         return;
@@ -8081,6 +8177,7 @@ export function CoordinatorDashboard({
     },
     [
       agendaAppointmentObservation,
+      canCancelGroups,
       closeAgendaActionModal,
       requestAppointmentCancellation,
       resolveAgendaManualPolicyDecision,
@@ -8911,24 +9008,24 @@ export function CoordinatorDashboard({
     const specialties = newRoom.specialties.split(',').map((value) => value.trim()).filter(Boolean);
     setRoomMutationPending(true);
     try {
-      const result = await dataService.createClinicRoom({ name, specialties, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false, is_active: true });
+      const result = await dataService.createClinicRoom({ name, specialties, capacity: newRoom.capacity.trim() ? Number(newRoom.capacity) : null, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false, is_active: true });
       if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível salvar a sala.', 'error'); return; }
       const saved = normalizeRoomFromApi(result.data); setRooms((prev) => [...prev.filter((room) => String(room?.id) !== String(saved.id)), saved]);
-      setNewRoom({ name: '', specialties: '', preventOverlappingAppointments: true }); showToast('Sala salva e disponível na agenda.', 'success');
+      setNewRoom({ name: '', specialties: '', capacity: '', preventOverlappingAppointments: true }); showToast('Sala salva e disponível na agenda.', 'success');
     } finally { setRoomMutationPending(false); }
   };
   const handleEditRoom = (room: any) => {
     if (!canManageRooms || roomMutationPending) return; const normalized = normalizeRoomFromApi(room); setEditingRoom(normalized);
-    setNewRoom({ name: normalized.name, specialties: normalized.specialties.join(', '), preventOverlappingAppointments: normalized.preventOverlappingAppointments !== false });
+    setNewRoom({ name: normalized.name, specialties: normalized.specialties.join(', '), capacity: normalized.capacity == null ? '' : String(normalized.capacity), preventOverlappingAppointments: normalized.preventOverlappingAppointments !== false });
   };
   const handleUpdateRoom = async (e: React.FormEvent) => {
     e.preventDefault(); if (!canManageRooms || !editingRoom || roomMutationPending) return; const name = newRoom.name.trim(); if (!name) return;
     const specialties = newRoom.specialties.split(',').map((value) => value.trim()).filter(Boolean); setRoomMutationPending(true);
     try {
-      const result = await dataService.updateClinicRoom(String(editingRoom.id), { name, specialties, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false });
+      const result = await dataService.updateClinicRoom(String(editingRoom.id), { name, specialties, capacity: newRoom.capacity.trim() ? Number(newRoom.capacity) : null, prevent_overlapping_appointments: newRoom.preventOverlappingAppointments !== false });
       if (!result?.success || !result?.data) { showToast(result?.error || 'Não foi possível atualizar a sala.', 'error'); return; }
       const saved = normalizeRoomFromApi(result.data); setRooms((prev) => prev.map((room) => String(room?.id) === String(saved.id) ? saved : room));
-      setEditingRoom(null); setNewRoom({ name: '', specialties: '', preventOverlappingAppointments: true }); showToast('Sala atualizada.', 'success');
+      setEditingRoom(null); setNewRoom({ name: '', specialties: '', capacity: '', preventOverlappingAppointments: true }); showToast('Sala atualizada.', 'success');
     } finally { setRoomMutationPending(false); }
   };
   const handleDeleteRoom = async (id: string) => {
@@ -10286,6 +10383,7 @@ export function CoordinatorDashboard({
       onDateChange={setCalendarDate}
       onViewChange={handleAgendaViewChange}
       onCreateAppointment={openNewAppointmentAt}
+      onManageGroupSessions={canViewGroups ? () => setGroupSessionDialog({showList:true}) : undefined}
       onEditAppointment={handleEditAppointment}
       onConfirmAppointment={handleConfirmAppointmentFromAgenda}
       onCancelAppointment={handleCancelAppointmentFromAgenda}
@@ -10406,6 +10504,11 @@ export function CoordinatorDashboard({
                     Especialidades ajudam a filtrar salas, mas são opcionais. Separe por vírgula.
                   </p>
                 </div>
+                <label className="block text-sm font-semibold">Capacidade de pacientes
+                  <input type="number" min={1} max={1000} step={1} className="mt-2 w-full rounded-xl border p-3"
+                    value={newRoom.capacity} onChange={(e)=>setNewRoom({...newRoom,capacity:e.target.value})} />
+                  <span className="mt-1 block text-xs text-slate-500">Informe a capacidade para permitir sessões em grupo.</span>
+                </label>
                 <label className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-4">
                   <input
                     type="checkbox"
@@ -10432,7 +10535,7 @@ export function CoordinatorDashboard({
                     type="button"
                     onClick={() => {
                       setEditingRoom(null);
-                      setNewRoom({ name: "", specialties: "", preventOverlappingAppointments: true });
+                      setNewRoom({ name: "", specialties: "", capacity: "", preventOverlappingAppointments: true });
                     }}
                     className="w-full py-2 text-slate-400 text-[10px] font-bold uppercase tracking-widest"
                   >
@@ -15860,6 +15963,19 @@ export function CoordinatorDashboard({
         onTemplateDelete={handleDeleteClinicAnamnesisTemplate}
       />
 
+      {groupSessionDialog && canViewGroups && <GroupSessionDialog
+        {...groupSessionDialog} patients={allPatients} professionals={appointmentProfessionalOptions}
+        specialties={clinicSessionSpecialtyOptions} rooms={rooms} onRooms={setRooms} timeZone={clinicTimeZone}
+        initialDate={sessionDate} initialTime={sessionTime} canCreate={canCreateGroups} canEdit={canEditGroups} canCancel={canCancelGroups}
+        onClose={() => setGroupSessionDialog(null)}
+        onIndividual={(date,time) => {setGroupSessionDialog(null);openNewAppointmentAt(date,time);}}
+        onPersisted={(result) => onGroupAppointmentsResolved?.(result)}
+        onFinance={(appointment) => {
+          setGroupSessionDialog(null);
+          setPatientFinanceLaunchRequest({key:`${appointment.id}:history:${Date.now()}`,appointmentId:appointment.id,action:"history"});
+          navigateToTab("financial",financialIntent("Financeiro de pacientes"));
+        }}
+      />}
       {isAddSessionModalOpen && (
         <div
           className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fade-in"
@@ -15879,6 +15995,11 @@ export function CoordinatorDashboard({
               <CalendarPlus size={22} className="text-[#7a32fc]" />{" "}
               {editingAppointmentId ? "Editar Agendamento" : "Agendar Sessão"}
             </h2>
+            {!editingAppointmentId && canCreateGroups && <label className="mb-4 block text-sm font-semibold">Modalidade
+              <select className={sessionModalInputClass} value="INDIVIDUAL" onChange={(e) => {
+                if(e.target.value==="GROUP"){setIsAddSessionModalOpen(false);setGroupSessionDialog({});}
+              }}><option value="INDIVIDUAL">Individual</option><option value="GROUP">Grupo</option></select>
+            </label>}
             <div className="space-y-4">
               <div className="relative">
                 <label className={sessionModalLabelClass}>
@@ -18209,11 +18330,17 @@ export function CoordinatorDashboard({
                     <button
                       type="button"
                       onClick={addFinancialPlanRow}
+                      disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError) || !clinicFinancialPlanServiceOptions.length}
+                      title={!clinicFinancialPlanServiceOptions.length ? "É necessário profissional ativo na clínica" : "Adicionar plano financeiro"}
                       className="inline-flex items-center justify-center gap-2 rounded-2xl bg-white px-4 py-2 text-xs font-bold text-[#7a32fc] shadow-sm transition-all hover:bg-violet-50"
                     >
                       <Plus size={14} /> Plano
                     </button>
                   </div>
+                  {clinicSpecialtiesError && <p role="alert" className="mb-3 text-xs text-rose-700">{clinicSpecialtiesError}</p>}
+                  {!therapistMembersLoading && !clinicSpecialtiesError && !clinicFinancialPlanServiceOptions.length && (
+                    <p className="mb-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">Nenhuma especialidade disponível. Vincule um profissional ativo na equipe antes de cadastrar planos financeiros.</p>
+                  )}
                   <div className="space-y-3">
                     {(() => {
                       const plans = normalizePatientFinancialPlans(newPatientForm.financialPlans, newPatientForm);
@@ -18246,14 +18373,41 @@ export function CoordinatorDashboard({
                           <div key={plan.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
                             <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
                               <div className="xl:col-span-2">
+                                <FormField label="Profissional responsável pelo plano">
+                                  <select
+                                    className={patientFormInputClass}
+                                    value={plan.professionalUserId || ""}
+                                    disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError)}
+                                    onChange={(e) => handleFinancialPlanChange(plan.id, "professionalUserId", e.target.value)}
+                                  >
+                                    <option value="">Selecione o profissional</option>
+                                    {plan.professionalUserId && !appointmentProfessionalOptions.some((member: any) => String(member.id) === plan.professionalUserId) && (
+                                      <option value={plan.professionalUserId} disabled>Profissional anterior (vínculo inativo)</option>
+                                    )}
+                                    {appointmentProfessionalOptions.map((member: any) => (
+                                      <option key={String(member.id)} value={String(member.id)}>
+                                        {member.label || member.name || "Profissional"} · {member.clinicSpecialty}
+                                      </option>
+                                    ))}
+                                  </select>
+                                  {!plan.professionalUserId && <p className="mt-1 text-xs text-slate-500">
+                                    Para planos novos, selecione primeiro o profissional. A especialidade será preenchida automaticamente.
+                                  </p>}
+                                </FormField>
+                              </div>
+                              <div className="xl:col-span-2">
                                 <FormField label="Linha de cuidado / especialidade">
                                   <select
                                     className={patientFormInputClass}
-                                    value={plan.serviceType}
+                                    value={patientFinancialPlanSelectionValue(plan)}
+                                    disabled={therapistMembersLoading || Boolean(clinicSpecialtiesError) || !clinicFinancialPlanServiceOptions.length || Boolean(plan.professionalUserId)}
                                     onChange={(e) => handleFinancialPlanChange(plan.id, "serviceType", e.target.value)}
                                   >
-                                    <option value="">Especialidade/serviço</option>
-                                    {PATIENT_FINANCIAL_SERVICE_OPTIONS.map((option) => (
+                                    <option value="">Selecione a especialidade</option>
+                                    {plan.serviceType && !clinicFinancialPlanServiceOptions.some((option) => option.value === patientFinancialPlanSelectionValue(plan)) && (
+                                      <option value={patientFinancialPlanSelectionValue(plan)} disabled>Especialidade anterior (indisponível na equipe atual)</option>
+                                    )}
+                                    {clinicFinancialPlanServiceOptions.map((option) => (
                                       <option key={option.value} value={option.value}>{option.label}</option>
                                     ))}
                                   </select>
@@ -18261,12 +18415,12 @@ export function CoordinatorDashboard({
                               </div>
                             {plan.serviceType === "CUSTOM" && (
                               <div className="xl:col-span-2">
-                                <FormField label="Nome do serviço">
+                                <FormField label="Especialidade do profissional">
                                   <input
                                     className={patientFormInputClass}
-                                    placeholder="Nome do serviço"
                                     value={plan.customServiceName}
-                                    onChange={(e) => handleFinancialPlanChange(plan.id, "customServiceName", e.target.value)}
+                                    readOnly
+                                    title="Nome definido pelo cadastro do profissional ativo"
                                   />
                                 </FormField>
                               </div>
@@ -18307,6 +18461,21 @@ export function CoordinatorDashboard({
                                   inputMode="decimal"
                                   value={plan.amount}
                                   onChange={(e) => handleFinancialPlanChange(plan.id, "amount", e.target.value)}
+                                />
+                              </FormField>
+                            )}
+                            {GROUP_FINANCIAL_PLAN_EDITOR_ENABLED && plan.billingMode === "PRIVATE" && (
+                              <FormField
+                                label="Sessão em grupo (por paciente)"
+                                helperText="Valor para cada participante do grupo. Deixe em branco se não houver atendimento coletivo nesta especialidade."
+                              >
+                                <input
+                                  className={patientFormInputClass}
+                                  placeholder="R$ 0,00"
+                                  inputMode="decimal"
+                                  aria-label="Valor da sessão em grupo por paciente"
+                                  value={plan.groupAmount}
+                                  onChange={(event) => handleFinancialPlanChange(plan.id, "groupAmount", event.target.value)}
                                 />
                               </FormField>
                             )}
