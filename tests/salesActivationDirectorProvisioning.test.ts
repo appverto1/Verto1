@@ -3,6 +3,7 @@ import fs from 'node:fs';
 
 const server = fs.readFileSync('server.ts', 'utf8');
 const activationUi = fs.readFileSync('src/components/SalesActivationAccess.tsx', 'utf8');
+const activationOAuth = fs.readFileSync('src/services/salesActivationGoogleOAuth.ts', 'utf8');
 
 const passwordActivation = fs.readFileSync('services/publicSalesActivationPasswordRoute.ts', 'utf8');
 const authLogin = server.match(
@@ -15,7 +16,8 @@ const onboardingResolver = server.match(
   /async function resolveOnboardingContextForUser[\s\S]*?async function persistSpecialtyFromOnboardingContext/
 )?.[0] || '';
 
-assert.match(activationUi, /verto_intended_role', 'director'/);
+assert.match(activationUi, /beginSalesActivationGoogleOAuth\(token, activation\.email/);
+assert.match(activationOAuth, /verto_intended_role', 'director'/);
 assert.match(activationUi, /onLogin\(\s*null,\s*'director'/);
 assert.doesNotMatch(activationUi, /onLogin\(\s*null,\s*'coordinator'/);
 

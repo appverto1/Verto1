@@ -61,7 +61,8 @@
       "\"/api/public/sales-offers/:token/payment-status\"",
       "publicSalesPaymentStatusLimiter"
     ],
-    "sha256": "95abc6898d39a95c18a5c4a3d6e081b3229c911c6841389bd98128a236f447e0"
+    "sha256": "f36f5eb5283769373d7f69d08d8e0d32f157f78aba69b5aa0a52949faf6b672d",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -70,7 +71,8 @@
       "\"/api/public/sales-offers/:token/prepare-activation\"",
       "publicSalesPostPaymentLimiter"
     ],
-    "sha256": "97d084bf18867880d929b8b19ad276d8614afdf7be45668f4020ac38db6dfbe6"
+    "sha256": "1a7e452e7701e394f9ff16706a16c9fc6138b6831af0a36fb99d50fd7f870655",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -79,7 +81,8 @@
       "\"/api/public/sales-offers/:token/director-session\"",
       "publicSalesPostPaymentLimiter"
     ],
-    "sha256": "04c57e9ee68d2a4fd740ec9b4a16632baa64bff48e0d6b72469de988e40ba826"
+    "sha256": "4d41eb9a006b9b6a407020a7bc88316e26f1667d1d7753c477688d65ba59be01",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",

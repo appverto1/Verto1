@@ -22,7 +22,8 @@
   {
     "module": "services/salesAssistedCheckoutPaymentProcessor.ts",
     "name": "processSalesAssistedCheckoutCompleted",
-    "sha256": "1362633555a1b7606cbd4a3c0a8424fbddd470844cd9c35e051765a5a4a462c5"
+    "sha256": "dc7344c334cdbb835f01f304508322990a9d062651afc582f3842053d2afd954",
+    "stagingFunctionalChange": true
   },
   {
     "module": "services/salesSubscriptionFinancialReconciliation.ts",

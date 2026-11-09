@@ -6,9 +6,11 @@ const builder = fs.readFileSync(
   'utf8'
 );
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const proposalTransport = fs.readFileSync(new URL('../src/services/salesModularProposalPersistence.ts', import.meta.url), 'utf8');
+assert.match(builder, /loadSalesModularProposalData\(authenticatedFetch, lead\.id\)/);
 
 assert.match(
-  builder,
+  proposalTransport,
   /profitability-assumptions\?context=new_proposal/,
   'o construtor precisa pedir premissas normalizadas para nova proposta'
 );

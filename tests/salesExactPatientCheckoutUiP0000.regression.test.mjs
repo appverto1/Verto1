@@ -1,7 +1,13 @@
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
+
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
+const draftInput = fs.readFileSync('src/utils/salesModularProposalBuilderInput.ts', 'utf8');
+const duplicateDraft = fs.readFileSync('src/utils/salesModularProposalScenarioDraft.ts', 'utf8');
 const server = fs.readFileSync('server.ts', 'utf8');
 const calculator = fs.readFileSync('src/utils/salesModularProposal.ts', 'utf8');
 const stripePlan = fs.readFileSync('src/utils/salesCommercialEvolution.ts', 'utf8');
@@ -18,10 +24,11 @@ assert.match(builder, /input\.exactPerPatientBilling !== true && nextStandardCom
 
 // Only newly versioned exact-seat proposals use 50-patient Essencial capacity.
 // Legacy snapshots retain their original ten-patient block-selection semantics.
-assert.match(builder, /const commercialCapacityForExactDemand =/);
+assert.match(draftInput, /export const commercialCapacityForExactDemand =/);
 assert.match(builder, /const initialCapacity = commercialCapacityForExactDemand\(patientQuantity\);/);
 assert.match(builder, /input\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(safeQuantity\)/);
-assert.match(builder, /snapshotInput\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(snapshotDemand\)/);
+assert.match(builder, /buildSalesModularProposalDuplicateDraft\(simulation, catalog\)/);
+assert.match(duplicateDraft, /snapshotInput\.exactPerPatientBilling === true\s*\? commercialCapacityForExactDemand\(snapshotDemand\)/);
 assert.match(builder, /Plano Essencial · 1 a 50 pacientes/);
 
 // An immutable historical offer must not silently become exact-seat billing.
@@ -42,7 +49,7 @@ assert.match(builder, /catalog\.items\.some\(\(item\) => item\.itemKey === line\
 // The backend must derive Stripe seat quantities from the frozen exact model;
 // mere UI wording must never replace the server-side payment contract.
 assert.match(server, /exactPerPatientBilling: source\.exactPerPatientBilling === true/);
-assert.match(fs.readFileSync('services/salesModularCheckoutCore.ts', 'utf8'), /quantity: Number\(line\.quantity \|\| 1\)/);
+assert.match(checkoutCoreSource, /quantity: Number\(line\.quantity \|\| 1\)/);
 assert.match(calculator, /contractedCapacityPatients: exactPerPatientBilling \? input\.patientQuantity/);
 assert.match(stripePlan, /exactPerPatientBilling === true/);
 console.log('salesExactPatientCheckoutUiP0000.regression.test.mjs: PASS');
