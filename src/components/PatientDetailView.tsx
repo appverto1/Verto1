@@ -2256,10 +2256,29 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     setSessionTabSelectedPlanId('');
     try {
       const result = await dataService.getPatientTherapeuticPlan(patientId, { force: true });
-      if (result?.success === false || !Array.isArray(result?.data?.planScopes)) {
+      const hasConfirmedScopes = result?.success !== false && Array.isArray(result?.data?.planScopes);
+      if (!hasConfirmedScopes && hasAbaSessionSurface) {
         throw new Error(result?.message || result?.error || 'Não foi possível conferir os planos do paciente.');
       }
-      const options = sessionTabSpecialtyOptions(result.data.planScopes, scheduledSessionForPatient);
+      let options = hasConfirmedScopes
+        ? sessionTabSpecialtyOptions(result.data.planScopes, scheduledSessionForPatient)
+        : [];
+      // Existing conventional adult appointments may have no PTS/specialty
+      // plan (legacy adult workflow). Preserve that authorized appointment
+      // path, but never invent a clinical plan or allow an invalid specialty.
+      const hasSpecialtyPlan = hasConfirmedScopes && result.data.planScopes.some((plan: any) =>
+        String(plan?.mode || '').toLowerCase() === 'specialty');
+      if (!hasAbaSessionSurface && !hasSpecialtyPlan && options.length === 0 && scheduledSessionForPatient) {
+        const appointmentKey = appointmentClinicalSpecialtyKey(scheduledSessionForPatient);
+        const appointmentSpecialty = String(
+          scheduledSessionForPatient?.specialty || scheduledSessionForPatient?.service_type ||
+          scheduledSessionForPatient?.serviceType || scheduledSessionForPatient?.approach || ''
+        ).trim();
+        if (appointmentKey && appointmentSpecialty) {
+          options = [{ id: `appointment:${appointmentKey}`, specialty: appointmentSpecialty,
+            label: `${appointmentSpecialty} · agendamento (sem plano ativo)` }];
+        }
+      }
       if (requestId !== sessionTabPickerRequestRef.current) return;
       setSessionTabPlanOptions(options);
       if (options.length === 1) setSessionTabSelectedPlanId(options[0].id);
