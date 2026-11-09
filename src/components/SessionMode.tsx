@@ -94,6 +94,7 @@ import {
 import { formatMaintenanceScheduleDueLabel, resolveMaintenanceProbeAvailability } from '../utils/abaMaintenanceScheduling';
 import { mapMaintenancePanelResponse, resolveMaintenanceTargetDisplay } from '../utils/peiMaintenancePanel';
 import { isPeiClinicalRowAfterProgressReset } from '../utils/peiSessionReset';
+import { createSessionTrialWriteQueue } from '../utils/sessionTrialWriteQueue';
 import { abaV3ActionDisplayLabel, normalizeAbaV3TrialActionKey, type AbaV3TrialActionKey } from '../utils/abaV3Collection';
 import {
   abaRecommendationPriorityLabel,
@@ -1152,6 +1153,7 @@ export const SessionMode = ({
   const [manualRegularOverrideTargetId, setManualRegularOverrideTargetId] = useState<string | null>(null);
   const [promptLevelKey, setPromptLevelKey] = useState('verbal');
   const [records, setRecords, recordsRef] = useLiveSessionState<SessionRecord[]>([]);
+  const legacyTrialWriteQueueRef = useRef(createSessionTrialWriteQueue());
   const [sessionLiveSummary, setSessionLiveSummary] = useState<any>(null);
   const [maintenanceOverview, setMaintenanceOverview] = useState<any>({ schedules: [], probeResults: [], alerts: [], summary: null });
   const [maintenancePanel, setMaintenancePanel] = useState<any>(null);
@@ -3658,7 +3660,9 @@ export const SessionMode = ({
     }
 
     const trialLockKey = `trial-v3:${recordTargetId}:${actionKey}:${selectedPrompt?.key || 'none'}`;
-    if (!lockAction(trialLockKey, 600)) return;
+    // A short tap debounce prevents an accidental duplicate gesture; a pending
+    // network sync must never lock out the next independent clinical attempt.
+    if (!lockAction(trialLockKey, 90)) return;
     const clientEventId = crypto.randomUUID();
     const localRecordId = `trial-v3-${clientEventId}`;
     const actionLabel = abaV3ActionDisplayLabel(actionKey);
@@ -4113,7 +4117,9 @@ export const SessionMode = ({
       return;
     }
     const trialLockKey = `trial:${String(recordTargetId || goal?.name || 'goal')}:${outcome}:${selectedPrompt.key}`;
-    if (!lockAction(trialLockKey, 600)) return;
+    // A short tap debounce prevents an accidental duplicate gesture; a pending
+    // network sync must never lock out the next independent clinical attempt.
+    if (!lockAction(trialLockKey, 90)) return;
     const isCorrect = outcome !== 'error' && score > 0;
     const isIndependent = outcome === 'independent';
     const trialId = `trial-${crypto.randomUUID()}`;
@@ -4174,7 +4180,9 @@ export const SessionMode = ({
     updateRecordStatus(trialId, 'syncing');
 
     try {
-      await Promise.resolve(onRecordTrial(patient.id, goal.name, score, '', {
+      // App's legacy callback updates a shared PEI snapshot. Run those writes
+      // in event order, while accepting and displaying every subsequent tap.
+      await legacyTrialWriteQueueRef.current(() => Promise.resolve(onRecordTrial(patient.id, goal.name, score, '', {
         sessionId,
         sessionStartedAt: activeSession?.startedAt || timestamp,
         sessionReferenceDate: activeSession?.referenceDate || timestamp.slice(0, 10),
@@ -4208,7 +4216,7 @@ export const SessionMode = ({
         isIndependent,
         timestamp,
         therapistId: resolvedTherapistId || null
-      }));
+      })));
       setTrialCount((prev) => prev + 1);
       updateRecordStatus(trialId, 'synced');
       if (isMaintenanceProbeCollection(normalizedCollectionType)) {
