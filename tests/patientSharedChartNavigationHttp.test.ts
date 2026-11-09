@@ -11,12 +11,13 @@ const actorId = '22222222-2222-4222-8222-222222222222';
 
 let criticalWrites = 0;
 let projectionReads = 0;
+let chartWriteKeys: string[] = [];
 const app = express();
 app.use(express.json());
 app.use((req: any, _res, next) => {
   const role = String(req.headers['x-role'] || 'director');
   req.session = { user: { id: actorId, role, clinicId: req.headers['x-clinic'] || clinicId } };
-  req.authorizationContext = { capabilities: new Set(['reports.clinical.indicators']) };
+  req.authorizationContext = { capabilities: new Set(['reports.clinical.indicators', 'aba.analytics.view']) };
   next();
 });
 const supabase = {
@@ -27,6 +28,28 @@ const supabase = {
       return { data: { canPublish: allowed, canDelegate: allowed }, error: null };
     }
     if (name === 'patient_file_actor_has_patient_access_v1') return { data: false, error: null };
+    if (name === 'get_aba_chart_series_bundle_v3') {
+      projectionReads++;
+      assert.equal(params.p_organization_id, clinicId, 'ABA reference must be scoped to clinic');
+      assert.equal(params.p_patient_id, patientId, 'ABA reference must be scoped to patient');
+      return { data: { segments: [{
+        target_id: '55555555-5555-4555-8555-555555555555',
+        measurement_model_version: 'V3',
+        phase_assignment_id: '66666666-6666-4666-8666-666666666666',
+        metric_key: 'PRIMARY_INDEPENDENCE_PERCENT',
+        series_key: 'dtt:55555555-5555-4555-8555-555555555555',
+        points: [],
+      }] }, error: null };
+    }
+    if (name === 'set_patient_shared_chart_selection_v2') {
+      criticalWrites++;
+      chartWriteKeys.push(params.p_chart_key);
+      assert.equal(params.p_actor_id, actorId);
+      assert.equal(params.p_clinic_id, clinicId);
+      assert.equal(params.p_patient_id, patientId);
+      assert.equal(params.p_chart_family, 'ABA_V3');
+      return { data: { reference_version: 1 }, error: null };
+    }
     criticalWrites++;
     return { data: null, error: { code: 'UNEXPECTED_WRITE' } };
   },
@@ -98,6 +121,39 @@ try {
   assert.equal((await request(primary, patientId, otherClinicId)).status, 403, 'cross-clinic actor denied');
   assert.equal(criticalWrites, 0, 'invalid and IDOR requests must never write clinical sharing state');
   assert.equal(projectionReads, 0, 'invalid references must be rejected before reading clinical data');
+
+  // Positive HTTP regression: the backend must hash the chart identity with
+  // the Node crypto module, then persist only after the authorized projection.
+  // Prior to this fix, crypto.createHash was called without importing crypto,
+  // so the valid Save returned 503 before reaching the atomic database RPC.
+  const abaDescriptor = {
+    schemaVersion: 1,
+    family: 'ABA_V3',
+    domain: 'skills',
+    metricSignature: 'PRIMARY_INDEPENDENCE_PERCENT',
+    seriesRefs: [{
+      targetId: '55555555-5555-4555-8555-555555555555',
+      measurementModelVersion: 'V3',
+      phaseAssignmentId: '66666666-6666-4666-8666-666666666666',
+      metricKey: 'PRIMARY_INDEPENDENCE_PERCENT',
+      seriesKey: 'dtt:55555555-5555-4555-8555-555555555555',
+    }],
+    axis: 'date',
+    comparePrevious: false,
+  };
+  const firstSave = await request(abaDescriptor);
+  assert.equal(firstSave.status, 200, 'valid professional chart Save must not return 503');
+  const firstBody: any = await firstSave.json();
+  assert.equal(firstBody.success, true);
+  assert.match(firstBody.data.chartKey, /^ABA_V3:[a-f0-9]{40}$/);
+  const repeatSave = await request(abaDescriptor);
+  assert.equal(repeatSave.status, 200, 'repeat Save remains idempotent at chart identity level');
+  const repeatBody: any = await repeatSave.json();
+  assert.equal(firstBody.data.chartKey, repeatBody.data.chartKey, 'same descriptor yields stable key');
+  assert.deepEqual(chartWriteKeys, [firstBody.data.chartKey, firstBody.data.chartKey]);
+  assert.equal(criticalWrites, 2, 'one DB mutation per explicit Save');
+  assert.equal(projectionReads, 2, 'exactly one scoped projection per Save, no N+1');
+
   console.log('patientSharedChartNavigationHttp.test.ts: PASS');
 } finally {
   server.close();
