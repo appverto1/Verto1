@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { buildClinicalOutcomePlanScopeIndex } from '../src/utils/clinicalOutcomePlanScope';
 import { selectPtsMultidisciplinarySeries } from '../src/utils/ptsMultidisciplinarySeries';
+import { isClinicalOutcomeHistoricalOnlySeries, summarizeClinicalOutcomeSeries } from '../src/utils/clinicalOutcomeAnalytics';
 import type { ClinicalOutcomeObservation, ClinicalOutcomeSeriesSummary } from '../src/utils/clinicalOutcomeAnalytics';
 
 const makeSeries = (key: string, planId: string | null, metricKey = 'TARGET_ACCURACY'): ClinicalOutcomeSeriesSummary => {
@@ -94,5 +95,60 @@ const blocked = selectPtsMultidisciplinarySeries({
   isHistoricalOnly: () => false,
 });
 assert.deepEqual(blocked, [], 'no cross-plan behavior or label-only contribution may enter PTS');
+
+// A completed V2 session can contain persisted interfering-behavior snapshots
+// even when the ABA V3 read model has no behavior rows. These are NOT arbitrary
+// historic target scores: preserve their original semantic metric and value.
+const snapshots = [
+  {
+    id: 'saved-frequency-1', planId: null, programId: null, goalId: null,
+    sessionId: 'session-1762719475912', itemId: null, itemLabel: 'Comportamento A',
+    specialty: 'Terapia Ocupacional', metricKey: 'BEHAVIOR_FREQUENCY',
+    metricLabel: 'Comportamento A', unit: 'ocorrências',
+    direction: 'lower_is_better' as const, source: 'aba_session_metric_snapshot',
+    observedAt: '2026-11-09T20:17:55.912Z', value: 0,
+  },
+  {
+    id: 'saved-frequency-2', planId: null, programId: null, goalId: null,
+    sessionId: 'session-1762719475912', itemId: null, itemLabel: 'Comportamento B',
+    specialty: 'Terapia Ocupacional', metricKey: 'BEHAVIOR_FREQUENCY',
+    metricLabel: 'Comportamento B', unit: 'ocorrências',
+    direction: 'lower_is_better' as const, source: 'aba_session_metric_snapshot',
+    observedAt: '2026-11-09T20:17:55.912Z', value: 3,
+  },
+];
+const snapshotSeries = summarizeClinicalOutcomeSeries(snapshots);
+assert.equal(snapshotSeries.length, 2, 'behavior names remain separate even if old snapshots have no behavior_id');
+assert.ok(snapshotSeries.every((item) => !isClinicalOutcomeHistoricalOnlySeries(item)),
+  'saved BEHAVIOR_* evidence is available when the canonical read model has no replacement');
+assert.ok(snapshotSeries.some((item) => item.validObservations[0].value === 0),
+  'a legitimate observation of zero occurrences is preserved, not mistaken for missing data');
+
+const savedBehaviorPts = selectPtsMultidisciplinarySeries({
+  allSeries: snapshotSeries,
+  ptsSeries: [],
+  ptsGoalRows: [],
+  specialtyPlanIds: ['to-plan'],
+  planScopeIndex: index,
+  isHistoricalOnly: isClinicalOutcomeHistoricalOnlySeries,
+});
+assert.equal(savedBehaviorPts.length, 2, 'interfering behaviors must appear in PTS after confirmed session closure');
+
+const previousLegacyTarget = makeSeries('old-target', 'to-plan');
+previousLegacyTarget.source = 'aba_session_metric_snapshot';
+previousLegacyTarget.observations[0].source = 'aba_session_metric_snapshot';
+previousLegacyTarget.observations[0].sessionId = 'session-1762719475912';
+assert.equal(isClinicalOutcomeHistoricalOnlySeries(previousLegacyTarget), true,
+  'old target snapshots must remain excluded from current analytic charts');
+
+const unrelatedSnapshot = makeSeries('other-plan-behavior', 'foreign-plan', 'BEHAVIOR_FREQUENCY');
+unrelatedSnapshot.source = 'aba_session_metric_snapshot';
+unrelatedSnapshot.observations[0].source = 'aba_session_metric_snapshot';
+unrelatedSnapshot.observations[0].sessionId = 'session-1762719475912';
+assert.deepEqual(selectPtsMultidisciplinarySeries({
+  allSeries: [unrelatedSnapshot], ptsSeries: [], ptsGoalRows: [],
+  specialtyPlanIds: ['to-plan'], planScopeIndex: index,
+  isHistoricalOnly: isClinicalOutcomeHistoricalOnlySeries,
+}), [], 'old behavior data with an explicit foreign plan must not cross the authorized scope');
 
 console.log('ptsMultidisciplinarySeries.test.ts: ok');
