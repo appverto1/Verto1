@@ -22,7 +22,7 @@ assert.doesNotMatch(shell, /label\.includes\('duração'\)\) return 'behaviors'/
 assert.match(shell, /Comportamentos interferentes no gráfico · até 3/, 'seleção do domínio comportamental deve falar em comportamentos interferentes, não alvos');
 const ptsSelector = fs.readFileSync('src/utils/ptsMultidisciplinarySeries.ts', 'utf8');
 assert.match(dashboard, /selectPtsMultidisciplinarySeries/, 'PTS multidisciplinar deve utilizar seleção modular');
-assert.match(ptsSelector, /isClinicalOutcomeInterferingBehaviorSeries\\(series\\)/, 'PTS deve incluir comportamento interferente de nível paciente mesmo sem planId legado');
+assert.match(ptsSelector, /isClinicalOutcomeInterferingBehaviorSeries\(series\)/, 'PTS deve incluir comportamento interferente de nível paciente mesmo sem planId legado');
 assert.match(analytics, /startsWith\('BEHAVIOR_'\)/, 'identificação de comportamento deve reconhecer métricas BEHAVIOR_*');
 assert.match(analytics, /sourceFamilies\.includes\('BEHAVIOR'\)/, 'identificação de comportamento deve reconhecer source_family BEHAVIOR do read model canônico');
 assert.match(analytics, /text\(observation\.itemId\) \|\| text\(observation\.itemLabel\)/, 'comportamentos legados sem itemId devem permanecer separados pelo nome clínico');
