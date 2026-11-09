@@ -24,4 +24,11 @@ assert.equal(score([1, 1, 1, 1, 1], 5), 100, 'limiar de cinco só é válido qua
 assert.equal(score([1, 1], undefined), 70, 'sem meta individual explícita, preserve cálculo legado VB-MAPP');
 assert.equal(calculateDomainMastery(rows([0.5]), skill(10), { protocolKind: 'other' }), 50, 'pontuação não VB-MAPP permanece inalterada');
 
+const sameTimestamp = '2026-11-02T10:00:00.000Z';
+assert.equal(calculateDomainMastery([
+  { title: 'Responder ao nome', score: 1, created_at: sameTimestamp },
+  { title: 'Responder ao nome', score: 1, created_at: sameTimestamp },
+], skill(2), { protocolKind: 'vbmapp' }), 100,
+  'duas tentativas distintas com mesmo milissegundo contam quando critério é total independente');
+
 console.log('clinicalMathCriterionScore.test.ts: PASS');
