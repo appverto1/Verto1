@@ -174,7 +174,7 @@ async function test() {
 
   res = response();
   await handlers.detail(request('GET', { params: { patientId: otherId, planId: otherId } }), res);
-  assert.equal(res.state.statusCode, 400, 'malformed scope denied');
+  assert.equal(res.state.statusCode, 404, 'cross-patient plan IDOR denied');
   assert.ok(writeCalls >= 1);
 }
 await test();
