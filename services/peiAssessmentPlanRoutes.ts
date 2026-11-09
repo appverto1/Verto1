@@ -84,7 +84,7 @@ export function createPeiAssessmentPlanHandlers(getDeps: () => Deps) {
     const [patient, membership, links] = await Promise.all([
       supabase.from('patients').select('id').eq('id', patientId).eq('clinic_id', clinicId).is('deleted_at', null).maybeSingle(),
       supabase.from('clinic_memberships').select('role,specialty,can_supervise').eq('clinic_id', clinicId).eq('user_id', actorId).eq('status', 'active').maybeSingle(),
-      supabase.from('patient_professional_links').select('specialty,case_role,permissions').eq('organization_id', clinicId).eq('patient_id', patientId).eq('professional_id', actorId).eq('status', 'active').limit(10)
+      supabase.from('patient_professional_links').select('specialty,case_role,permissions').eq('clinic_id', clinicId).eq('patient_id', patientId).eq('professional_id', actorId).eq('status', 'active').limit(10)
     ]);
     if (patient.error || membership.error || links.error) throw patient.error || membership.error || links.error;
     if (!patient.data || !membership.data) {
@@ -93,19 +93,24 @@ export function createPeiAssessmentPlanHandlers(getDeps: () => Deps) {
     }
     const manager = MANAGER_ROLES.has(String(membership.data.role || ''));
     const actorLinks: any[] = Array.isArray(links.data) ? links.data : [];
-    const supervisor = actorLinks.some(link => ['supervisor','case_supervisor'].includes(String(link.case_role)) &&
+    const supervisorRead = actorLinks.some(link => ['supervisor','case_supervisor'].includes(String(link.case_role)) &&
+      link.permissions?.read !== false);
+    const supervisorWrite = supervisorRead && actorLinks.some(link => ['supervisor','case_supervisor'].includes(String(link.case_role)) &&
       link.permissions?.write !== false);
-    return { actorId, clinicId, patientId, manager, supervisor, actorLinks };
+    return { actorId, clinicId, patientId, manager, supervisorRead, supervisorWrite, actorLinks,
+      membershipRole: String(membership.data.role || ''), membershipSpecialty: String(membership.data.specialty || '') };
   };
 
   const canRead = (ctx: any, plan: any) =>
-    ctx.manager || ctx.supervisor ||
-    (String(plan?.responsible_professional_id) === ctx.actorId &&
+    ctx.manager || ctx.supervisorRead ||
+    (ctx.membershipRole === 'therapist' && String(plan?.specialty || '').toLocaleLowerCase('pt-BR') === ctx.membershipSpecialty.toLocaleLowerCase('pt-BR') &&
+      String(plan?.responsible_professional_id) === ctx.actorId &&
       ctx.actorLinks.some((link: any) => String(link.specialty).toLocaleLowerCase('pt-BR') === String(plan.specialty).toLocaleLowerCase('pt-BR') && link.permissions?.read !== false));
 
   const canWrite = (ctx: any, plan: any) =>
-    ctx.manager || ctx.supervisor ||
-    (String(plan?.responsible_professional_id) === ctx.actorId &&
+    ctx.manager || ctx.supervisorWrite ||
+    (ctx.membershipRole === 'therapist' && String(plan?.specialty || '').toLocaleLowerCase('pt-BR') === ctx.membershipSpecialty.toLocaleLowerCase('pt-BR') &&
+      String(plan?.responsible_professional_id) === ctx.actorId &&
       ctx.actorLinks.some((link: any) => String(link.specialty).toLocaleLowerCase('pt-BR') === String(plan.specialty).toLocaleLowerCase('pt-BR') && link.permissions?.write !== false));
 
   const sendError = (res: any, error: any, route: string) => {
@@ -165,7 +170,7 @@ export function createPeiAssessmentPlanHandlers(getDeps: () => Deps) {
           protocolId.length > 180 || title.length < 2 || title.length > 180 || key.length < 8) {
           return res.status(422).json({ success: false, error: 'PEI_CREATE_INVALID' });
         }
-        if (!ctx.manager && !ctx.supervisor && responsibleId !== ctx.actorId) {
+        if (!ctx.manager && !ctx.supervisorWrite && responsibleId !== ctx.actorId) {
           return res.status(403).json({ success: false, error: 'PEI_RESPONSIBLE_DENIED' });
         }
         // Only a protocol from this clinic's evaluation catalog is eligible.
