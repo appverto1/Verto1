@@ -32,6 +32,7 @@
     "test:profile-notes-fallback": "tsx tests/profileNotesFallback.test.ts",
     "test:route-schema-fallbacks": "tsx tests/routeSchemaFallbacks.test.ts",
     "test:pei-plan-protocols": "tsx tests/peiPlanProtocols.test.ts",
+    "test:pei-assessment": "tsx tests/peiAssessmentPlanRoutes.test.ts",
     "test:pei-plan-tabs": "tsx tests/peiPlanTabs.test.ts",
     "test:therapeutic-plan": "tsx tests/therapeuticPlanPrograms.test.ts",
     "test:therapeutic-recommendations": "tsx tests/therapeuticProgramDrawerRecommendations.test.ts",
