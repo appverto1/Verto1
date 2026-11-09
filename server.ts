@@ -1,3 +1,8 @@
+import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';
+import { loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot } from './services/groupSessions/groupSessionScheduleConflicts';
+import { validateActiveClinicFinancialPlanSpecialties } from './services/patientFinancialSpecialtyGuard';
+import { createProfessionalFinancialReceiptHandlers } from './services/professionalFinancialReceiptHandlers';
+import { canActivateSpecialtyPlanForCase } from './services/therapeuticSpecialistActivation';
 import { createPaidDirectorSessionBootstrap } from './services/paidDirectorSessionBootstrap';
 import { registerPublicSalesPostPaymentReconciliationRoute } from './services/publicSalesPostPaymentReconciliationRoute';
 import { createSalesDirectorContractAccess } from './services/salesDirectorContractAccess';
@@ -7329,6 +7334,7 @@ const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'organization_id',
   'patient_id',
   'service_type',
+  'professional_user_id',
   'custom_service_name',
   'service_name_snapshot',
   'billing_mode',
@@ -7340,6 +7346,7 @@ const PATIENT_FINANCIAL_PLAN_BASE_SELECT = [
   'sessions_quantity',
   'quantity_period',
   'amount_cents',
+  'group_amount_cents',
   'copayment_amount_cents',
   'payment_method',
   'due_day',
@@ -12785,12 +12792,14 @@ function getClinicStateAppointmentProfessionals(appointment: any) {
   return { ids, names };
 }
 
-function validateClinicStateAppointmentsForScheduleConflicts(params: {
+async function validateClinicStateAppointmentsForScheduleConflicts(params: {
   appointments: any[];
+  clinicId: string;
   rooms?: any[];
   specialtySettings?: Record<string, any>;
 }) {
   const appointments = Array.isArray(params.appointments) ? params.appointments : [];
+  const canonicalGroupSlots = await loadCanonicalGroupScheduleSlots(supabase, params.clinicId, appointments);
   const roomsById = new Map(
     (Array.isArray(params.rooms) ? params.rooms : [])
       .map((room: any) => [sanitizeString(room?.id, 180), room])
@@ -12829,7 +12838,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         180,
       );
       const professionals = getClinicStateAppointmentProfessionals(appointment);
-      return {
+      const normalized = {
         index,
         id: sanitizeString(appointment?.id, 180),
         date,
@@ -12847,6 +12856,7 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
         professionalNames: professionals.names,
         blocks: getClinicStateAppointmentStatusBlocksConflict(appointment)
       };
+      return {...normalized, sharedGroupSlot: canonicalSharedGroupSlot(appointment, normalized, canonicalGroupSlots)};
     })
     .filter((appointment) => appointment.blocks && appointment.date && appointment.startTime);
 
@@ -12891,6 +12901,8 @@ function validateClinicStateAppointmentsForScheduleConflicts(params: {
             : `${current.patientName || 'Paciente'} já possui outra sessão nesse horário.`
         };
       }
+
+      if (current.sharedGroupSlot && current.sharedGroupSlot === other.sharedGroupSlot) continue;
 
       const sameRoom =
         current.locationType === 'clinica' &&
@@ -19324,16 +19336,21 @@ function sanitizeIsoDateOnly(value: unknown): string | null {
   return null;
 }
 
-function buildPatientProfileTypeFields(body: any) {
-  const canonicalProfileType = normalizePatientProfileType(
-    body?.patientProfileType ||
-      body?.patient_profile_type ||
-      body?.panelType ||
-      body?.panel_type ||
-      body?.profileType ||
-      body?.profile_type ||
-      body?.type,
-  );
+function buildPatientProfileTypeFields(body: any, partial = false) {
+  const requestedProfile = body?.patientProfileType ||
+    body?.patient_profile_type ||
+    body?.panelType ||
+    body?.panel_type ||
+    body?.profileType ||
+    body?.profile_type ||
+    body?.type;
+  const category = sanitizeString(body?.group || body?.patient_group || body?.grupo, 80)
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const pediatricCategory = ['infantil','crianca','adolescente'].includes(category);
+  // PATCH of an unrelated field must not overwrite KIDS/ABA with default ADULT.
+  // A pediatric category, even beside a stale ADULT alias, remains KIDS.
+  if (partial && !requestedProfile && !pediatricCategory) return {};
+  const canonicalProfileType = pediatricCategory ? 'KIDS' : normalizePatientProfileType(requestedProfile);
   return {
     patient_profile_type: canonicalProfileType,
     panel_type: canonicalProfileType,
@@ -19582,6 +19599,7 @@ function patientFinancialPlanSemanticFingerprint(row: any) {
     sessions_quantity: normalizeFinancialPlanSemanticInteger(source.sessions_quantity ?? source.sessionsQuantity),
     quantity_period: normalizeFinancialPlanSemanticEnum(source.quantity_period ?? source.quantityPeriod, 40),
     amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.amount_cents ?? source.amountCents) || 0),
+    group_amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.group_amount_cents ?? source.groupAmountCents) || 0),
     copayment_amount_cents: Math.max(0, normalizeFinancialPlanSemanticInteger(source.copayment_amount_cents ?? source.copaymentAmountCents) || 0),
     payment_method: normalizeFinancialPlanSemanticEnum(source.payment_method ?? source.paymentMethod ?? source.billingMethod, 40),
     due_day: normalizeFinancialPlanSemanticInteger(source.due_day ?? source.dueDay),
@@ -19942,10 +19960,10 @@ async function resolvePatientInsurancePayerSelection(params: {
   return { ok: true as const, payerId: null, payerName: payerName || null, insuranceType };
 }
 
-function buildPatientIdentityPersistenceFields(body: any) {
+function buildPatientIdentityPersistenceFields(body: any, options: { partial?: boolean } = {}) {
   const address = body?.address && typeof body.address === 'object' ? body.address : {};
   const guardian = body?.guardian && typeof body.guardian === 'object' ? body.guardian : {};
-  const profileFields = buildPatientProfileTypeFields(body);
+  const profileFields = buildPatientProfileTypeFields(body, options.partial === true);
   const hasOwn = (...keys: string[]) => keys.some((key) =>
     Object.prototype.hasOwnProperty.call(body || {}, key)
   );
@@ -20138,7 +20156,15 @@ function buildPatientFinancialPlanRows(params: {
   clinicId: string;
   actorId?: string | null;
 }) {
-  return normalizePatientFinancialPlans(params.financialPlans)
+  const normalizedPlans = normalizePatientFinancialPlans(params.financialPlans);
+  // Omitted fields from older clients must remain omitted for the canonical
+  // reconciler to preserve an already saved collective rate.
+  const explicitGroupRateIds = new Set(normalizedPlans.filter((_plan: any, index: number) =>
+    ['groupAmount', 'groupAmountCents', 'group_amount_cents'].some(key =>
+      Object.prototype.hasOwnProperty.call(params.financialPlans[index] || {}, key)
+    )
+  ).map((plan: any) => plan.id));
+  return normalizedPlans
     .filter(isPatientFinancialPlanComplete)
     .map(serializePatientFinancialPlanForPayload)
     .map((plan: any) => cleanObject({
@@ -20147,6 +20173,7 @@ function buildPatientFinancialPlanRows(params: {
       organization_id: params.clinicId,
       patient_id: params.patientId,
       service_type: sanitizeString(plan.serviceType, 60) || 'CUSTOM',
+      professional_user_id: isUuid(sanitizeString(plan.professionalUserId, 120)) ? sanitizeString(plan.professionalUserId, 120) : null,
       custom_service_name: sanitizeString(plan.customServiceName, 120) || null,
       service_name_snapshot: sanitizeString(plan.serviceNameSnapshot || plan.specialty, 120) || null,
       billing_mode: sanitizeString(plan.billingMode, 40) || 'PRIVATE',
@@ -20161,6 +20188,7 @@ function buildPatientFinancialPlanRows(params: {
       sessions_quantity: asSafeNumber(plan.sessionsQuantity, 1, 10000),
       quantity_period: sanitizeString(plan.quantityPeriod, 40) || null,
       amount_cents: Math.max(0, Math.round(Number(plan.amountCents || 0) || 0)),
+      group_amount_cents: explicitGroupRateIds.has(plan.id) ? plan.groupAmountCents : undefined,
       copayment_amount_cents: Math.max(0, Math.round(Number(plan.copaymentAmountCents || 0) || 0)),
       payment_method: sanitizeString(plan.paymentMethod || plan.billingMethod, 40) || null,
       due_day: asSafeNumber(plan.dueDay, 1, 31),
@@ -20203,6 +20231,12 @@ async function persistPatientFinancialPlans(params: {
     // independent PRIVATE/base plan mutations to continue.
     rows = rows.filter((row: any) => !patientFinancialPlanIsInsurance(row));
   }
+  const specialtyGate = await validateActiveClinicFinancialPlanSpecialties({
+  supabase, clinicId: params.clinicId, patientId: params.patientId, rows
+});
+if (!specialtyGate.ok) {
+  return { success: false, error: specialtyGate.error, code: specialtyGate.code };
+}
   const payerIds = Array.from(new Set(rows.map((row: any) => sanitizeString(row.payer_id, 120)).filter((id: string) => isUuid(id))));
   if (payerIds.length > 0) {
     const { data: payers, error: payerError } = await supabase
@@ -20250,7 +20284,7 @@ async function persistPatientFinancialPlans(params: {
     }
   }
 
-  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v2', {
+  const reconciliation = await supabase.rpc('reconcile_patient_financial_plans_v3', {
     p_organization_id: params.clinicId,
     p_patient_id: params.patientId,
     p_actor_id: isUuid(sanitizeString(params.actorId, 120)) ? sanitizeString(params.actorId, 120) : null,
@@ -20259,7 +20293,7 @@ async function persistPatientFinancialPlans(params: {
   });
   if (reconciliation.error) {
     const message = sanitizeString(reconciliation.error?.message || reconciliation.error, 500);
-    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v2')) {
+    if (isMissingRelationError(reconciliation.error) || message.includes('reconcile_patient_financial_plans_v3')) {
       return {
         success: false,
         error: 'A migração de persistência histórica dos planos financeiros ainda não foi aplicada.',
@@ -29471,7 +29505,8 @@ async function startServer() {
             : previous.data?.specialty_settings && typeof previous.data.specialty_settings === 'object'
               ? previous.data.specialty_settings
               : {};
-        const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+        const scheduleValidation = await validateClinicStateAppointmentsForScheduleConflicts({
+          clinicId,
           appointments: nextAppointments,
           rooms: nextRooms !== undefined ? nextRooms : Array.isArray(previous.data?.rooms) ? previous.data.rooms : [],
           specialtySettings: effectiveSpecialtySettings
@@ -30805,7 +30840,8 @@ async function startServer() {
     );
 
     const nextAppointmentsForValidation = mergeClinicStateAppointmentsById(state.appointments, preparedAppointments);
-    const scheduleValidation = validateClinicStateAppointmentsForScheduleConflicts({
+    const scheduleValidation = await validateClinicStateAppointmentsForScheduleConflicts({
+      clinicId,
       appointments: nextAppointmentsForValidation,
       rooms: state.rooms,
       specialtySettings: state.specialtySettings
@@ -39683,7 +39719,7 @@ async function startServer() {
         cpf: safeCpf !== undefined ? safeCpf : undefined,
         age: req.body?.age !== undefined ? asSafeNumber(req.body?.age, 0, 130) : undefined,
         diagnosis: req.body?.diagnosis !== undefined ? sanitizeString(req.body?.diagnosis, 2000) : undefined,
-        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(patientIdentityPayload) : {}),
+        ...(hasIdentityPersistencePatch ? buildPatientIdentityPersistenceFields(patientIdentityPayload, { partial: true }) : {}),
         profile_picture: safeProfilePicture !== undefined ? safeProfilePicture : undefined,
         profile_picture_path: safeProfilePicturePath !== undefined ? safeProfilePicturePath : undefined,
         therapist_id:
@@ -48839,6 +48875,7 @@ async function startServer() {
     const financialContextType = explicitFinancialContext || (payerId || payerName ? 'INSURANCE' : null);
 
     return {
+      ...groupCalendarMetadata(row),
       id: appointmentId,
       patient_id: patientId || null,
       patient_name: pickCalendarPatientName([
@@ -48983,7 +49020,7 @@ async function startServer() {
   const calendarEventMatchesFilters = (event: any, filters: any) => {
     const rawStatus = sanitizeString(event?.status, 80).toLowerCase();
     if (event?.is_active === false || event?.isActive === false || event?.deleted_at || event?.deletedAt || rawStatus === 'deleted') return false;
-    if (filters.therapistIds.length > 0 && !filters.therapistIds.includes(String(event.therapist_id || ''))) return false;
+    if (filters.therapistIds.length > 0 && !groupCalendarMatchesProfessional(event, new Set<string>(filters.therapistIds))) return false;
     if (filters.patientIds.length > 0 && !filters.patientIds.includes(String(event.patient_id || ''))) return false;
     if (filters.roomIds?.length > 0 && !filters.roomIds.includes(String(event.room_id || ''))) return false;
     if (filters.schoolIds?.length > 0 && !filters.schoolIds.includes(String(event.school_id || event.schoolId || ''))) return false;
@@ -52160,6 +52197,57 @@ async function startServer() {
       if (!context.ok) return res.status((context as any).status || 404).json(portalSafeError((context as any).status || 404));
       const appointment = (context as any).appointment;
       const previousStatus = normalizeOperationalAppointmentStatus(appointment.status);
+      // P1-27: only a DB-proven SENT 24h reminder for this exact session
+      // authorizes an immediate cancellation. Any other origin keeps the
+      // pre-existing pending request + clinic approval route unchanged.
+      const reminderNotificationId = sanitizeString(req.body?.notificationId || req.body?.notification_id, 120);
+      if (isUuid(reminderNotificationId)) {
+        const { data: automaticCancellation, error: automaticError } = await supabase.rpc(
+          'cancel_appointment_from_24h_reminder_v1', {
+            p_organization_id: appointment.organization_id || appointment.clinic_id,
+            p_clinic_id: appointment.clinic_id,
+            p_patient_id: appointment.patient_id,
+            p_appointment_id: appointment.id,
+            p_notification_id: reminderNotificationId,
+            p_actor_id: sanitizeString(req.session.user?.id, 120),
+            p_deployment_env: deploymentEnv,
+            p_reason: sanitizeTextField(req.body?.reason, 600) || null,
+            p_note: sanitizeTextField(req.body?.note || req.body?.observation, 1000) || null,
+          }
+        );
+        if (automaticError) {
+          const missingRpc = String(automaticError?.code || '') === 'PGRST202'
+            || String(automaticError?.message || '').includes('Could not find the function');
+          if (!missingRpc && !isMissingRelationError(automaticError)) throw automaticError;
+        } else if (automaticCancellation?.autoCancelled === true) {
+          // SQL committed request, appointment cancellation and audit together.
+          // A follow-up acknowledgement must never turn success into an error.
+          let notificationIds: string[] = [];
+          try {
+            const acknowledgement = await acknowledgePortalAppointmentNotifications({
+              appointment: automaticCancellation.appointment,
+              user: req.session.user,
+              action: 'cancelled_by_family_from_24h_reminder',
+              notificationId: reminderNotificationId
+            });
+            if (acknowledgement.ok) notificationIds = acknowledgement.notificationIds;
+          } catch (acknowledgementError: any) {
+            console.warn('[PortalAppointments] automatic cancellation acknowledgement deferred:',
+              acknowledgementError?.code || 'NOTIFICATION_ACKNOWLEDGEMENT_FAILED');
+          }
+          void regenerateClosureForAppointments([appointment.id], req.session.user, 'appointment_cancel_24h_auto');
+          const serializedAppointment = await serializePortalAppointmentForFamilyView(automaticCancellation.appointment);
+          return res.json(buildPortalAppointmentActionResult({
+            action: 'cancelled_by_family_from_24h_reminder',
+            appointment: serializedAppointment,
+            message: 'Sessão cancelada automaticamente a partir do lembrete de 24 horas.',
+            user: req.session.user,
+            notificationIds,
+            actionRequest: automaticCancellation.actionRequest,
+            alreadyAnswered: automaticCancellation.idempotent === true
+          }));
+        }
+      }
       if (isAppointmentTerminalForPortalAction(previousStatus)) return res.status(409).json(portalSafeError(409));
       const requestRow = await createOrUpdateAppointmentActionRequest({
         appointment,
@@ -55685,7 +55773,7 @@ async function startServer() {
     if (scope.allClinic) return true;
     const patientId = sanitizeString(row?.patient_id || row?.patientId, 120);
     const professionalId = sanitizeString(row?.therapist_id || row?.therapistId || row?.professional_id, 120);
-    return (patientId && scope.patientIds.has(patientId)) || (professionalId && scope.professionalIds.has(professionalId));
+    return Boolean((patientId && scope.patientIds.has(patientId)) || groupCalendarMatchesProfessional(row, scope.professionalIds));
   };
 
   const CALENDAR_INSURANCE_FIELDS = new Set([
@@ -55773,10 +55861,13 @@ async function startServer() {
         if (patientIdsForQuery.length === 0) return res.json({ success: true, data: [], source: 'authorization_scope' });
         query = query.in('patient_id', patientIdsForQuery);
       }
+      const professionalFilters: string[] = [];
       if (!calendarScope.allClinic && calendarScope.professionalIds.size > 0) {
-        query = query.in('therapist_id', Array.from(calendarScope.professionalIds));
+        professionalFilters.push(groupCalendarProfessionalFilter(calendarScope.professionalIds));
       }
-      if (filters.therapistIds.length > 0) query = query.in('therapist_id', filters.therapistIds);
+      if (filters.therapistIds.length > 0) professionalFilters.push(groupCalendarProfessionalFilter(filters.therapistIds));
+      if (professionalFilters.length === 1) query = query.or(professionalFilters[0]);
+      if (professionalFilters.length === 2) query = query.or(`and(or(${professionalFilters[0]}),or(${professionalFilters[1]}))`);
       if (filters.patientIds.length > 0 && (calendarScope.allClinic || calendarScope.patientIds.size === 0)) query = query.in('patient_id', filters.patientIds);
       if (filters.roomIds.length > 0) query = query.in('room_id', filters.roomIds);
       if (filters.schoolIds.length > 0) query = query.in('school_id', filters.schoolIds);
@@ -70083,7 +70174,7 @@ async function startServer() {
       currentClinicId,
       supabase,
       PATIENT_THERAPEUTIC_PLAN_SELECT,
-      isTherapeuticPlanManager, normalizeTherapeuticSpecialtyObjectives,
+      isTherapeuticPlanManager, canActivateSpecialtyPlanForCase, normalizeTherapeuticSpecialtyObjectives,
       normalizePtsClinicalPayload,
       ptsLastReviewedAt,
       sanitizeClinicalPayload,
@@ -70120,7 +70211,7 @@ async function startServer() {
     currentClinicId,
     isUuid,
     supabase,
-    isTherapeuticPlanManager, sanitizeTextField,
+    isTherapeuticPlanManager, canActivateSpecialtyPlanForCase, sanitizeTextField,
     sanitizeClinicalPayload,
     THERAPEUTIC_PROGRAM_ORIGIN_TYPES,
     fetchAbaRecommendationById,
@@ -76893,6 +76984,11 @@ async function startServer() {
     }
   });
 
+  const professionalReceipts = createProfessionalFinancialReceiptHandlers({
+  supabase, currentClinicId, sanitizeString, isUuid, patientFinanceErrorResponse
+});
+app.get('/api/professional-finance/receivables', noStoreDynamicResponse, checkAuth, professionalReceipts.list);
+app.post('/api/professional-finance/receivables/:paymentId/record', portalActionLimiter, checkAuth, professionalReceipts.record);
   app.get('/api/patient-finance/ledger', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), createPatientFinanceLedgerReadHandler(() => ({ sanitizeString, currentClinicId, isUuid, supabase, PATIENT_FINANCE_CHARGE_SELECT, patientFinanceErrorResponse, PATIENT_FINANCE_APPOINTMENT_SELECT, PATIENT_FINANCE_POLICY_SELECT, PRIVATE_FINANCIAL_SNAPSHOT_SELECT, extractMissingColumnName, PATIENT_FINANCE_APPOINTMENT_LEGACY_SELECT, hasMissingFinancialSchema, isMissingRelationError, APPOINTMENT_BILLING_CONTEXT_SELECT })));
 
   app.get('/api/patient-finance/transactions/:transactionId/document', noStoreDynamicResponse, checkAuth, requireClinicCapability('finance.payments.view'), createPatientFinanceTransactionDocumentReadHandler(() => ({ sanitizeString, currentClinicId, isUuid, supabase, sanitizeReceiptUrl, patientFinanceErrorResponse })));
@@ -83849,7 +83945,12 @@ async function startServer() {
     portalActionLimiter,
     enforcePayloadLimit,
     sanitizeString,
-    currentClinicId
+    currentClinicId,
+    serializeGroupAppointment: serializePersistedAppointmentForAgenda,
+    onGroupAppointmentsPersisted: async ({ appointments, action }: any) => {
+      if (action !== 'created') await acknowledgeStaleAppointmentReminderNotifications(appointments);
+      triggerAppointmentReminderScan(`group.${action}`);
+    }
   });
 
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback

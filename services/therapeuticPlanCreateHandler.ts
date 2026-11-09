@@ -10,6 +10,8 @@ export function createTherapeuticPlanCreateHandler(getDeps: () => any) {
       const organizationId = sanitizeString(req.session.user?.organizationId || req.session.user?.organization_id || clinicId, 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       const mode = sanitizeString(req.body?.mode, 40).toLowerCase();
+      const startAsDraft = mode === 'specialty' && req.body?.startAsDraft === true;
+      const planLabel = mode === 'specialty' ? sanitizeString(req.body?.planLabel, 120) : '';
       const idempotencyKey = sanitizeString(
         req.body?.idempotencyKey || req.body?.idempotency_key,
         180
@@ -277,6 +279,8 @@ export function createTherapeuticPlanCreateHandler(getDeps: () => any) {
             patientId,
             mode,
             specialty,
+            startAsDraft,
+            planLabel,
             responsibleProfessionalId,
             participantProfessionalIds: [...participantProfessionalIds].sort(),
             participantSpecialties: [...participantSpecialties].sort(),
@@ -334,6 +338,7 @@ export function createTherapeuticPlanCreateHandler(getDeps: () => any) {
         scope_snapshot: sanitizeClinicalPayload({
           mode,
           specialty,
+          planLabel,
           responsibleProfessionalId,
           participantProfessionalIds,
           participantSpecialties,
@@ -343,7 +348,9 @@ export function createTherapeuticPlanCreateHandler(getDeps: () => any) {
         source_template_version: sourceTemplateVersion,
         idempotency_key: idempotencyKey,
         request_hash: requestHash,
-        status: 'draft',
+        // Self-authored specialty plans are eligible for immediate clinical use.
+        // Membership, case link and specialty were verified above. PTS remains draft.
+        status: mode === 'specialty' && role === 'therapist' && responsibleProfessionalId === actorId && !startAsDraft ? 'active' : 'draft',
         edit_version: 1,
         created_by: actorId,
         updated_by: actorId,
@@ -383,7 +390,7 @@ export function createTherapeuticPlanCreateHandler(getDeps: () => any) {
             message:
               mode === 'interdisciplinary'
                 ? 'Já existe um Projeto Terapêutico Singular vigente para este paciente.'
-                : 'Já existe um plano ativo para esta especialidade.'
+                : 'Já existe um plano ativo desta especialidade. Crie o novo plano como rascunho para prepará-lo sem alterar as sessões atuais.'
           });
         }
         throw error;

@@ -1,54 +1,28 @@
 import cron from 'node-cron';
+import { resolveVertoBackgroundWorkerMode, type VertoBackgroundWorkerMode } from './backgroundWorkerModeConfig';
 import {
   normalizeVertoDeploymentEnvironment,
   type VertoDeploymentEnvironment,
 } from './deploymentEnvironment';
 import { installStagingSupabaseSchemaSelectGuard } from './supabaseSchemaSelectGuard';
 
-export type VertoBackgroundWorkerMode = 'active' | 'economy';
+export type { VertoBackgroundWorkerMode } from './backgroundWorkerModeConfig';
+export { normalizeVertoBackgroundWorkerMode, resolveVertoBackgroundWorkerMode, backgroundWorkersAreAutomatic } from './backgroundWorkerModeConfig';
 
-const ALLOWED_BACKGROUND_WORKER_MODES = new Set<VertoBackgroundWorkerMode>(['active', 'economy']);
 const guardedSchedulers = new WeakSet<object>();
 const guardedTimerApis = new WeakSet<object>();
 
-const clean = (value: unknown, maxLength = 80) =>
-  String(value ?? '').trim().slice(0, maxLength).toLowerCase();
+// Patient-facing delivery is mandatory even in economy. A single minute-level
+// schedule now claims both durable queues (reminders and clinic announcements)
+// atomically. Other expensive scans stay stopped; the name is internal only.
+const ESSENTIAL_NOTIFICATION_SCHEDULES = new Set([
+  'verto-notification-jobs',
+]);
 
-export function normalizeVertoBackgroundWorkerMode(value: unknown): VertoBackgroundWorkerMode | null {
-  const normalized = clean(value);
-  return ALLOWED_BACKGROUND_WORKER_MODES.has(normalized as VertoBackgroundWorkerMode)
-    ? normalized as VertoBackgroundWorkerMode
-    : null;
-}
-
-export function resolveVertoBackgroundWorkerMode(params: {
-  env?: NodeJS.ProcessEnv;
-  deploymentEnv?: VertoDeploymentEnvironment | null;
-} = {}): VertoBackgroundWorkerMode {
-  const env = params.env || process.env;
-  const deploymentEnv = params.deploymentEnv || normalizeVertoDeploymentEnvironment(env.VERTO_DEPLOYMENT_ENV);
-  if (!deploymentEnv) {
-    throw new Error('VERTO_DEPLOYMENT_ENV deve ser staging ou production antes de resolver background workers.');
-  }
-
-  const rawMode = clean(env.VERTO_BACKGROUND_WORKER_MODE);
-  if (!rawMode) return deploymentEnv === 'staging' ? 'economy' : 'active';
-
-  const mode = normalizeVertoBackgroundWorkerMode(rawMode);
-  if (!mode) {
-    throw new Error('VERTO_BACKGROUND_WORKER_MODE deve ser active ou economy.');
-  }
-  if (deploymentEnv === 'production' && mode !== 'active') {
-    throw new Error('VERTO_BACKGROUND_WORKER_MODE=economy é proibido em production.');
-  }
-  return mode;
-}
-
-export function backgroundWorkersAreAutomatic(params: {
-  env?: NodeJS.ProcessEnv;
-  deploymentEnv?: VertoDeploymentEnvironment | null;
-} = {}): boolean {
-  return resolveVertoBackgroundWorkerMode(params) === 'active';
+export function isEssentialEconomyNotificationSchedule(expression: unknown, options: unknown): boolean {
+  return expression === '* * * * *' &&
+    typeof options === 'object' && options !== null &&
+    ESSENTIAL_NOTIFICATION_SCHEDULES.has(String((options as { name?: unknown }).name || ''));
 }
 
 export function installVertoBackgroundWorkerCronGuard(params: {
@@ -72,7 +46,17 @@ export function installVertoBackgroundWorkerCronGuard(params: {
     throw new Error('BACKGROUND_WORKER_CRON_GUARD_UNSUPPORTED');
   }
 
+  const originalSchedule = scheduler.schedule.bind(scheduler);
   scheduler.schedule = ((expression: string, task: (...args: any[]) => any, options?: any) => {
+    // Staging-only: the externally scheduled worker handles both durable queues.
+    // Without this flag the existing minute dispatcher stays active, fail-safe.
+    if (isEssentialEconomyNotificationSchedule(expression, options) &&
+        String(env.VERTO_STAGING_NOTIFICATION_DISPATCH || '').trim() !== 'external-cron') {
+      params.logger?.log?.('[Background Workers] Entrega essencial de notificacoes habilitada no modo economy.', {
+        deploymentEnv, workerMode: mode, taskName: options.name,
+      });
+      return originalSchedule(expression, task, options);
+    }
     const stoppedTask = scheduler.createTask(expression, task, options);
     params.logger?.log?.('[Background Workers] Polling node-cron suprimido pelo modo economy.', {
       deploymentEnv,
@@ -82,7 +66,7 @@ export function installVertoBackgroundWorkerCronGuard(params: {
     return stoppedTask;
   }) as typeof scheduler.schedule;
   guardedSchedulers.add(scheduler);
-  params.logger?.log?.('[Background Workers] Modo economy ativo; schedulers node-cron permanecem parados.', {
+  params.logger?.log?.('[Background Workers] Modo economy ativo; polling generico pausado, entregas essenciais preservadas.', {
     deploymentEnv,
     workerMode: mode,
   });

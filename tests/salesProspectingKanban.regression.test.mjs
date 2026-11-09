@@ -4,6 +4,13 @@ import { test } from 'node:test';
 
 const sql = readFileSync('supabase/migrations/20261027143000_sales_prospecting_attempts_v1.sql', 'utf8');
 const routes = readFileSync('services/salesProspectingRoutes.ts', 'utf8');
+const creationRoutes = readFileSync('services/salesKanbanOpportunityCreationRoutes.ts', 'utf8');
+const creationInput = readFileSync('services/salesKanbanOpportunityCreationInput.ts', 'utf8');
+const creationTransport = readFileSync('src/services/salesKanbanOpportunityCreation.ts', 'utf8');
+const activityRoutes = readFileSync('services/salesProspectingActivityRoutes.ts', 'utf8');
+const activityInput = readFileSync('services/salesKanbanActivityInput.ts', 'utf8');
+const movementRoutes = readFileSync('services/salesKanbanMovementRoutes.ts', 'utf8');
+const activityTransport = readFileSync('src/services/salesKanbanActivity.ts', 'utf8');
 const kanban = readFileSync('src/components/CommercialKanban.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CommercialDashboard.tsx', 'utf8');
 const superAdmin = readFileSync('src/components/SuperAdminDashboard.tsx', 'utf8');
@@ -18,12 +25,12 @@ test('sales migration uses balanced PL/pgSQL bodies with a transactional wrapper
 
 test('sales attempts stay private behind server authority and MFA middleware', () => {
   assert.match(routes, /checkAuth, checkPlatformAdmin/);
-  assert.match(routes, /record_sales_prospecting_attempt_v1/);
+  assert.match(activityRoutes, /record_sales_prospecting_attempt_v1/);
   // Existing manual-loss route now requires a chosen reason and uses one atomic
   // server-side RPC; the older function remains only for legacy compatibility.
-  assert.match(routes, /mark_sales_lead_lost_with_reason_v1/);
-  assert.match(routes, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
-  assert.match(routes, /target\.data\?\.kind==='lost'/);
+  assert.match(activityRoutes, /mark_sales_lead_lost_with_reason_v1/);
+  assert.match(activityInput, /const reasonId = sanitizeString\(req\.body\?\.reasonId,120\)/);
+  assert.match(movementRoutes, /target\.data\?\.kind==='lost'/);
   assert.match(sql, /revoke all on public\.sales_prospecting_attempts from public, anon, authenticated;/);
   assert.match(sql, /grant execute on function public\.record_sales_prospecting_attempt_v1\([^;]+to service_role;/s);
   assert.doesNotMatch(sql, /to authenticated;/i);
@@ -45,8 +52,8 @@ test('each channel remains capped at five; manual loss stays protected', () => {
 
 
 test('clicking a prospecting button persists before updating UI and supports manual lost', () => {
-  assert.match(kanban, /\/prospecting-attempt-time/);
-  assert.match(kanban, /\/mark-lost/);
+  assert.match(activityTransport, /\/prospecting-attempt-time/);
+  assert.match(activityTransport, /\/mark-lost/);
   assert.match(kanban, /crypto\.randomUUID\(\)/);
   assert.match(kanban, /onLeadPatch\(lead\.id,\{status:json\.data\.status/);
   assert.match(kanban, /overflow-x-auto/);
@@ -105,7 +112,7 @@ test('full-width Kanban supports custom titles, colors, ordering, deletion, draw
   assert.match(kanban,/onDrop/);
   assert.match(kanban,/onOpenLead/);
   assert.match(kanban,/Carregar mais /);
-  assert.match(kanban,/\/kanban\/leads\//);
+  assert.match(activityTransport,/\/kanban\/leads\//);
   assert.match(routes,/salesGuard = \[checkAuth, checkPlatformAdmin\]/);
   assert.match(routes,/sales_kanban_columns/);
   assert.match(routes,/order_sales_kanban_columns_v1/);
@@ -127,7 +134,7 @@ test('DRE contains a separate, rich analytical dashboard with database aggregate
 });
 
 test('owner-only opportunity batch/CRUD uses server authority and atomic DB functions',()=>{
-  assert.match(routes,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities', \.\.\.salesGuard/);
+  assert.match(creationRoutes,/app\.post\('\/api\/owner\/sales\/kanban\/opportunities', \.\.\.salesGuard/);
   assert.match(routes,/app\.patch\('\/api\/owner\/sales\/kanban\/opportunities\/:leadId', \.\.\.salesGuard/);
   assert.match(routes,/app\.delete\('\/api\/owner\/sales\/kanban\/opportunities\/:leadId', \.\.\.salesGuard/);
   assert.match(crudSql,/public\.create_sales_kanban_opportunities_v1/);
@@ -173,7 +180,7 @@ test('business day guard enforces local weekday/office hours and one attempt per
   assert.match(guardSql,/time '17:30'/);
   assert.match(guardSql,/PROSPECTING_ALREADY_TODAY/);
   assert.match(guardSql,/PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
-  assert.match(routes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
+  assert.match(activityRoutes,/message.includes\('PROSPECTING_ALREADY_TODAY'\)/);
   assert.match(kanban,/nextSalesCadenceSlots/);
   assert.match(kanban,/setAttemptDialog/);
 });
@@ -222,8 +229,8 @@ test('conversation success uses explicitly saved Brazilian date/time instead of 
   assert.match(kanban,/Salvar alteração/);
   assert.match(kanban,/setAttempts\(old=>attempt/);
   assert.match(kanban,/onLeadPatch\(lead\.id,\{status:json\.data\.status/);
-  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/decisor-contact'/);
-  assert.match(routes,/save_sales_decisor_contact_v2/);
+  assert.match(activityRoutes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/decisor-contact'/);
+  assert.match(activityRoutes,/save_sales_decisor_contact_v2/);
 });
 
 test('conversation edit is locked, audited, idempotent and protected from manipulation',()=>{
@@ -245,8 +252,8 @@ test('return date/time is stored as owner CRM metadata without notifications',()
   assert.match(kanban,/Próximo retorno de contato/);
   assert.match(kanban,/Salvar retorno/);
   assert.match(kanban,/Cancelar retorno/);
-  assert.match(routes,/save_sales_contact_followup_v1/);
-  assert.match(routes,/eq\('actor_user_id',actorId\)/);
+  assert.match(activityRoutes,/save_sales_contact_followup_v1/);
+  assert.match(activityRoutes,/eq\('actor_user_id',actorId\)/);
   assert.match(contactSql,/unique\(lead_id,actor_user_id\)/);
   assert.match(contactSql,/sales_contact_followups enable row level security/);
   assert.match(contactSql,/followup_canceled/);
@@ -267,8 +274,8 @@ test('WhatsApp text has an explicit selectable channel and persists only through
   assert.match(kanban,/a.channel==='whatsapp_call'\?'Ligação WhatsApp':'Mensagem WhatsApp'/);
   assert.match(kanban,/Decisor por mensagem/);
   assert.match(kanban,/setAttempts\(old=>attempt/);
-  assert.match(routes,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
-  assert.match(routes,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
+  assert.match(activityInput,/!\['phone', 'whatsapp_call'\]\.includes\(channel\)/);
+  assert.match(activityInput,/!\['phone','whatsapp_call','whatsapp_message'\]\.includes\(channel\)/);
 });
 
 test('text contact never increments phone or WhatsApp call counters and preserves future follow-ups',()=>{
@@ -325,8 +332,8 @@ test('all call attempt buttons open the editable timestamp dialog and only Save 
 test('historical failed calls can be corrected, not re-counted or reclassified',()=>{
   assert.match(kanban,/attemptId:a\.id,localAt:brazilLocalInput\(a\.occurred_at\)/);
   assert.match(kanban,/setAttempts\(old=>draft\.attemptId/);
-  assert.match(routes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
-  assert.match(routes,/save_sales_prospecting_attempt_time_v2/);
+  assert.match(activityRoutes,/app\.put\('\/api\/owner\/sales\/leads\/:leadId\/prospecting-attempt-time'/);
+  assert.match(activityRoutes,/save_sales_prospecting_attempt_time_v2/);
   assert.match(attemptTimeSql,/outcome='no_decisor' for update/);
   assert.match(attemptTimeSql,/update public\.sales_prospecting_attempts set occurred_at=p_occurred_at/);
   assert.match(attemptTimeSql,/attempt_time_corrected/);
@@ -376,8 +383,8 @@ test('only Save attributes a script and decision-maker interest; edits preserve 
   assert.match(kanban,/Demonstrou interesse/);
   assert.match(kanban,/Não demonstrou interesse/);
   assert.match(kanban,/scriptLabel\(a\.script_version_id\)/);
-  assert.match(routes,/save_sales_prospecting_attempt_time_v2/);
-  assert.match(routes,/save_sales_decisor_contact_v2/);
+  assert.match(activityRoutes,/save_sales_prospecting_attempt_time_v2/);
+  assert.match(activityRoutes,/save_sales_decisor_contact_v2/);
   assert.match(scriptsSql,/SCRIPT_ATTRIBUTION_IMMUTABLE/);
   assert.match(scriptsSql,/script_version_id uuid references public\.sales_script_versions\(id\)/);
   assert.match(compatSql,/new\.contact_result:='no_answer'/);
@@ -399,6 +406,7 @@ test('script comparisons separate contactability and interested decisions withou
 const acquisitionSql=readFileSync('supabase/migrations/20261028233000_sales_acquisition_multiselect_v1.sql','utf8');
 const acquisitionApi=readFileSync('services/salesAcquisitionRoutes.ts','utf8');
 const acquisitionPanel=readFileSync('src/components/CommercialAcquisitionPanel.tsx','utf8');
+const acquisitionTransport=readFileSync('src/services/salesKanbanAcquisition.ts','utf8');
 test('global acquisition catalog seeds event, paid traffic and referral with owner-only isolation',()=>{
   assert.match(acquisitionSql,/values\('Evento'\),\('Tráfego pago'\),\('Indicação'\)/);
   assert.match(acquisitionSql,/sales_acquisition_channels_name_uidx/);
@@ -417,7 +425,8 @@ test('every card supports acquisition multiselect without F5 and serialized Save
   assert.match(kanban,/type="checkbox" checked=\{checked\}/);
   assert.match(kanban,/Salvar canais/);
   assert.match(kanban,/setAcquisitionByLead\(old=>/);
-  assert.match(kanban,/acquisition\/board\?leadIds=/);
+  assert.match(kanban,/loadSalesKanbanAcquisitionBoard\(request,q\)/);
+  assert.match(acquisitionTransport,/\/api\/owner\/sales\/acquisition\/board/);
   assert.match(acquisitionApi,/save_sales_lead_acquisition_channels_v1/);
   assert.match(acquisitionSql,/where id=p_lead_id and deleted_at is null for update/);
   assert.match(acquisitionSql,/acquisition_channels_saved/);
@@ -610,7 +619,8 @@ test('commercial drilldown enforces owner MFA, window bounds, paging and SQL exe
 test('optional script/channel failures cannot blank the canonical Kanban or overwrite saved origins',()=>{
   assert.match(kanban,/const scriptsPromise=request\('\/api\/owner\/sales\/scripts\/active'\)/);
   assert.match(kanban,/\.catch\(\(\)=>\(\{data:\{versions:\[\]\},failed:true\}\)\)/);
-  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/board\?leadIds='\+q\)/);
+  assert.match(kanban,/loadSalesKanbanAcquisitionBoard\(request,q\)/);
+  assert.match(acquisitionTransport,/\?leadIds=/);
   assert.match(kanban,/\.catch\(\(\)=>\(\{data:\{channels:\[\],links:\[\]\},failed:true\}\)\)/);
   assert.match(kanban,/const \[board,history,acquisitionResult\] = await Promise\.all/);
   assert.match(kanban,/setAcquisitionCatalogUnavailable\(pages\.some\(page=>page\.acquisitionFailed\)\)/);
@@ -715,11 +725,11 @@ test('call/save UI now labels cadence as advisory and reports only real remainin
   assert.match(kanban,/A cadência é apenas sugestão/);
   assert.match(kanban,/Horários sugeridos não bloqueiam registros reais/);
   assert.doesNotMatch(kanban,/É permitida uma ligação por dia/);
-  assert.match(routes,/Oportunidade removida ou com preferência explícita de não receber contatos/);
-  assert.match(routes,/Esta tentativa já foi salva com outros dados/);
-  assert.match(routes,/Este contato já foi salvo com outros dados/);
-  const attemptRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"));
-  const contactRoute=routes.slice(routes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"),routes.indexOf("app.put('/api/owner/sales/leads/:leadId/followup'"));
+  assert.match(activityRoutes,/Oportunidade removida ou com preferência explícita de não receber contatos/);
+  assert.match(activityRoutes,/Esta tentativa já foi salva com outros dados/);
+  assert.match(activityRoutes,/Este contato já foi salvo com outros dados/);
+  const attemptRoute=activityRoutes.slice(activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/prospecting-attempt-time'"),activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"));
+  const contactRoute=activityRoutes.slice(activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/decisor-contact'"),activityRoutes.indexOf("app.put('/api/owner/sales/leads/:leadId/followup'"));
   assert.doesNotMatch(attemptRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
   assert.doesNotMatch(contactRoute,/PROSPECTING_ALREADY_TODAY|CHANNEL_ATTEMPT_LIMIT|PROSPECTING_OUTSIDE_BUSINESS_HOURS/);
 });
@@ -735,10 +745,12 @@ test('bulk lead import preselects any subset and assigns different active acquis
   assert.match(kanban,/Aplicar canais aos \{bulkSelectedRows\.length\} selecionados/);
   assert.match(kanban,/Editar canais deste contato/);
   assert.match(kanban,/phones\.map\(\(_,index\)=>bulkChannelsByRow\[index\]\|\|\[\]\)/);
-  assert.match(kanban,/body:JSON\.stringify\(\{phones,channelsByPhone\}\)/);
+  // Existing phone-only callers retain the same exact two-field request body;
+  // the new manual form can opt into per-phone identification atomically.
+  assert.match(creationTransport,/detailsByPhone \? \{phones,channelsByPhone,detailsByPhone\} : \{phones,channelsByPhone\}/);
   assert.match(kanban,/for\(const item of json\.leads\|\|\[\]\)next\[item\.id\]=item\.channelIds\|\|\[\]/);
-  assert.match(routes,/create_sales_kanban_opportunities_v2/);
-  assert.match(routes,/channelsByPhone\.length!==phones\.length/);
+  assert.match(creationRoutes,/create_sales_kanban_opportunities_v2/);
+  assert.match(creationInput,/channelsByPhone\.length!==phones\.length/);
   assert.match(bulkCreationSql,/create_sales_kanban_opportunities_v1\(p_phones,p_actor_id,p_action_key\)/);
   assert.match(bulkCreationSql,/sales_lead_acquisition_channels\(lead_id,channel_id,assigned_by\)/);
   assert.match(bulkCreationSql,/IDEMPOTENCY_CONFLICT/);
@@ -751,7 +763,8 @@ test('existing cards can be chosen in a group with add-preserving or explicit re
   assert.match(kanban,/Selecionar até 100 visíveis/);
   assert.match(kanban,/Substituir os canais atuais \(em vez de adicionar\)/);
   assert.match(kanban,/\[\.\.\.new Set\(\[\.\.\.\(acquisitionByLead\[leadId\]\|\|\[\]\),\.\.\.bulkExistingChannels\]\)\]/);
-  assert.match(kanban,/request\('\/api\/owner\/sales\/acquisition\/leads\/bulk'/);
+  assert.match(kanban,/persistSalesKanbanAcquisitionBulk\(request,key,selections\)/);
+  assert.match(acquisitionTransport,/\/api\/owner\/sales\/acquisition\/leads\/bulk/);
   assert.match(kanban,/for\(const item of result\.selections\|\|\[\]\)next\[item\.leadId\]=item\.channelIds\|\|\[\]/);
   assert.match(acquisitionRoutes,/app\.put\('\/api\/owner\/sales\/acquisition\/leads\/bulk',\.\.\.guard/);
   assert.match(bulkExistingSql,/save_sales_lead_acquisition_channels_v1\(/);

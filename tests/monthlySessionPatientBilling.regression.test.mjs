@@ -70,7 +70,7 @@ assert.match(migration, /plan\.valid_from<=v_effective_at/);
 assert.match(migration, /v_effective_at<plan\.valid_until/);
 assert.match(migration, /patient_financial_plan_version[\s\S]{0,700}v_plan\.version/);
 assert.match(migration, /payment_appointment_items where patient_financial_plan_id = \$1/);
-assert.match(server, /reconcile_patient_financial_plans_v2/);
+assert.match(server, /reconcile_patient_financial_plans_v3/);
 assert.match(etapa1, /reconcile_patient_financial_plans_v1/); // Etapa 1 migration remains preserved.
 
 // Reversal updates only an open group; financially touched/paid groups are immutable and flagged.

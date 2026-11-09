@@ -25,7 +25,8 @@
       "publicSalesLeadIpLimiter",
       "publicSalesLeadIdentityLimiter"
     ],
-    "sha256": "09d1f187afc3d4f9d76e4cac03ca75fc8586f27e54885054377f46d038911364"
+    "sha256": "f13a014b907faba564b1f9f3c1609705a792983e3c3b63a9b0d13af3fc2d810d",
+    "stagingFunctionalChange": true
   },
   {
     "method": "get",
@@ -637,7 +638,8 @@
       "requireScopedTherapeuticPlanCapability('create')",
       "checkPatientAccess"
     ],
-    "sha256": "486cdae72c1f590b719ac2f450eed65fe53ac8373095edd40528b1efa2dc33e7"
+    "sha256": "c13a687dd1818403a9f54b40e095ac6505c6d585f8a11a8ef78d0c70ef9dd883",
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -648,7 +650,8 @@
       "requireScopedTherapeuticPlanCapability('edit')",
       "checkPatientAccess"
     ],
-    "sha256": "be93423a9a7e5cb7fbd986b79d4eae1e9279242808729cb8d016ffe97b43942a"
+    "sha256": "ef2abf8ef4b83952456acfcd98aa4cb1e6243f0e5d9635dd9922cd4477981464",
+    "stagingFunctionalChange": true
   },
   {
     "method": "post",
@@ -715,7 +718,8 @@
       "requireAnyClinicCapability('aba.program.create', 'treatment_plan.create')",
       "checkPatientAccess"
     ],
-    "sha256": "009dde21e8fff954ce6b7b86779ebd3c2d190bc8120925fb90ff276df4345cc7"
+    "sha256": "c5b3832d6afe23a1b53313d35a55bae28ba91b4c9423a8a6deffb4cbe67f17eb",
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",
@@ -727,7 +731,8 @@
       "requireAnyClinicCapability('aba.program.edit', 'treatment_plan.create')",
       "checkPatientAccess"
     ],
-    "sha256": "2c4c5d8f8e0b3e4f28b8033629fe108c295e314e70a14336e2e961317c96d803"
+    "sha256": "b7cab9298e9b092d50b7be22a240110ebf74349fee1ef6563cb691d9c8eabc2f",
+    "stagingFunctionalChange": true
   },
   {
     "method": "patch",

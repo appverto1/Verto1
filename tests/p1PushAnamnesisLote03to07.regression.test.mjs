@@ -8,6 +8,7 @@ const sw=source('public/sw.js');
 const push=source('services/pushNotificationService.ts');
 const cron=source('services/cronService.ts');
 const announcements=source('services/clinicAnnouncementCronService.ts');
+const announcementDelivery=source('services/clinicAnnouncementDelivery.ts');
 const server=source('server.ts');
 
 // P1 3: browser permission is authoritative, not a locally stored subscription.
@@ -53,7 +54,8 @@ assert.match(cron,/rpc\('mark_sent_appointment_notification_jobs_v1'/);
 assert.match(cron,/buildPortalReminderIdempotencyKey/);
 assert.match(cron,/reminderScheduleCycleKey/);
 assert.match(announcements,/claim_due_clinic_announcements_v1/);
-assert.match(announcements,/materialize_clinic_announcement_portal_notifications_v1/);
+assert.match(announcements,/createClinicAnnouncementDeliveryService/);
+assert.match(announcementDelivery,/materialize_clinic_announcement_portal_notifications_v1/);
 assert.match(portal,/const dedupePortalNotifications/);
 assert.match(portal,/markPortalNotificationRead/);
 assert.match(portal,/navigator\.serviceWorker\?\.addEventListener\?\.\('message', refreshFromPush/);

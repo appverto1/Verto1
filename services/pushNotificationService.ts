@@ -1,5 +1,13 @@
 import crypto from 'crypto';
+import {
+  sanitizeText,
+  normalizePushSubscription,
+  type PushSubscriptionInput,
+  type NormalizedPushSubscription,
+} from './pushSubscriptionNormalization';
+export { normalizePushSubscription };
 import webpush from 'web-push';
+import { reminderPushOptions, clinicAnnouncementPushOptions } from './patientPushDeliveryPolicy';
 import {
   buildPatientReminderNotificationPayload,
   resolveBrandingContext,
@@ -8,22 +16,6 @@ import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
 import { matchesVertoDeploymentEnvironment, normalizeVertoDeploymentEnvironment, type VertoDeploymentEnvironment } from './deploymentEnvironment';
 
 type Logger = Pick<Console, 'log' | 'warn' | 'error'>;
-
-type PushSubscriptionInput = {
-  endpoint?: string;
-  keys?: {
-    p256dh?: string;
-    auth?: string;
-  };
-};
-
-type NormalizedPushSubscription = {
-  endpoint: string;
-  keys: {
-    p256dh: string;
-    auth: string;
-  };
-};
 
 export type AppointmentPushSubscriptionEntry = {
   row: any;
@@ -94,14 +86,12 @@ type SendAppointmentNotificationParams = {
   title?: string;
   body?: string;
   reminderKind?: string;
+  scheduledFor?: string | null;
   preloadedSubscriptions?: AppointmentPushSubscriptionEntry[];
   logger?: Logger;
 };
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const sanitizeText = (value: unknown, maxLength = 240) =>
-  String(value ?? '').trim().slice(0, maxLength);
 
 const sanitizeBrandLogoText = (value: unknown) => {
   const text = String(value ?? '').trim();
@@ -179,34 +169,6 @@ const hashPushRenewalToken = (value: unknown) => {
 };
 
 const createPushRenewalToken = () => crypto.randomBytes(32).toString('base64url');
-
-const safeJsonSubscription = (value: any): PushSubscriptionInput | null => {
-  if (!value) return null;
-  if (typeof value === 'string') {
-    try {
-      return JSON.parse(value);
-    } catch {
-      return null;
-    }
-  }
-  if (typeof value === 'object') return value;
-  return null;
-};
-
-export const normalizePushSubscription = (rowOrSubscription: any): NormalizedPushSubscription | null => {
-  if (rowOrSubscription?.invalidated_at) return null;
-  const direct = safeJsonSubscription(rowOrSubscription);
-  const embedded = safeJsonSubscription(rowOrSubscription?.subscription);
-  const source = embedded || direct || {};
-  const endpoint = sanitizeText(source?.endpoint || rowOrSubscription?.endpoint, 2000);
-  const p256dh = sanitizeText(source?.keys?.p256dh || rowOrSubscription?.p256dh, 2000);
-  const auth = sanitizeText(source?.keys?.auth || rowOrSubscription?.auth, 2000);
-  if (!endpoint || !p256dh || !auth) return null;
-  return {
-    endpoint,
-    keys: { p256dh, auth }
-  };
-};
 
 export async function resolvePatientIdsForPush(params: ResolvePatientIdsParams): Promise<string[]> {
   const ids = new Set<string>();
@@ -587,7 +549,7 @@ export async function deleteInvalidPushSubscription(params: {
   const invalidatedAt = new Date().toISOString();
   const mark = await params.supabase
     .from('push_subscriptions')
-    .update({ invalidated_at: invalidatedAt, p256dh: null, auth: null, subscription: null, updated_at: invalidatedAt })
+    .update({ invalidated_at: invalidatedAt, updated_at: invalidatedAt })
     .eq('endpoint', endpoint)
     .eq('deployment_env', deploymentEnv);
   if (!mark.error) return;
@@ -712,6 +674,7 @@ export async function findPushSubscriptionsForPatient(params: {
       .from('push_subscriptions')
       .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env')
       .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
       .in(column, values)
       .limit(500);
     if (error) {
@@ -735,6 +698,7 @@ export async function findPushSubscriptionsForPatient(params: {
       .from('push_subscriptions')
       .select('endpoint, p256dh, auth, subscription, patient_id, user_id, user_email, clinic_id, deployment_env')
       .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
       .ilike('user_email', patientEmail)
       .limit(100);
     if (error) {
@@ -828,6 +792,7 @@ export async function findPushSubscriptionsForRecipients(params: {
           .from('push_subscriptions')
           .select(selectColumns)
           .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
           .in(column, chunk)
           .order('endpoint', { ascending: true })
           .range(from, from + 499);
@@ -862,6 +827,7 @@ export async function findPushSubscriptionsForRecipients(params: {
           .from('push_subscriptions')
           .select(selectColumns)
           .eq('deployment_env', deploymentEnv)
+      .is('invalidated_at', null)
           .or(filters)
           .order('endpoint', { ascending: true })
           .range(from, from + 499);
@@ -1011,7 +977,16 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
   });
   let sent = 0; let failed = 0; const invalidEndpoints = new Set<string>();
   for (const entry of rows) {
-    try { await webpush.sendNotification(entry.subscription, payload); sent += 1; }
+    try {
+      // Avisos são comunicação direta da clínica: prioridade alta e TTL limitado.
+      // A confirmação HTTP do provedor NÃO prova exibição no aparelho.
+      await webpush.sendNotification(entry.subscription, payload, {
+        ...(params.data?.notificationType === 'clinic_announcement'
+          ? clinicAnnouncementPushOptions
+          : { TTL: 24 * 60 * 60, urgency: 'high' as const }),
+      });
+      sent += 1;
+    }
     catch (error: any) { failed += 1; logger.warn('[Push] Falha ao enviar aviso da clínica.', { patientId: isUuid(patientId) ? patientId : null, clinicId: isUuid(clinicId) ? clinicId : null, endpoint: entry.subscription.endpoint.slice(0,80), statusCode: error?.statusCode ?? error?.status ?? null, message: error?.message || String(error) }); if (isGonePushError(error)) invalidEndpoints.add(entry.subscription.endpoint); }
   }
   if (invalidEndpoints.size > 0) {
@@ -1117,6 +1092,8 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
     data: {
       ...(notificationPayload.data || {}),
       deploymentEnv,
+      notificationType: 'appointment_reminder',
+      ...(params.scheduledFor ? { scheduledFor: params.scheduledFor } : {}),
     },
   });
 
@@ -1126,7 +1103,9 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
 
   for (const entry of rows) {
     try {
-      await webpush.sendNotification(entry.subscription, payload);
+      // Short TTL + high urgency: delayed mobile devices should not display
+      // a time-sensitive appointment reminder hours after its due time.
+      await webpush.sendNotification(entry.subscription, payload, reminderPushOptions);
       sent += 1;
     } catch (error: any) {
       failed += 1;

@@ -23,6 +23,6 @@ for (const expected of baseline) {
   assert.ok(ts.isArrowFunction(handler) && ts.isBlock(handler.body), `module handler: ${expected.path}`);
   const body = printer.printNode(ts.EmitHint.Unspecified, handler.body, source);
   const emitted = ts.transpileModule(`async function handler(req,res) ${body}`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, removeComments: true } }).outputText;
-  assert.equal(createHash('sha256').update(emitted).digest('hex'), expected.sha256, `production behavior: ${expected.path}`);
+  assert.equal(createHash('sha256').update(emitted).digest('hex'), expected.sha256, `reviewed behavior: ${expected.path}`);
 }
-console.log(`Production route parity: ${baseline.length} extracted routes, middleware and emitted handler bodies match production`);
+console.log(`Reviewed route baseline: ${baseline.length} extracted routes, middleware and emitted handler bodies match`);

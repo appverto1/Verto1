@@ -13,7 +13,8 @@ import {
   resolveBrandingContext,
 } from '../src/services/notificationBranding';
 import { resolvePortalPatientDisplayName } from '../src/utils/patientDisplayName';
-import { isVertoInstitutionalAsset } from '../src/constants/vertoBranding';
+import { sanitizeText, sanitizeEmail, isUuid, isGenericClinicNotificationName, sanitizeClinicNotificationLogoUrl, extractReminderMissingColumnName, extractReminderClinicLogoStoragePath, isActiveAppointmentStatus } from './reminderValueNormalization';
+export { extractReminderMissingColumnName, extractReminderClinicLogoStoragePath, isActiveAppointmentStatus } from './reminderValueNormalization';
 import {
   releaseDistributedJobLease,
   tryAcquireDistributedJobLease
@@ -23,6 +24,7 @@ import { createClinicAnnouncementCronService } from './clinicAnnouncementCronSer
 import { dispatchDueDeliveryQueues } from './deliveryQueueBatch';
 import { createAppointmentReminderBrandingService } from './appointmentReminderBranding';
 import { validateClaimedAppointmentReminder } from './appointmentReminderJobGuards';
+import { parseReminderSourcePayload } from './reminderSourcePayload';
 export type { ClinicAnnouncementDispatchSummary } from './clinicAnnouncementCronService';
 
 dayjs.extend(utc);
@@ -105,102 +107,10 @@ const REMINDER_STEPS = [
   }
 ];
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 let started = false;
 let running = false;
 let activeOptions: ActiveCronServiceOptions | null = null;
 const recentlySentReminders = new Map<string, number>();
-
-const sanitizeText = (value: unknown, maxLength = 240) =>
-  String(value ?? '').trim().slice(0, maxLength);
-
-const sanitizeEmail = (value: unknown) => {
-  const email = sanitizeText(value, 320).toLowerCase();
-  return email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : '';
-};
-
-const parseReminderSourcePayload = (value: unknown): Record<string, any> => {
-  if (!value) return {};
-  if (typeof value === 'object') return value as Record<string, any>;
-  if (typeof value !== 'string') return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  } catch {
-    return {};
-  }
-};
-
-const isUuid = (value: unknown) => UUID_REGEX.test(sanitizeText(value, 120));
-
-export const extractReminderMissingColumnName = (error: unknown) => {
-  const message = sanitizeText((error as any)?.message || error, 1000);
-  if (!message) return '';
-  const direct = message.match(/column\s+"?([a-zA-Z0-9_]+)"?\s+does not exist/i);
-  if (direct?.[1]) return direct[1].toLowerCase();
-  const qualified = message.match(/column\s+[a-zA-Z0-9_]+\."?([a-zA-Z0-9_]+)"?\s+does not exist/i);
-  if (qualified?.[1]) return qualified[1].toLowerCase();
-  const schemaCache = message.match(/could\s+not\s+find\s+the\s+'?([a-zA-Z0-9_]+)'?\s+column/i);
-  return schemaCache?.[1]?.toLowerCase() || '';
-};
-
-export const extractReminderClinicLogoStoragePath = (value: unknown) => {
-  const raw = String(value ?? '').trim();
-  if (!raw) return '';
-  if (raw.startsWith('patient-photos/')) return raw.slice('patient-photos/'.length);
-  if (raw.startsWith('/api/storage/patient-photos/view?')) {
-    try {
-      return new URLSearchParams(raw.slice(raw.indexOf('?') + 1)).get('path') || '';
-    } catch {
-      return '';
-    }
-  }
-  const storageMatch = raw.match(/\/storage\/v1\/object\/(?:sign|public)\/patient-photos\/([^?]+)/i);
-  if (!storageMatch?.[1]) return '';
-  try {
-    return decodeURIComponent(storageMatch[1]);
-  } catch {
-    return storageMatch[1];
-  }
-};
-
-const isGenericClinicNotificationName = (value: unknown) => {
-  const normalized = sanitizeText(value, 160)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
-  return !normalized || ['sua clinica', 'minha clinica', 'clinica', 'clinica verto', 'verto'].includes(normalized);
-};
-
-const sanitizeClinicNotificationLogoUrl = (value: unknown) => {
-  const raw = String(value ?? '').trim();
-  if (!raw) return '';
-  const text = /^data:image\//i.test(raw) ? raw.slice(0, 1_000_000) : raw.slice(0, 2_000);
-  if (!text) return '';
-  if (isVertoInstitutionalAsset(text)) return '';
-  if (/^data:image\/(png|jpe?g|webp);base64,[a-z0-9+/=\s]+$/i.test(text)) return text;
-  if (/^https?:\/\//i.test(text) || (text.startsWith('/') && !text.startsWith('//'))) return text;
-  if (text.startsWith('patient-photos/') || /^[\w./-]+\.(png|jpe?g|webp)$/i.test(text)) {
-    return `/api/storage/patient-photos/view?path=${encodeURIComponent(text)}`;
-  }
-  return '';
-};
-
-export const isActiveAppointmentStatus = (status: unknown) => {
-  const normalized = sanitizeText(status || 'scheduled', 40).toLowerCase();
-  return ![
-    'cancelled',
-    'canceled',
-    'completed',
-    'rescheduled',
-    'reschedule',
-    'deleted',
-    'inactive'
-  ].includes(normalized);
-};
 
 const hasResponse = (appointment: ReminderAppointment) => {
   const patientResponse = sanitizeText(appointment.patientResponse, 40).toLowerCase();
@@ -1627,6 +1537,7 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
             appointment: { id: entry.appointment.id, scheduledAt: entry.appointment.scheduled_at, reminderKind: entry.kind, clinicId: entry.clinicId, clinicName: entry.clinicName, clinicLogoUrl: entry.clinicLogoUrl, patientName: resolvePortalPatientDisplayName(entry.patient), canRequestReschedule: true },
             clinicId: entry.clinicId,
             reminderKind: entry.kind,
+            scheduledFor: entry.job.scheduled_for,
             preloadedSubscriptions: preloaded,
             logger: options.logger,
           }) : { sent: 0, failed: 0, subscriptions: 0 };
@@ -1648,6 +1559,24 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
         return { entry, push: { sent: 0, failed: 1 }, ok: false, error: error?.message || String(error) };
       }
     }));
+    // "SENT" below means the reminder was saved to the patient portal;
+    // it is NOT an Android delivery receipt. Log aggregate provider outcomes
+    // to diagnose missing pushes without exposing patient identifiers.
+    const providerStats = chunkResults.reduce((totals, result) => {
+      if (!result.entry.appointment) return totals;
+      totals.reminders += 1;
+      totals.subscriptions += Number(result.push?.subscriptions || 0);
+      totals.accepted += Number(result.push?.sent || 0);
+      totals.failed += Number(result.push?.failed || 0);
+      if (!result.push?.subscriptions) totals.withoutSubscription += 1;
+      return totals;
+    }, { reminders: 0, subscriptions: 0, accepted: 0, failed: 0, withoutSubscription: 0 });
+    if (providerStats.reminders) {
+      options.logger.log('[Notification Jobs] Push: respostas do provedor, não recibos do Android.', {
+        deploymentEnv: options.deploymentEnv,
+        ...providerStats,
+      });
+    }
     for (const result of chunkResults) {
       if (result.ok) {
         finalResults.push({ id: result.entry.job.id, outcome: 'SENT' });
@@ -1684,12 +1613,13 @@ async function runNotificationJobQueue(options: ActiveCronServiceOptions, trigge
   return { skipped: false, totalCandidates: jobs.length, sent24h, sent12h, failed };
 }
 
-async function runUnifiedDeliveryQueueScan(trigger: string) {
-  const options = activeOptions;
-  if (!options) return;
-  // Claim subsequent due items even during a prior send; database locks and
-  // claimed status avoid duplicate jobs without delaying 24h/12h reminders.
-  await dispatchDueDeliveryQueues({
+async function runUnifiedDeliveryQueueScan(trigger: string, overrideOptions?: ActiveCronServiceOptions) {
+  const options = overrideOptions || activeOptions;
+  if (!options) return { skipped: true, failed: false };
+  // Continue claiming once per minute even if an earlier batch is still being
+  // delivered. PostgreSQL's SKIP LOCKED/CLAIMED state prevents duplicate claims;
+  // pausing the next claim would unnecessarily delay new 24h/12h reminders.
+  return await dispatchDueDeliveryQueues({
     supabase: options.supabase,
     deploymentEnv: options.deploymentEnv,
     workerId: options.runtimeOwnerId,
@@ -1698,6 +1628,32 @@ async function runUnifiedDeliveryQueueScan(trigger: string) {
     processNotificationJobs: (rows) => runNotificationJobQueue(options, trigger, rows),
     processClinicAnnouncements: (rows) => clinicAnnouncementService.runClinicAnnouncementDispatchScan(trigger, rows),
   });
+}
+
+/**
+ * Single-run durable queue drain for Railway Cron in staging.
+ * No timer, HTTP listener or global scan is started. Production is explicitly forbidden.
+ * Reuses the same transactional claim and idempotent delivery logic as the web server.
+ */
+export async function runStagingNotificationQueuesOnce(options: CronServiceOptions) {
+  const deploymentEnv = normalizeVertoDeploymentEnvironment(options.deploymentEnv);
+  if (deploymentEnv !== 'staging') {
+    throw new Error('STAGING_NOTIFICATION_CRON_PRODUCTION_FORBIDDEN');
+  }
+  if (!options.supabase) {
+    throw new Error('STAGING_NOTIFICATION_CRON_SUPABASE_REQUIRED');
+  }
+  const workerOptions: ActiveCronServiceOptions = {
+    supabase: options.supabase,
+    deploymentEnv,
+    vapidPublicKey: options.vapidPublicKey || null,
+    vapidPrivateKey: options.vapidPrivateKey || null,
+    logger: options.logger || console,
+    runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
+    requireDistributedLease: false,
+  };
+  clinicAnnouncementService.startClinicAnnouncementCron(workerOptions);
+  return runUnifiedDeliveryQueueScan('railway_staging_notification_cron', workerOptions);
 }
 
 export function triggerAppointmentReminderScan(_trigger = 'manual_trigger') {
@@ -1736,7 +1692,7 @@ export function startAppointmentReminderCron(options: CronServiceOptions) {
     runtimeOwnerId: sanitizeText(options.runtimeOwnerId || crypto.randomUUID(), 200),
     requireDistributedLease: false,
   };
-  cron.schedule('* * * * *', () => { void runUnifiedDeliveryQueueScan('notification_jobs_cron_1_minute'); }, { timezone: 'UTC' });
+  cron.schedule('* * * * *', () => { void runUnifiedDeliveryQueueScan('notification_jobs_cron_1_minute'); }, { timezone: 'UTC', name: 'verto-notification-jobs' });
   setTimeout(() => { void runUnifiedDeliveryQueueScan('notification_jobs_startup'); }, 5 * 1000);
   logger.log('[Notification Jobs] Filas de lembretes e avisos iniciadas com claim único.', { timezone: 'UTC', businessTimezone: BRAZIL_TIMEZONE, deploymentEnv, pushEnabled: Boolean(options.vapidPublicKey && options.vapidPrivateKey) });
 }

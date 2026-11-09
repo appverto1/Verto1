@@ -32,6 +32,7 @@ import {
 import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
+  resolvePatientProfileTypeForCategory,
   resolvePatientPortalKind,
 } from './utils/patientProfileType';
 import { normalizePatientInsuranceEligibility } from './utils/patientInsuranceEligibility';
@@ -1006,6 +1007,13 @@ export default function App() {
   const buildPatientAnamnesisSnapshot = (patientLike: any, baseAnamnesisData?: any) => {
     const source = patientLike || {};
     const existing = baseAnamnesisData && typeof baseAnamnesisData === 'object' ? baseAnamnesisData : {};
+    // Prefer an explicit patient registration category over an older anamnesis snapshot.
+    const canonicalCategory = coalescePatientText(source?.grupo, source?.patient_group, source?.group, existing?.grupo);
+    const canonicalProfile = resolvePatientProfileTypeForCategory(
+      canonicalCategory,
+      source?.patientProfileType || source?.patient_profile_type || source?.panelType || source?.panel_type ||
+        source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType || existing?.panelType,
+    );
     const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const metadata = asObject(source?.metadata);
     const address = {
@@ -1108,7 +1116,7 @@ export default function App() {
           : existing?.monthlyTreatmentValue || 0,
       billingDueDay: coalescePatientText(source?.billingDueDay, existing?.billingDueDay),
       billingMethod: coalescePatientText(source?.billingMethod, existing?.billingMethod),
-      grupo: coalescePatientText(source?.grupo, source?.group, existing?.grupo),
+      grupo: canonicalCategory,
       comoConheceu: coalescePatientText(source?.comoConheceu, source?.source, existing?.comoConheceu),
       rg: coalescePatientText(source?.rg, existing?.rg),
       cep: coalescePatientText(source?.cep, existing?.cep),
@@ -8823,6 +8831,12 @@ export default function App() {
             onAddActivityLog={onAddActivityLog}
             onScheduleSession={handleScheduleSession}
             onUpdateAppointment={handleUpdateAppointment}
+            onGroupAppointmentsResolved={(result: any) => {
+              if(result?.sectionVersions && typeof result.sectionVersions === 'object') {
+                clinicStateSectionVersionsRef.current={...clinicStateSectionVersionsRef.current,...result.sectionVersions};
+              }
+              return applyAppointmentResultToAgenda(result,{action:result.action,items:result.items},nextAppointmentActionSequence());
+            }}
             onAppointmentActionResolved={(appointment: any) => {
               const actionSequence = nextAppointmentActionSequence();
               return applyAppointmentResultToAgenda(

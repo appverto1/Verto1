@@ -7,7 +7,7 @@ const migration = fs.readFileSync('supabase/migrations/20260904173500_patient_fi
 const privateEngine = fs.readFileSync('supabase/migrations/20260812022000_private_finance_membership_authority_v2.sql', 'utf8');
 
 // P0: no destructive delete-all/insert-all in the server persistence path.
-assert.match(server, /supabase\.rpc\('reconcile_patient_financial_plans_v2'/);
+assert.match(server, /supabase\.rpc\('reconcile_patient_financial_plans_v3'/);
 assert.doesNotMatch(server, /from\('patient_financial_plans'\)[\s\S]{0,120}\.delete\(\)[\s\S]{0,160}\.eq\('patient_id', params\.patientId\)/);
 
 // Versioning foundation and historical protection.

@@ -1,0 +1,1 @@
+These are the original staging migration sources used to review and test the production promotion bundles. They are not in the migrations directory and must not be applied independently in production. The promotion migrations contain the sources in dependency order and have their own production history entries.

@@ -181,7 +181,7 @@ const fakeSupabase = {
     };
   },
   async rpc(name, args) {
-    assert.equal(name, 'reconcile_patient_financial_plans_v2');
+    assert.equal(name, 'reconcile_patient_financial_plans_v3');
     capturedRpc = args;
     return { data: { success: true, data: args.p_plans }, error: null };
   },
@@ -190,6 +190,7 @@ const persistStart = server.indexOf('async function persistPatientFinancialPlans
 const persistEnd = server.indexOf('async function updatePatientStatusIfNeeded', persistStart);
 const persistContext = {
   isUuid,
+  validateActiveClinicFinancialPlanSpecialties: async () => ({ ok: true }),
   loadCanonicalActivePatientFinancialPlansForTissPreservation: async () => canonicalForMock,
   hydrateOmittedPatientFinancialPlanTissFieldsForPersistence: hydrateTiss,
   buildPatientFinancialPlanRows: buildRows,

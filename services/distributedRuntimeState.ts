@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { sha256, asDate } from './distributedRuntimePrimitives';
 import { resolveVertoBackgroundWorkerMode } from './backgroundWorkerMode';
 
 type SupabaseLike = {
@@ -17,14 +18,6 @@ const ECONOMY_SUPPRESSED_AUTOMATIC_JOB_LEASES = new Set([
   'active-patient-retry-drain',
   'active-patient-daily-reconciliation',
 ]);
-
-const sha256 = (value: unknown) =>
-  crypto.createHash('sha256').update(String(value ?? ''), 'utf8').digest('hex');
-
-const asDate = (value: unknown, fallbackMs: number) => {
-  const parsed = new Date(String(value || ''));
-  return Number.isFinite(parsed.getTime()) ? parsed : new Date(Date.now() + fallbackMs);
-};
 
 export function shouldSuppressDistributedJobLeaseForEconomy(
   jobKey: unknown,

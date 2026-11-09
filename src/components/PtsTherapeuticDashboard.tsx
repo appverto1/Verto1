@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   CalendarClock,
+  ChevronLeft,
   ChevronDown,
   ChevronUp,
   ClipboardList,
@@ -275,6 +276,11 @@ export function PtsTherapeuticDashboard({
       <header className={`rounded-3xl border p-5 sm:p-6 ${surface}`}>
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
+            {canManagePlans && (
+              <button type="button" className={`${neutralButton} mb-3 inline-flex items-center gap-2`} onClick={onManagePlans} data-testid="pts-back-to-plans">
+                <ChevronLeft size={16} aria-hidden="true" /> Voltar aos planos
+              </button>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <h2 className={`text-xl font-semibold tracking-tight sm:text-2xl ${text}`}>Projeto Terapêutico Singular</h2>
               {hasActiveVersion ? (
@@ -314,7 +320,6 @@ export function PtsTherapeuticDashboard({
           </div>
 
           <div className={`flex flex-col gap-2 rounded-2xl border p-2 sm:flex-row sm:flex-wrap xl:max-w-[540px] xl:justify-end ${inset}`} aria-label="Ações do PTS">
-            {canManagePlans && <button type="button" className={neutralButton} onClick={onManagePlans}>Voltar aos planos</button>}
             {hasActiveVersion && onRecordReview && <button type="button" className={reviewButton} onClick={onRecordReview}><CalendarClock size={15} /> Nova reavaliação</button>}
             {hasActiveVersion && onRecordRisk && <button type="button" className={riskButton} onClick={onRecordRisk}><ShieldAlert size={15} /> Registrar risco</button>}
             {canEditScope && (
