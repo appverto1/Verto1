@@ -60,6 +60,10 @@ assert.match(detail, /sessionTabSpecialtyOptions\(result\.data\.planScopes, sche
 assert.match(detail, /role="dialog" aria-modal="true" aria-labelledby="session-specialty-title"/);
 assert.match(detail, /requestSessionStart\('fullscreen', \{ therapeuticPlanId: selected\.id, specialty: selected\.specialty \}\)/);
 assert.match(detail, /sessionPlanMatchesAppointmentSpecialty\(selected, scheduledSessionForPatient\)/);
+assert.match(detail, /label: \`\$\{appointmentSpecialty\} · agendamento \(sem plano ativo\)\`/,
+  'legacy adult appointments remain usable only through the confirmed appointment specialty');
+assert.match(detail, /activeSessionLiveRef\.current \|\| activeSession/,
+  'multiple asynchronous trial acknowledgements must not overwrite session counts');
 assert.match(detail, /startConventionalSession\(String\(patient\?\.id \|\| ''\), appointmentId/);
 assert.match(detail, /void requestSessionStart\('fullscreen'\);/, 'Agenda continues using existing safe preflight');
 assert.match(mode, /legacyTrialWriteQueueRef\.current\(\(\) => Promise\.resolve\(onRecordTrial/);
