@@ -103,11 +103,13 @@ assert.match(dashboard, /unscopedBehaviorSeriesBelongsToSpecialty\(series, selec
   'P1-15/16: gráficos gerais de todas especialidades incluem apenas comportamento comprovadamente vinculado');
 assert.match(dashboard, /data-testid="clinical-target-detail"/, 'P1-13: todas especialidades usam o mesmo gráfico detalhado por alvo');
 assert.match(dashboard, /<SeriesChart series=\{series\}/, 'P1-13: evidência por alvo preserva sua unidade clínica');
-assert.match(dashboard, /linkedPlanIds = new Set\(ptsGoalRows/,
-  'P1-14: PTS usa apenas vínculos explícitos para consolidar planos por especialidade');
-assert.match(dashboard, /contribution\.link && contribution\.specialtyPlan\?\.id/,
-  'P1-14: especialidade não vinculada não pode ser incluída por simples igualdade de nome');
-assert.match(dashboard, /unique\.set\(series\.key, series\)/,
+assert.match(ptsSelector, /\.\.\.specialtyPlanIds/,
+  'PTS inclui os planos por especialidade já autorizados, mesmo sem vínculo explícito ao goal');
+assert.match(ptsSelector, /contribution\.link && contribution\.specialtyPlan\?\.id/,
+  'P1-14: contribuições vinculadas exigem ID explícito, nunca apenas nome de especialidade');
+assert.match(ptsSelector, /selected\.set\(series\.key, series\)/,
   'P1-14: deduplicação por identidade canônica evita duplicar série clínica no PTS');
+assert.match(ptsSelector, /const isUnscopedBehavior = !hasExplicitScope/,
+  'comportamentos com vínculo explícito a plano externo não entram por fallback');
 
 console.log('clinicalOutcomePlanScope.regression.test.ts: ok');
