@@ -59,7 +59,11 @@ assert.deepEqual(clinicalOutcomeSeriesSourceKinds(summary([
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 assert.match(dashboard, /ptsPlanSeries/);
 assert.match(dashboard, /clinicalOutcomeSeriesBelongsToPlanScope/);
-assert.match(dashboard, /for \(const series of ptsPlanSeries\)/, 'PTS deve nascer do read model canônico mesmo sem goals estruturados');
+const ptsSelector = fs.readFileSync('src/utils/ptsMultidisciplinarySeries.ts', 'utf8');
+assert.match(dashboard, /ptsSeries: ptsPlanSeries/, 'PTS deve receber séries canônicas do plano mesmo sem goals estruturados');
+assert.match(ptsSelector, /ptsSeries\.forEach\(include\)/, 'o módulo deve preservar o read model canônico sem goals estruturados');
+assert.match(ptsSelector, /clinicalOutcomeSeriesBelongsToPlanScope\(series, linkedPlanId, planScopeIndex\)/,
+  'contribuições devem exigir vínculo de plano validado, não apenas nome de especialidade');
 assert.match(dashboard, /pts-canonical-unstructured-evidence/, 'evidência canônica deve permanecer visível quando common_objectives está vazio');
 assert.match(dashboard, /sem inferir automaticamente uma especialidade/i, 'specialty null não pode ser atribuído silenciosamente a um plano de especialidade');
 
