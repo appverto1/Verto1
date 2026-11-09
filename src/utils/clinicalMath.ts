@@ -153,7 +153,9 @@ export function calculateDomainMastery(
     }
 
     const timeline = (timelineByKey.get(task.key) || []).sort((a, b) => a.ts - b.ts);
-    const selectedIdx = timeline.findIndex((r) => r.ts === selected.ts && r.score === selected.score);
+    const selectedIdx = mode === 'baseline'
+      ? timeline.findIndex((r) => r.ts === selected.ts && r.score === selected.score)
+      : timeline.findLastIndex((r) => r.ts === selected.ts && r.score === selected.score);
     const upto = selectedIdx >= 0 ? timeline.slice(0, selectedIdx + 1) : timeline;
 
     let streak = 0;
