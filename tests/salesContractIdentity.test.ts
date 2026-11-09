@@ -27,7 +27,7 @@ assert.match(builder, /contractEmail: frozenContractEmail/);
 assert.match(builder, /useState\(''\)/, 'novo contrato não deve herdar silenciosamente o e-mail do lead');
 assert.match(builder, /não é usado automaticamente/);
 assert.match(builder, /!contractEmailValid/);
-assert.match(builder, /disabled=\{contractEmailLocked\}/);
+assert.doesNotMatch(builder, /disabled=\{contractEmailLocked\}/);
 assert.match(builder, /historicalOfferMissingContractIdentity/);
 assert.match(builder, /Duplicar cenário para nova proposta/);
 assert.doesNotMatch(
