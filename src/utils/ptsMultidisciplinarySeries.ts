@@ -57,11 +57,12 @@ export function selectPtsMultidisciplinarySeries({
       .filter(Boolean),
   );
 
+  const visiblePlanIds = [...planIds];
   for (const series of allSeries) {
     if (isHistoricalOnly(series)) continue;
     if (
       isClinicalOutcomeInterferingBehaviorSeries(series)
-      || [...planIds].some((id) => clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex))
+      || visiblePlanIds.some((id) => clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex))
     ) include(series);
   }
 
