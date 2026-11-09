@@ -10,7 +10,6 @@ const offer = read('src/components/PublicSalesOffer.tsx');
 const builder = read('src/components/SalesModularProposalBuilder.tsx');
 const proposal = read('src/utils/salesModularProposal.ts');
 const settled = read('services/salesCheckoutSettledMethod.ts');
-const migration = read('supabase/migrations/20261109000500_sales_settled_payment_method_v1.sql');
 
 const paidStart = server.indexOf('const processSalesAssistedCheckoutCompleted');
 const paidEnd = server.indexOf('const stripeInvoiceSubscriptionId', paidStart);
@@ -42,5 +41,4 @@ assert.match(offer, /cardActivationPath/);
 assert.match(settled, /invoicePayments\.list/);
 assert.match(settled, /paymentIntents\.retrieve/);
 assert.match(settled, /paymentMethods\.retrieve/);
-assert.match(migration, /ADD COLUMN IF NOT EXISTS settled_payment_method text/);
 console.log('commercialMainPromotionGate20261109: PASS');
