@@ -46,6 +46,7 @@ import {
 } from '../utils/clinicalOutcomeAnalytics';
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope, unscopedBehaviorSeriesBelongsToSpecialty } from '../utils/clinicalOutcomePlanScope';
+import { selectPtsMultidisciplinarySeries } from '../utils/ptsMultidisciplinarySeries';
 import { ClinicalPlanAnalyticsShell, type AnalyticsAxis, type ClinicalPlanShareDescriptor } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
@@ -717,44 +718,14 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
     });
   }, [activePts, data.contributions, ptsPayload, specialtyPlans, summaries]);
 
-  const ptsAnalyticsSeries = useMemo(() => {
-    const unique = new Map<string, ClinicalOutcomeSeriesSummary>();
-    // The canonical read model is the evidence authority. Structured PTS goals and
-    // contribution links organize that evidence when present, but never gate visibility.
-    for (const series of ptsPlanSeries) {
-      if (!isHistoricalOnlySeries(series)) unique.set(series.key, series);
-    }
-    for (const row of ptsGoalRows) {
-      for (const contribution of row.contributions) {
-        for (const series of contribution.series) {
-          if (!isHistoricalOnlySeries(series)) unique.set(series.key, series);
-        }
-      }
-    }
-    // A PTS goal may explicitly link a specialty plan even when historical
-    // observations reference only that plan (without the PTS goal id).
-    // Reuse the already authorized canonical series; never infer links from
-    // a matching specialty name or read another patient's/clinic's data.
-    const linkedPlanIds = new Set(ptsGoalRows.flatMap((row) => row.contributions
-      .filter((contribution) => Boolean(contribution.link && contribution.specialtyPlan?.id))
-      .map((contribution) => String(contribution.specialtyPlan.id))));
-    if (linkedPlanIds.size > 0) {
-      for (const series of summaries) {
-        if (isHistoricalOnlySeries(series)) continue;
-        if (Array.from(linkedPlanIds).some((id) => clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex))) {
-          unique.set(series.key, series);
-        }
-      }
-    }
-    // Comportamentos interferentes são evidência longitudinal do paciente e não
-    // pertencem semanticamente a uma especialidade. Na visão multidisciplinar do PTS,
-    // preserve-os mesmo quando o legado ainda não carrega planId/goalId/programId.
-    // A autoridade/origem permanece explícita na própria série; não inferimos vínculo.
-    for (const series of summaries) {
-      if (isClinicalOutcomeInterferingBehaviorSeries(series)) unique.set(series.key, series);
-    }
-    return Array.from(unique.values());
-  }, [planScopeIndex, ptsGoalRows, ptsPlanSeries, summaries]);
+  const ptsAnalyticsSeries = useMemo(() => selectPtsMultidisciplinarySeries({
+    allSeries: summaries,
+    ptsSeries: ptsPlanSeries,
+    ptsGoalRows,
+    specialtyPlanIds: specialtyPlans.map((plan) => plan.id),
+    planScopeIndex,
+    isHistoricalOnly: isHistoricalOnlySeries,
+  }), [planScopeIndex, ptsGoalRows, ptsPlanSeries, specialtyPlans, summaries]);
   const ptsUnstructuredTargetGroups = useMemo(() => (
     buildClinicalTargetGroups(ptsAnalyticsSeries).filter((group) => group.clinicalSeries.length > 0)
   ), [ptsAnalyticsSeries]);
