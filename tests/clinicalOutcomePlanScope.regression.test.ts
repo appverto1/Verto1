@@ -117,7 +117,7 @@ assert.match(ptsSelector, /const isUnscopedBehavior = !hasExplicitScope/,
 // announce persistence before the server has confirmed it.
 const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
 const completionStart = dataService.indexOf('async completeAbaSession(sessionId: string, payload: any)');
-const completionEnd = dataService.indexOf('async ', completionStart + 20);
+const completionEnd = dataService.indexOf('\n  async ', completionStart + 25);
 assert.ok(completionStart > 0 && completionEnd > completionStart, 'completion service method found');
 const completion = dataService.slice(completionStart, completionEnd);
 assert.match(completion, /if \(completionAttempt\.response\.ok\) \{[\s\S]*?completionAttempt\.result\?\.success === true[\s\S]*?pending !== true[\s\S]*?notifyClinicalOutcomesChanged\(/,
