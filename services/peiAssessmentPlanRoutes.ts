@@ -1,8 +1,6 @@
 // PEI assessment plans are independent from the legacy patient.pei goals and PTS.
 // All routes require the existing clinic capability + patient access middlewares.
 // Browser-supplied clinic, patient and actor IDs are never used as authorities.
-import crypto from 'node:crypto';
-
 type Deps = {
   supabase: any;
   currentClinicId: (user: any) => string | null;
