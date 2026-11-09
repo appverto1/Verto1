@@ -1,6 +1,6 @@
 # Verto — promoção seletiva para main: proposta → checkout → pagamento → ativação → onboarding
 
-**Registro:** 2026-11-08 · **Destino:** `main` / Verto Produção · **Estado:** BLOQUEADO — sem mudança funcional ou deploy autorizável até integrar e testar.
+**Registro:** 2026-11-09 · **Destino:** `main` / Verto Produção · **Estado:** candidato PARCIAL em PR #666 (draft). Nenhum merge/deploy de produção autorizado até integração e testes.
 
 ## Evidências de baseline
 
@@ -23,7 +23,7 @@ NÃO substituir `src/App.tsx`, `server.ts`, `CommercialKanban.tsx`, workflows, c
 
 ## Pré-requisitos do banco
 
-Staging contém `sales_offers.settled_payment_method`, **produção não**. O caminho #665 confere Stripe Invoice Payment → PaymentIntent `succeeded` → método efetivo, nunca `session.payment_method_types` (apenas opções ofertadas). Precisa revisar e promover seletivamente migrations de `sales_card_browser_handoff_v1`, `sales_stripe_webhook_monotonic_guard_v1` e `sales_website_existing_customer_guard_20261108`, com controle de idempotência, permissões, RLS, locks e privilégios. Produção já possui migrations Kanban equivalentes com nomes diferentes; não reaplicar nem reescrever dados para alinhar histórico.
+O caminho #665 confere Stripe Invoice Payment → PaymentIntent `succeeded` → método efetivo, nunca `session.payment_method_types`. A comparação de esquema identificou dois artefatos que só existem em staging (`sales_offers.settled_payment_method` e tabela `sales_card_checkout_handoffs`), mas a auditoria de **todas as rotas comerciais ativas** não encontrou uso deles. Por custo e menor privilégio, **não promover esses artefatos enquanto não houver uso comprovado**. As migrações comerciais versionadas do guard de lead convertido e monotonicidade do checkout foram copiadas como arquivos de revisão, mas **nenhum SQL foi aplicado em produção**. Produção já possui migrations Kanban equivalentes com nomes diferentes; não reaplicar nem reescrever histórico.
 
 Verificar backup/rollback e ausência de regressões **antes** de qualquer SQL de produção. Não tocar em dados clínicos, usuários, históricos, assinaturas em vigor ou Stripe LIVE durante homologação.
 
@@ -47,4 +47,8 @@ Verificar backup/rollback e ausência de regressões **antes** de qualquer SQL d
 
 ## Resultado desta inspeção
 
-Nenhum arquivo funcional foi transposto nesta branch. **Bloqueado para merge/deploy** por divergência de módulos, wiring do monólito, migration obrigatória ausente em produção e ausência dos testes integrados no candidato. Este documento é apenas um guardrail de release; não constitui aprovação funcional.
+**Progresso verificável do PR #666:** construtor e validador de propostas sem trial, revisão versionada de e-mail, `PublicSalesOffer.tsx` sem login direto por token, UI que diferencia cartão imediato e boleto por e-mail, verificador isolado do método financeiro, SQL de guards e teste fail-closed incluído no `pre-main-gate`. O candidato contém 12 arquivos alterados/adicionados e 13 commits desde main no checkpoint. Todos ainda **fora de produção**.
+
+**Bloqueio operacional reproduzido:** a atualização seletiva do `server.ts` monolítico (4.755.289 caracteres) foi construída e passou por validação de âncoras em memória, porém a API da conexão GitHub rejeitou a gravação do blob grande com erro HTTP/2 ao enviar o corpo. Não substituir por `server.ts` de staging (3.95 MB), pois incorporaria alterações de outros módulos clínicos e quebraria preservação de main. É necessário usar um ambiente com clone local/repositório editável e execução do diff seletivo (p.ex. sessão Work/Codex), seguido de build e testes reais. O teste `commercialMainPromotionGate20261109.regression.test.mjs` foi registrado e **deve falhar** até a implementação do backend; não silenciar nem contornar. Nenhum merge nem deploy enquanto ele falhar.
+
+**Pendente adicional:** smoke Google real de staging com endereço contratual idêntico ao da identidade Google; o teste anterior utilizou endereços distintos e não validou esse caminho. Cartão e boleto precisam ser homologados sem cobrança real em Stripe TEST.
