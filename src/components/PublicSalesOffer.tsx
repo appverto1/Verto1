@@ -680,9 +680,11 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         if (/^\/ativacao-comercial\/[A-Za-z0-9_-]{43,80}$/.test(activationPath)) {
           // A confirmed card can proceed to credential choice, NOT a direct session.
           window.location.replace(activationPath);
+          return true;
         }
-        // A compensated boleto has no browser token; use verified email activation.
-        return true;
+        // Boleto readiness requires explicit, server-owned email-send evidence.
+        // An intermediate status must not silently stop reconciliation.
+        return data?.activationEmailSent === true;
       }
       return false;
     };
