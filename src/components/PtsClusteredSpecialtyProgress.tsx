@@ -35,7 +35,7 @@ export function PtsClusteredSpecialtyProgress({
   }
   const hasPercent = selected.unit === '%';
   const values = selected.weeks.flatMap((week) => Object.values(week.values));
-  const bounds = hasPercent ? [0, 100] as [number, number] : [Math.min(0, ...values), 'auto'] as const;
+  const bounds: [number, number | 'auto'] = hasPercent ? [0, 100] : [Math.min(0, ...values), 'auto'];
   const axisTone = isDark ? '#94A3B8' : '#64748B';
   const chartRows = selected.weeks.map((week) => ({
     week: labelForWeek(week.week),
