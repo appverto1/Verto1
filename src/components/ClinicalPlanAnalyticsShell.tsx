@@ -22,6 +22,9 @@ import {
 } from '../utils/clinicalOutcomeAnalytics';
 import { buildClinicalProgramChangeOverview, type ClinicalTargetChange } from '../utils/clinicalProgramChangeAnalytics';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
+import { PtsClusteredSpecialtyProgress } from './PtsClusteredSpecialtyProgress';
+import { buildPtsClusteredSpecialtyMetrics, type PtsChartSpecialtyPlan } from '../utils/ptsClusteredSpecialtyProgress';
+import type { ClinicalOutcomePlanScopeIndex } from '../utils/clinicalOutcomePlanScope';
 
 type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance' | 'changes';
 export type AnalyticsAxis = 'date' | 'session';
@@ -29,11 +32,13 @@ export type AnalyticsAxis = 'date' | 'session';
 export type ClinicalPlanShareDescriptor = {
   schemaVersion: 1;
   family: 'PLAN_PTS';
-  domain: 'skills' | 'behaviors' | 'mastery' | 'maintenance';
+  domain: 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance';
+  planIds?: string[];
   metricSignature: string;
   seriesKeys: string[];
   axis: AnalyticsAxis;
   comparePrevious: boolean;
+  allowedDomains?: Array<'skills' | 'behaviors' | 'mastery' | 'maintenance'>;
 };
 
 type ClinicalPlanAnalyticsShellProps = {
@@ -48,6 +53,9 @@ type ClinicalPlanAnalyticsShellProps = {
   onOpenSessionReport?: (sessionId: string) => void;
   onShareDescriptorChange?: (descriptor: ClinicalPlanShareDescriptor | null) => void;
   programs?: any[];
+  ptsSpecialtyPlans?: PtsChartSpecialtyPlan[];
+  ptsPlanScopeIndex?: ClinicalOutcomePlanScopeIndex;
+  shareControl?: React.ReactNode;
 };
 
 type MetricOption = {
@@ -832,8 +840,14 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, onShareDescriptorChange, programs = [] }: ClinicalPlanAnalyticsShellProps) {
+export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, onShareDescriptorChange, programs = [], ptsSpecialtyPlans, ptsPlanScopeIndex, shareControl }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
+  const ptsGroupedOverview = activeDomain === 'overview' && Boolean(ptsSpecialtyPlans?.length && ptsPlanScopeIndex);
+  const [ptsMetricId, setPtsMetricId] = useState('');
+  const ptsMetrics = useMemo(() => ptsSpecialtyPlans && ptsPlanScopeIndex
+    ? buildPtsClusteredSpecialtyMetrics(ptsSpecialtyPlans, series, ptsPlanScopeIndex)
+    : [], [ptsSpecialtyPlans, ptsPlanScopeIndex, series]);
+  const selectedPtsMetric = ptsMetrics.find((metric) => metric.id === ptsMetricId) || ptsMetrics[0] || null;
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
   const [overviewDomainKeys, setOverviewDomainKeys] = useState<OverviewDomainKey[]>([]);
@@ -892,9 +906,21 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
     : [], [activeMetric, selectedSeriesKeys]);
 
   const shareDescriptor = useMemo<ClinicalPlanShareDescriptor | null>(() => {
+    if (activeDomain === 'overview') {
+      if (!ptsGroupedOverview || !ptsSpecialtyPlans?.length || !selectedPtsMetric) return null;
+      return {
+        schemaVersion: 1,
+        family: 'PLAN_PTS',
+        domain: 'overview',
+        planIds: ptsSpecialtyPlans.map((plan) => plan.id),
+        metricSignature: selectedPtsMetric.id,
+        seriesKeys: [],
+        axis: 'date',
+        comparePrevious: false,
+      };
+    }
     if (
-      activeDomain === 'overview'
-      || activeDomain === 'changes'
+      activeDomain === 'changes'
       || !activeMetric
       || selectedSeries.length === 0
     ) return null;
@@ -907,7 +933,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
       axis,
       comparePrevious: Boolean(comparePrevious),
     };
-  }, [activeDomain, activeMetric, axis, comparePrevious, selectedSeries]);
+  }, [activeDomain, activeMetric, axis, comparePrevious, selectedSeries, ptsGroupedOverview, ptsSpecialtyPlans, selectedPtsMetric]);
 
   useEffect(() => {
     onShareDescriptorChange?.(shareDescriptor);
@@ -1047,7 +1073,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
             <h2 className={`mt-1 text-lg font-semibold tracking-tight ${text}`}>{scopeLabel}</h2>
             <p className={`mt-1 text-xs ${subtle}`}>Escolha o domínio e a métrica. Séries incompatíveis continuam separadas.</p>
           </div>
-          <div role="group" aria-label="Agrupamento do gráfico" className="flex items-center gap-1 self-start rounded-xl border p-1 dark:border-slate-700">
+          <div role="group" aria-label="Agrupamento do gráfico" style={{ display: ptsGroupedOverview ? 'none' : undefined }} className="flex items-center gap-1 self-start rounded-xl border p-1 dark:border-slate-700">
             <button type="button" aria-pressed={axis === 'date'} onClick={() => activeDomain !== 'changes' && onAxisChange('date')} disabled={activeDomain === 'changes'} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${axis === 'date' ? 'bg-violet-600 text-white shadow-sm' : `${subtle} hover:text-violet-600`} disabled:cursor-not-allowed disabled:opacity-40`}><CalendarDays size={14} /> Por data</button>
             <button type="button" aria-pressed={axis === 'session'} onClick={() => onAxisChange('session')} className={`inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${axis === 'session' ? 'bg-violet-600 text-white shadow-sm' : `${subtle} hover:text-violet-600`}`}><Layers3 size={14} /> Por sessão</button>
           </div>
@@ -1086,13 +1112,13 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className={`text-sm font-semibold ${text}`}>{activeDomain === 'overview' ? 'Registros clínicos por domínio' : activeDomain === 'changes' ? 'Andamento geral dos programas' : activeMetric?.label}</p>
-            <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? `Uma barra por ${axis === 'session' ? 'sessão' : 'dia'}, com os domínios empilhados; não é um score clínico.` : activeDomain === 'changes' ? 'Leitura consolidada das mudanças entre sessões, preservando a direção e a unidade de cada métrica.' : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
+            <p className={`text-sm font-semibold ${text}`}>{activeDomain === 'overview' ? (ptsGroupedOverview ? 'Comparação por especialidade' : 'Registros clínicos por domínio') : activeDomain === 'changes' ? 'Andamento geral dos programas' : activeMetric?.label}</p>
+            <p className={`mt-0.5 text-[11px] ${subtle}`}>{activeDomain === 'overview' ? (ptsGroupedOverview ? 'Barras lado a lado por semana, com uma cor para cada plano; escolha a métrica comparável.' : `Uma barra por ${axis === 'session' ? 'sessão' : 'dia'}, com os domínios empilhados; não é um score clínico.`) : activeDomain === 'changes' ? 'Leitura consolidada das mudanças entre sessões, preservando a direção e a unidade de cada métrica.' : `${activeCount} ponto(s) no período atual${comparePrevious ? ` · ${previousCount} no período anterior` : ''} · ${unitLabel}`}</p>
           </div>
           {comparePrevious && activeDomain !== 'changes' && <div role="group" aria-label="Legenda de período" className={`flex items-center gap-3 text-[11px] ${subtle}`}><span className="inline-flex items-center gap-1.5"><span className="h-0.5 w-6 bg-violet-600" /> Atual</span><span className="inline-flex items-center gap-1.5"><span className="h-0 w-6 border-t-2 border-dashed border-violet-400" /> Anterior</span></div>}
         </div>
 
-        {activeDomain === 'overview' && (
+        {activeDomain === 'overview' && !ptsGroupedOverview && (
           <div className="mb-2.5 space-y-2" data-testid="overview-domain-filters">
             <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filtrar domínios exibidos no gráfico">
               <span className={`mr-1 text-[11px] ${subtle}`}>Exibir:</span>
@@ -1124,6 +1150,8 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
         {activeDomain === 'changes' ? (
           <ProgramChangesView series={series} programs={programs} isDark={isDark} onOpenSessionReport={onOpenSessionReport} />
+        ) : ptsGroupedOverview && ptsSpecialtyPlans && ptsPlanScopeIndex ? (
+          <PtsClusteredSpecialtyProgress plans={ptsSpecialtyPlans} metrics={ptsMetrics} isDark={isDark} selectedMetricId={selectedPtsMetric?.id || ''} onSelectedMetricIdChange={setPtsMetricId} />
         ) : activeDomain === 'overview' ? (
           <div className="flex h-[170px] min-w-0 sm:h-[180px]" data-testid="overview-chart-frame">
             <OverviewYAxisPane max={overviewYAxis.max} ticks={overviewYAxis.ticks} isDark={isDark} />
@@ -1197,7 +1225,8 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         )}
 
         {activeDomain !== 'overview' && activeDomain !== 'changes' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}
-        {activeDomain === 'overview' && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral empilha, na mesma barra, a contagem de registros clínicos de cada domínio por dia ou sessão. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
+        {activeDomain === 'overview' && !ptsGroupedOverview && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral empilha, na mesma barra, a contagem de registros clínicos de cada domínio por dia ou sessão. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
+        {shareControl && <div className="mt-4" data-testid="clinical-chart-sharing-controls">{shareControl}</div>}
       </div>
     </section>
   );

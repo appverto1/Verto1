@@ -59,7 +59,11 @@ assert.deepEqual(clinicalOutcomeSeriesSourceKinds(summary([
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
 assert.match(dashboard, /ptsPlanSeries/);
 assert.match(dashboard, /clinicalOutcomeSeriesBelongsToPlanScope/);
-assert.match(dashboard, /for \(const series of ptsPlanSeries\)/, 'PTS deve nascer do read model canônico mesmo sem goals estruturados');
+const ptsSelector = fs.readFileSync('src/utils/ptsMultidisciplinarySeries.ts', 'utf8');
+assert.match(dashboard, /ptsSeries: ptsPlanSeries/, 'PTS deve receber séries canônicas do plano mesmo sem goals estruturados');
+assert.match(ptsSelector, /ptsSeries\.forEach\(include\)/, 'o módulo deve preservar o read model canônico sem goals estruturados');
+assert.match(ptsSelector, /clinicalOutcomeSeriesBelongsToPlanScope\(series, linkedPlanId, planScopeIndex\)/,
+  'contribuições devem exigir vínculo de plano validado, não apenas nome de especialidade');
 assert.match(dashboard, /pts-canonical-unstructured-evidence/, 'evidência canônica deve permanecer visível quando common_objectives está vazio');
 assert.match(dashboard, /sem inferir automaticamente uma especialidade/i, 'specialty null não pode ser atribuído silenciosamente a um plano de especialidade');
 
@@ -99,11 +103,13 @@ assert.match(dashboard, /unscopedBehaviorSeriesBelongsToSpecialty\(series, selec
   'P1-15/16: gráficos gerais de todas especialidades incluem apenas comportamento comprovadamente vinculado');
 assert.match(dashboard, /data-testid="clinical-target-detail"/, 'P1-13: todas especialidades usam o mesmo gráfico detalhado por alvo');
 assert.match(dashboard, /<SeriesChart series=\{series\}/, 'P1-13: evidência por alvo preserva sua unidade clínica');
-assert.match(dashboard, /linkedPlanIds = new Set\(ptsGoalRows/,
-  'P1-14: PTS usa apenas vínculos explícitos para consolidar planos por especialidade');
-assert.match(dashboard, /contribution\.link && contribution\.specialtyPlan\?\.id/,
-  'P1-14: especialidade não vinculada não pode ser incluída por simples igualdade de nome');
-assert.match(dashboard, /unique\.set\(series\.key, series\)/,
+assert.match(ptsSelector, /\.\.\.specialtyPlanIds/,
+  'PTS inclui os planos por especialidade já autorizados, mesmo sem vínculo explícito ao goal');
+assert.match(ptsSelector, /contribution\.link && contribution\.specialtyPlan\?\.id/,
+  'P1-14: contribuições vinculadas exigem ID explícito, nunca apenas nome de especialidade');
+assert.match(ptsSelector, /selected\.set\(series\.key, series\)/,
   'P1-14: deduplicação por identidade canônica evita duplicar série clínica no PTS');
+assert.match(ptsSelector, /const isUnscopedBehavior = !hasExplicitScope/,
+  'comportamentos com vínculo explícito a plano externo não entram por fallback');
 
 console.log('clinicalOutcomePlanScope.regression.test.ts: ok');

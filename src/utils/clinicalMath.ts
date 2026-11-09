@@ -6,6 +6,8 @@ type ProtocolTaskLike = {
   max_score?: number;
   meta_sucessos?: number;
   metaSucessos?: number;
+  criterionMode?: 'total_independent' | 'consecutive_independent';
+  masteryCriterionMode?: 'total_independent' | 'consecutive_independent';
 };
 
 type ClinicalTaskLike = {
@@ -85,7 +87,10 @@ export function calculateDomainMastery(
         label,
         key,
         maxScore: Math.max(1, Number(maxFromTask ?? 1)),
-        metaSucessos: Math.max(1, Math.floor(Number(metaSucessos ?? criterion)))
+        metaSucessos: Math.max(1, Math.floor(Number(metaSucessos ?? criterion))),
+        explicitCriterion: metaSucessos !== null && metaSucessos > 0,
+        criterionMode: String(task?.criterionMode || task?.masteryCriterionMode || '') === 'consecutive_independent'
+          ? 'consecutive_independent' as const : 'total_independent' as const,
       };
     })
     .filter((task) => task.key);
@@ -148,7 +153,10 @@ export function calculateDomainMastery(
     }
 
     const timeline = (timelineByKey.get(task.key) || []).sort((a, b) => a.ts - b.ts);
-    const selectedIdx = timeline.findIndex((r) => r.ts === selected.ts && r.score === selected.score);
+    const selectedIdx = timeline.reduce((matchIndex, row, index) =>
+      row.ts === selected.ts && row.score === selected.score && (mode !== 'baseline' || matchIndex < 0)
+        ? index
+        : matchIndex, -1);
     const upto = selectedIdx >= 0 ? timeline.slice(0, selectedIdx + 1) : timeline;
 
     let streak = 0;
@@ -162,9 +170,23 @@ export function calculateDomainMastery(
     const last = upto[upto.length - 1];
     if (!last) return;
 
-    // If backend persisted consecutive_successes, trust it for latest row.
+    // If backend persisted consecutive_successes, trust it only for an
+    // explicit consecutive criterion. An independent TOTAL criterion must
+    // never be replaced by a streak or a global 5/10 guess.
     if (last.consecutive !== null && Number.isFinite(last.consecutive)) {
       streak = Math.max(0, Math.floor(last.consecutive));
+    }
+
+    if (task.explicitCriterion) {
+      const independentCorrectCount = task.criterionMode === 'consecutive_independent'
+        ? streak
+        : upto.filter((row) => row.score >= 1).length;
+      const criterionMet = independentCorrectCount >= task.metaSucessos;
+      // Intermediate credit is 0.5 only while an explicit configured
+      // criterion is pending; never turn partial trials into full mastery.
+      const hasPartialEvidence = independentCorrectCount > 0 || last.score >= 0.5;
+      obtained += (criterionMet ? 1 : hasPartialEvidence ? 0.5 : 0) * maxScore;
+      return;
     }
 
     const basePercent = last.score >= 0.5 ? 50 : 0;
