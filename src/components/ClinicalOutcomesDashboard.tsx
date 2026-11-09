@@ -622,6 +622,10 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
   const plans = useMemo(() => (Array.isArray(data.plans) ? data.plans.slice().sort(latestPlanFirst) : []), [data.plans]);
   const ptsPlans = useMemo(() => plans.filter((plan) => plan.mode === 'interdisciplinary'), [plans]);
   const specialtyPlans = useMemo(() => plans.filter((plan) => plan.mode === 'specialty'), [plans]);
+  const ptsChartSpecialtyPlans = useMemo(() => specialtyPlans.map((plan) => ({
+    id: String(plan.id),
+    specialty: clean(plan.specialty) || 'Especialidade não informada',
+  })), [specialtyPlans]);
   const activePts = ptsPlans.find((plan) => ['active', 'draft', 'paused'].includes(clean(plan.status))) || ptsPlans[0] || null;
 
   useEffect(() => {
@@ -923,6 +927,8 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
           onOpenSessionReport={onOpenSessionReport}
           onShareDescriptorChange={onShareDescriptorChange}
           programs={data.programs || []}
+          ptsSpecialtyPlans={scopeId === 'pts' ? ptsChartSpecialtyPlans : undefined}
+          ptsPlanScopeIndex={scopeId === 'pts' ? planScopeIndex : undefined}
         />
       )}
 
