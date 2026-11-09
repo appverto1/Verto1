@@ -136,6 +136,27 @@ export const isClinicalOutcomeInterferingBehaviorSeries = (
   return sourceFamilies.includes('BEHAVIOR');
 };
 
+/**
+ * Historical target snapshots must not replace versioned V3 evidence.
+ * A completed-session BEHAVIOR_* snapshot is different: when it is the only
+ * available evidence for that behavior, hiding it erases a legitimate
+ * interfering-behavior series from PTS and specialty charts.
+ *
+ * This is presentation filtering only; the server has already enforced the
+ * patient/clinic scope and deduplicated canonical vs legacy observations.
+ */
+export const isClinicalOutcomeHistoricalOnlySeries = (series: ClinicalOutcomeSeriesSummary) => {
+  const sourceLabel = clinicalOutcomeSourceLabel(series.source).toLocaleLowerCase('pt-BR');
+  if (!sourceLabel.includes('histórico') || sourceLabel.includes('v3 +')) return false;
+  const rows = Array.isArray(series.observations) ? series.observations : [];
+  if (isClinicalOutcomeInterferingBehaviorSeries(series) && rows.length > 0 && rows.every((row) =>
+    text(row.source) === 'aba_session_metric_snapshot'
+    && text(row.sessionId)
+    && text(row.metricKey).toUpperCase().startsWith('BEHAVIOR_')
+  )) return false;
+  return true;
+};
+
 export const normalizeClinicalOutcomeDirection = (value: unknown): ClinicalOutcomeDirection => {
   const normalized = text(value).toLowerCase();
   if (['lower_is_better', 'lower-is-better', 'lower', 'decrease', 'decrease_is_better'].includes(normalized)) return 'lower_is_better';

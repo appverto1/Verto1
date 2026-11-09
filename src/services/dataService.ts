@@ -3002,7 +3002,15 @@ export const dataService = {
         completionAttempt = await requestCompletion();
       }
 
-      if (completionAttempt.response.ok) return completionAttempt.result;
+      if (completionAttempt.response.ok) {
+        // A successful persisted closure changes both behavior summaries and
+        // the patient graphs. Do not invalidate for a deferred/offline closure:
+        // its observations are not yet authoritative on the server.
+        if (completionAttempt.result?.success === true && completionAttempt.result?.pending !== true) {
+          notifyClinicalOutcomesChanged(String(payload?.patient_id || payload?.patientId || ''));
+        }
+        return completionAttempt.result;
+      }
 
       const retryableCompletion =
         completionAttempt.response.status === 408 ||

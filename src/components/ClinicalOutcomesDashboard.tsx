@@ -31,6 +31,7 @@ import {
   clinicalOutcomeDirectionLabel,
   clinicalOutcomeEvidenceSampleLabel,
   clinicalOutcomeEvidenceLabel,
+  isClinicalOutcomeHistoricalOnlySeries,
   clinicalOutcomeSourceLabel,
   clinicalOutcomeTargetReference,
   clinicalOutcomeUnitLabel,
@@ -268,10 +269,7 @@ const isCollectionVolumeSeries = (series: ClinicalOutcomeSeriesSummary) => {
 
 const isLegacyUnversionedSeries = (series: ClinicalOutcomeSeriesSummary) => series.observations.some((row) => clean(row?.metadata?.historyVersionStatus) === 'LEGACY_UNVERSIONED');
 
-const isHistoricalOnlySeries = (series: ClinicalOutcomeSeriesSummary) => {
-  const sourceLabel = clinicalOutcomeSourceLabel(series.source).toLocaleLowerCase('pt-BR');
-  return sourceLabel.includes('histórico') && !sourceLabel.includes('v3 +');
-};
+const isHistoricalOnlySeries = isClinicalOutcomeHistoricalOnlySeries;
 
 const metricPriority = (series: ClinicalOutcomeSeriesSummary) => {
   const key = clean(series.metricKey).toUpperCase();
