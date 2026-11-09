@@ -112,4 +112,17 @@ assert.match(ptsSelector, /selected\.set\(series\.key, series\)/,
 assert.match(ptsSelector, /const isUnscopedBehavior = !hasExplicitScope/,
   'comportamentos com vínculo explícito a plano externo não entram por fallback');
 
+// A completed session must invalidate the same patient-scoped analytics cache
+// immediately, not wait for staleMs/F5. Deferred/offline closures do not
+// announce persistence before the server has confirmed it.
+const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
+const completionStart = dataService.indexOf('async completeAbaSession(sessionId: string, payload: any)');
+const completionEnd = dataService.indexOf('async ', completionStart + 20);
+assert.ok(completionStart > 0 && completionEnd > completionStart, 'completion service method found');
+const completion = dataService.slice(completionStart, completionEnd);
+assert.match(completion, /if \(completionAttempt\.response\.ok\) \{[\s\S]*?completionAttempt\.result\?\.success === true[\s\S]*?pending !== true[\s\S]*?notifyClinicalOutcomesChanged\(/,
+  'only a confirmed successful session close invalidates the patient graph cache');
+assert.ok(completion.indexOf('notifyClinicalOutcomesChanged(') > completion.indexOf('if (completionAttempt.response.ok)'),
+  'pending, unsaved, failed or offline closure must not pretend charts were persisted');
+
 console.log('clinicalOutcomePlanScope.regression.test.ts: ok');
