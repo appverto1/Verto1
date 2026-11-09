@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   AlertCircle,
   Check,
@@ -8,7 +8,6 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { LogoVerto } from './Common';
-import { getSupabase } from '../lib/supabase';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -598,72 +597,6 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offerUnavailable, setOfferUnavailable] = useState(false);
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
   const [paymentStatusRefreshKey, setPaymentStatusRefreshKey] = useState(0);
-  const [directorOpening, setDirectorOpening] = useState(false);
-  const directorOpeningRef = useRef(false);
-
-  const openDirectorSession = async (checkoutSessionId: string) => {
-    if (!checkoutSessionId || directorOpeningRef.current) return false;
-    directorOpeningRef.current = true;
-    setDirectorOpening(true);
-    setError('');
-    try {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/director-session`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          cache: 'no-store',
-          body: JSON.stringify({ sessionId: checkoutSessionId }),
-        },
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.success === false || !payload?.tokenHash) {
-        if (payload?.error === 'SALES_DIRECTOR_SESSION_ALREADY_CLAIMED') {
-          window.location.replace('/');
-          return true;
-        }
-        throw new Error(payload?.message || payload?.error || 'Não foi possível abrir sua conta agora.');
-      }
-
-      const supabase = await getSupabase();
-      const verified = await supabase.auth.verifyOtp({
-        token_hash: String(payload.tokenHash),
-        type: (payload.otpType || 'magiclink') as any,
-      });
-      if (verified?.error || !verified?.data?.session?.access_token) {
-        throw verified?.error || new Error('Não foi possível estabelecer a sessão do Diretor.');
-      }
-
-      const loginResponse = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          accessToken: verified.data.session.access_token,
-          intendedRole: 'director',
-          provider: 'sales_checkout',
-          activationFlow: false,
-        }),
-      });
-      const loginPayload = await loginResponse.json().catch(() => ({}));
-      if (!loginResponse.ok || loginPayload?.success === false) {
-        throw new Error(loginPayload?.message || loginPayload?.error || 'O acesso foi liberado, mas não foi possível abrir a Verto.');
-      }
-
-      setPaymentReturnState('account_activated');
-      window.history.replaceState({}, document.title, '/');
-      window.location.replace('/');
-      return true;
-    } catch (sessionError: any) {
-      setError(sessionError?.message || 'Não foi possível abrir sua conta agora. Tente novamente.');
-      return false;
-    } finally {
-      directorOpeningRef.current = false;
-      setDirectorOpening(false);
-    }
-  };
-
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
@@ -743,7 +676,12 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       }
       if (state === 'review_required') return true;
       if (state === 'director_ready') {
-        await openDirectorSession(checkoutSessionId);
+        const activationPath = String(data?.cardActivationPath || '');
+        if (/^\/ativacao-comercial\/[A-Za-z0-9_-]{43,80}$/.test(activationPath)) {
+          // A confirmed card can proceed to credential choice, NOT a direct session.
+          window.location.replace(activationPath);
+        }
+        // A compensated boleto has no browser token; use verified email activation.
         return true;
       }
       return false;
@@ -921,7 +859,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
           {paymentReturnState !== 'idle' ? (
             <div className="flex min-h-72 flex-col items-center justify-center text-center">
-              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' || directorOpening ? (
+              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' ? (
                 <Loader2 className="mb-4 animate-spin text-violet-600" size={30} />
               ) : paymentReturnState === 'unavailable' || paymentReturnState === 'review_required' ? (
                 <AlertCircle className="mb-4 text-amber-600" size={32} />
@@ -929,14 +867,12 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 <CheckCircle2 className="mb-4 text-emerald-600" size={32} />
               )}
               <h1 className="text-xl font-semibold text-slate-900">
-                {directorOpening
-                  ? 'Abrindo sua Verto'
-                  : paymentReturnState === 'confirming'
+                {paymentReturnState === 'confirming'
                     ? 'Confirmando seu pagamento'
                     : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
                       ? 'Preparando sua clínica'
                       : paymentReturnState === 'director_ready'
-                        ? 'Acesso de Diretor liberado'
+                        ? 'Configure seu acesso à Verto'
                         : paymentReturnState === 'account_activated'
                           ? 'Conta de Diretor ativada'
                           : paymentReturnState === 'review_required'
@@ -944,25 +880,23 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                             : 'Confirmação em andamento'}
               </h1>
               <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
-                {directorOpening
-                  ? 'Seu pagamento já foi confirmado. Estamos abrindo a sessão segura do Diretor e levando você para a configuração inicial da clínica.'
-                  : paymentReturnState === 'director_ready'
-                    ? 'A Stripe confirmou o pagamento. A Verto já criou o acesso de Diretor e liberou exatamente os módulos contratados. Você pode seguir direto para o onboarding.'
+                {paymentReturnState === 'director_ready'
+                    ? 'Pagamento confirmado. Para cartão, configure Google ou senha imediatamente; para boleto compensado, siga o link enviado ao e-mail contratual.'
                     : paymentReturnState === 'account_activated'
                       ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
                       : paymentReturnState === 'review_required'
                         ? 'Seu pagamento foi preservado. Os dados comerciais precisam de revisão antes de liberar o acesso.'
                         : paymentReturnState === 'unavailable'
                           ? 'Ainda não conseguimos consultar o estado final. Atualize esta página em alguns instantes; nenhuma nova cobrança será criada.'
-                          : 'A Stripe confirmou a transação e a Verto está concluindo automaticamente a criação da conta, da clínica e dos módulos contratados.'}
+                          : 'Pagamento confirmado. A Verto está preparando seu primeiro acesso: imediato para cartão e por e-mail após compensação do boleto.'}
               </p>
 
               {paymentReturnState !== 'confirming' && paymentReturnState !== 'unavailable' ? (
                 <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
                   {[
                     { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
-                    { label: 'Diretor e módulos contratados liberados', done: ['director_ready', 'account_activated'].includes(paymentReturnState) || directorOpening },
-                    { label: 'Entrada no onboarding da clínica', done: paymentReturnState === 'account_activated' || directorOpening }
+                    { label: 'Primeiro acesso liberado com segurança', done: ['director_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Google ou senha configurado antes do onboarding', done: paymentReturnState === 'account_activated' }
                   ].map((step) => (
                     <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">
                       <span className={step.done ? 'text-emerald-600' : 'text-slate-300'}>{step.done ? '✓' : '○'}</span>
@@ -972,20 +906,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 </div>
               ) : null}
 
-              {paymentReturnState === 'director_ready' && !directorOpening ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const sessionId = new URLSearchParams(window.location.search).get('session_id') || '';
-                    void openDirectorSession(sessionId);
-                  }}
-                  className="mt-5 min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-                >
-                  Entrar na Verto e continuar onboarding
-                </button>
-              ) : null}
-
-              {['payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) && !directorOpening ? (
+              {['payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) ? (
                 <button
                   type="button"
                   onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}
