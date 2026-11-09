@@ -1,9 +1,7 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from 'recharts';
-import type { ClinicalOutcomeSeriesSummary } from '../utils/clinicalOutcomeAnalytics';
-import type { ClinicalOutcomePlanScopeIndex } from '../utils/clinicalOutcomePlanScope';
 import { clinicalSpecialtyScopeKey } from '../utils/clinicalSpecialties';
-import { buildPtsClusteredSpecialtyMetrics, type PtsChartSpecialtyPlan } from '../utils/ptsClusteredSpecialtyProgress';
+import type { PtsChartSpecialtyPlan, PtsClusteredMetric } from '../utils/ptsClusteredSpecialtyProgress';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
 const COLORS: Record<string, string> = {
@@ -15,19 +13,14 @@ const EXTRA_COLORS = ['#8B5CF6', '#0891B2', '#E11D48', '#65A30D', '#C026D3', '#4
 const labelForWeek = (week: string) => week.slice(8, 10) + '/' + week.slice(5, 7);
 
 export function PtsClusteredSpecialtyProgress({
-  plans, series, planScopeIndex, isDark = false, selectedMetricId = '', onSelectedMetricIdChange,
+  plans, metrics, isDark = false, selectedMetricId = '', onSelectedMetricIdChange,
 }: {
   plans: PtsChartSpecialtyPlan[];
-  series: ClinicalOutcomeSeriesSummary[];
-  planScopeIndex: ClinicalOutcomePlanScopeIndex;
+  metrics: PtsClusteredMetric[];
   isDark?: boolean;
   selectedMetricId?: string;
   onSelectedMetricIdChange?: (metricId: string) => void;
 }) {
-  const metrics = useMemo(
-    () => buildPtsClusteredSpecialtyMetrics(plans, series, planScopeIndex),
-    [plans, series, planScopeIndex],
-  );
   const selected = metrics.find((metric) => metric.id === selectedMetricId) || metrics[0];
   const tones = isDark ? 'text-slate-300' : 'text-slate-600';
   if (!selected) {
