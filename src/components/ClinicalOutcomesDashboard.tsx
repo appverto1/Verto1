@@ -915,6 +915,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
         />
       )}
 
+      {analyticsSeries.length === 0 && shareControl}
       {analyticsSeries.length > 0 && (
         <ClinicalPlanAnalyticsShell
           key={`${patientId}:${scopeId}`}
