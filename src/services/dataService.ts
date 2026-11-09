@@ -6445,6 +6445,63 @@ export const dataService = {
     return { success: true, data: [] };
   },
 
+  // PEI evaluation plans persist on the server, separate from patient demographics.
+  // Deliberately no offline-first optimistic acknowledgement: the Save button
+  // confirms only a successful, committed database write.
+  async listPeiAssessmentPlans(patientId: string) {
+    const endpoint = '/api/pei/patients/' + encodeURIComponent(patientId) + '/assessment-plans';
+    try {
+      const response = await fetchClinical(endpoint, { credentials: 'include', headers: await getAuthHeaders() },
+        { helperName: 'listPeiAssessmentPlans', operation: 'list', table: 'patient_pei_assessment_plans_v1', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível carregar os planos de avaliação.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível carregar os planos de avaliação.');
+      return { success: false, data: [], error: message, message };
+    }
+  },
+
+  async getPeiAssessmentPlan(patientId: string, planId: string) {
+    const endpoint = '/api/pei/patients/' + encodeURIComponent(patientId) + '/assessment-plans/' + encodeURIComponent(planId);
+    try {
+      const response = await fetchClinical(endpoint, { credentials: 'include', headers: await getAuthHeaders() },
+        { helperName: 'getPeiAssessmentPlan', operation: 'list', table: 'patient_pei_assessment_plans_v1,patient_pei_assessment_plan_versions_v1', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível abrir o plano de avaliação.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível abrir o plano de avaliação.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async createPeiAssessmentPlan(patientId: string, payload: any) {
+    const endpoint = '/api/pei/patients/' + encodeURIComponent(patientId) + '/assessment-plans';
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST', credentials: 'include',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }, { helperName: 'createPeiAssessmentPlan', operation: 'write', table: 'patient_pei_assessment_plans_v1', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível criar o plano de avaliação.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível criar o plano de avaliação.');
+      return { success: false, error: message, message };
+    }
+  },
+
+  async savePeiAssessmentPlan(patientId: string, planId: string, payload: any) {
+    const endpoint = '/api/pei/patients/' + encodeURIComponent(patientId) + '/assessment-plans/' + encodeURIComponent(planId);
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH', credentials: 'include',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }, { helperName: 'savePeiAssessmentPlan', operation: 'write', table: 'patient_pei_assessment_plans_v1', hasExplicitColumns: true });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar o plano de avaliação.');
+    } catch (error) {
+      const message = getApiErrorMessage(error, 'Não foi possível salvar o plano de avaliação.');
+      return { success: false, error: message, message };
+    }
+  },
+
   async getAbaLinkableTargetsForMaintenance(patientId: string, options: { limit?: number } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse([]);
     const endpoint = endpointWithQuery(`/api/patients/${encodeURIComponent(String(patientId))}/aba/targets/linkable`, {
