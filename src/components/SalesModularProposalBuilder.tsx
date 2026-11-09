@@ -733,7 +733,7 @@ export const SalesModularProposalBuilder = ({
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
           offerValidityDays: 14,
-          trialDays: 7,
+          trialDays: 0,
           onboardingInstallments: 1,
           usageProfile: 'intensive',
           driverOverrides: {},
@@ -1776,7 +1776,7 @@ export const SalesModularProposalBuilder = ({
         : 'manual');
     setInput({
       ...snapshotInput,
-      trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
+      trialDays: 0,
       commercialPricingMode: 'manual_module_prices',
       commercialCapacityBasis: 'current_patients',
       // Duplicar um cenário histórico cria uma nova composição comercial sem
@@ -2202,9 +2202,24 @@ export const SalesModularProposalBuilder = ({
                     value={contractEmail}
                     maxLength={254}
                     autoComplete="email"
-                    disabled={contractEmailLocked}
+                    disabled={Boolean(busy)}
                     onChange={(event) => {
-                      setContractEmail(event.target.value);
+                      const nextEmail = event.target.value;
+                      // The old paid contract and Checkout keep their frozen identity.
+                      // Changing it starts a separate draft; only Save can persist.
+                      if (
+                        contractEmailLocked &&
+                        normalizeContractEmail(nextEmail) !== frozenOfferContractEmail &&
+                        selectedSimulation
+                      ) {
+                        duplicateSimulation(selectedSimulation);
+                        setCheckoutLink(null);
+                        setOfferAccepted(false);
+                        setNotice(
+                          'E-mail alterado no rascunho de uma nova proposta. Salve e selecione o cenário antes de gerar outro link.'
+                        );
+                      }
+                      setContractEmail(nextEmail);
                       setPreparedOffer(null);
                       setError('');
                     }}
@@ -2227,7 +2242,7 @@ export const SalesModularProposalBuilder = ({
                   </p>
                 ) : contractEmailLocked ? (
                   <p className="mt-2 text-xs font-normal text-emerald-700">
-                    E-mail congelado nesta proposta: {frozenOfferContractEmail}
+                    E-mail desta proposta: {frozenOfferContractEmail}. Para mudar, edite o campo, salve uma nova versão e selecione-a antes de gerar um novo link.
                   </p>
                 ) : historicalOfferMissingContractIdentity ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -3814,30 +3829,12 @@ export const SalesModularProposalBuilder = ({
                       ))}
                     </select>
                   </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Período de teste
-                    <select
-                      value={input.trialDays ?? 0}
-                      onChange={(event) =>
-                        updateInput({
-                          trialDays: Number(event.target.value) as 0 | 7 | 14 | 30
-                        })
-                      }
-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
-                    >
-                      <option value={0}>Sem teste</option>
-                      <option value={7}>7 dias</option>
-                      <option value={14}>14 dias</option>
-                      <option value={30}>30 dias</option>
-                    </select>
-                    {selectedSimulationTrialDays !== null ? (
-                      <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
-                        Cenário selecionado: {selectedSimulationTrialDays > 0
-                          ? `${selectedSimulationTrialDays} dias de teste`
-                          : 'sem período de teste'}.
-                      </span>
-                    ) : null}
-                  </label>
+                  {selectedSimulationTrialDays !== null && selectedSimulationTrialDays > 0 ? (
+                    <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                      Esta proposta antiga contém período grátis, que não é mais oferecido.
+                      Duplique o cenário, clique em Salvar e selecione a nova versão antes de criar outro link.
+                    </div>
+                  ) : null}
                   <label className="text-sm font-medium text-slate-700">
                     Validade
                     <select
