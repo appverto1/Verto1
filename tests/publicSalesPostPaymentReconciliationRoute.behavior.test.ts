@@ -133,6 +133,13 @@ test('contract review takes precedence over even a claimed or ready session',asy
  assert.equal(res.statusCode,200);
  assert.equal(res.body.state,'review_required');
 });
+test('contract review never exposes the card activation capability',async()=>{
+ const s=fixture({reconcileSalesAssistedCheckout:async()=>({paymentConfirmed:true,accountActivated:true,directorSessionReady:true,sessionClaimed:false,reviewRequired:true,settledPaymentMethod:'card',cardActivationPath:'/ativacao-comercial/'+'a'.repeat(48)})});
+ const res=await s.call();
+ assert.equal(res.body.state,'review_required');
+ assert.equal(res.body.directorSessionReady,false);
+ assert.equal(res.body.cardActivationPath,null);
+});
 test('Stripe reconciliation exception fails closed with a stable 503 response',async()=>{
  const s=fixture({getStripe:()=>{throw new Error('STRIPE_UNAVAILABLE')}});
  const res=await s.call();

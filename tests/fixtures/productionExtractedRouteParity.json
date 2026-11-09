@@ -72,7 +72,7 @@
       "\"/api/public/sales-offers/:token/prepare-activation\"",
       "publicSalesPostPaymentLimiter"
     ],
-    "sha256": "2b3b4e3ea0aeabe6b9cf5bd12c47d6dd9c0eb9a7c5549396a95e963fe0643fa8",
+    "sha256": "1a7e452e7701e394f9ff16706a16c9fc6138b6831af0a36fb99d50fd7f870655",
     "stagingFunctionalChange": true
   },
   {

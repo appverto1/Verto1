@@ -6,7 +6,7 @@ const server=readFileSync('server.ts','utf8');
 const hash=s=>createHash('sha256').update(s).digest('hex');
 const sections=[
   {file:"services/paidDirectorSessionBootstrap.ts",hash:"098eb3652859b3efe50221ed264ae5010929375816c81dce41d26462c29e53ba",factory:"createPaidDirectorSessionBootstrap"},
-  {file:"services/publicSalesPostPaymentReconciliationRoute.ts",hash:"c61c79c0d3c0a31ac64475b014b7a1b34ca5200083b512bd493acd726dd14e16",factory:"registerPublicSalesPostPaymentReconciliationRoute"},
+  {file:"services/publicSalesPostPaymentReconciliationRoute.ts",hash:"ccff4ebb79eb04b3d6f80115404cc4b714550af8146a6ff11df3be4211831310",factory:"registerPublicSalesPostPaymentReconciliationRoute"},
   {file:"services/salesDirectorContractAccess.ts",hash:"d3e346bbc21e96892d7c4c12b30987f2bfb3eb1cf202dcc2de64dc0fdd61882d",factory:"createSalesDirectorContractAccess"},
   {file:"services/salesPaidDirectorAccountProvisioning.ts",hash:"6ace99737a7a298dbd61814017ae7917aefde4a666378a21c2550ff000934fc3",factory:"createSalesPaidDirectorAccountProvisioning"},
 

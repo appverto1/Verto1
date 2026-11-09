@@ -5,7 +5,7 @@ import { PGlite } from '@electric-sql/pglite';
 const db = new PGlite();
 try {
   await db.exec('create table public.sales_checkout_links (id integer primary key, status text, marker text)');
-  await db.exec(readFileSync('supabase/migrations/20261109114257_sales_checkout_terminal_monotonic_guard.sql', 'utf8'));
+  await db.exec(readFileSync('supabase/migrations/20261109115958_sales_checkout_terminal_monotonic_guard.sql', 'utf8'));
   for (const status of ['completed', 'failed', 'expired']) {
     await db.query('insert into public.sales_checkout_links values ($1,$2,$3)', [1, status, 'original']);
     await db.query("update public.sales_checkout_links set status='payment_pending', marker='stale' where id=1");
