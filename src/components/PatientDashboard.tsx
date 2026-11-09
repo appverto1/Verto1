@@ -1774,10 +1774,22 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const modeNormalized = mode === 'first' ? 'baseline' : 'latest';
       return effectiveDomains.map((domain: any) => {
         const domainName = String(domain?.name || 'Geral').trim() || 'Geral';
-        const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : []).map((skill: any) => ({
-          name: String(skill?.name || '').trim(),
-          maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 1) || 1)
-        }));
+        const domainTasks = (Array.isArray(domain?.skills) ? domain.skills : []).map((skill: any) => {
+          const explicitCriterion = skill?.masteryCriteria || skill?.mastery_criteria || {};
+          const consecutiveTarget = explicitCriterion.requiredConsecutiveIndependentCorrectTrials
+            ?? explicitCriterion.required_consecutive_independent_correct_trials;
+          const totalTarget = explicitCriterion.requiredIndependentCorrectTrials
+            ?? explicitCriterion.required_independent_correct_trials
+            ?? skill?.meta_sucessos
+            ?? skill?.metaSucessos;
+          return {
+            name: String(skill?.name || '').trim(),
+            maxScore: Math.max(1, Number(skill?.maxScore ?? skill?.max_score ?? 1) || 1),
+            metaSucessos: consecutiveTarget ?? totalTarget ?? undefined,
+            criterionMode: consecutiveTarget !== null && consecutiveTarget !== undefined
+              ? 'consecutive_independent' as const : 'total_independent' as const,
+          };
+        });
         const domainEvents = scoredEvents
           .filter((event: any) => event._timestamp <= cutoffTs)
           .filter((event: any) => {
