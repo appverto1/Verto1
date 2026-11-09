@@ -4488,7 +4488,7 @@ export const SessionMode = ({
       return;
     }
     const frequencyLockKey = `frequency:${behavior.id}:${behaviorName}`;
-    if (!lockAction(frequencyLockKey, 300)) return;
+    if (!lockAction(frequencyLockKey, 90)) return;
     const payload = buildBehaviorPayload(behaviorName, 'frequency', { behavior_id: behavior.id, behaviorId: behavior.id, count_delta: countDelta, countDelta });
     triggerMicroFeedback(`behavior:${behavior.id}`, 'plus');
     showClinicalToast(buildClinicalActionToast({
@@ -4801,19 +4801,23 @@ export const SessionMode = ({
 
   const registerRateOccurrence = () => {
     if (!ensureSessionCanRecord()) return;
-    if (!rateWindow) return;
-    if (!lockAction(`rate:${rateWindow.id}`, 300)) return;
-    setRateWindow({ ...rateWindow, count: Number(rateWindow.count || 0) + 1 });
-    const payload = buildBehaviorPayload(rateWindow.behaviorName, 'rate', {
-      behavior_id: rateWindow.behaviorId || selectedBehavior.id,
-      behaviorId: rateWindow.behaviorId || selectedBehavior.id,
+    // This ref is updated synchronously by useLiveSessionState, so quick taps
+    // cannot overwrite the preceding rate increment before React rerenders.
+    const currentRateWindow = rateWindowRef.current;
+    if (!currentRateWindow) return;
+    if (!lockAction(`rate:${currentRateWindow.id}`, 90)) return;
+    const nextRateCount = Number(currentRateWindow.count || 0) + 1;
+    setRateWindow({ ...currentRateWindow, count: nextRateCount });
+    const payload = buildBehaviorPayload(currentRateWindow.behaviorName, 'rate', {
+      behavior_id: currentRateWindow.behaviorId || selectedBehavior.id,
+      behaviorId: currentRateWindow.behaviorId || selectedBehavior.id,
       count_delta: 1,
       countDelta: 1,
-      raw_payload: { rateWindowId: rateWindow.id, rateWindowStartedAt: rateWindow.startedAt }
+      raw_payload: { rateWindowId: currentRateWindow.id, rateWindowStartedAt: currentRateWindow.startedAt }
     });
     showClinicalToast(buildClinicalActionToast({
       action: 'frequency',
-      behaviorName: rateWindow.behaviorName,
+      behaviorName: currentRateWindow.behaviorName,
       countDelta: 1,
       location: selectedLocation,
       severity: selectedSeverity
@@ -4821,11 +4825,11 @@ export const SessionMode = ({
     void saveBehaviorEvent(payload, {
       id: String(payload.id),
       kind: 'behavior',
-      title: rateWindow.behaviorName,
-      detail: `taxa +1 (${Number(rateWindow.count || 0) + 1})`,
+      title: currentRateWindow.behaviorName,
+      detail: `taxa +1 (${nextRateCount})`,
       timestamp: payload.timestamp,
       measurementType: 'rate',
-      behaviorId: rateWindow.behaviorId || selectedBehavior.id,
+      behaviorId: currentRateWindow.behaviorId || selectedBehavior.id,
       countDelta: 1,
       contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
