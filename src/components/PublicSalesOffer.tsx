@@ -1,14 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { resolveSalesPostPaymentState, resolveSalesPostPaymentRetryDelayMs } from '../utils/salesPostPaymentState.mjs';
 import {
   AlertCircle,
-  Check,
   CheckCircle2,
-  Layers3,
   Loader2,
   ShieldCheck
 } from 'lucide-react';
 import { LogoVerto } from './Common';
-import { getSupabase } from '../lib/supabase';
+import { ModularOfferDetails } from './ModularPublicOfferDetails';
+export { ModularOfferDetails } from './ModularPublicOfferDetails';
+import { loadPublicSalesOfferResponse, requireConfirmedPublicSalesOffer } from '../services/publicSalesOfferTransport';
+import { acceptPublicSalesModularOffer, handoffPublicSalesCardCheckout } from '../services/publicSalesCardCheckout';
+import { requestPublicSalesPostPaymentReconciliation, loadPublicSalesPaymentStatusResponse } from '../services/publicSalesPostPaymentTransport';
 import {
   PUBLIC_ACTIVE_PATIENT_PRICE_LABEL,
   formatSalesCurrency
@@ -17,7 +20,6 @@ import type {
   CustomCapacityPolicy,
   OfferItemDiscount
 } from '../utils/salesCommercialEvolution';
-import { formatSalesCommercialDate } from '../utils/salesCommercialDate';
 
 type LegacyPublicOffer = {
   offerType: 'legacy';
@@ -156,436 +158,13 @@ type PublicOffer = LegacyPublicOffer | ModularPublicOffer;
 type PaymentReturnState =
   | 'idle'
   | 'confirming'
+  | 'payment_pending'
   | 'payment_confirmed'
   | 'provisioning'
   | 'director_ready'
   | 'account_activated'
   | 'review_required'
   | 'unavailable';
-
-export const ModularOfferDetails = ({
-  offer
-}: {
-  offer: ModularPublicOffer;
-}) => {
-  const recurringItems = offer.items.filter(
-    (item) => item.pricingMode !== 'one_time'
-  );
-  const oneTimeItems = offer.items.filter(
-    (item) => item.oneTimeAmountCents > 0
-  );
-  const hasPlatformFoundation = recurringItems.some(
-    (item) => item.itemKey === 'platform_foundation'
-  );
-  const recurringModuleCount = recurringItems.filter(
-    (item) => item.itemKey !== 'platform_foundation'
-  ).length;
-  const hasPromotion =
-    offer.promotionalMonthlyAmountCents !==
-    offer.postDiscountMonthlyAmountCents;
-  const capacityBlockPhases = offer.capacityBlockPhases || [];
-  const currentBlockPhase = capacityBlockPhases[0] || null;
-  const postBenefitBlockPhase =
-    capacityBlockPhases[capacityBlockPhases.length - 1] || null;
-  const publicBlockSizePatients =
-    currentBlockPhase?.blockSizePatients ??
-    offer.basePackage?.capacity?.blockSizePatients ??
-    offer.basePackage?.capacity?.policy?.blockSizePatients ??
-    0;
-  const publicGracePeriodDays =
-    offer.basePackage?.capacity?.gracePeriodDays ??
-    offer.basePackage?.capacity?.policy?.gracePeriodDays ??
-    0;
-  const historicalBlockPriceCents =
-    offer.basePackage?.capacity?.effectiveBlockPriceCents ??
-    offer.basePackage?.capacity?.policy?.blockPriceCents ??
-    null;
-
-  return (
-    <>
-      <div className="mt-6 overflow-hidden rounded-2xl border border-slate-200">
-        <div className="border-b border-slate-200 bg-slate-50 px-4 py-3">
-          <p className="text-xs font-medium text-slate-500">Estrutura escolhida</p>
-          <p className="mt-1 text-sm font-semibold text-slate-900">
-            Composição modular Verto
-          </p>
-          <p className="mt-1 text-xs font-normal text-slate-500">
-            {hasPlatformFoundation ? 'Fundação da plataforma + ' : ''}
-            {recurringModuleCount} módulo(s) ·{' '}
-            {offer.initialActivePatientQuantity} pacientes estimados
-            {offer.basePackage?.limitQuantity
-              ? ` · capacidade de ${offer.basePackage.limitQuantity}`
-              : ''}
-          </p>
-        </div>
-        <div className="divide-y divide-slate-100">
-          {recurringItems.map((item) => (
-            <div
-              key={`${item.itemKey}:${item.publicMetadata?.tierName || 'item'}`}
-              className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Check size={15} className="shrink-0 text-emerald-600" />
-                  <p className="text-sm font-medium text-slate-900">{item.publicName}</p>
-                </div>
-                <p className="mt-1 pl-[23px] text-xs font-normal leading-5 text-slate-500">
-                  {item.description}
-                </p>
-                {Array.isArray(item.publicMetadata?.features) &&
-                item.publicMetadata.features.length > 0 ? (
-                  <ul className="mt-2 space-y-1 pl-[23px] text-xs font-normal leading-5 text-slate-600">
-                    {item.publicMetadata.features.map(
-                      (feature: string, featureIndex: number) => (
-                        <li
-                          key={`${item.itemKey}:feature:${featureIndex}`}
-                          className="flex items-start gap-2"
-                        >
-                          <span
-                            aria-hidden="true"
-                            className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-violet-400"
-                          />
-                          <span>{feature}</span>
-                        </li>
-                      )
-                    )}
-                  </ul>
-                ) : null}
-                {item.limitQuantity || item.includedQuantity ? (
-                  <p className="mt-1 pl-[23px] text-xs font-medium text-violet-700">
-                    {item.limitQuantity
-                      ? `Limite: ${item.limitQuantity.toLocaleString('pt-BR')} ${item.publicMetadata?.unitName || ''}`
-                      : `${item.includedQuantity?.toLocaleString('pt-BR')} ${item.publicMetadata?.unitName || ''} incluídos`}
-                  </p>
-                ) : null}
-                {item.publicMetadata?.pricePerPatientCents != null ? (
-                  <p className="mt-1 pl-[23px] text-xs font-medium text-slate-700">
-                    {formatSalesCurrency(
-                      Number(item.publicMetadata.pricePerPatientCents),
-                      offer.currency
-                    )}{' '}
-                    por paciente/mês · capacidade faturada{' '}
-                    {Number(
-                      item.publicMetadata.billedCapacityPatients || 0
-                    ).toLocaleString('pt-BR')}
-                  </p>
-                ) : null}
-                {item.itemDiscountBasisPoints > 0 ? (
-                  <p className="mt-1 pl-[23px] text-xs font-medium text-emerald-700">
-                    Desconto do módulo:{' '}
-                    {(item.itemDiscountBasisPoints / 100).toLocaleString(
-                      'pt-BR',
-                      { maximumFractionDigits: 2 }
-                    )}
-                    %
-                  </p>
-                ) : null}
-              </div>
-              <div className="shrink-0 pl-[23px] text-left sm:min-w-44 sm:pl-0 sm:text-right">
-                {item.offerDiscount ? (
-                  <>
-                    <p className="text-xs text-slate-500">
-                      Preço de tabela: {formatSalesCurrency(item.offerDiscount.priceBeforeDiscountCents, offer.currency)}/mês
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-violet-800">
-                      {formatSalesCurrency(item.offerDiscount.discountedPriceCents, offer.currency)}/mês
-                    </p>
-                    <p className="mt-1 text-xs font-medium text-slate-700">
-                      {item.offerDiscount.durationCount
-                        ? `durante ${item.offerDiscount.durationCount} ${item.offerDiscount.durationUnit === 'days' ? 'dias' : 'meses'}`
-                        : item.offerDiscount.endsAt
-                          ? `até ${formatSalesCommercialDate(item.offerDiscount.endsAt)}`
-                          : 'condição vigente'}
-                    </p>
-                    <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-900">
-                      Depois: {formatSalesCurrency(item.offerDiscount.priceAfterExpirationCents, offer.currency)}/mês
-                    </p>
-                  </>
-                ) : (
-                  <p className="text-sm font-semibold text-slate-900">
-                    {formatSalesCurrency(
-                      hasPromotion
-                        ? item.promotionalRecurringAmountCents
-                        : item.postPromotionRecurringAmountCents,
-                      offer.currency
-                    )}
-                    <span className="font-normal text-slate-500">/mês</span>
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {offer.basePackage?.capacity ? (
-        <div className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/70 p-4">
-          <p className="text-sm font-medium text-violet-950">Capacidade técnica contratada da composição Verto</p>
-          <div className="mt-3 grid gap-2 text-xs text-slate-700 sm:grid-cols-3">
-            <span>Limite-base: {offer.basePackage.capacity.baseLimitPatients} pacientes</span>
-            <span>Quantidade reservada: {offer.basePackage.capacity.selectedBlocks} bloco(s)</span>
-            <span>Limite total: {offer.basePackage.capacity.totalContractedLimitPatients} pacientes</span>
-            <span>Armazenamento: {offer.basePackage.capacity.includedStorageMb.toLocaleString('pt-BR')} MB</span>
-            <span>
-              Valor do bloco nesta fase:{' '}
-              {currentBlockPhase == null
-                ? historicalBlockPriceCents == null
-                  ? 'definido na condição comercial'
-                  : `${formatSalesCurrency(
-                      historicalBlockPriceCents,
-                      offer.currency
-                    )}/mês`
-                : `${formatSalesCurrency(
-                    currentBlockPhase.blockPriceCents,
-                    offer.currency
-                  )}/mês`}
-            </span>
-            {postBenefitBlockPhase &&
-            postBenefitBlockPhase.phaseNumber !==
-              currentBlockPhase?.phaseNumber ? (
-              <span>
-                Valor do bloco após os benefícios:{' '}
-                {formatSalesCurrency(
-                  postBenefitBlockPhase.blockPriceCents,
-                  offer.currency
-                )}/mês
-              </span>
-            ) : null}
-            <span>
-              Valor dos blocos reservados nesta fase:{' '}
-              {formatSalesCurrency(
-                currentBlockPhase?.blocksRevenueCents ??
-                  offer.basePackage.capacity.blocksMonthlyRevenueCents,
-                offer.currency
-              )}/mês
-            </span>
-          </div>
-          {currentBlockPhase ? (
-            <details className="mt-3 rounded-xl border border-violet-100 bg-white/80">
-              <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-violet-900">
-                Módulos que compõem o bloco de{' '}
-                {currentBlockPhase.blockSizePatients}
-              </summary>
-              <div className="divide-y divide-violet-50 border-t border-violet-100 px-3">
-                {currentBlockPhase.modules.map((module) => {
-                  const postModule = postBenefitBlockPhase?.modules.find(
-                    (candidate) => candidate.itemKey === module.itemKey
-                  );
-                  return (
-                    <div
-                      key={module.itemKey}
-                      className="flex items-center justify-between gap-3 py-2 text-xs"
-                    >
-                      <span className="text-slate-600">{module.publicName}</span>
-                      <span className="text-right font-medium text-slate-800">
-                        {formatSalesCurrency(
-                          module.blockRevenueCents,
-                          offer.currency
-                        )}
-                        {postModule &&
-                        postModule.blockRevenueCents !==
-                          module.blockRevenueCents
-                          ? ` · depois ${formatSalesCurrency(
-                              postModule.blockRevenueCents,
-                              offer.currency
-                            )}`
-                          : ''}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
-          ) : null}
-          {capacityBlockPhases.length > 0 ? (
-            <div className="mt-3 space-y-2" aria-label="Fases comerciais da capacidade">
-              {capacityBlockPhases.map((phase, phaseIndex) => {
-                const previousPhase =
-                  phaseIndex > 0 ? capacityBlockPhases[phaseIndex - 1] : null;
-                const changedModules = phase.modules.filter((module) => {
-                  if (!previousPhase) return true;
-                  const previousModule = previousPhase.modules.find(
-                    (candidate) => candidate.itemKey === module.itemKey
-                  );
-                  return (
-                    !previousModule ||
-                    previousModule.effectivePricePerPatientCents !==
-                      module.effectivePricePerPatientCents
-                  );
-                });
-                return (
-                  <div
-                    key={phase.phaseNumber}
-                    className="rounded-xl border border-violet-100 bg-white/80 p-3"
-                  >
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <div>
-                        <p className="text-xs font-medium text-violet-900">
-                          Fase {phase.phaseNumber}
-                        </p>
-                        <p className="mt-0.5 text-[11px] font-normal text-slate-500">
-                          {formatSalesCommercialDate(phase.startsAt)} —{' '}
-                          {phase.endsAt
-                            ? formatSalesCommercialDate(phase.endsAt)
-                            : 'condição permanente'}
-                        </p>
-                      </div>
-                      <div className="text-left text-xs text-slate-700 sm:text-right">
-                        <p>
-                          {formatSalesCurrency(
-                            phase.effectivePricePerPatientCents,
-                            offer.currency
-                          )}
-                          /paciente
-                        </p>
-                        <p className="mt-0.5 font-medium text-slate-900">
-                          {formatSalesCurrency(
-                            phase.contractedMonthlyRevenueCents,
-                            offer.currency
-                          )}
-                          /mês · bloco{' '}
-                          {formatSalesCurrency(
-                            phase.blockPriceCents,
-                            offer.currency
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                    {changedModules.length > 0 ? (
-                      <p className="mt-2 text-[11px] font-normal leading-5 text-slate-600">
-                        {phaseIndex === 0
-                          ? 'Módulos desta fase: '
-                          : 'Valores alterados nesta fase: '}
-                        {changedModules
-                          .map(
-                            (module) =>
-                              `${module.publicName} ${formatSalesCurrency(
-                                module.effectivePricePerPatientCents,
-                                offer.currency
-                              )}/paciente`
-                          )
-                          .join(' · ')}
-                      </p>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
-          <p className="mt-3 text-xs leading-5 text-slate-600">
-            A capacidade contratada contempla até{' '}
-            {offer.basePackage.capacity.baseLimitPatients} pacientes ativos. Ao
-            ultrapassar esse limite, a capacidade será ampliada em blocos de{' '}
-            {publicBlockSizePatients} pacientes,
-            mantendo os mesmos módulos contratados e os preços por paciente
-            vigentes em cada fase. Há{' '}
-            {publicGracePeriodDays} dias de
-            tolerância para ajuste no próximo ciclo. A ampliação de capacidade
-            não bloqueia o acesso contratado.
-          </p>
-        </div>
-      ) : null}
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {hasPromotion ? (
-          <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
-            <p className="text-xs font-medium text-violet-700">
-              Durante a promoção
-            </p>
-            <p className="mt-1 text-xl font-semibold text-slate-900">
-              {formatSalesCurrency(
-                offer.promotionalMonthlyAmountCents,
-                offer.currency
-              )}
-              <span className="text-sm font-normal text-slate-500">/mês</span>
-            </p>
-            <p className="mt-1 text-xs font-normal text-slate-600">
-              {offer.globalDiscountPercentage.toLocaleString('pt-BR', {
-                maximumFractionDigits: 2
-              })}
-              % de desconto por {offer.discountDurationMonths} meses
-            </p>
-          </div>
-        ) : null}
-        <div
-          className={`rounded-2xl border border-emerald-200 bg-emerald-50 p-4 ${
-            hasPromotion ? '' : 'sm:col-span-2'
-          }`}
-        >
-          <p className="text-xs font-medium text-emerald-700">
-            {hasPromotion ? 'Após a promoção' : 'Total mensal'}
-          </p>
-          <p className="mt-1 text-xl font-semibold text-slate-900">
-            {formatSalesCurrency(
-              offer.postDiscountMonthlyAmountCents,
-              offer.currency
-            )}
-            <span className="text-sm font-normal text-slate-500">/mês</span>
-          </p>
-        </div>
-      </div>
-
-      {oneTimeItems.length > 0 ? (
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-          <p className="text-xs font-medium text-slate-500">Implantação</p>
-          {oneTimeItems.map((item) => (
-            <div
-              key={item.itemKey}
-              className="mt-2 flex items-center justify-between gap-4 text-sm"
-            >
-              <span className="font-normal text-slate-700">{item.publicName}</span>
-              <span className="font-semibold text-slate-900">
-                {formatSalesCurrency(item.oneTimeAmountCents, offer.currency)}
-              </span>
-            </div>
-          ))}
-          {offer.onboardingInstallments > 1 ? (
-            <p className="mt-2 text-xs font-normal text-slate-500">
-              Condição comercial: {offer.onboardingInstallments} parcelas,
-              sem criar cobrança na Stripe nesta etapa.
-            </p>
-          ) : null}
-        </div>
-      ) : null}
-
-      {offer.publicNotes ? (
-        <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm font-normal leading-6 text-slate-700">
-          {offer.publicNotes}
-        </div>
-      ) : null}
-
-      <div className="mt-4 flex items-start gap-3 rounded-2xl border border-violet-100 bg-violet-50 p-4">
-        <Layers3 size={18} className="mt-0.5 shrink-0 text-violet-700" />
-        <p className="text-sm font-normal leading-6 text-violet-950">
-          {hasPlatformFoundation
-            ? 'Comece com a Fundação Verto e os módulos necessários hoje. Novos módulos e blocos de capacidade podem ser adicionados conforme a operação crescer, sem duplicar a base da plataforma.'
-            : 'Comece com os módulos necessários hoje. Novos módulos e blocos de capacidade podem ser adicionados conforme a operação crescer.'}
-        </p>
-      </div>
-
-      <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm font-normal text-amber-900">
-        Proposta válida até{' '}
-        {formatSalesCommercialDate(offer.expiresAt)}.
-      </div>
-
-      {offer.trialDays > 0 ? (
-        <div className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-          <p className="text-sm font-semibold text-emerald-900">{offer.trialDays} dias gratuitos</p>
-          <p className="mt-1 text-xs font-normal leading-5 text-emerald-800">
-            O cartão é cadastrado na Stripe e a primeira cobrança ocorre após o período de teste, conforme esta proposta.
-          </p>
-        </div>
-      ) : null}
-
-      <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-center">
-        <p className="text-sm font-medium text-slate-800">Contratação protegida pela Verto</p>
-        <p className="mt-1 text-xs font-normal leading-5 text-slate-500">
-          Depois do aceite, esta mesma página prepara ou reutiliza o Checkout da Stripe. Os módulos e valores são sempre reconstruídos do contrato congelado no servidor.
-        </p>
-      </div>
-    </>
-  );
-};
 
 export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offer, setOffer] = useState<PublicOffer | null>(null);
@@ -598,72 +177,6 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
   const [offerUnavailable, setOfferUnavailable] = useState(false);
   const [paymentReturnState, setPaymentReturnState] = useState<PaymentReturnState>('idle');
   const [paymentStatusRefreshKey, setPaymentStatusRefreshKey] = useState(0);
-  const [directorOpening, setDirectorOpening] = useState(false);
-  const directorOpeningRef = useRef(false);
-
-  const openDirectorSession = async (checkoutSessionId: string) => {
-    if (!checkoutSessionId || directorOpeningRef.current) return false;
-    directorOpeningRef.current = true;
-    setDirectorOpening(true);
-    setError('');
-    try {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/director-session`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          cache: 'no-store',
-          body: JSON.stringify({ sessionId: checkoutSessionId }),
-        },
-      );
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || payload?.success === false || !payload?.tokenHash) {
-        if (payload?.error === 'SALES_DIRECTOR_SESSION_ALREADY_CLAIMED') {
-          window.location.replace('/');
-          return true;
-        }
-        throw new Error(payload?.message || payload?.error || 'Não foi possível abrir sua conta agora.');
-      }
-
-      const supabase = await getSupabase();
-      const verified = await supabase.auth.verifyOtp({
-        token_hash: String(payload.tokenHash),
-        type: (payload.otpType || 'magiclink') as any,
-      });
-      if (verified?.error || !verified?.data?.session?.access_token) {
-        throw verified?.error || new Error('Não foi possível estabelecer a sessão do Diretor.');
-      }
-
-      const loginResponse = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          accessToken: verified.data.session.access_token,
-          intendedRole: 'director',
-          provider: 'sales_checkout',
-          activationFlow: false,
-        }),
-      });
-      const loginPayload = await loginResponse.json().catch(() => ({}));
-      if (!loginResponse.ok || loginPayload?.success === false) {
-        throw new Error(loginPayload?.message || loginPayload?.error || 'O acesso foi liberado, mas não foi possível abrir a Verto.');
-      }
-
-      setPaymentReturnState('account_activated');
-      window.history.replaceState({}, document.title, '/');
-      window.location.replace('/');
-      return true;
-    } catch (sessionError: any) {
-      setError(sessionError?.message || 'Não foi possível abrir sua conta agora. Tente novamente.');
-      return false;
-    } finally {
-      directorOpeningRef.current = false;
-      setDirectorOpening(false);
-    }
-  };
-
   useEffect(() => {
     let cancelled = false;
     let retryTimer: number | null = null;
@@ -672,54 +185,19 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     const returnedFromPayment = query.get('payment') === 'success' && Boolean(checkoutSessionId);
     const legacyPaymentReturnWithoutContext = returnedFromPayment && token.toLowerCase() === 'pagamento';
 
+    let lastObservedPaymentState: PaymentReturnState | null = null;
     const applyStatusPayload = (data: any) => {
-      if (data?.state === 'review_required' || data?.reviewRequired === true) {
-        setPaymentReturnState('review_required');
-        return 'review_required';
-      }
-      if (data?.state === 'account_activated' || data?.sessionClaimed === true) {
-        setPaymentReturnState('account_activated');
-        return 'account_activated';
-      }
-      if (data?.state === 'director_ready' || data?.directorSessionReady === true) {
-        setPaymentReturnState('director_ready');
-        return 'director_ready';
-      }
-      if (data?.state === 'provisioning' || data?.accountProvisioned === true) {
-        setPaymentReturnState('provisioning');
-        return 'provisioning';
-      }
-      if (data?.state === 'payment_confirmed' || data?.paymentConfirmed === true) {
-        setPaymentReturnState('payment_confirmed');
-        return 'payment_confirmed';
-      }
-      setPaymentReturnState('confirming');
-      return 'payment_pending';
+      const state = resolveSalesPostPaymentState(data);
+      lastObservedPaymentState = state;
+      setPaymentReturnState(state === 'payment_pending' ? 'confirming' : state);
+      return state;
     };
 
-    const paymentRetryDelayMs = (response: Response | null, data: any, fallbackMs: number) => {
-      const headerSeconds = Number(response?.headers?.get('retry-after') || 0);
-      const payloadMs = Number(data?.retryAfterMs || 0);
-      const requestedMs = headerSeconds > 0
-        ? headerSeconds * 1000
-        : payloadMs > 0
-          ? payloadMs
-          : fallbackMs;
-      return Math.max(1500, Math.min(30000, Math.round(requestedMs)));
-    };
+    const paymentRetryDelayMs = (response: Response | null, data: any, fallbackMs: number) =>
+      resolveSalesPostPaymentRetryDelayMs(response?.headers?.get('retry-after'), data, fallbackMs);
 
     const reconcileDirectorProvisioning = async () => {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/prepare-activation`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          cache: 'no-store',
-          body: JSON.stringify({ sessionId: checkoutSessionId }),
-        },
-      );
-      const data = await response.json().catch(() => ({}));
+      const { response, data } = await requestPublicSalesPostPaymentReconciliation(token, checkoutSessionId);
       if (response.status === 429) {
         return {
           ...data,
@@ -743,7 +221,13 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
       }
       if (state === 'review_required') return true;
       if (state === 'director_ready') {
-        await openDirectorSession(checkoutSessionId);
+        const path = String(data?.cardActivationPath || '');
+        if (/^\/ativacao-comercial\/[A-Za-z0-9_-]{43,80}$/.test(path)) {
+          // A validated card purchase unlocks a one-time activation route,
+          // never an Auth session. Google/password selection is still required.
+          window.location.replace(path);
+        }
+        // Boleto has no browser activation path; it must use the e-mail.
         return true;
       }
       return false;
@@ -779,11 +263,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         if (cancelled) return;
 
         try {
-          const response = await fetch(
-            `/api/public/sales-offers/${encodeURIComponent(token)}/payment-status?session_id=${encodeURIComponent(checkoutSessionId)}`,
-            { credentials: 'omit', cache: 'no-store' },
-          );
-          const data = await response.json().catch(() => ({}));
+          const { response, data } = await loadPublicSalesPaymentStatusResponse(token, checkoutSessionId);
           if (response.status === 429) {
             setPaymentReturnState('confirming');
             nextDelayMs = paymentRetryDelayMs(response, data, 5000);
@@ -821,28 +301,34 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
           }
         }
       }
-      if (!cancelled) setPaymentReturnState('provisioning');
+      // A bounded poll timeout is never evidence of payment or provisioning.
+      // Only the authoritative backend can say whether it is still unpaid.
+      if (!cancelled && lastObservedPaymentState === 'payment_pending')
+        setPaymentReturnState('payment_pending');
+      else if (!cancelled && lastObservedPaymentState === null)
+        setPaymentReturnState('unavailable');
     };
 
     const loadOffer = async () => {
+      // A token change must not continue displaying a previous clinic's proposal.
+      setOffer(null);
+      setAcceptedAt(null);
+      setCommercialConsent(false);
+      setLoading(true);
+      setError('');
       setOfferUnavailable(false);
       try {
-        const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}`, {
-          credentials: 'omit',
-        });
-        const data = await response.json().catch(() => ({}));
+        const { response, data } = await loadPublicSalesOfferResponse(token);
         if (response.status === 404 && data?.error === 'OFFER_UNAVAILABLE') {
           // An opaque public link may be expired, revoked, or already paid.
           // A 404 cannot prove which. Never retry checkout or claim payment here.
           if (!cancelled) { setOfferUnavailable(true); setError(''); }
           return;
         }
-        if (!response.ok || data?.success === false) {
-          throw new Error(data?.message || data?.error || 'Oferta indisponível.');
-        }
+        const confirmedOffer = requireConfirmedPublicSalesOffer(response, data);
         if (!cancelled) {
-          setOffer(data.offer);
-          setAcceptedAt(data.offer?.acceptedAt || null);
+          setOffer(confirmedOffer);
+          setAcceptedAt(confirmedOffer?.acceptedAt || null);
         }
       } catch (loadError: any) {
         if (!cancelled) setError(loadError?.message || 'Não foi possível carregar esta oferta.');
@@ -867,18 +353,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     setContinuing(true);
     setError('');
     try {
-      const response = await fetch(`/api/public/sales-offers/${encodeURIComponent(token)}/checkout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'omit',
-        body: JSON.stringify({ acceptTerms: true })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false) {
-        throw new Error(data?.message || data?.error || 'Não foi possível continuar.');
-      }
-      if (!data?.url) throw new Error('Checkout indisponível.');
-      window.location.assign(data.url);
+      await handoffPublicSalesCardCheckout(token, (url) => window.location.assign(url));
     } catch (checkoutError: any) {
       setError(checkoutError?.message || 'Não foi possível continuar.');
     } finally {
@@ -891,21 +366,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
     setAccepting(true);
     setError('');
     try {
-      const response = await fetch(
-        `/api/public/sales-offers/${encodeURIComponent(token)}/accept`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit',
-          body: JSON.stringify({
-            commercialValuesConsent: true
-          })
-        }
-      );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data?.success === false) {
-        throw new Error(data?.error || 'Não foi possível registrar o aceite.');
-      }
+      const data = await acceptPublicSalesModularOffer(token);
       setAcceptedAt(data.acceptedAt || new Date().toISOString());
     } catch (acceptError: any) {
       setError(acceptError?.message || 'Não foi possível registrar o aceite.');
@@ -921,7 +382,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
         <section className="rounded-[28px] border border-slate-200 bg-white p-5 shadow-sm md:p-8">
           {paymentReturnState !== 'idle' ? (
             <div className="flex min-h-72 flex-col items-center justify-center text-center">
-              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' || directorOpening ? (
+              {paymentReturnState === 'confirming' || paymentReturnState === 'provisioning' ? (
                 <Loader2 className="mb-4 animate-spin text-violet-600" size={30} />
               ) : paymentReturnState === 'unavailable' || paymentReturnState === 'review_required' ? (
                 <AlertCircle className="mb-4 text-amber-600" size={32} />
@@ -929,14 +390,14 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 <CheckCircle2 className="mb-4 text-emerald-600" size={32} />
               )}
               <h1 className="text-xl font-semibold text-slate-900">
-                {directorOpening
-                  ? 'Abrindo sua Verto'
-                  : paymentReturnState === 'confirming'
-                    ? 'Confirmando seu pagamento'
+                {paymentReturnState === 'confirming'
+                    ? 'Verificando o pagamento'
+                    : paymentReturnState === 'payment_pending'
+                      ? 'Pagamento aguardando confirmação'
                     : paymentReturnState === 'provisioning' || paymentReturnState === 'payment_confirmed'
                       ? 'Preparando sua clínica'
                       : paymentReturnState === 'director_ready'
-                        ? 'Acesso de Diretor liberado'
+                        ? 'Configure seu acesso à Verto'
                         : paymentReturnState === 'account_activated'
                           ? 'Conta de Diretor ativada'
                           : paymentReturnState === 'review_required'
@@ -944,25 +405,27 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                             : 'Confirmação em andamento'}
               </h1>
               <p className="mt-3 max-w-md text-sm font-normal leading-6 text-slate-600">
-                {directorOpening
-                  ? 'Seu pagamento já foi confirmado. Estamos abrindo a sessão segura do Diretor e levando você para a configuração inicial da clínica.'
-                  : paymentReturnState === 'director_ready'
-                    ? 'A Stripe confirmou o pagamento. A Verto já criou o acesso de Diretor e liberou exatamente os módulos contratados. Você pode seguir direto para o onboarding.'
+                {paymentReturnState === 'payment_pending'
+                    ? 'Se você escolheu Boleto, pague o documento na Stripe e aguarde a compensação. A emissão do boleto não confirma a quitação. Sua clínica só será liberada após confirmação do pagamento pela Stripe. Não inicie outro Checkout; use Atualizar status para consultar novamente.'
+                    : paymentReturnState === 'confirming'
+                      ? 'A Stripe ainda está verificando o resultado da transação. Não inicie outro Checkout enquanto a confirmação estiver pendente.'
+                    : paymentReturnState === 'director_ready'
+                    ? 'A Stripe confirmou o pagamento. Se você pagou por cartão, escolha agora Google ou senha. Para boleto, utilize o link enviado ao e-mail contratual após a compensação.'
                     : paymentReturnState === 'account_activated'
                       ? 'A conta da clínica está ativa como Diretor e os módulos contratados foram vinculados.'
                       : paymentReturnState === 'review_required'
                         ? 'Seu pagamento foi preservado. Os dados comerciais precisam de revisão antes de liberar o acesso.'
                         : paymentReturnState === 'unavailable'
                           ? 'Ainda não conseguimos consultar o estado final. Atualize esta página em alguns instantes; nenhuma nova cobrança será criada.'
-                          : 'A Stripe confirmou a transação e a Verto está concluindo automaticamente a criação da conta, da clínica e dos módulos contratados.'}
+                          : 'Pagamento confirmado. A Verto está preparando o primeiro acesso: imediato para cartão, ou por e-mail para boleto compensado.'}
               </p>
 
-              {paymentReturnState !== 'confirming' && paymentReturnState !== 'unavailable' ? (
+              {paymentReturnState !== 'confirming' && paymentReturnState !== 'payment_pending' && paymentReturnState !== 'unavailable' ? (
                 <div className="mt-6 w-full max-w-md rounded-2xl border border-slate-200 bg-slate-50 p-4 text-left">
                   {[
                     { label: 'Pagamento confirmado pela Stripe', done: ['payment_confirmed', 'provisioning', 'director_ready', 'account_activated'].includes(paymentReturnState) },
-                    { label: 'Diretor e módulos contratados liberados', done: ['director_ready', 'account_activated'].includes(paymentReturnState) || directorOpening },
-                    { label: 'Entrada no onboarding da clínica', done: paymentReturnState === 'account_activated' || directorOpening }
+                    { label: 'Primeiro acesso liberado com segurança', done: ['director_ready', 'account_activated'].includes(paymentReturnState) },
+                    { label: 'Acesso por Google ou senha configurado', done: paymentReturnState === 'account_activated' }
                   ].map((step) => (
                     <div key={step.label} className="flex items-center gap-2 py-1.5 text-sm">
                       <span className={step.done ? 'text-emerald-600' : 'text-slate-300'}>{step.done ? '✓' : '○'}</span>
@@ -972,20 +435,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                 </div>
               ) : null}
 
-              {paymentReturnState === 'director_ready' && !directorOpening ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const sessionId = new URLSearchParams(window.location.search).get('session_id') || '';
-                    void openDirectorSession(sessionId);
-                  }}
-                  className="mt-5 min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"
-                >
-                  Entrar na Verto e continuar onboarding
-                </button>
-              ) : null}
-
-              {['payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) && !directorOpening ? (
+              {['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'].includes(paymentReturnState) ? (
                 <button
                   type="button"
                   onClick={() => setPaymentStatusRefreshKey((current) => current + 1)}
@@ -1054,7 +504,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                         <div>
                           <p className="font-medium">Proposta aceita</p>
                           <p className="mt-1 font-normal leading-5 text-slate-600">
-                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o cadastro do cartão.
+                            Aceite registrado em {new Date(acceptedAt).toLocaleString('pt-BR')}. Você já pode continuar para o pagamento seguro por cartão ou boleto.
                           </p>
                         </div>
                       </div>
@@ -1094,7 +544,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                       {continuing
                         ? 'Preparando Checkout...'
                         : offer.modularCheckoutEnabled && offer.stripeReady
-                          ? 'Continuar para cadastro do cartão'
+                          ? 'Continuar para pagamento (cartão ou boleto)'
                           : 'Configuração Stripe pendente'}
                     </button>
                   ) : null}

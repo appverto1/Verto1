@@ -7,9 +7,9 @@ const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8
 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
 const bootstrap = server.match(/const preparePaidDirectorSessionBootstrap =[^]*?const processSalesAssistedCheckoutCompleted/)?.[0] || '';
-const statusRoute = server.match(/"\/api\/public\/sales-offers\/:token\/payment-status"[^]*?"\/api\/public\/sales-offers\/:token\/prepare-activation"/)?.[0] || '';
-const reconcileRoute = server.match(/"\/api\/public\/sales-offers\/:token\/prepare-activation"[^]*?"\/api\/public\/sales-offers\/:token\/director-session"/)?.[0] || '';
-const sessionRoute = server.match(/"\/api\/public\/sales-offers\/:token\/director-session"[^]*?const loadPublicSalesActivation/)?.[0] || '';
+const statusRoute = fs.readFileSync('services/publicSalesPaymentStatusRoute.ts', 'utf8');
+const reconcileRoute = fs.readFileSync('services/publicSalesPostPaymentReconciliationRoute.ts', 'utf8');
+const sessionRoute = fs.readFileSync('services/publicSalesDirectorSessionRoute.ts', 'utf8');
 
 // Compatibility intent: the Director remains provisioned server-side. For delayed
 // payment methods, a payment-confirmed e-mail is an additional durable first-access path.
@@ -24,7 +24,8 @@ assert.match(statusRoute, /accountProvisioned/);
 assert.match(statusRoute, /directorSessionReady/);
 assert.match(statusRoute, /sessionClaimed/);
 assert.match(statusRoute, /"director_ready"/);
-assert.doesNotMatch(statusRoute, /activationPath|emailDeliveryState|activationEmailSent/);
+assert.match(statusRoute, /activationEmailSent/);
+assert.doesNotMatch(statusRoute, /cardActivationPath|activationPath/);
 
 // The retained prepare-activation URL is now a reconciliation endpoint: it reads Stripe,
 // reuses the canonical paid processor and does not create a new Checkout/subscription.
@@ -34,21 +35,21 @@ assert.doesNotMatch(reconcileRoute, /req\.body\?\.email|req\.body\.email/);
 assert.doesNotMatch(reconcileRoute, /checkout\.sessions\.create|subscriptions\.update/);
 assert.doesNotMatch(reconcileRoute, /emails\.send|sendTransactionalEmail/);
 
-// Session is issued without sending mail. It is backed by the frozen contract identity.
-assert.match(sessionRoute, /sanitizeEmail\(offer\.contract_email\)/);
-assert.match(sessionRoute, /generateLink\(\{[\s\S]*?type:\s*"magiclink"/);
-assert.match(sessionRoute, /properties\?\.hashed_token/);
+// The public return URL cannot create an authenticated Director session.
+assert.match(sessionRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
+assert.match(sessionRoute, /status\(410\)/);
+assert.doesNotMatch(sessionRoute, /generateLink|hashed_token/);
 assert.doesNotMatch(sessionRoute, /emails\.send|sendTransactionalEmail/);
 
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
-assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /prepareSalesActivationAccess\(/);
+assert.match(processPaid, /attemptEmail: settledMethod === 'boleto'/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
-assert.match(publicOffer, /director-session/);
-assert.match(publicOffer, /supabase\.auth\.verifyOtp/);
-assert.match(publicOffer, /provider:\s*'sales_checkout'/);
-assert.match(publicOffer, /\/api\/auth\/login/);
+assert.match(reconcileRoute, /immediateCardActivation \|\| boletoEmailReady/);
+assert.match(publicOffer, /cardActivationPath/);
+assert.doesNotMatch(publicOffer, /supabase\.auth\.verifyOtp/);
 assert.match(publicOffer, /A Stripe confirmou o pagamento/);
-assert.doesNotMatch(publicOffer, /Reenviar e-mail|activation_ready|\/ativacao-comercial\//);
+assert.match(publicOffer, /Configure seu acesso à Verto/);
 
 console.log('salesPaidDirectorActivationEmailRecovery20260831.regression.test.mjs: OK');

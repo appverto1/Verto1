@@ -4,6 +4,7 @@ import fs from 'node:fs';
 
 const server = readModularServerSource();
 const publicOffer = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
+const activationPage = fs.readFileSync('src/components/SalesActivationAccess.tsx', 'utf8');
 const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 
 const processPaid = server.match(/const processSalesAssistedCheckoutCompleted =[^]*?const stripeInvoiceSubscriptionId/)?.[0] || '';
@@ -16,7 +17,7 @@ assert.match(processPaid, /paymentStatus === "paid"/);
 assert.match(processPaid, /confirm_sales_assisted_checkout_payment/);
 assert.match(processPaid, /provisionPaidSalesDirectorAccount\(/);
 assert.doesNotMatch(processPaid, /buildSalesPostPaymentActivationEmail|sendTransactionalEmail|resend\.emails\.send/);
-assert.match(processPaid, /options\.sendActivationEmail[\s\S]*?prepareSalesActivationAccess\(/);
+assert.match(processPaid, /prepareSalesActivationAccess\(/);
 assert.match(processPaid, /preserveProvisioningStatus:\s*true/);
 
 const createUserBlock = provision.match(/supabase\.auth\.admin\.createUser\(\{[^]*?\}\);/)?.[0] || '';
@@ -39,18 +40,15 @@ assert.match(finalize, /provisioning_status:\s*"completed"/);
 assert.match(verification, /exactModules/);
 assert.match(verification, /everyActiveModuleComesFromContract/);
 
-assert.match(sessionRoute, /SALES_DIRECTOR_SESSION_ALREADY_CLAIMED/);
-assert.match(sessionRoute, /verifySalesDirectorContractAccess\(/);
-assert.match(sessionRoute, /supabase\.auth\.admin\.generateLink/);
-assert.match(sessionRoute, /hashed_token/);
+assert.match(sessionRoute, /SALES_DIRECTOR_EMAIL_ACTIVATION_REQUIRED/);
+assert.match(sessionRoute, /status\(410\)/);
+assert.doesNotMatch(sessionRoute, /supabase\.auth\.admin\.generateLink/);
 assert.doesNotMatch(sessionRoute, /emails\.send|sendTransactionalEmail/);
 
-assert.match(publicOffer, /supabase\.auth\.verifyOtp/);
-assert.match(publicOffer, /provider:\s*'sales_checkout'/);
-assert.match(publicOffer, /intendedRole:\s*'director'/);
-assert.match(publicOffer, /window\.location\.replace\('\/'\)/);
-assert.match(publicOffer, /Entrada no onboarding da clínica/);
-assert.doesNotMatch(publicOffer, /E-mail de ativação enviado|Reenviar e-mail/);
+assert.match(publicOffer, /cardActivationPath/);
+assert.match(activationPage, /beginSalesActivationGoogleOAuth/);
+assert.match(activationPage, /persistPublicSalesActivationPassword/);
+assert.doesNotMatch(publicOffer, /supabase\.auth\.verifyOtp/);
 
 // Existing paid-Director onboarding remains the destination after automatic session establishment.
 assert.match(onboarding, /director/i);

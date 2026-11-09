@@ -76,7 +76,7 @@ export function registerPublicSalesPaymentStatusRoute(
             .maybeSingle(),
           supabase
             .from("pending_activations")
-            .select("token,expires_at,used")
+            .select("token,expires_at,used,activation_email_sent_at")
             .eq("source", "sales_assisted_signup")
             .eq("sales_offer_id", offer.id)
             .eq("sales_lead_id", offer.lead_id)
@@ -111,6 +111,7 @@ export function registerPublicSalesPaymentStatusRoute(
           accountProvisioned
           && bootstrap
           && bootstrap.used !== true
+          && Boolean(bootstrap.activation_email_sent_at)
           && sanitizeString(bootstrap.token, 128) === hashSalesOfferToken(expectedBootstrapToken)
           && (!bootstrap.expires_at || new Date(bootstrap.expires_at).getTime() > Date.now()),
         );
@@ -131,6 +132,7 @@ export function registerPublicSalesPaymentStatusRoute(
           paymentConfirmed,
           accountProvisioned,
           directorSessionReady,
+          activationEmailSent: Boolean(bootstrap?.activation_email_sent_at),
           sessionClaimed,
           accountActivated: sessionClaimed,
           reviewRequired,

@@ -128,6 +128,13 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
             error: 'O período de teste congelado diverge entre os snapshots da proposta. Gere uma nova proposta antes de continuar.',
           });
         }
+        if (frozenTrialDays !== 0) {
+          return res.status(409).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_TRIAL_DISABLED",
+            error: "Esta proposta antiga contém período grátis. Duplique o cenário e gere uma nova proposta sem teste antes de contratar.",
+          });
+        }
         const snapshot =
           offer.modular_snapshot && typeof offer.modular_snapshot === "object"
             ? offer.modular_snapshot
@@ -244,6 +251,13 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
             success: false,
             code: "MODULAR_CHECKOUT_RECONCILIATION_FAILED",
             error: "Os valores congelados da proposta não reconciliam com seus itens.",
+          });
+        }
+        if (!Number.isFinite(Number(firstPhase?.invoiceAmountCents)) || Number(firstPhase.invoiceAmountCents) <= 0) {
+          return res.status(422).json({
+            success: false,
+            code: "MODULAR_CHECKOUT_INITIAL_PAYMENT_REQUIRED",
+            error: "A contratação exige uma primeira cobrança maior que zero. Revise as condições comerciais antes de gerar o link.",
           });
         }
         const customerFacingModulesOnly =
@@ -468,14 +482,8 @@ export function createModularCheckoutCore(deps: Record<string, any>) {
               : `${origin}/oferta/pagamento?payment=cancelled`,
             expires_at: Math.floor(Date.now() / 1000) + 24 * 60 * 60,
             metadata: stripeMetadata,
-            ...(frozenTrialDays > 0
-              ? { payment_method_collection: "always" as const }
-              : {}),
             subscription_data: {
               metadata: stripeMetadata,
-              ...(frozenTrialDays > 0
-                ? { trial_period_days: frozenTrialDays }
-                : {}),
             },
             line_items: checkoutPlan.initialLineItems.map((line) => ({
               quantity: Number(line.quantity || 1),

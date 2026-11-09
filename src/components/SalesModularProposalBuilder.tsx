@@ -19,6 +19,22 @@ import {
 } from 'lucide-react';
 import { getSupabase } from '../lib/supabase';
 import {
+  SALES_PATIENT_CAPACITY_BLOCKS,
+  SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS,
+  isSalesFunctionalModuleItemKey,
+  commercialCapacityForDemand,
+  commercialPlanLabelForCapacity,
+  commercialCapacityForExactDemand,
+  itemTierForQuantity,
+  selectionForItem,
+  normalizeBuilderInputForCalculation
+} from '../utils/salesModularProposalBuilderInput';
+
+import { prepareSalesPublicOffer, copySalesPublicOfferUrl } from '../services/salesPublicOfferLinks';
+import {normalizeContractEmail,isValidContractEmail,resolveFrozenPublicOfferContractEmail} from '../utils/salesPublicOfferContractIdentity';
+import { loadSalesModularProposalData, saveSalesModularScenario, selectSalesModularScenario, renameSalesModularScenario, archiveSalesModularScenario, readConfirmedSalesModularProposalResponse } from '../services/salesModularProposalPersistence';
+import { buildSalesModularProposalDuplicateDraft } from '../utils/salesModularProposalScenarioDraft';
+import {
   applySalesPackageTierSelection,
   calculateSalesModularProposal,
   recommendSalesPackageTier,
@@ -29,8 +45,7 @@ import {
   type SalesModularProposalInput,
   type SalesModularProposalResult,
   type SalesPricingCatalogItem,
-  type SalesPricingCatalogSnapshot,
-  type SalesPricingCatalogTier
+  type SalesPricingCatalogSnapshot
 } from '../utils/salesModularProposal';
 import {
   calculateCustomCapacity,
@@ -112,69 +127,10 @@ const percent = (value: number | null | undefined) =>
 const requestKey = (prefix: string) =>
   `${prefix}:${crypto.randomUUID()}`;
 
-const normalizeContractEmail = (value: unknown) =>
-  String(value || '').trim().toLowerCase();
-
-const isValidContractEmail = (value: unknown) => {
-  const email = normalizeContractEmail(value);
-  return (
-    email.length >= 3 &&
-    email.length <= 254 &&
-    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  );
-};
-
 const ECONOMY_SIMULATOR_PATIENT_PRESETS = [150, 160, 170, 200] as const;
 
-const SALES_FUNCTIONAL_MODULE_KEYS = [
-  'clinical_core',
-  'appointments_communication',
-  'financial_management',
-  'insurance_tiss',
-  'school_management'
-] as const;
-
-const SALES_PATIENT_CAPACITY_BLOCKS = [10, 20, 30, 40, 50] as const;
-const SALES_ESSENTIAL_PATIENT_LIMIT = 50;
-const SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS = 50;
 const SALES_HEALTHY_MODULE_MARGIN_BASIS_POINTS = 7000;
 const SALES_ATTENTION_MODULE_MARGIN_BASIS_POINTS = 5000;
-
-const isSalesFunctionalModuleItemKey = (value: string) =>
-  SALES_FUNCTIONAL_MODULE_KEYS.includes(
-    value as (typeof SALES_FUNCTIONAL_MODULE_KEYS)[number]
-  );
-
-const commercialCapacityForDemand = (patientQuantity: number) =>
-  SALES_PATIENT_CAPACITY_BLOCKS.find(
-    (capacity) => patientQuantity <= capacity
-  ) ?? null;
-
-const commercialPlanLabelForCapacity = (capacity: number) => {
-  const safeCapacity = Math.max(
-    SALES_ESSENTIAL_PATIENT_LIMIT,
-    Math.floor(Number(capacity) || SALES_ESSENTIAL_PATIENT_LIMIT)
-  );
-  if (safeCapacity <= SALES_ESSENTIAL_PATIENT_LIMIT) {
-    return 'Plano Essencial · 1 a 50 pacientes';
-  }
-  const enterpriseBlock = Math.ceil(
-    (safeCapacity - SALES_ESSENTIAL_PATIENT_LIMIT) /
-      SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS
-  );
-  const startsAt =
-    SALES_ESSENTIAL_PATIENT_LIMIT +
-    (enterpriseBlock - 1) * SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS +
-    1;
-  return `Enterprise ${enterpriseBlock} · ${startsAt} a ${safeCapacity} pacientes`;
-};
-
-// New exact-seat offers use the Essencial 1–50 / Enterprise 50-seat bands.
-// Keep historical block-based offer capacity selection unchanged.
-const commercialCapacityForExactDemand = (patientQuantity: number) => {
-  const demand = Math.max(1, Math.floor(Number(patientQuantity) || 1));
-  return Math.ceil(demand / SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS) * SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS;
-};
 
 const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) => {
   if (marginBasisPoints == null) {
@@ -198,187 +154,6 @@ const moduleMarginTrafficLight = (marginBasisPoints: number | null | undefined) 
   return {
     label: `Crítica · ${percent(marginBasisPoints)}`,
     className: 'border-rose-200 bg-rose-50 text-rose-800'
-  };
-};
-
-const itemTierForQuantity = (
-  item: SalesPricingCatalogItem,
-  quantity: number
-) =>
-  [...item.tiers]
-    .sort((left, right) => left.sortOrder - right.sortOrder)
-    .find(
-      (tier) =>
-        !tier.isCustom &&
-        tier.minimumQuantity <= quantity &&
-        (tier.maximumQuantity === null || quantity <= tier.maximumQuantity)
-    ) ||
-  item.tiers.find((tier) => tier.isCustom) ||
-  null;
-
-const selectionForItem = (
-  item: SalesPricingCatalogItem,
-  patientQuantity: number,
-  baseTier: SalesPricingCatalogTier,
-  perPatientPricing = false,
-  exactPerPatientBilling = false
-): SalesModularLineSelection => {
-  const quantity =
-    item.itemKey === 'insurance_tiss'
-      ? 100
-      : item.itemKey === 'additional_storage'
-        ? 1
-        : patientQuantity;
-  const suggestedTier = itemTierForQuantity(item, quantity);
-  const customCommercialTier =
-    perPatientPricing && isSalesFunctionalModuleItemKey(item.itemKey)
-      ? item.tiers.find((tier) => tier.isCustom) ||
-        item.tiers.find((tier) => tier.maximumQuantity === null) ||
-        null
-      : null;
-  const linkedTier =
-    item.itemKey === 'clinical_core'
-      ? baseTier
-      : customCommercialTier || suggestedTier;
-  const catalogMonthlyAmountCents =
-    linkedTier?.recurringAmountCents ??
-    suggestedTier?.recurringAmountCents ??
-    item.recurringAmountCents ??
-    0;
-  return {
-    itemKey: item.itemKey,
-    tierId: linkedTier?.id || null,
-    quantity,
-    itemDiscountBasisPoints: 0,
-    customRecurringAmountCents:
-      exactPerPatientBilling && item.billingInterval === 'monthly'
-        ? null
-        : perPatientPricing && item.billingInterval !== 'one_time'
-          ? catalogMonthlyAmountCents
-        : linkedTier?.isCustom
-          ? 0
-          : null,
-    pricingEditMode:
-      exactPerPatientBilling && item.billingInterval === 'monthly'
-        ? 'per_patient'
-        : perPatientPricing && item.billingInterval !== 'one_time'
-          ? 'monthly_total'
-        : undefined,
-    proposedPricePerPatientCents:
-      perPatientPricing && item.billingInterval !== 'one_time'
-        ? null
-        : undefined,
-    customOneTimeAmountCents: item.itemKey === 'onboarding' ? 0 : null
-  };
-};
-
-const normalizeBuilderInputForCalculation = (
-  input: SalesModularProposalInput,
-  catalog: SalesPricingCatalogSnapshot
-): SalesModularProposalInput => {
-  if (input.exactPerPatientBilling !== true) return input;
-  const coreItem = catalog.items.find(
-    (item) => item.itemKey === 'clinical_core'
-  );
-  const baseTier = coreItem?.tiers.find(
-    (tier) => tier.id === input.basePackageTierId
-  );
-  if (!coreItem || !baseTier) return input;
-
-  const patientQuantity = input.patientQuantity;
-  const rawCapacity = Number(input.customBasePackageLimit || 0);
-  const validCommercialCapacity =
-    Number.isInteger(rawCapacity) &&
-    rawCapacity >= SALES_ESSENTIAL_PATIENT_LIMIT &&
-    rawCapacity >= patientQuantity &&
-    rawCapacity % SALES_ENTERPRISE_BLOCK_SIZE_PATIENTS === 0;
-  const customBasePackageLimit =
-    input.commercialPricingMode === 'manual_module_prices' &&
-    (baseTier.isCustom || baseTier.maximumQuantity === null)
-      ? validCommercialCapacity
-        ? rawCapacity
-        : commercialCapacityForExactDemand(patientQuantity)
-      : input.customBasePackageLimit;
-
-  const lines = input.lines.map((line) => {
-    const item = catalog.items.find(
-      (candidate) => candidate.itemKey === line.itemKey
-    );
-    if (!item) return line;
-
-    let normalized: SalesModularLineSelection = { ...line };
-    if (item.itemKey === 'clinical_core') {
-      normalized = {
-        ...normalized,
-        tierId: baseTier.id,
-        quantity: patientQuantity
-      };
-    } else if (
-      item.pricingMode === 'package_limit' &&
-      item.itemKey !== 'insurance_tiss'
-    ) {
-      const selectedTier = item.tiers.find(
-        (tier) => tier.id === normalized.tierId
-      );
-      const selectedTierFits =
-        Boolean(selectedTier) &&
-        Number(selectedTier?.minimumQuantity || 0) <= patientQuantity &&
-        (
-          selectedTier?.maximumQuantity === null ||
-          patientQuantity <= Number(selectedTier?.maximumQuantity)
-        );
-      const compatibleTier = selectedTierFits
-        ? selectedTier
-        : itemTierForQuantity(item, patientQuantity);
-      normalized = {
-        ...normalized,
-        tierId: compatibleTier?.id || normalized.tierId || null,
-        quantity: patientQuantity
-      };
-    }
-
-    if (
-      input.commercialPricingMode === 'manual_module_prices' &&
-      item.billingInterval !== 'one_time'
-    ) {
-      const editMode =
-        normalized.pricingEditMode === 'monthly_total'
-          ? 'monthly_total'
-          : 'per_patient';
-      if (editMode === 'per_patient') {
-        normalized = {
-          ...normalized,
-          pricingEditMode: editMode,
-          proposedPricePerPatientCents:
-            typeof normalized.proposedPricePerPatientCents === 'number' &&
-            Number.isFinite(normalized.proposedPricePerPatientCents) &&
-            normalized.proposedPricePerPatientCents >= 0
-              ? Math.round(normalized.proposedPricePerPatientCents)
-              : null,
-          customRecurringAmountCents: null
-        };
-      } else {
-        normalized = {
-          ...normalized,
-          pricingEditMode: editMode,
-          proposedPricePerPatientCents: null,
-          customRecurringAmountCents:
-            typeof normalized.customRecurringAmountCents === 'number' &&
-            Number.isFinite(normalized.customRecurringAmountCents) &&
-            normalized.customRecurringAmountCents >= 0
-              ? Math.round(normalized.customRecurringAmountCents)
-              : null
-        };
-      }
-    }
-
-    return normalized;
-  });
-
-  return {
-    ...input,
-    customBasePackageLimit,
-    lines
   };
 };
 
@@ -626,15 +401,7 @@ export const SalesModularProposalBuilder = ({
         ...(init.headers || {})
       }
     });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || data?.success === false) {
-      const fetchError = new Error(
-        data?.error || 'Não foi possível concluir esta ação.'
-      );
-      (fetchError as any).code = data?.code;
-      throw fetchError;
-    }
-    return data;
+    return readConfirmedSalesModularProposalResponse(response);
   };
 
   useEffect(() => {
@@ -674,13 +441,8 @@ export const SalesModularProposalBuilder = ({
       setLoading(true);
       setError('');
       try {
-        const [catalogData, assumptionData, simulationData] = await Promise.all([
-          authenticatedFetch('/api/owner/sales/pricing-catalogs?compact=1'),
-          authenticatedFetch('/api/owner/sales/profitability-assumptions?context=new_proposal'),
-          authenticatedFetch(
-            `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations?page=1&pageSize=50`
-          )
-        ]);
+        const [catalogData, assumptionData, simulationData] =
+          await loadSalesModularProposalData(authenticatedFetch, lead.id);
         if (cancelled) return;
         const activeCatalog =
           catalogData.catalog as SalesPricingCatalogSnapshot;
@@ -733,7 +495,7 @@ export const SalesModularProposalBuilder = ({
           globalDiscountBasisPoints: 0,
           discountDurationMonths: 0,
           offerValidityDays: 14,
-          trialDays: 7,
+          trialDays: 0,
           onboardingInstallments: 1,
           usageProfile: 'intensive',
           driverOverrides: {},
@@ -1439,19 +1201,9 @@ export const SalesModularProposalBuilder = ({
   if (useLegacyFallback) return <>{legacyFallback}</>;
 
   const updateInput = (patch: Partial<SalesModularProposalInput>) => {
-    const changesFrozenTrial =
-      Object.prototype.hasOwnProperty.call(patch, 'trialDays') &&
-      selectedSimulationId.length > 0;
     setInput((current) => (current ? { ...current, ...patch } : current));
-    if (changesFrozenTrial) {
-      setSelectedSimulationId('');
-    }
     setPreparedOffer(null);
-    setNotice(
-      changesFrozenTrial
-        ? 'Período de teste alterado. Salve e selecione um novo cenário para congelar essa condição antes de gerar a proposta.'
-        : ''
-    );
+    setNotice('');
   };
 
   const changePatientQuantity = (patientQuantity: number) => {
@@ -1619,12 +1371,8 @@ export const SalesModularProposalBuilder = ({
     setError('');
     setNotice('');
     try {
-      const data = await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations`,
-        {
-          method: 'POST',
-          headers: { 'X-Idempotency-Key': requestKey('modular-simulation') },
-          body: JSON.stringify({
+      const data = await saveSalesModularScenario(
+        authenticatedFetch, lead.id, requestKey('modular-simulation'), {
             proposalMode: 'modular',
             catalogVersionId: catalog.id,
             assumptionSetId: assumptions.id,
@@ -1636,8 +1384,7 @@ export const SalesModularProposalBuilder = ({
             commercialExceptionType,
             internalNotes,
             publicNotes
-          })
-        }
+          }
       );
       const stored = {
         ...data.simulation,
@@ -1666,10 +1413,12 @@ export const SalesModularProposalBuilder = ({
     setBusy(`select:${simulation.id}`);
     setError('');
     try {
-      await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/simulations/${encodeURIComponent(simulation.id)}/select`,
-        { method: 'POST', body: JSON.stringify({}) }
-      );
+      await selectSalesModularScenario(authenticatedFetch, lead.id, simulation.id);
+      if (simulation.id !== selectedSimulationId) {
+        setPreparedOffer(null);
+        setCheckoutLink(null);
+        setOfferAccepted(false);
+      }
       setSelectedSimulationId(simulation.id);
       if (simulation.offer?.contract_email) {
         setContractEmail(normalizeContractEmail(simulation.offer.contract_email));
@@ -1697,16 +1446,7 @@ export const SalesModularProposalBuilder = ({
     if (editingScenarioName.trim().length < 2) return;
     setBusy(`rename:${simulationId}`);
     try {
-      const data = await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations/${encodeURIComponent(simulationId)}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({
-            action: 'rename',
-            scenarioName: editingScenarioName
-          })
-        }
-      );
+      const data = await renameSalesModularScenario(authenticatedFetch, lead.id, simulationId, editingScenarioName);
       setSimulations((current) =>
         current.map((simulation) =>
           simulation.id === simulationId ? data.simulation : simulation
@@ -1724,13 +1464,7 @@ export const SalesModularProposalBuilder = ({
   const archiveSimulation = async (simulationId: string) => {
     setBusy(`archive:${simulationId}`);
     try {
-      await authenticatedFetch(
-        `/api/owner/sales/leads/${encodeURIComponent(lead.id)}/modular-simulations/${encodeURIComponent(simulationId)}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({ action: 'archive' })
-        }
-      );
+      await archiveSalesModularScenario(authenticatedFetch, lead.id, simulationId);
       setSimulations((current) =>
         current.map((simulation) =>
           simulation.id === simulationId
@@ -1743,6 +1477,9 @@ export const SalesModularProposalBuilder = ({
       );
       if (selectedSimulationId === simulationId) {
         setSelectedSimulationId('');
+        setPreparedOffer(null);
+        setCheckoutLink(null);
+        setOfferAccepted(false);
       }
     } catch (archiveError: any) {
       setError(archiveError?.message || 'Não foi possível arquivar.');
@@ -1752,80 +1489,7 @@ export const SalesModularProposalBuilder = ({
   };
 
   const duplicateSimulation = (simulation: SavedModularSimulation) => {
-    const snapshotInput = simulation.modular_input_snapshot;
-    const snapshotDemand = Math.max(1, snapshotInput.patientQuantity);
-    const snapshotRecommended = catalog
-      ? recommendSalesPackageTier(catalog, snapshotDemand)
-      : null;
-    const snapshotCoreItem = catalog?.items.find(
-      (item) => item.itemKey === 'clinical_core'
-    );
-    const snapshotTier = snapshotCoreItem?.tiers.find(
-      (tier) => tier.id === snapshotInput.basePackageTierId
-    );
-    const modernCoreTier =
-      snapshotCoreItem?.tiers.find((tier) => tier.isCustom) ||
-      snapshotCoreItem?.tiers.find((tier) => tier.maximumQuantity === null) ||
-      null;
-    const modernCapacity = snapshotInput.exactPerPatientBilling === true
-      ? commercialCapacityForExactDemand(snapshotDemand)
-      : commercialCapacityForDemand(snapshotDemand) || Math.max(51, snapshotDemand);
-    const inferredMode = snapshotInput.basePackageSelectionMode ||
-      (snapshotRecommended?.id === snapshotInput.basePackageTierId
-        ? 'automatic'
-        : 'manual');
-    setInput({
-      ...snapshotInput,
-      trialDays: normalizeSalesTrialDays(snapshotInput.trialDays, 0),
-      commercialPricingMode: 'manual_module_prices',
-      commercialCapacityBasis: 'current_patients',
-      // Duplicar um cenário histórico cria uma nova composição comercial sem
-      // expor a infraestrutura como módulo; o snapshot original permanece intacto.
-      platformFoundationPricingMode: 'manual',
-      platformFoundationMonthlyAmountCents: 0,
-      usageProfile: 'intensive',
-      driverOverrides: {},
-      basePackageTierId:
-        modernCoreTier?.id || snapshotInput.basePackageTierId,
-      basePackageSelectionMode: modernCoreTier ? 'manual' : inferredMode,
-      customBasePackageLimit: modernCoreTier
-        ? modernCapacity
-        : snapshotTier?.isCustom || snapshotTier?.maximumQuantity === null
-          ? snapshotInput.customBasePackageLimit ??
-            simulation.results_snapshot?.basePackage?.limitQuantity ??
-            snapshotDemand
-          : null,
-      customCapacityBlocks: null,
-      customCapacitySelectionMode: 'automatic',
-      lines: snapshotInput.lines
-        .filter((line) => isSalesFunctionalModuleItemKey(line.itemKey))
-        .map((line) => {
-        const item = catalog?.items.find(
-          (candidate) => candidate.itemKey === line.itemKey
-        );
-        if (!item || item.billingInterval === 'one_time') return line;
-        const tier = item.tiers.find(
-          (candidate) => candidate.id === line.tierId
-        );
-        const modernTier =
-          item.tiers.find((candidate) => candidate.isCustom) ||
-          item.tiers.find((candidate) => candidate.maximumQuantity === null) ||
-          tier ||
-          null;
-        return {
-          ...line,
-          tierId: modernTier?.id || line.tierId,
-          pricingEditMode: line.pricingEditMode || 'monthly_total',
-          customRecurringAmountCents:
-            line.pricingEditMode === 'per_patient'
-              ? line.customRecurringAmountCents ?? null
-              : line.customRecurringAmountCents ??
-                tier?.recurringAmountCents ??
-                item.recurringAmountCents ??
-                0
-        };
-      })
-    });
+    setInput({ ...buildSalesModularProposalDuplicateDraft(simulation, catalog), trialDays: 0 });
     setScenarioName(
       `Cópia de ${simulation.scenario_name || 'cenário modular'}`
     );
@@ -1871,15 +1535,15 @@ export const SalesModularProposalBuilder = ({
     setBusy('offer');
     setError('');
     try {
-      const data = await authenticatedFetch('/api/owner/sales/offers', {
-        method: 'POST',
-        headers: { 'X-Idempotency-Key': requestKey('modular-offer') },
-        body: JSON.stringify({
+      const data = await prepareSalesPublicOffer(
+        authenticatedFetch,
+        {
           leadId: lead.id,
           simulationId: selectedSimulation.id,
           contractEmail: frozenContractEmail
-        })
-      });
+        },
+        requestKey('modular-offer')
+      );
       setPreparedOffer(data);
       if (data?.offer?.contract_email) {
         setContractEmail(normalizeContractEmail(data.offer.contract_email));
@@ -1906,10 +1570,9 @@ export const SalesModularProposalBuilder = ({
 
   const activeOfferId =
     preparedOffer?.offer?.id || selectedSimulation?.offer?.id || '';
-  const frozenOfferContractEmail = normalizeContractEmail(
-    preparedOffer?.offer?.contract_email ||
-      selectedSimulation?.offer?.contract_email ||
-      ''
+  const frozenOfferContractEmail = resolveFrozenPublicOfferContractEmail(
+    preparedOffer?.offer,
+    selectedSimulation?.offer
   );
   const contractEmailLocked = isValidContractEmail(frozenOfferContractEmail);
   const historicalOfferMissingContractIdentity = Boolean(
@@ -2022,6 +1685,17 @@ export const SalesModularProposalBuilder = ({
       setError(emailError?.message || 'Não foi possível enviar o link.');
     } finally {
       setBusy('');
+    }
+  };
+
+  const copyPublicOfferLink = async () => {
+    const url = preparedOffer?.publicUrl;
+    if (!url) return;
+    try {
+      await copySalesPublicOfferUrl(url, (value) => navigator.clipboard.writeText(value));
+      setNotice('Link da proposta pública copiado.');
+    } catch {
+      setError('Não foi possível copiar automaticamente. Abra a proposta pública e copie o endereço do navegador.');
     }
   };
 
@@ -2202,9 +1876,35 @@ export const SalesModularProposalBuilder = ({
                     value={contractEmail}
                     maxLength={254}
                     autoComplete="email"
-                    disabled={contractEmailLocked}
+                    disabled={Boolean(busy)}
                     onChange={(event) => {
-                      setContractEmail(event.target.value);
+                      const nextEmail = event.target.value;
+                      // Editing a frozen contract email starts a new unsaved version.
+                      // Neither a prior proposal nor its Checkout/activation identity is modified.
+                      if (
+                        contractEmailLocked &&
+                        normalizeContractEmail(nextEmail) !== frozenOfferContractEmail &&
+                        selectedSimulation
+                      ) {
+                        setInput({
+                          ...buildSalesModularProposalDuplicateDraft(selectedSimulation, catalog),
+                          trialDays: 0
+                        });
+                        setScenarioName(
+                          `Cópia de ${selectedSimulation.scenario_name || 'cenário modular'}`
+                        );
+                        setInternalJustification(selectedSimulation.internal_justification || '');
+                        setApproveCommercialException(false);
+                        setInternalNotes(selectedSimulation.internal_notes || '');
+                        setPublicNotes(selectedSimulation.public_notes || '');
+                        setSelectedSimulationId('');
+                        setCheckoutLink(null);
+                        setOfferAccepted(false);
+                        setNotice(
+                          'E-mail editável em uma nova versão. Clique em Salvar cenário e selecione-a antes de gerar a proposta. O link anterior permanece intacto.'
+                        );
+                      }
+                      setContractEmail(nextEmail);
                       setPreparedOffer(null);
                       setError('');
                     }}
@@ -2227,7 +1927,7 @@ export const SalesModularProposalBuilder = ({
                   </p>
                 ) : contractEmailLocked ? (
                   <p className="mt-2 text-xs font-normal text-emerald-700">
-                    E-mail congelado nesta proposta: {frozenOfferContractEmail}
+                    E-mail desta proposta: {frozenOfferContractEmail}. Para alterar, edite o campo: será preparado um novo cenário, que precisa ser salvo antes de gerar um novo link. O contrato anterior não será alterado.
                   </p>
                 ) : historicalOfferMissingContractIdentity ? (
                   <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
@@ -3814,30 +3514,12 @@ export const SalesModularProposalBuilder = ({
                       ))}
                     </select>
                   </label>
-                  <label className="text-sm font-medium text-slate-700">
-                    Período de teste
-                    <select
-                      value={input.trialDays ?? 0}
-                      onChange={(event) =>
-                        updateInput({
-                          trialDays: Number(event.target.value) as 0 | 7 | 14 | 30
-                        })
-                      }
-                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 font-normal"
-                    >
-                      <option value={0}>Sem teste</option>
-                      <option value={7}>7 dias</option>
-                      <option value={14}>14 dias</option>
-                      <option value={30}>30 dias</option>
-                    </select>
-                    {selectedSimulationTrialDays !== null ? (
-                      <span className="mt-1 block text-xs font-normal leading-5 text-slate-500">
-                        Cenário selecionado: {selectedSimulationTrialDays > 0
-                          ? `${selectedSimulationTrialDays} dias de teste`
-                          : 'sem período de teste'}.
-                      </span>
-                    ) : null}
-                  </label>
+                  {selectedSimulationTrialDays !== null && selectedSimulationTrialDays > 0 ? (
+                    <div role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                      Este cenário antigo contém período grátis, que não é mais permitido em novas contratações.
+                      Duplique o cenário e salve uma nova versão sem teste antes de gerar o link de pagamento.
+                    </div>
+                  ) : null}
                   <label className="text-sm font-medium text-slate-700">
                     Validade
                     <select
@@ -5814,6 +5496,12 @@ export const SalesModularProposalBuilder = ({
                 >
                   <ExternalLink size={16} /> Abrir proposta pública
                 </a>
+              ) : null}
+              {preparedOffer?.publicUrl ? (
+                <button type="button" onClick={() => void copyPublicOfferLink()}
+                  className="flex min-h-11 items-center justify-center gap-2 rounded-xl border border-violet-200 bg-white px-4 text-sm font-medium text-violet-700">
+                  <Copy size={16} /> Copiar link da proposta pública
+                </button>
               ) : null}
               {activeOfferId ? (
                 <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">

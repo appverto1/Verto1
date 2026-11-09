@@ -1,25 +1,34 @@
-import { readModularServerSource } from './helpers/modularServerSource.mjs';
+import {readFileSync as readItem09Source} from 'node:fs';
+import { readFileSync as readItem07Source } from 'node:fs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = readModularServerSource();
+const stripeWebhookEventStateSource = readItem09Source('services/stripeWebhookEventState.ts','utf8');
+const stripePaidProcessorSource = readItem09Source('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
+const stripeFinancialSource = readItem09Source('services/salesSubscriptionFinancialReconciliation.ts','utf8');
+const stripeScheduleSource = readItem09Source('services/salesModularSubscriptionSchedule.ts','utf8');
+const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscountSync.ts','utf8');
+const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
+
+const checkoutCoreSource = readItem07Source('services/salesModularCheckoutCore.ts','utf8');
+const publicCheckoutRouteSource = readItem07Source('services/publicSalesCheckoutRoutes.ts','utf8');
+
+const server = fs.readFileSync('server.ts', 'utf8');
+const offerRoutes = fs.readFileSync('services/ownerSalesOfferCreationRoutes.ts', 'utf8');
 const builder = fs.readFileSync('src/components/SalesModularProposalBuilder.tsx', 'utf8');
 const migration = fs.readFileSync(
   'supabase/migrations/20260814100000_sales_offer_contract_identity.sql',
   'utf8'
 );
 
-const modularOfferPreparation = server.match(
+const modularOfferPreparation = offerRoutes.match(
   /const prepareSalesModularOffer = async[\s\S]*?const prepareSalesOfferFromSimulation = async/
 )?.[0] || '';
-const modularCheckout = server.match(
-  /const createOrReuseModularCheckout = async[\s\S]*?app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout"/
-)?.[0] || '';
+const modularCheckout = checkoutCoreSource.slice(checkoutCoreSource.indexOf('const createOrReuseModularCheckout = async'));
 const checkoutEmailRoute = server.match(
   /app\.post\(\s*"\/api\/owner\/sales\/offers\/:offerId\/modular-checkout\/email"[\s\S]*?app\.get\(/
 )?.[0] || '';
-const checkoutProcessor = server.match(
-  /const processSalesAssistedCheckoutCompleted = async[\s\S]*?const processSalesAssistedStripeEvent = async/
+const checkoutProcessor = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted = async[\s\S]*?ITEM09_SOURCE_END/
 )?.[0] || '';
 
 assert.match(builder, /Identidade contratual/);
@@ -28,7 +37,12 @@ assert.match(builder, /contractEmail: frozenContractEmail/);
 assert.match(builder, /useState\(''\)/, 'novo contrato não deve herdar silenciosamente o e-mail do lead');
 assert.match(builder, /não é usado automaticamente/);
 assert.match(builder, /!contractEmailValid/);
-assert.match(builder, /disabled=\{contractEmailLocked\}/);
+assert.doesNotMatch(builder, /disabled=\{contractEmailLocked\}/);
+assert.match(builder, /disabled=\{Boolean\(busy\)\}/);
+assert.match(builder, /normalizeContractEmail\(nextEmail\) !== frozenOfferContractEmail/);
+assert.match(builder, /buildSalesModularProposalDuplicateDraft\(selectedSimulation, catalog\)/);
+assert.match(builder, /setSelectedSimulationId\(''\)/);
+assert.match(builder, /Clique em Salvar cenário e selecione-a/);
 assert.match(builder, /historicalOfferMissingContractIdentity/);
 assert.match(builder, /Duplicar cenário para nova proposta/);
 assert.doesNotMatch(

@@ -1,5 +1,6 @@
 import type Stripe from 'stripe';
 import crypto from 'crypto';
+import { resolveSalesSettledCheckoutMethod } from './salesCheckoutSettledMethod';
 // Item 09: Stripe paid; original audited statements retained unchanged.
 export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string, any>) => {
   const { buildSalesModuleSetHash, isUuid, persistActivityLog, preparePaidDirectorSessionBootstrap, prepareSalesActivationAccess, provisionPaidSalesDirectorAccount, resolveStripeEnvironment, sanitizeEmail, sanitizeString, supabase, syncSalesSubscriptionDiscount, validateStripeSecretForEnvironment } = deps;
@@ -7,7 +8,7 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
   const processSalesAssistedCheckoutCompleted = async (
     stripe: Stripe,
     session: Stripe.Checkout.Session,
-    options: { sendActivationEmail?: boolean } = {},
+    _options: { sendActivationEmail?: boolean } = {},
   ) => {
     const metadata = (session.metadata || {}) as Record<string, string>;
     if (sanitizeString(metadata.flowType, 80) === "sales_modular_assisted") {
@@ -96,21 +97,14 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
     }
     if (!paymentIdentityEmail) throw new Error("SALES_CHECKOUT_EMAIL_MISSING");
     let subscription: Stripe.Subscription | null = null;
-    // A paid Checkout is already authoritative for the financial transition.
-    // Only no-payment sessions need the subscription status before persistence.
-    if (paymentStatus === "no_payment_required" && subscriptionId) {
-      subscription = await stripe.subscriptions.retrieve(subscriptionId, {
-        expand: ["discounts", "items.data.price"],
-      } as any);
-    }
-    const subscriptionStatus = sanitizeString(
-      subscription?.status,
-      40,
-    ).toLowerCase();
+    // A zero-value invoice (including a trial Checkout) can be marked "paid"
+    // by Stripe without collecting money. Only a positive, settled Checkout
+    // may provision a paid Director; boleto remains pending until settlement.
+    const paidAmountCents = Number(session.amount_total);
     const paymentConfirmed =
-      paymentStatus === "paid" ||
-      (paymentStatus === "no_payment_required" &&
-        ["active", "trialing"].includes(subscriptionStatus));
+      paymentStatus === "paid" &&
+      Number.isSafeInteger(paidAmountCents) &&
+      paidAmountCents > 0;
 
     if (!paymentConfirmed) {
       const pendingResults = await Promise.all([
@@ -130,7 +124,9 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
           .from("sales_leads")
           .update({ status: "payment_pending", updated_at: now })
           .eq("id", leadId)
-          .is("deleted_at", null),
+          .is("deleted_at", null)
+          // Old unpaid webhook must not demote an already converted clinic.
+          .neq("status", "converted"),
         supabase.from("sales_lead_events").upsert(
           [
             {
@@ -164,6 +160,11 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       }
       return { paymentConfirmed: false, activationPrepared: false };
     }
+
+    // Checkout lists card and boleto as *available* methods, not selected.
+    // The successful invoice PaymentIntent is the only authoritative rail.
+    const settledMethod = await resolveSalesSettledCheckoutMethod(stripe, session);
+    if (!settledMethod) throw new Error("SALES_CHECKOUT_SETTLED_METHOD_UNVERIFIED");
 
     const { data: paymentConfirmation, error: paymentConfirmationError } =
       await supabase.rpc("confirm_sales_assisted_checkout_payment", {
@@ -298,22 +299,22 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       email: directorEmail,
     });
 
-    const activationEmail = options.sendActivationEmail
-      ? await prepareSalesActivationAccess({
+    // Both card and boleto use the same verified email-first activation.
+    // The Checkout return URL never authorizes a Director session.
+    const activationEmail = await prepareSalesActivationAccess({
           offerId,
           leadId,
           checkoutSessionId: session.id,
           email: directorEmail,
           clinicLabel:
             sanitizeString(lead.clinic_name || lead.name, 180) || null,
-          attemptEmail: true,
+          attemptEmail: settledMethod === 'boleto',
           // For delayed payment methods (for example boleto), the Director and
           // contracted modules are already provisioned before this message is sent.
           // The e-mail is only a durable first-access path, so it must never move
           // provisioning_status backwards from the completed state.
           preserveProvisioningStatus: true,
-        })
-      : null;
+        });
 
     if (subscription) {
       try {
@@ -336,7 +337,15 @@ export const createSalesAssistedCheckoutPaymentProcessor = (deps: Record<string,
       directorClinicId: directorProvisioning.clinicId,
       activationPrepared: Boolean(activationEmail?.activationReady),
       activationEmailSent: Boolean(activationEmail?.activationEmailSent),
-      activationPath: activationEmail?.activationPath || null,
+      // A card purchaser may proceed immediately to the *credential choice*
+      // with the one-time activation capability; it is NOT a login session.
+      // Never return the activation token for a boleto.
+      cardActivationPath:
+        settledMethod === 'card' && bootstrap.bootstrapReady && activationEmail?.activationReady
+          ? activationEmail.activationPath
+          : null,
+      settledPaymentMethod: settledMethod,
+      activationPath: settledMethod === 'card' ? activationEmail?.activationPath || null : null,
       emailErrorCode: activationEmail?.emailErrorCode || null,
     };
   };

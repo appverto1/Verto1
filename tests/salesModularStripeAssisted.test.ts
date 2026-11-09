@@ -37,7 +37,9 @@ assert.match(fs.readFileSync('services/stripeEnvironment.ts', 'utf8'), /sk_live_
 assert.match(checkoutCore, /mode: "subscription"/);
 assert.match(checkoutCore, /resolveFrozenSalesOfferTrialDays\(offer\)/);
 assert.match(checkoutCore, /trialDays: frozenTrialDays/);
-assert.match(checkoutCore, /trial_period_days: frozenTrialDays/);
+assert.match(checkoutCore, /MODULAR_CHECKOUT_TRIAL_DISABLED/);
+assert.match(checkoutCore, /MODULAR_CHECKOUT_INITIAL_PAYMENT_REQUIRED/);
+assert.doesNotMatch(checkoutCore, /trial_period_days: frozenTrialDays/);
 assert.match(server, /PROPOSAL_TRIAL_SNAPSHOT_MISMATCH/);
 assert.match(checkoutCore, /client_reference_id: offerId/);
 assert.match(checkoutCore, /idempotencyKey/);
