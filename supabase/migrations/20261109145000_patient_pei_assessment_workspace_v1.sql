@@ -215,3 +215,25 @@ revoke all on function public.write_patient_pei_assessment_plan_v1(
 grant execute on function public.write_patient_pei_assessment_plan_v1(
  text,uuid,uuid,uuid,uuid,text,uuid,text,jsonb,jsonb,text,integer,text
 ) to service_role;
+
+-- Resolve only the requested evaluation protocol, avoiding a full clinic protocol JSON download.
+create or replace function public.get_clinic_pei_evaluation_protocol_v1(
+  p_clinic_id uuid, p_protocol_id text
+) returns jsonb
+language sql stable security invoker
+set search_path = public, pg_temp
+as $query$
+  select item.value
+  from public.clinic_state cs
+  cross join lateral jsonb_array_elements(
+    case when jsonb_typeof(cs.protocols)='array' then cs.protocols else '[]'::jsonb end
+  ) as item(value)
+  where cs.clinic_id = p_clinic_id
+    and (item.value->>'id' = p_protocol_id or item.value->>'canonicalKey'=p_protocol_id)
+    and lower(coalesce(item.value->>'category','evaluation')) = 'evaluation'
+    and jsonb_typeof(item.value->'data')='array'
+  limit 1;
+$query$;
+revoke all on function public.get_clinic_pei_evaluation_protocol_v1(uuid,text)
+  from public, anon, authenticated;
+grant execute on function public.get_clinic_pei_evaluation_protocol_v1(uuid,text) to service_role;
