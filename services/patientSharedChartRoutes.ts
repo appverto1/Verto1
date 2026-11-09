@@ -716,8 +716,8 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
         return res.json({
           success: true,
           governance: {
-            canPublish: authority.data?.canPublish === true,
-            canDelegate: authority.data?.canDelegate === true,
+            canPublish: authority?.canPublish === true,
+            canDelegate: authority?.canDelegate === true,
           },
           data: row && descriptor ? {
             chartKey: sanitizeString(row.chart_key, 256),
