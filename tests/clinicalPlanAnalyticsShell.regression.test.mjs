@@ -20,7 +20,9 @@ assert.match(shell, /Comportamentos interferentes/, 'o domínio comportamental d
 assert.match(shell, /isClinicalOutcomeInterferingBehaviorSeries\(series\)/, 'classificação comportamental deve usar semântica explícita, não palavras genéricas como duração');
 assert.doesNotMatch(shell, /label\.includes\('duração'\)\) return 'behaviors'/, 'duração terapêutica genérica não pode ser classificada como comportamento interferente');
 assert.match(shell, /Comportamentos interferentes no gráfico · até 3/, 'seleção do domínio comportamental deve falar em comportamentos interferentes, não alvos');
-assert.match(dashboard, /for \(const series of summaries\)[\s\S]*?isClinicalOutcomeInterferingBehaviorSeries\(series\)/, 'PTS multidisciplinar deve incluir comportamento interferente de nível paciente mesmo sem planId legado');
+const ptsSelector = fs.readFileSync('src/utils/ptsMultidisciplinarySeries.ts', 'utf8');
+assert.match(dashboard, /selectPtsMultidisciplinarySeries/, 'PTS multidisciplinar deve utilizar seleção modular');
+assert.match(ptsSelector, /isClinicalOutcomeInterferingBehaviorSeries\\(series\\)/, 'PTS deve incluir comportamento interferente de nível paciente mesmo sem planId legado');
 assert.match(analytics, /startsWith\('BEHAVIOR_'\)/, 'identificação de comportamento deve reconhecer métricas BEHAVIOR_*');
 assert.match(analytics, /sourceFamilies\.includes\('BEHAVIOR'\)/, 'identificação de comportamento deve reconhecer source_family BEHAVIOR do read model canônico');
 assert.match(analytics, /text\(observation\.itemId\) \|\| text\(observation\.itemLabel\)/, 'comportamentos legados sem itemId devem permanecer separados pelo nome clínico');
