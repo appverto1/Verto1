@@ -61,4 +61,27 @@ assert.match(shell, /domain: 'overview'/, 'PTS general chart can be explicitly s
 assert.match(shell, /planIds: ptsSpecialtyPlans\.map/, 'PTS selection carries plan identities, not client-computed scores');
 assert.doesNotMatch(portal, /getClinicalOutcomesDashboard|getAbaChartSeriesBundle|supabase|\.rpc\(/);
 assert.match(shell, /PtsClusteredSpecialtyProgress/, 'PTS overview compares specialties');
+
+// Compact clinical publication controls must remain accessible and draft-only.
+// Visual changes must not move the Save authority or the case-delegation gate.
+const delegationPanel = read('src/components/PatientSharedChartDelegationPanel.tsx');
+assert.match(control, /data-professional-shared-chart className=\{\`rounded-2xl border px-3 py-3 sm:px-4/,
+  'publication card uses compact spacing on desktop and mobile');
+assert.match(control, /mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between/,
+  'checkbox and actions share one row on desktop but stack on narrow screens');
+assert.match(control, /flex shrink-0 flex-wrap items-center justify-end gap-2/,
+  'Save and removal controls remain grouped instead of stacking vertically');
+assert.match(control, /aria-live="polite"/, 'published-state indicator announces status changes');
+assert.match(control, /disabled=\{busy \|\| !dirty\} onClick=\{\(\) => void save\(\)\}/,
+  'the explicit Save remains the only authority for publication changes');
+assert.match(control, /setDraftClearAll\(true\); setDraftEnabled\(false\)/,
+  'removal remains a draft that requires Save');
+assert.match(control, /confirm\('Retirar o gráfico do painel do paciente/,
+  'removal still requires confirmation before persistence');
+assert.match(control, /governance\.canDelegate && <PatientSharedChartDelegationPanel/,
+  'case permissions remain visible only when authorized');
+assert.match(delegationPanel, /!open\) return;/, 'authorization details load only when explicitly opened');
+assert.doesNotMatch(control, /border-violet-100 bg-violet-50\/40/,
+  'full-width tinted legacy sharing panel must not return');
+
 console.log('patientSharedChartNavigation.regression.test.mjs: PASS');

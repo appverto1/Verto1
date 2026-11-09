@@ -61,9 +61,9 @@ export function PatientSharedChartDelegationPanel({ patientId }: { key?: React.K
   };
 
   return (
-    <div className="mt-3 border-t border-violet-100 pt-3" data-shared-chart-case-delegations>
+    <div className="mt-2 border-t border-slate-200/80 pt-1.5 dark:border-slate-700" data-shared-chart-case-delegations>
       <button type="button" onClick={() => setOpen((value) => !value)}
-        aria-expanded={open} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-violet-200 px-3 text-xs font-semibold">
+        aria-expanded={open} className="inline-flex min-h-11 items-center gap-2 rounded-lg px-1 text-xs font-medium text-slate-600 transition hover:text-violet-600 dark:text-slate-300 dark:hover:text-violet-300">
         <ShieldCheck size={16} aria-hidden />
         {open ? 'Fechar autorizações do caso' : 'Gerenciar autorizações do caso'}
       </button>
