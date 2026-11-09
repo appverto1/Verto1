@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, Clock3, FilePlus2, Plus, Save, Trash2 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
@@ -51,6 +51,8 @@ export const PeiAssessmentWorkspace = ({
   const [protocolId, setProtocolId] = useState('');
   const [newTitle, setNewTitle] = useState('');
   const [showHistory, setShowHistory] = useState(false);
+  const [serverEditable, setServerEditable] = useState(false);
+  const createKeyRef = useRef(newId());
   const card = isDark ? 'border-slate-700 bg-[#142037] text-slate-100' : 'border-slate-200 bg-white text-slate-900';
   const subtle = isDark ? 'text-slate-300' : 'text-slate-500';
   const input = isDark
@@ -75,17 +77,12 @@ export const PeiAssessmentWorkspace = ({
     return Array.from(new Map(listed.map((p: any) => [p.id, p])).values());
   }, [professionals, caseTeamLinks]);
   const selectedResponsible = memberOptions.find((p: any) => p.id === responsibleId);
-  const canEdit = Boolean(plan && plan.status !== 'completed' && plan.status !== 'archived' &&
-    (String(currentUserId) === plan.responsible_professional_id ||
-      ['director', 'coordinator', 'supervisor'].includes(String((caseTeamLinks || []).find((l: any) =>
-        l.professional_id === currentUserId)?.case_role || ''))));
-  // The backend remains authoritative; this local flag only avoids offering
-  // edits on archived/completed plans. Users receive precise 403s when denied.
-  const editable = Boolean(plan && ['draft', 'active'].includes(plan.status));
+  // The backend is the authority. A role string in the browser never grants editing.
+  const editable = Boolean(serverEditable && plan && ['draft', 'active'].includes(plan.status));
 
   useEffect(() => {
     let cancelled = false;
-    setSelectedId(''); setPlan(null); setRows([]); setDraft([]);
+    setSelectedId(''); setPlan(null); setRows([]); setDraft([]); setServerEditable(false);
     setNotice(''); setError(''); setShowCreate(false);
     if (!patientId) return;
     setLoading(true);
@@ -93,7 +90,8 @@ export const PeiAssessmentWorkspace = ({
       if (cancelled) return;
       if (r?.success) setRows(Array.isArray(r.data) ? r.data : []);
       else setError(message(r, 'Não foi possível carregar os planos de avaliação.'));
-    }).finally(() => { if (!cancelled) setLoading(false); });
+    }).catch(() => { if (!cancelled) setError('Não foi possível carregar os planos de avaliação.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [patientId]);
 
@@ -106,13 +104,22 @@ export const PeiAssessmentWorkspace = ({
       if (cancelled) return;
       if (!r?.success || !r?.data) { setError(message(r, 'Não foi possível abrir o plano.')); return; }
       setPlan(r.data);
+      setServerEditable(r.canEdit === true);
       setTitle(r.data.title || '');
       setDraft(structuredClone(r.data.content?.goals || []));
       setHistory(Array.isArray(r.history) ? r.history : []);
       setDirty(false);
-    }).finally(() => { if (!cancelled) setLoading(false); });
+    }).catch(() => { if (!cancelled) setError('Não foi possível abrir o plano de avaliação.'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [selectedId, patientId]);
+
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
 
   const selectPlan = (id: string) => {
     if (busy || id === selectedId) return;
@@ -170,7 +177,8 @@ export const PeiAssessmentWorkspace = ({
         return;
       }
       applySavedPlan(r.data, action);
-    } finally { setBusy(false); }
+    } catch { setError('A conexão falhou. Confira o salvamento antes de tentar novamente.'); }
+    finally { setBusy(false); }
   };
   const create = async () => {
     if (busy || !selectedResponsible || !protocolId || !newTitle.trim()) {
@@ -181,14 +189,16 @@ export const PeiAssessmentWorkspace = ({
       const r: any = await dataService.createPeiAssessmentPlan(patientId, {
         responsibleProfessionalId: responsibleId,
         specialty: selectedResponsible.specialty, protocolId, title: newTitle.trim(),
-        idempotencyKey: newId(),
+        idempotencyKey: createKeyRef.current,
       });
       if (!r?.success || !r?.data) { setError(message(r, 'Não foi possível criar o plano.')); return; }
+      createKeyRef.current = newId();
       setRows(current => [r.data, ...current.filter(row => row.id !== r.data.id)]);
       setSelectedId(r.data.id); setShowCreate(false);
       setNewTitle(''); setResponsibleId(''); setProtocolId('');
       setNotice('Plano de avaliação criado no servidor.');
-    } finally { setBusy(false); }
+    } catch { setError('A conexão falhou. Consulte a lista antes de tentar criar novamente.'); }
+    finally { setBusy(false); }
   };
 
   return (
