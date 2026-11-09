@@ -158,18 +158,13 @@ export function ProfessionalSharedChartControl({
 
   if (!descriptor && !confirmed && !loading && !error && !governance.canDelegate) return null;
   return (
-    <section aria-label="Publicação do gráfico no painel do paciente" data-professional-shared-chart className={`rounded-2xl border px-3 py-3 sm:px-4 ${isDark ? 'border-slate-700 bg-slate-900 text-slate-100' : 'border-slate-200 bg-white text-slate-800 shadow-sm'}`}>
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${isDark ? 'bg-violet-500/15 text-violet-300' : 'bg-violet-50 text-violet-600'}`}>
-            <Share2 size={17} aria-hidden />
-          </span>
-          <div className="min-w-0">
-            <p className="text-sm font-semibold">Gráfico no painel do paciente</p>
-            <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Controle o que aparece no portal do paciente.</p>
-          </div>
+    <section aria-label="Publicação do gráfico no painel do paciente" data-professional-shared-chart className={`min-w-0 space-y-3 px-1 py-1 ${isDark ? 'text-slate-100' : 'text-slate-800'}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2">
+          <Share2 size={16} aria-hidden="true" className="shrink-0 text-violet-500" />
+          <p className="text-sm font-semibold">Gráfico no painel do paciente</p>
         </div>
-        <span aria-live="polite" className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${loading
+        <span aria-live="polite" className={`inline-flex shrink-0 items-center rounded-full border px-2 py-1 text-[11px] font-medium ${loading
           ? isDark ? 'border-slate-700 text-slate-300' : 'border-slate-200 text-slate-500'
           : confirmed
             ? activeMatchesCurrent
@@ -181,54 +176,63 @@ export function ProfessionalSharedChartControl({
       </div>
 
       {ready && governance.canPublish && (
-        <>
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            {descriptor && (
-              <label className={`flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-xl border px-3 py-2 text-sm ${isDark
-                ? 'border-slate-700 bg-slate-800/50 hover:bg-slate-800'
-                : 'border-slate-200 bg-slate-50/80 hover:bg-slate-50'}`}>
-                <input type="checkbox" className="h-4 w-4 shrink-0 accent-violet-600" checked={draftEnabled && !draftClearAll} disabled={busy} onChange={(event) => {
+        <div className="space-y-3">
+          {descriptor && (
+            <label className={`flex min-h-10 w-full cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-[13px] font-medium ${isDark
+              ? 'border-slate-700 bg-slate-800/60 hover:bg-slate-800'
+              : 'border-slate-200 bg-slate-50 hover:bg-slate-100'}`}>
+              <input
+                type="checkbox"
+                aria-label="Exibir este gráfico no portal do paciente"
+                className="h-4 w-4 shrink-0 accent-violet-600"
+                checked={draftEnabled && !draftClearAll}
+                disabled={busy}
+                onChange={(event) => {
                   setDraftEnabled(event.target.checked);
                   setDraftClearAll(!event.target.checked && activeMatchesCurrent);
-                }} />
-                <span className="font-medium">Exibir este gráfico no portal do paciente</span>
-              </label>
-            )}
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:ml-auto">
-              {confirmed && (
-                <button type="button" disabled={busy} onClick={() => { setDraftClearAll(true); setDraftEnabled(false); }}
-                  className={`min-h-11 rounded-lg px-2 text-xs font-medium text-rose-600 transition hover:bg-rose-50 disabled:opacity-50 ${isDark ? 'text-rose-300 hover:bg-rose-500/10' : ''}`}>
-                  Não exibir nenhum gráfico
-                </button>
-              )}
-              <button type="button" disabled={busy || !dirty} onClick={() => void save()}
-                className="min-h-11 rounded-xl bg-violet-600 px-5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50">
-                {busy ? 'Salvando…' : 'Salvar'}
-              </button>
-            </div>
-          </div>
+                }}
+              />
+              <span className="whitespace-nowrap">Exibir no portal do paciente</span>
+            </label>
+          )}
+
           {descriptor?.family === 'PLAN_PTS' && draftEnabled && !draftClearAll && (
-            <fieldset className={`mt-3 rounded-xl border px-3 py-2.5 ${isDark ? 'border-slate-700 bg-slate-800/30' : 'border-slate-200 bg-slate-50/60'}`}>
+            <fieldset className={`min-w-0 rounded-lg border px-3 pb-2 pt-1.5 ${isDark ? 'border-slate-700 bg-slate-800/30' : 'border-slate-200 bg-slate-50/60'}`}>
               <legend className="px-1 text-xs font-semibold">Permitir navegação por outras abas (opcional)</legend>
-              <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Sem marcações, o paciente vê apenas a aba selecionada.</p>
-              <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1">
+              <p className={`text-[11px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>Sem seleção, apenas a aba atual fica visível.</p>
+              <div className="mt-2 grid grid-cols-1 gap-y-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.55fr)] sm:gap-x-2">
                 {extraDomains.map((domain) => (
-                  <label key={domain.id} className="inline-flex min-h-10 items-center gap-2 text-xs">
-                    <input type="checkbox" className="h-4 w-4 accent-violet-600" checked={draftDomains.includes(domain.id)} disabled={busy} onChange={() => toggleDomain(domain.id)} />
-                    {domain.label}
+                  <label key={domain.id} className="flex min-h-9 min-w-0 cursor-pointer items-center gap-2 whitespace-nowrap text-xs">
+                    <input type="checkbox" className="h-4 w-4 shrink-0 accent-violet-600" checked={draftDomains.includes(domain.id)} disabled={busy} onChange={() => toggleDomain(domain.id)} />
+                    <span>{domain.label}</span>
                   </label>
                 ))}
               </div>
             </fieldset>
           )}
-          {dirty && <p className={`mt-2 text-xs ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Alterações ainda não salvas. Clique em Salvar para aplicar.</p>}
-        </>
+
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {confirmed && (
+              <button type="button" disabled={busy} onClick={() => { setDraftClearAll(true); setDraftEnabled(false); }}
+                className={`min-h-10 shrink-0 whitespace-nowrap rounded-lg border px-3 text-xs font-medium transition-colors disabled:opacity-50 ${isDark
+                  ? 'border-slate-700 text-slate-300 hover:border-rose-500 hover:text-rose-300'
+                  : 'border-slate-200 text-slate-600 hover:border-rose-300 hover:text-rose-600'}`}>
+                Não exibir nenhum gráfico
+              </button>
+            )}
+            <button type="button" disabled={busy || !dirty} onClick={() => void save()}
+              className="min-h-10 shrink-0 whitespace-nowrap rounded-lg bg-violet-600 px-5 text-xs font-semibold text-white transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-50">
+              {busy ? 'Salvando…' : 'Salvar'}
+            </button>
+          </div>
+          {dirty && <p className={`text-xs ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Alterações ainda não salvas. Clique em Salvar para aplicar.</p>}
+        </div>
       )}
-      {ready && !governance.canPublish && <p className="mt-2 text-xs opacity-75">A publicação depende da liderança do caso ou de delegação ativa.</p>}
-      {!ready && !loading && <button type="button" onClick={() => void reload()} className="mt-2 min-h-11 rounded-xl border px-3 text-xs font-semibold">Tentar novamente</button>}
-      {error && <p role="alert" className="mt-2 text-xs text-rose-600">{error}</p>}
-      {message && <p role="status" className="mt-2 text-xs text-emerald-600">{message}</p>}
-      {ready && governance.canDelegate && <PatientSharedChartDelegationPanel key={patientId} patientId={patientId} />}
+      {ready && !governance.canPublish && <p className="text-xs opacity-75">A publicação depende da liderança do caso ou de delegação ativa.</p>}
+      {!ready && !loading && <button type="button" onClick={() => void reload()} className="min-h-10 rounded-lg border px-3 text-xs font-semibold">Tentar novamente</button>}
+      {error && <p role="alert" className="text-xs text-rose-600">{error}</p>}
+      {message && <p role="status" className="text-xs text-emerald-600">{message}</p>}
+      {ready && governance.canDelegate && <PatientSharedChartDelegationPanel key={patientId} patientId={patientId} isDark={isDark} />}
     </section>
   );
 }
