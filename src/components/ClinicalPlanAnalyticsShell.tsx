@@ -54,6 +54,7 @@ type ClinicalPlanAnalyticsShellProps = {
   programs?: any[];
   ptsSpecialtyPlans?: PtsChartSpecialtyPlan[];
   ptsPlanScopeIndex?: ClinicalOutcomePlanScopeIndex;
+  shareControl?: React.ReactNode;
 };
 
 type MetricOption = {
@@ -838,7 +839,7 @@ function OverviewTooltip({ active, payload, label }: any) {
   );
 }
 
-export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, onShareDescriptorChange, programs = [], ptsSpecialtyPlans, ptsPlanScopeIndex }: ClinicalPlanAnalyticsShellProps) {
+export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, onShareDescriptorChange, programs = [], ptsSpecialtyPlans, ptsPlanScopeIndex, shareControl }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
   const ptsGroupedOverview = activeDomain === 'overview' && Boolean(ptsSpecialtyPlans?.length && ptsPlanScopeIndex);
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
@@ -1207,6 +1208,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
 
         {activeDomain !== 'overview' && activeDomain !== 'changes' && selectedSeries.length === 0 && <div className="py-10 text-center"><Target className="mx-auto text-slate-300" size={26} /><p className={`mt-2 text-sm ${subtle}`}>{activeDomain === 'behaviors' ? 'Selecione ao menos um comportamento interferente para visualizar.' : 'Selecione ao menos um alvo para visualizar.'}</p></div>}
         {activeDomain === 'overview' && !ptsGroupedOverview && <div className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${isDark ? 'border-slate-700 bg-slate-900/40 text-slate-300' : 'border-slate-200 bg-slate-50 text-slate-600'}`}><Activity size={15} className="mt-0.5 shrink-0 text-violet-500" /><span>A visão geral empilha, na mesma barra, a contagem de registros clínicos de cada domínio por dia ou sessão. Percentuais, duração, frequência e outras unidades não são somados entre si.</span></div>}
+        {shareControl && <div className="mt-4" data-testid="clinical-chart-sharing-controls">{shareControl}</div>}
       </div>
     </section>
   );
