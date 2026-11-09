@@ -56,6 +56,7 @@ type ClinicalOutcomesDashboardProps = {
   isPanelDark?: boolean;
   onOpenSessionReport?: (sessionId: string) => void;
   onShareDescriptorChange?: (descriptor: ClinicalPlanShareDescriptor | null) => void;
+  shareControl?: React.ReactNode;
 };
 
 type DashboardData = {
@@ -536,7 +537,7 @@ function SeriesChart({ series, isDark, axis, compact = false }: { series: Clinic
   );
 }
 
-export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false, onOpenSessionReport, onShareDescriptorChange }: ClinicalOutcomesDashboardProps) {
+export function ClinicalOutcomesDashboard({ patientId, organizationId = null, isPanelDark = false, onOpenSessionReport, onShareDescriptorChange, shareControl }: ClinicalOutcomesDashboardProps) {
   const today = useMemo(() => localDateKey(new Date()), []);
   const [periodPreset, setPeriodPreset] = useState('90');
   const [customDateFrom, setCustomDateFrom] = useState(() => shiftDateKey(today, -89));
@@ -929,6 +930,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
           programs={data.programs || []}
           ptsSpecialtyPlans={scopeId === 'pts' ? ptsChartSpecialtyPlans : undefined}
           ptsPlanScopeIndex={scopeId === 'pts' ? planScopeIndex : undefined}
+          shareControl={shareControl}
         />
       )}
 
