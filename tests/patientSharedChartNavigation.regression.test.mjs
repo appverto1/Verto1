@@ -19,10 +19,17 @@ for (const token of [
   'set_patient_shared_chart_selection_v2',
   'clear_patient_shared_chart_selection_v2',
 ]) assert.ok(routes.includes(token), 'missing hard gate: ' + token);
-assert.match(routes, /requestedDomains\.length > 3/, 'server bounds supplementary tabs');
+assert.match(routes, /requestedDomains\.length > \(overview \? 4 : 3\)/, 'server bounds supplementary tabs by selected chart');
 assert.match(routes, /allowedDomains\.some/, 'server validates tab allowlist');
 assert.match(routes, /new Set\(allowedDomains\)\.size !== allowedDomains\.length/, 'duplicate tabs rejected');
 assert.match(routes, /requestedPlanIds\.includes\(/, 'supplementary tabs limited to selected authorized plan IDs');
+assert.match(routes, /planIds\.length > 12/, 'overview descriptor must cap server-authorized plans');
+assert.match(routes, /planIds\.some\(\(id: string\) => !isUuid\(id\)\)/, 'overview rejects forged plan IDs');
+assert.match(routes, /filterTherapeuticPlanScopesForActor/, 'specialty plan selection must be actor-scoped');
+assert.match(routes, /requestedPlanIds\.some\(\(planId\) => !allowedPlanIds\.has\(planId\)\)/, 'server denies unauthorized plans');
+assert.match(routes, /buildPtsClusteredSpecialtyMetrics\(/, 'grouped projection is recomputed server-side');
+assert.match(routes, /item\.id === descriptor\.metricSignature/, 'server rejects mismatched metric signature');
+assert.match(routes, /if \(overview && !groupedMetric\) return null/, 'overview without valid canonical measure cannot publish');
 assert.match(routes, /classify\(series\) === domain/, 'server independently classifies supplementary views');
 const additionalViews = routes.slice(routes.indexOf('const additionalViews ='), routes.indexOf('return {\n      family: \'PLAN_PTS\'', routes.indexOf('const additionalViews =')));
 assert.doesNotMatch(additionalViews, /supabase\.|await /, 'navigation must not create N+1 queries');
@@ -48,6 +55,10 @@ assert.match(shell, /data-testid="clinical-chart-sharing-controls"/);
 assert.match(portal, /Array\.isArray\(chart\.views\)/);
 assert.match(portal, /sharedChart\.views\.map/, 'tab list comes from the server projection');
 assert.match(portal, /activeView\.series\.map/, 'chart data comes from selected authorized tab');
+assert.match(portal, /chart\.grouped\?\.plans/, 'PTS bars come from scoped server projection');
+assert.match(portal, /sharedChart\.grouped\.plans\.map/, 'patient grouped bars use only projected specialties');
+assert.match(shell, /domain: 'overview'/, 'PTS general chart can be explicitly selected for publication');
+assert.match(shell, /planIds: ptsSpecialtyPlans\.map/, 'PTS selection carries plan identities, not client-computed scores');
 assert.doesNotMatch(portal, /getClinicalOutcomesDashboard|getAbaChartSeriesBundle|supabase|\.rpc\(/);
 assert.match(shell, /PtsClusteredSpecialtyProgress/, 'PTS overview compares specialties');
 console.log('patientSharedChartNavigation.regression.test.mjs: PASS');
