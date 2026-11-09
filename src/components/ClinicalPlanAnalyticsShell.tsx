@@ -37,6 +37,7 @@ export type ClinicalPlanShareDescriptor = {
   seriesKeys: string[];
   axis: AnalyticsAxis;
   comparePrevious: boolean;
+  allowedDomains?: Array<'skills' | 'behaviors' | 'mastery' | 'maintenance'>;
 };
 
 type ClinicalPlanAnalyticsShellProps = {
