@@ -124,8 +124,11 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
     ageFromBirthDate(patient?.dataNascimento) ??
     ageFromBirthDate(patient?.anamnesisData?.dataNascimento);
   const group = cleanProfileKey(patient?.patient_group || patient?.group || patient?.grupo || patient?.patientGroup || '');
+  // Some imported adult records store age=0 as an unset placeholder. A stored
+  // adult clinic category must not turn their collection into pediatric ABA.
+  const effectiveAge = age === 0 && ['adulto', 'idoso'].includes(group) ? null : age;
   const pediatricGroup = ['infantil', 'crianca', 'criancas', 'kids', 'child', 'adolescente', 'teen'].includes(group);
-  const isPediatric = (age !== null && age < 18) || (age === null && pediatricGroup);
+  const isPediatric = (effectiveAge !== null && effectiveAge < 18) || (effectiveAge === null && pediatricGroup);
 
   // Older records can carry a generic ADULT default alongside a persisted
   // KIDS portal/panel field. Never route a confirmed pediatric patient into
@@ -138,7 +141,7 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
   if (pediatricGroup && isPediatric) return 'KIDS';
   // This product defines ADULT as an adult workflow: stale ADULT defaults on
   // a child under 13 must not open conventional/adult collection.
-  if (age !== null && age <= 12) return 'KIDS';
+  if (effectiveAge !== null && effectiveAge <= 12) return 'KIDS';
 
   for (const candidate of explicitCandidates) {
     const raw = String(candidate ?? '').trim();
@@ -156,7 +159,7 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
     if (raw.toUpperCase() === 'KIDS') return 'KIDS';
   }
 
-  return age !== null && age <= 12 ? 'KIDS' : 'ADULT_CONVENTIONAL';
+  return effectiveAge !== null && effectiveAge <= 12 ? 'KIDS' : 'ADULT_CONVENTIONAL';
 };
 
 export const isAdultPatientPortal = (patient: any) => resolvePatientPortalKind(patient) !== 'KIDS';
