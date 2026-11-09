@@ -1151,7 +1151,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         {activeDomain === 'changes' ? (
           <ProgramChangesView series={series} programs={programs} isDark={isDark} onOpenSessionReport={onOpenSessionReport} />
         ) : ptsGroupedOverview && ptsSpecialtyPlans && ptsPlanScopeIndex ? (
-          <PtsClusteredSpecialtyProgress plans={ptsSpecialtyPlans} series={series} planScopeIndex={ptsPlanScopeIndex} isDark={isDark} selectedMetricId={selectedPtsMetric?.id || ''} onSelectedMetricIdChange={setPtsMetricId} />
+          <PtsClusteredSpecialtyProgress plans={ptsSpecialtyPlans} metrics={ptsMetrics} isDark={isDark} selectedMetricId={selectedPtsMetric?.id || ''} onSelectedMetricIdChange={setPtsMetricId} />
         ) : activeDomain === 'overview' ? (
           <div className="flex h-[170px] min-w-0 sm:h-[180px]" data-testid="overview-chart-frame">
             <OverviewYAxisPane max={overviewYAxis.max} ticks={overviewYAxis.ticks} isDark={isDark} />
