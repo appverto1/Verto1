@@ -14,6 +14,17 @@ const aba = read('src/components/AbaV3ClinicalChartPanel.tsx');
 assert.doesNotMatch(patient, /<EvolutionBarChart|<CumulativeGrowthChart|import \{ EvolutionBarChart \}|import \{ CumulativeGrowthChart \}/,
   'portal infantil cannot display either automatic graph or any legacy fallback');
 assert.match(patient, /<PortalSharedClinicalChart patientId=/, 'infant portal reads only published graph');
+assert.match(patient, /<PortalSharedClinicalChart patientId=\{String\(portalPatientId[^\n]+embedded \/>/,
+  'infant portal keeps the new published chart embedded inside its original home card');
+assert.match(patient, /kidsGamification\.weekPhotos\}<\/p>[\s\S]*?<\/div>\s*<\/div>\s*<PortalSharedClinicalChart[^\n]+embedded \/>\s*<\/div>/,
+  'original child dashboard groups reward counters and the new chart without duplicate cards');
+assert.match(portal, /embedded \? 'min-w-0 border-t border-blue-100 pt-4'/,
+  'embedded chart uses the old child panel, not a nested card');
+assert.match(patient, /portalSection === 'appointments' && portalAppointmentsPanel/,
+  'child session calendar is preserved');
+assert.match(patient, /portalSection === 'notes' && portalNotesPanel/,
+  'child notes are preserved');
+
 assert.match(patient, /<AdultWellbeingTrendChart/, 'adult wellbeing graph must remain fixed and untouched');
 assert.match(patient, /familyDiaryHistory/, 'family diary preserved');
 assert.match(patient, /kidsGamification\.stars/, 'infant gamification preserved');
