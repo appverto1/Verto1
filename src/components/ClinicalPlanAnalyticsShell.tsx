@@ -23,7 +23,7 @@ import {
 import { buildClinicalProgramChangeOverview, type ClinicalTargetChange } from '../utils/clinicalProgramChangeAnalytics';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { PtsClusteredSpecialtyProgress } from './PtsClusteredSpecialtyProgress';
-import type { PtsChartSpecialtyPlan } from '../utils/ptsClusteredSpecialtyProgress';
+import { buildPtsClusteredSpecialtyMetrics, type PtsChartSpecialtyPlan } from '../utils/ptsClusteredSpecialtyProgress';
 import type { ClinicalOutcomePlanScopeIndex } from '../utils/clinicalOutcomePlanScope';
 
 type AnalyticsDomain = 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance' | 'changes';
@@ -32,7 +32,8 @@ export type AnalyticsAxis = 'date' | 'session';
 export type ClinicalPlanShareDescriptor = {
   schemaVersion: 1;
   family: 'PLAN_PTS';
-  domain: 'skills' | 'behaviors' | 'mastery' | 'maintenance';
+  domain: 'overview' | 'skills' | 'behaviors' | 'mastery' | 'maintenance';
+  planIds?: string[];
   metricSignature: string;
   seriesKeys: string[];
   axis: AnalyticsAxis;
@@ -842,6 +843,11 @@ function OverviewTooltip({ active, payload, label }: any) {
 export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesByKey, comparePrevious, axis, onAxisChange, isDark = false, onOpenSessionReport, onShareDescriptorChange, programs = [], ptsSpecialtyPlans, ptsPlanScopeIndex, shareControl }: ClinicalPlanAnalyticsShellProps) {
   const [activeDomain, setActiveDomain] = useState<AnalyticsDomain>('overview');
   const ptsGroupedOverview = activeDomain === 'overview' && Boolean(ptsSpecialtyPlans?.length && ptsPlanScopeIndex);
+  const [ptsMetricId, setPtsMetricId] = useState('');
+  const ptsMetrics = useMemo(() => ptsSpecialtyPlans && ptsPlanScopeIndex
+    ? buildPtsClusteredSpecialtyMetrics(ptsSpecialtyPlans, series, ptsPlanScopeIndex)
+    : [], [ptsSpecialtyPlans, ptsPlanScopeIndex, series]);
+  const selectedPtsMetric = ptsMetrics.find((metric) => metric.id === ptsMetricId) || ptsMetrics[0] || null;
   const [metricSignatureValue, setMetricSignatureValue] = useState('');
   const [selectedSeriesKeys, setSelectedSeriesKeys] = useState<string[]>([]);
   const [overviewDomainKeys, setOverviewDomainKeys] = useState<OverviewDomainKey[]>([]);
@@ -900,9 +906,21 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
     : [], [activeMetric, selectedSeriesKeys]);
 
   const shareDescriptor = useMemo<ClinicalPlanShareDescriptor | null>(() => {
+    if (activeDomain === 'overview') {
+      if (!ptsGroupedOverview || !ptsSpecialtyPlans?.length || !selectedPtsMetric) return null;
+      return {
+        schemaVersion: 1,
+        family: 'PLAN_PTS',
+        domain: 'overview',
+        planIds: ptsSpecialtyPlans.map((plan) => plan.id),
+        metricSignature: selectedPtsMetric.id,
+        seriesKeys: [],
+        axis: 'date',
+        comparePrevious: false,
+      };
+    }
     if (
-      activeDomain === 'overview'
-      || activeDomain === 'changes'
+      activeDomain === 'changes'
       || !activeMetric
       || selectedSeries.length === 0
     ) return null;
@@ -915,7 +933,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
       axis,
       comparePrevious: Boolean(comparePrevious),
     };
-  }, [activeDomain, activeMetric, axis, comparePrevious, selectedSeries]);
+  }, [activeDomain, activeMetric, axis, comparePrevious, selectedSeries, ptsGroupedOverview, ptsSpecialtyPlans, selectedPtsMetric]);
 
   useEffect(() => {
     onShareDescriptorChange?.(shareDescriptor);
@@ -1133,7 +1151,7 @@ export function ClinicalPlanAnalyticsShell({ scopeLabel, series, previousSeriesB
         {activeDomain === 'changes' ? (
           <ProgramChangesView series={series} programs={programs} isDark={isDark} onOpenSessionReport={onOpenSessionReport} />
         ) : ptsGroupedOverview && ptsSpecialtyPlans && ptsPlanScopeIndex ? (
-          <PtsClusteredSpecialtyProgress plans={ptsSpecialtyPlans} series={series} planScopeIndex={ptsPlanScopeIndex} isDark={isDark} />
+          <PtsClusteredSpecialtyProgress plans={ptsSpecialtyPlans} series={series} planScopeIndex={ptsPlanScopeIndex} isDark={isDark} selectedMetricId={selectedPtsMetric?.id || ''} onSelectedMetricIdChange={setPtsMetricId} />
         ) : activeDomain === 'overview' ? (
           <div className="flex h-[170px] min-w-0 sm:h-[180px]" data-testid="overview-chart-frame">
             <OverviewYAxisPane max={overviewYAxis.max} ticks={overviewYAxis.ticks} isDark={isDark} />
