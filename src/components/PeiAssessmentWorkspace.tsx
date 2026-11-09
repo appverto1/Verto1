@@ -220,19 +220,19 @@ export const PeiAssessmentWorkspace = ({
       {notice && <p role="status" className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 p-3 text-sm text-emerald-600"><CheckCircle2 size={16}/>{notice}</p>}
       {showCreate && <div className="mt-5 grid gap-3 rounded-xl border border-violet-500/20 p-4 sm:grid-cols-2">
         <label className="text-xs font-medium">Profissional responsável
-          <select className={input + ' mt-1'} value={responsibleId} onChange={e => setResponsibleId(e.target.value)}>
+          <select className={input + ' mt-1'} value={responsibleId} onChange={e => { createKeyRef.current = newId(); setResponsibleId(e.target.value); }}>
             <option value="">Selecione</option>
             {memberOptions.map((p: any) => <option key={p.id} value={p.id}>{p.name} · {p.specialty}</option>)}
           </select>
         </label>
         <label className="text-xs font-medium">Protocolo padronizado de avaliação
-          <select className={input + ' mt-1'} value={protocolId} onChange={e => setProtocolId(e.target.value)}>
+          <select className={input + ' mt-1'} value={protocolId} onChange={e => { createKeyRef.current = newId(); setProtocolId(e.target.value); }}>
             <option value="">Selecione</option>
             {evaluationProtocols.map((p: any) => <option key={p.id} value={String(p.id)}>{p.title}</option>)}
           </select>
         </label>
         <label className="text-xs font-medium sm:col-span-2">Nome do plano
-          <input className={input + ' mt-1'} value={newTitle} maxLength={180} onChange={e => setNewTitle(e.target.value)}
+          <input className={input + ' mt-1'} value={newTitle} maxLength={180} onChange={e => { createKeyRef.current = newId(); setNewTitle(e.target.value); }}
             placeholder="Ex.: Avaliação inicial de comunicação"/>
         </label>
         <div className="flex gap-2 sm:col-span-2">
