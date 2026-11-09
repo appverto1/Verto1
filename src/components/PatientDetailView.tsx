@@ -12286,10 +12286,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 {therapeuticPlanMode === 'pei' && activePeiPlanSubtab === 'assessment' && (
                   <PeiAssessmentWorkspace
                     patientId={String(patient?.id || '')}
-                    protocols={planProtocolCatalog}
+                    protocols={safeProtocols}
                     professionals={clinicTherapists}
                     caseTeamLinks={activeCaseTeamLinks}
-                    currentUserId={resolvedClinicContext?.userId || clinicContext?.userId || null}
                     isDark={isPanelDark}
                   />
                 )}
