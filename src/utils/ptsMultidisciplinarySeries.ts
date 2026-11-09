@@ -42,7 +42,14 @@ export function selectPtsMultidisciplinarySeries({
 
   for (const goal of ptsGoalRows) {
     for (const contribution of goal.contributions) {
-      (contribution.series || []).forEach(include);
+      // A matching specialty label is never enough to grant a PTS link.
+      // Include contributed evidence only for an explicit plan-scoped link.
+      const linkedPlanId = contribution.link && contribution.specialtyPlan?.id
+        ? String(contribution.specialtyPlan.id).trim() : '';
+      if (!linkedPlanId) continue;
+      for (const series of contribution.series || []) {
+        if (clinicalOutcomeSeriesBelongsToPlanScope(series, linkedPlanId, planScopeIndex)) include(series);
+      }
     }
   }
 
@@ -60,10 +67,19 @@ export function selectPtsMultidisciplinarySeries({
   const visiblePlanIds = [...planIds];
   for (const series of allSeries) {
     if (isHistoricalOnly(series)) continue;
-    if (
-      isClinicalOutcomeInterferingBehaviorSeries(series)
-      || visiblePlanIds.some((id) => clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex))
-    ) include(series);
+    const belongsToVisiblePlan = visiblePlanIds.some((id) =>
+      clinicalOutcomeSeriesBelongsToPlanScope(series, id, planScopeIndex));
+    // Preserve genuinely unscoped patient-level behavior evidence, but never
+    // smuggle a behavior explicitly linked to an unrelated plan into the PTS.
+    const hasExplicitScope = (series.observations || []).some((row) => [
+      row.planId, row.programId, row.goalId,
+      row.metadata?.planId, row.metadata?.plan_id,
+      row.metadata?.programId, row.metadata?.program_id,
+      row.metadata?.goalId, row.metadata?.goal_id,
+      row.metadata?.therapeuticObjectiveId, row.metadata?.therapeutic_objective_id,
+    ].some((value) => String(value ?? '').trim()));
+    const isUnscopedBehavior = !hasExplicitScope && isClinicalOutcomeInterferingBehaviorSeries(series);
+    if (belongsToVisiblePlan || isUnscopedBehavior) include(series);
   }
 
   return [...selected.values()];
