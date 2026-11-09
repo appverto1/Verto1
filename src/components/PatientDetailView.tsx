@@ -1745,6 +1745,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     [configuredDefaultSessionMinutes, scheduledSessionForPatient],
   );
   const [activeSession, setActiveSession] = useState<any>(null);
+  const activeSessionLiveRef = useRef<any>(null);
   const [sessionDurationInput, setSessionDurationInput] = useState(String(configuredDefaultSessionMinutes));
   const [remainingSessionSeconds, setRemainingSessionSeconds] = useState(0);
   const [showSessionStartConfirm, setShowSessionStartConfirm] = useState(false);
@@ -2102,12 +2103,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const persistActiveSession = (session: any) => {
+    activeSessionLiveRef.current = session;
     localStorage.setItem(sessionStorageKey, JSON.stringify(session));
     setActiveSession(session);
     setRemainingSessionSeconds(calculateRemainingSessionSeconds(session));
   };
 
   const clearActiveSession = () => {
+    activeSessionLiveRef.current = null;
     localStorage.removeItem(sessionStorageKey);
     setActiveSession(null);
     setRemainingSessionSeconds(0);
@@ -2116,6 +2119,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   useEffect(() => {
     const syncSession = () => {
       const persisted = readPersistedSession();
+      activeSessionLiveRef.current = persisted;
       setActiveSession(persisted);
       setRemainingSessionSeconds(persisted ? calculateRemainingSessionSeconds(persisted) : 0);
     };
@@ -3226,10 +3230,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   const incrementActiveSessionRecordCount = () => {
-    if (!activeSession) return;
+    // Independent V2/V3 clicks can finish network synchronization in the same
+    // render. Read the latest persisted session, never a stale React closure,
+    // so concurrent acknowledgements cannot lose the accumulated count.
+    const latest = activeSessionLiveRef.current || activeSession;
+    if (!latest) return;
     persistActiveSession({
-      ...activeSession,
-      recordCount: Number(activeSession.recordCount || 0) + 1
+      ...latest,
+      recordCount: Number(latest.recordCount || 0) + 1
     });
   };
 
