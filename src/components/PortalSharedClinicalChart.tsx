@@ -48,7 +48,7 @@ const DOMAIN_LABELS: Record<string, string> = {
 const ALLOWED_PLAN_DOMAINS = new Set(Object.keys(DOMAIN_LABELS));
 
 /** Patient-self, read-only projection. Never reuse raw professional observations. */
-export function PortalSharedClinicalChart({ patientId }: { patientId: string }) {
+export function PortalSharedClinicalChart({ patientId, embedded = false }: { patientId: string; embedded?: boolean }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
   const [sharedChart, setSharedChart] = useState<PortalSharedChart | null>(null);
   const [selectedDomain, setSelectedDomain] = useState('');
@@ -156,7 +156,7 @@ export function PortalSharedClinicalChart({ patientId }: { patientId: string }) 
   }, [activeView]);
 
   return (
-    <section className="mb-6 rounded-[28px] border border-violet-100 bg-white p-4 shadow-sm sm:p-6" aria-label="Evolução compartilhada" data-portal-shared-chart>
+    <section className={embedded ? 'min-w-0 border-t border-blue-100 pt-4' : 'mb-6 rounded-[28px] border border-violet-100 bg-white p-4 shadow-sm sm:p-6'} aria-label="Evolução compartilhada" data-portal-shared-chart>
       <h2 className="text-base font-semibold text-slate-900">Evolução compartilhada</h2>
       <p className="mt-1 text-xs text-slate-500">Gráfico compartilhado pela equipe clínica</p>
       {status === 'loading' && <p role="status" className="mt-5 text-sm text-slate-500">Carregando evolução compartilhada…</p>}
