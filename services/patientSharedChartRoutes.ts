@@ -1,4 +1,5 @@
 import type { Express } from 'express';
+import { createHash } from 'node:crypto';
 import { isClinicalOutcomeInterferingBehaviorSeries, summarizeClinicalOutcomeSeries, type ClinicalOutcomeObservation } from '../src/utils/clinicalOutcomeAnalytics';
 import { filterTherapeuticPlanScopesForActor } from '../src/utils/therapeuticPlanAccess';
 import { buildPtsClusteredSpecialtyMetrics } from '../src/utils/ptsClusteredSpecialtyProgress';
@@ -414,7 +415,7 @@ export function registerPatientSharedChartRoutes(app: Express, deps: SharedChart
   };
 
   const sharedChartKey = (descriptor: SharedChartDescriptor) => (
-    descriptor.family + ':' + crypto.createHash('sha256').update(JSON.stringify(descriptor)).digest('hex').slice(0, 40)
+    descriptor.family + ':' + createHash('sha256').update(JSON.stringify(descriptor)).digest('hex').slice(0, 40)
   );
 
   const projectSharedClinicalSeries = (series: any) => ({
