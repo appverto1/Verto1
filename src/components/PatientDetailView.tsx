@@ -13,6 +13,7 @@ import { CumulativeGrowthChart } from './CumulativeGrowthChart';
 import { ClinicalChartsWorkspace } from './ClinicalChartsWorkspace';
 import { ProgressReportPDFLayout } from './ProgressReportPDFLayout';
 import { TherapeuticPlanPanel } from './TherapeuticPlanPanel';
+import { PeiAssessmentWorkspace } from './PeiAssessmentWorkspace';
 import { AbaReinforcerCatalogPanel } from './AbaReinforcerCatalogPanel';
 import { PatientProfessionalLinksPanel } from './PatientProfessionalLinksPanel';
 import { PatientCareNetworkPanel } from './PatientCareNetworkPanel';
@@ -534,7 +535,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showConfirmation, setShowConfirmation] = useState(false); 
   const [editingTask, setEditingTask] = useState<any>(null); 
   const [isPlanFilterOpen, setIsPlanFilterOpen] = useState(false);
-  const [activePeiPlanSubtab, setActivePeiPlanSubtab] = useState<PeiPlanSubtab>('teaching');
+  const [activePeiPlanSubtab, setActivePeiPlanSubtab] = useState<PeiPlanSubtab>('assessment');
   const [therapeuticPlanMode, setTherapeuticPlanMode] = useState<'pts' | 'pei'>('pts');
   const [isAddingPEIGoal, setIsAddingPEIGoal] = useState(false);
   const [selectedPEIProtocolId, setSelectedPEIProtocolId] = useState("");
@@ -1845,7 +1846,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     completedSessionReportsLoadedForRef.current = '';
     setRestoreSessionData(false);
     setClearMaintenanceOnSessionRestore(false);
-    setActivePeiPlanSubtab('teaching');
+    setActivePeiPlanSubtab('assessment');
     setHasLoadedPeiMaintenancePanel(false);
     setPeiMaintenancePanelMessage('');
     setAbaMaintenancePanel(null);
@@ -12213,7 +12214,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       type="button"
                       role="tab"
                       aria-selected={therapeuticPlanMode === 'pts'}
-                      onClick={() => { setTherapeuticPlanMode('pts'); setActivePeiPlanSubtab('teaching'); }}
+                      onClick={() => { setTherapeuticPlanMode('pts'); setActivePeiPlanSubtab('assessment'); }}
                       className={`relative min-h-[72px] rounded-2xl border px-4 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pts' ? (isPanelDark ? 'border-violet-400/40 bg-violet-500/10 text-violet-100' : 'border-violet-200 bg-violet-50/80 text-violet-800 shadow-sm') : isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300 hover:border-slate-600 hover:bg-slate-900/70' : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:border-violet-200 hover:bg-white'}`}
                     >
                       <span className="block text-sm font-semibold">PTS</span>
@@ -12224,7 +12225,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       type="button"
                       role="tab"
                       aria-selected={therapeuticPlanMode === 'pei'}
-                      onClick={() => setTherapeuticPlanMode('pei')}
+                      onClick={() => { setTherapeuticPlanMode('pei'); setActivePeiPlanSubtab('assessment'); }}
                       className={`relative min-h-[72px] rounded-2xl border px-4 py-3 text-left transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 ${therapeuticPlanMode === 'pei' ? (isPanelDark ? 'border-violet-400/40 bg-violet-500/10 text-violet-100' : 'border-violet-200 bg-violet-50/80 text-violet-800 shadow-sm') : isPanelDark ? 'border-slate-700 bg-slate-900/40 text-slate-300 hover:border-slate-600 hover:bg-slate-900/70' : 'border-slate-200 bg-slate-50/70 text-slate-700 hover:border-violet-200 hover:bg-white'}`}
                     >
                       <span className="block text-sm font-semibold">PEI</span>
@@ -12233,7 +12234,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     </button>
                   </div>
                   <p className={`mt-2 px-1 text-xs leading-5 ${isPanelDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                    {therapeuticPlanMode === 'pts' ? 'Coordenação clínica compartilhada da equipe.' : 'Metas educacionais e estruturas legadas do paciente.'}
+                    {therapeuticPlanMode === 'pts' ? 'Coordenação clínica compartilhada da equipe.' : 'Planos de avaliação por protocolo e acompanhamento educacional do paciente.'}
                   </p>
                 </div>
 
@@ -12242,8 +12243,10 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   {PEI_PLAN_SUBTABS.map((tab) => {
                     const active = activePeiPlanSubtab === tab.id;
                     const label =
-                      tab.id === 'teaching'
-                        ? 'Programas'
+                      tab.id === 'assessment'
+                        ? 'Planos de avaliação'
+                        : tab.id === 'teaching'
+                          ? 'Programas'
                         : tab.id === 'maintenance'
                           ? 'Manutenção'
                           : tab.id === 'generalization'
@@ -12278,6 +12281,16 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                     );
                   })}
                 </nav>
+                )}
+
+                {therapeuticPlanMode === 'pei' && activePeiPlanSubtab === 'assessment' && (
+                  <PeiAssessmentWorkspace
+                    patientId={String(patient?.id || '')}
+                    protocols={safeProtocols}
+                    professionals={clinicTherapists}
+                    caseTeamLinks={activeCaseTeamLinks}
+                    isDark={isPanelDark}
+                  />
                 )}
 
                 {(therapeuticPlanMode === 'pts' || activePeiPlanSubtab === 'teaching') && (

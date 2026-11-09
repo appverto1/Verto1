@@ -8,7 +8,7 @@ import {
   debugMapperOutput,
 } from './debugPeiMaintenance';
 
-export type PeiPlanSubtab = 'teaching' | 'maintenance' | 'generalization' | 'history';
+export type PeiPlanSubtab = 'assessment' | 'teaching' | 'maintenance' | 'generalization' | 'history';
 
 export type PeiMaintenanceGroupKey =
   | 'today'
@@ -60,6 +60,7 @@ export type PeiMaintenanceEligibleSkill = {
 };
 
 export const PEI_PLAN_SUBTABS: Array<{ id: PeiPlanSubtab; label: string }> = [
+  { id: 'assessment', label: 'Avaliação' },
   { id: 'teaching', label: 'Ensino' },
   { id: 'maintenance', label: 'Manutencao' },
   { id: 'generalization', label: 'Generalizacao' },
