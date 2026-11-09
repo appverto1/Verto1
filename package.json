@@ -78,6 +78,7 @@
     "test:sales-commercial-exceptions": "tsx tests/salesCommercialExceptionApproval.test.ts",
     "test:sales-modular-stripe": "tsx tests/salesModularStripeAssisted.test.ts",
     "test:clinical-multidisciplinary": "tsx tests/clinicalMultidisciplinaryEvolution.test.ts",
+    "test:pts-clustered-progress": "tsx tests/ptsClusteredSpecialtyProgress.test.ts",
     "test:sales-financial-input": "tsx tests/salesFinancialAssumptionsInput.test.ts",
     "test:owner-mfa": "tsx tests/ownerMfaEnforcement.test.ts",
     "test:demo-sandbox": "tsx tests/demoSandbox.test.ts",
