@@ -68,6 +68,10 @@ assert.match(detail, /startConventionalSession\(String\(patient\?\.id \|\| ''\),
 assert.match(detail, /void requestSessionStart\('fullscreen'\);/, 'Agenda continues using existing safe preflight');
 assert.match(mode, /legacyTrialWriteQueueRef\.current\(\(\) => Promise\.resolve\(onRecordTrial/);
 assert.match(mode, /if \(!lockAction\(trialLockKey, 90\)\) return;/);
+assert.match(mode, /if \(!lockAction\(frequencyLockKey, 90\)\) return;/);
+assert.match(mode, /if \(!lockAction\(\`rate:\$\{currentRateWindow\.id\}\`, 90\)\) return;/);
+assert.match(mode, /const currentRateWindow = rateWindowRef\.current;/);
+assert.match(mode, /setRateWindow\(\{ \.\.\.currentRateWindow, count: nextRateCount \}\)/);
 assert.doesNotMatch(mode, /if \(!lockAction\(trialLockKey, 600\)\) return;/);
 
 console.log('sessionTabSpecialtyFastCollection.test.ts: PASS');
