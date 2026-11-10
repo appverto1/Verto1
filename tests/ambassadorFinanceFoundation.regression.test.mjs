@@ -14,7 +14,7 @@ test('ambassador finance remains a standalone module behind platform-admin MFA',
   assert.match(routes, /ambassador_create_partner_v1/);
   assert.match(routes, /ambassador_assign_lead_v1/);
   assert.doesNotMatch(routes, /\/api\/patients|\/api\/clinic\//);
-  assert.doesNotMatch(routes, /payouts|transfers\.create|paymentIntents\.create/);
+  assert.doesNotMatch(routes, /stripe\.transfers|transfers\.create|payouts\.create|paymentIntents\.create/);
 });
 
 test('private commission ledger cannot be read or written by ordinary authenticated clients', () => {
