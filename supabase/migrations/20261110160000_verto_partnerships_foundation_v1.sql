@@ -151,10 +151,10 @@ begin
 end;
 $;
 
--- Return only clinic labels and payment status for this verified partner user.
+-- Return only clinic labels and payment status for the server-authorized partner account.
 -- This is a server-only read RPC, not an RLS bypass exposed to browser roles.
 create or replace function public.verto_partner_referral_overview_v1(
-  p_user_id uuid, p_limit integer default 50, p_offset integer default 0
+  p_partner_id uuid, p_limit integer default 50, p_offset integer default 0
 ) returns table (
   referral_id uuid, clinic_name text, lead_status text,
   has_paid boolean, referred_at timestamptz
@@ -174,7 +174,7 @@ as $$
     from public.verto_partner_accounts p
     join public.verto_partner_referrals r on r.partner_id = p.id
     join public.sales_leads l on l.id = r.sales_lead_id
-   where p.user_id = p_user_id and l.deleted_at is null
+   where p.id = p_partner_id and l.deleted_at is null
    order by r.created_at desc, r.id desc
    limit least(greatest(coalesce(p_limit,50),1),50)
    offset least(greatest(coalesce(p_offset,0),0),5000);
