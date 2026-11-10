@@ -236,7 +236,7 @@ export function ExternalPartnershipPortal() {
         <div className="mt-7 flex items-center gap-2 text-violet-700"><ShieldCheck size={18}/><span className="text-xs font-semibold">Acesso exclusivo</span></div>
         <h1 id="partner-login-title" className="mt-2 text-2xl font-semibold text-slate-900">Portal do parceiro</h1>
         <p className="mt-2 text-sm leading-6 text-slate-600">{entryChoice === null
-          ? 'Quero participar do programa de indicações da Verto, com cadastro e aprovação antes do acesso comercial.'
+          ? 'Inscreva-se no programa de indicações da Verto. O acesso comercial depende de aprovação.'
           : signupMode
             ? 'Confirme seu e-mail e envie sua inscrição. O acesso comercial exige aprovação da Verto.'
             : 'Entre com o e-mail cadastrado no programa de parcerias comerciais. Este acesso é independente dos portais clínicos.'}</p>
