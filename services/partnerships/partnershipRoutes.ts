@@ -9,6 +9,11 @@ const fail = (res: any) => res.status(503).json({success:false,error:'PARTNERSHI
 const ownId = (req: any) => safe(req.session?.user?.id,120);
 const isConflict = (error: any) => error?.code === '23505';
 const isValidEmail = (v: string) => !v || (v.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v));
+const saveSession = (req:any) => new Promise<void>((resolve,reject) => {
+  if (!req.session?.save) return reject(new Error('SESSION_NOT_AVAILABLE'));
+  req.session.save((error:any) => error ? reject(error) : resolve());
+});
+
 
 type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any};
 
@@ -20,6 +25,70 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
   const {supabase,checkAuth,checkPlatformAdmin}=deps;
   const adminGuard=[checkAuth,checkPlatformAdmin];
 
+  // Isolated external login: a verified Supabase identity is matched ONLY against
+  // a previously registered partner email; no clinic role or session is created.
+  app.post('/api/partnerships/auth/session',async(req:any,res:any)=>{
+    if(!req.is('application/json') || !req.body || Array.isArray(req.body)
+       || Object.keys(req.body).some(k=>k!=='accessToken')
+       || typeof req.body.accessToken!=='string'
+       || req.body.accessToken.length<40 || req.body.accessToken.length>8192)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    try{
+      const auth=await supabase.auth.getUser(req.body.accessToken);
+      const identity=auth.data?.user;
+      const email=safe(identity?.email,254).toLowerCase();
+      if(auth.error || !uuid(identity?.id) || !email || !identity?.email_confirmed_at)
+        return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
+      // Prevent a partner login from silently changing an active clinical session.
+      if(req.session?.user?.id && req.session.user.id!==identity.id)
+        return res.status(409).json({success:false,error:'CLINICAL_SESSION_ACTIVE'});
+      const found=await supabase.from('verto_partner_accounts')
+        .select(PARTNER_ACCOUNT_FIELDS+',contact_email,partner_kind')
+        .eq('partner_kind','external').eq('contact_email',email).maybeSingle();
+      if(found.error)throw found.error;
+      if(!found.data)return res.status(403).json({success:false,error:'PARTNER_NOT_REGISTERED'});
+      if(!req.session)return fail(res);
+      req.session.partnerAccountId=found.data.id;
+      req.session.partnerAuthUserId=identity.id;
+      req.session.partnerEmail=email;
+      await saveSession(req);
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true});
+    }catch{return fail(res);}
+  });
+
+  app.get('/api/partnerships/portal',async(req:any,res:any)=>{
+    const id=safe(req.session?.partnerAccountId,120);
+    const email=safe(req.session?.partnerEmail,254).toLowerCase();
+    if(!uuid(id)||!uuid(req.session?.partnerAuthUserId)||!email)
+      return res.status(401).json({success:false,error:'PARTNER_LOGIN_REQUIRED'});
+    try{
+      const found=await supabase.from('verto_partner_accounts')
+        .select(PARTNER_ACCOUNT_FIELDS+',contact_email,partner_kind')
+        .eq('id',id).eq('partner_kind','external').eq('contact_email',email).maybeSingle();
+      if(found.error)throw found.error;
+      if(!found.data)return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
+      const overview=await supabase.rpc('verto_partner_referral_overview_v1',{
+        p_partner_id:found.data.id,p_limit:50,p_offset:0
+      });
+      if(overview.error)throw overview.error;
+      res.setHeader('Cache-Control','private, no-store');
+      const {contact_email,partner_kind,...account}=found.data;
+      return res.json({success:true,account,referrals:overview.data||[]});
+    }catch{return fail(res);}
+  });
+
+  app.post('/api/partnerships/auth/logout',async(req:any,res:any)=>{
+    if(req.session){
+      delete req.session.partnerAccountId;
+      delete req.session.partnerAuthUserId;
+      delete req.session.partnerEmail;
+      try{await saveSession(req);}catch{return fail(res);}
+    }
+    res.setHeader('Cache-Control','no-store');
+    return res.json({success:true});
+  });
+
   app.get('/api/partnerships/me',checkAuth,async(req:any,res:any)=>{
     const userId=ownId(req);
     if(!uuid(userId))return res.status(401).json({success:false,error:'AUTH_REQUIRED'});
@@ -28,7 +97,7 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
         .select(PARTNER_ACCOUNT_FIELDS).eq('user_id',userId).maybeSingle();
       if(account.error)throw account.error;
       if(!account.data)return res.json({success:true,account:null,referrals:[]});
-      const overview=await supabase.rpc('verto_partner_referral_overview_v1',{p_user_id:userId,p_limit:50,p_offset:0});
+      const overview=await supabase.rpc('verto_partner_referral_overview_v1',{p_partner_id:account.data.id,p_limit:50,p_offset:0});
       if(overview.error)throw overview.error;
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,account:account.data,referrals:overview.data||[]});
@@ -91,7 +160,7 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       return res.status(400).json({success:false,error:'INVALID_REQUEST'});
     const displayName=safe(req.body.displayName,180);
     const contactEmail=safe(req.body.contactEmail,254).toLowerCase();
-    if(displayName.length<2||!isValidEmail(contactEmail)
+    if(displayName.length<2||!contactEmail||!isValidEmail(contactEmail)
       ||(typeof req.body.displayName==='string'&&req.body.displayName.length>180)
       ||(typeof req.body.contactEmail==='string'&&req.body.contactEmail.length>254))
       return res.status(400).json({success:false,error:'INVALID_PARTNER'});
