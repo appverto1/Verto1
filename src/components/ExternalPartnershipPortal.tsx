@@ -101,7 +101,7 @@ export function ExternalPartnershipPortal() {
       const supabase = await getSupabase();
       const { error: authError } = await supabase.auth.signInWithOtp({
         email: email.trim().toLowerCase(),
-        options: { shouldCreateUser: true },
+        options: { shouldCreateUser: true, emailRedirectTo: window.location.origin + '/parcerias?partner_oauth=1' },
       });
       if (authError) throw authError;
       setCodeSent(true);
