@@ -4,6 +4,7 @@ import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
 import { PartnershipPanel } from './PartnershipPanel';
 import { ensureFreshSession, getSupabase } from '../lib/supabase';
+import { cleanPartnerAuthReturnUrl, readPartnerEmailCallbackHash } from '../lib/partnerEmailCallback';
 
 const portalUrl = '/api/partnerships/portal';
 const readJson = async (response: Response) => response.json().catch(() => ({}));
@@ -38,7 +39,9 @@ export function ExternalPartnershipPortal() {
     if (!response.ok || !result?.success) {
       throw new Error(result?.error === 'CLINICAL_SESSION_ACTIVE'
         ? 'Há um portal clínico aberto nesta sessão. Saia dele antes de entrar como parceiro externo.'
-        : 'Acesso não autorizado. Confira o e-mail cadastrado com a Verto.');
+        : result?.error === 'PARTNER_NOT_REGISTERED'
+          ? 'Este e-mail ainda não está cadastrado como parceiro externo. Solicite o cadastro no Super Admin.'
+          : 'Acesso não autorizado. Confira o e-mail cadastrado com a Verto.');
     }
     if (!(await checkPortal())) throw new Error('Não foi possível confirmar a sessão do parceiro.');
   };
@@ -47,26 +50,40 @@ export function ExternalPartnershipPortal() {
     let active = true;
     const bootstrap = async () => {
       try {
-        const params = new URLSearchParams(window.location.search);
-        const oauthReturn = params.get('partner_oauth') === '1';
+        const callbackUrl = new URL(window.location.href);
+        const oauthReturn = callbackUrl.searchParams.get('partner_oauth') === '1';
+        const emailReturn = oauthReturn ? readPartnerEmailCallbackHash(callbackUrl.hash) : null;
+        if (oauthReturn) {
+          // Scrub implicit-flow credentials from the address bar before any async work.
+          window.history.replaceState(window.history.state, document.title,
+            cleanPartnerAuthReturnUrl(callbackUrl.href));
+        }
         if (await checkPortal()) return;
         if (oauthReturn) {
-          // Explicitly exchange PKCE after OAuth. This route must not invoke the clinical login handler.
-          const session = await ensureFreshSession({ sessionTimeoutMs: 5000 });
+          if (emailReturn?.failed) throw new Error('O link de acesso expirou ou é inválido. Solicite um novo e-mail.');
+          let session;
+          if (emailReturn?.hasAuthResponse) {
+            // E-mail confirmation returns tokens in the URL fragment, not a PKCE code.
+            if (!emailReturn.accessToken || !emailReturn.refreshToken)
+              throw new Error('Link incompleto. Solicite um novo e-mail de acesso.');
+            const supabase = await getSupabase();
+            const restored = await supabase.auth.setSession({
+              access_token: emailReturn.accessToken,
+              refresh_token: emailReturn.refreshToken,
+            });
+            if (restored.error) throw new Error('Não foi possível validar o link. Solicite um novo e-mail.');
+            session = restored.data?.session;
+          } else {
+            // Google OAuth and PKCE email callbacks retain the existing code exchange.
+            session = await ensureFreshSession({ sessionTimeoutMs: 5000 });
+          }
           if (!session?.access_token) throw new Error('Não foi possível concluir o login. Tente novamente.');
           await exchangeSession(session.access_token);
         }
       } catch (err: any) {
         if (active) setError(err?.message || 'Falha no acesso do parceiro.');
       } finally {
-        if (active) {
-          const url = new URL(window.location.href);
-          if (url.searchParams.has('partner_oauth')) {
-            url.searchParams.delete('partner_oauth');
-            window.history.replaceState({}, document.title, url.pathname + url.search + url.hash);
-          }
-          setLoading(false);
-        }
+        if (active) setLoading(false);
       }
     };
     void bootstrap();
