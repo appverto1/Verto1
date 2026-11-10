@@ -56,7 +56,7 @@ create or replace function public.verto_claim_partner_referral_v1(
 language plpgsql security invoker
 set search_path = pg_catalog, public
 as $$
-declare v_partner_id uuid; v_existing_partner_id uuid;
+declare v_partner_id uuid; v_existing_partner_id uuid; v_lead_id uuid;
 begin
   if p_lead_id is null or p_referral_code is null
      or p_referral_code !~ '^VERTO-[A-F0-9]{18}$'
@@ -69,6 +69,12 @@ begin
    where p.referral_code = p_referral_code
      and p.status = 'approved' and p.compliance_approved is true;
   if v_partner_id is null then return false; end if;
+
+  -- Serialize attribution against concurrent claims and lead changes.
+  select l.id into v_lead_id from public.sales_leads l
+   where l.id = p_lead_id and l.deleted_at is null
+   for update;
+  if v_lead_id is null then return false; end if;
 
   -- No retroactive assignment of an existing lead, no post-payment claims.
   if not exists (
