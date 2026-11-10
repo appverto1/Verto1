@@ -30,6 +30,7 @@ import {
   CreditCard,
   Check,
   Activity,
+  Gift,
 } from "lucide-react";
 import { LogoVerto } from "./Common";
 import { TutorialOverlay } from "./Tutorial";
@@ -51,6 +52,7 @@ import {
 } from "./RoomReservation";
 import { dataService } from "../services/dataService";
 import { ProfessionalReceipts } from "./ProfessionalReceipts";
+import { PartnershipPanel } from "./PartnershipPanel";
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -949,6 +951,16 @@ export const TherapistDashboard = ({
             {isSidebarExpanded && <span>Reserva de Salas</span>}
           </button>
 
+          <button
+            type="button"
+            onClick={() => handleSetView("partnerships")}
+            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm ${view === "partnerships" ? "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"}`}
+            title={!isSidebarExpanded ? "Indique e Ganhe" : ""}
+          >
+            <Gift size={20} />
+            {isSidebarExpanded && <span>Indique e Ganhe</span>}
+          </button>
+
           {user?.role === "coordinator" && (
             <button
               onClick={() => onViewTeam()}
@@ -1028,6 +1040,12 @@ export const TherapistDashboard = ({
               }}
               onBack={handleBackView}
             />
+          </div>
+        )}
+
+        {view === "partnerships" && (
+          <div className="p-4 sm:p-8">
+            <PartnershipPanel onBack={handleBackView} />
           </div>
         )}
 
@@ -1647,6 +1665,14 @@ export const TherapistDashboard = ({
                         className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#7a32fc] transition-colors text-xs font-semibold uppercase tracking-wider text-left"
                       >
                         <DoorOpen size={18} /> Reserva de Salas
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {handleSetView("partnerships"); setIsMenuOpen(false);}}
+                        className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#7a32fc] transition-colors text-xs font-semibold uppercase tracking-wider text-left"
+                      >
+                        <Gift size={18} /> Indique e Ganhe
                       </button>
 
                       <div className="h-px bg-gray-100 my-1"></div>
