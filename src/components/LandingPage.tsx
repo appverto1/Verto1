@@ -73,6 +73,8 @@ const CENTRAL_ABA_SHOWCASE_ASPECT_RATIO = '1142 / 576';
 export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
   const [showLogin, setShowLogin] = useState(false);
   const [showRegister, setShowRegister] = useState(false);
+  const [entryAudience, setEntryAudience] = useState<'professional' | 'patient' | 'care-network' | null>(null);
+  const [careNetworkGuidance, setCareNetworkGuidance] = useState(false);
   const [loginType, setLoginType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
   const [registerType, setRegisterType] = useState<'professional' | 'patient' | 'coordinator' | null>(null);
   const [registerStep, setRegisterStep] = useState(1); // 1: Type, 2: Form
@@ -508,12 +510,50 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
   };
 
   const openSalesInterest = () => {
+    setEntryAudience(null);
     setSalesGooglePrefill(null);
     setRegisterError('');
     setRegisterType('professional');
     setRegisterStep(2);
     setShowLogin(false);
     setShowRegister(true);
+  };
+
+  const openAudienceEntry = (audience: 'professional' | 'patient' | 'care-network') => {
+    setEntryAudience(audience);
+    setCareNetworkGuidance(false);
+    setShowLogin(false);
+    setShowRegister(false);
+    setLoginError('');
+    setRegisterError('');
+    resetPasswordRecoveryState();
+  };
+
+  const openAudienceRegistration = () => {
+    if (entryAudience === 'care-network') {
+      // Clinical sharing is invitation-only; no public account grants patient access.
+      setCareNetworkGuidance(true);
+      return;
+    }
+    if (entryAudience === 'professional') {
+      openSalesInterest();
+      return;
+    }
+    setEntryAudience(null);
+    setRegisterType('patient');
+    setRegisterStep(2);
+    setShowRegister(true);
+  };
+
+  const openAudienceLogin = () => {
+    if (entryAudience === 'care-network') {
+      window.location.assign('/rede-de-cuidado');
+      return;
+    }
+    setLoginType(entryAudience === 'patient' ? 'patient' : 'professional');
+    setLoginStep('email');
+    setEntryAudience(null);
+    setShowLogin(true);
   };
 
   const audienceCards = [
@@ -769,17 +809,13 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
             </div>
             <div className="mt-8 text-center">
               <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Acesse sua área</h1>
-              <p className="mt-2 text-sm font-normal leading-6 text-slate-500">Escolha como deseja entrar na Verto.</p>
+              <p className="mt-2 text-sm font-normal leading-6 text-slate-500">Escolha seu perfil para começar na Verto.</p>
             </div>
 
             <div className="mt-7 space-y-3">
               <button
                 type="button"
-                onClick={() => {
-                  setLoginType('professional');
-                  setLoginStep('email');
-                  setShowLogin(true);
-                }}
+                onClick={() => openAudienceEntry('professional')}
                 className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-purple-100 bg-purple-50/60 px-4 py-4 text-left transition hover:border-[#7a32fc]/40 hover:bg-purple-50 active:scale-[0.99]"
               >
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-[#7a32fc] shadow-sm">
@@ -794,26 +830,34 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
 
               <button
                 type="button"
-                onClick={() => { window.location.href = '/rede-de-cuidado'; }}
+                onClick={() => openAudienceEntry('care-network')}
                 className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-violet-100 bg-white px-4 py-4 text-left transition hover:border-[#7a32fc]/35 hover:bg-violet-50/40 active:scale-[0.99]"
               >
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]">
                   <Users size={21} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-slate-900">Sou parceiro</span>
+                  <span className="block text-sm font-semibold text-slate-900">Rede de Cuidado</span>
                   <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos compartilhados por clínicas Verto</span>
                 </span>
                 <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400" />
               </button>
 
+              <a href="/parcerias"
+                className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-violet-100 bg-white px-4 py-4 text-left transition hover:border-[#7a32fc]/35 hover:bg-violet-50/40 active:scale-[0.99]">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]">
+                  <Users size={21}/>
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">Parcerias comerciais</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Indique clínicas e acompanhe suas parcerias</span>
+                </span>
+                <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400"/>
+              </a>
+
               <button
                 type="button"
-                onClick={() => {
-                  setLoginType('patient');
-                  setLoginStep('email');
-                  setShowLogin(true);
-                }}
+                onClick={() => openAudienceEntry('patient')}
                 className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-pink-100 bg-pink-50/60 px-4 py-4 text-left transition hover:border-pink-300 hover:bg-pink-50 active:scale-[0.99]"
               >
                 <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-pink-500 shadow-sm">
@@ -842,11 +886,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button type="button" onClick={() => { window.location.href = '/entrar'; }} className="rounded-full bg-[#7a32fc] px-4 py-2.5 text-xs font-medium text-white shadow-lg shadow-purple-500/20 sm:hidden">Entrar</button>
             <button
-              onClick={() => {
-                setLoginType('patient');
-                setLoginStep('email');
-                setShowLogin(true);
-              }}
+              onClick={() => openAudienceEntry('patient')}
               className="hidden whitespace-nowrap rounded-full border border-purple-100 bg-white px-3 py-2 text-xs font-semibold text-[#7a32fc] shadow-sm transition-colors hover:border-[#7a32fc] hover:bg-purple-50 sm:inline-flex sm:px-4 sm:text-sm"
             >
               Sou Paciente
@@ -859,10 +899,10 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                 Sou parceiro <ChevronDown size={14} aria-hidden="true" />
               </summary>
               <div className="absolute right-0 top-full z-50 mt-2 w-64 space-y-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-                <a href="/rede-de-cuidado" className="block rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-violet-50">
+                <button type="button" onClick={() => openAudienceEntry('care-network')} className="block w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-violet-50">
                   Rede de Cuidado
                   <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos clínicos compartilhados</span>
-                </a>
+                </button>
                 <a href="/parcerias" className="block rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-violet-50">
                   Programa de Parcerias
                   <span className="mt-0.5 block text-xs font-normal text-slate-500">Indicações comerciais e acompanhamento</span>
@@ -870,11 +910,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
               </div>
             </details>
             <button
-              onClick={() => {
-                setLoginType('professional');
-                setLoginStep('email');
-                setShowLogin(true);
-              }}
+              onClick={() => openAudienceEntry('professional')}
               className="hidden whitespace-nowrap rounded-full bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95 sm:inline-flex sm:px-5 sm:py-2.5 sm:text-sm"
             >
               Sou Profissional
@@ -906,7 +942,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                 </p>
                 <div className="mt-10 flex flex-col gap-3 sm:flex-row">
                   <button
-                    onClick={openSalesInterest}
+                    onClick={() => openAudienceEntry('professional')}
                     className="inline-flex items-center justify-center gap-3 rounded-2xl bg-[#7a32fc] px-7 py-4 text-sm font-semibold text-white shadow-2xl shadow-purple-500/20 transition-all hover:opacity-90"
                   >
                     Quero saber mais
@@ -1433,7 +1469,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
-                onClick={openSalesInterest}
+                onClick={() => openAudienceEntry('professional')}
                 className="inline-flex items-center justify-center gap-3 rounded-2xl bg-white px-7 py-4 text-sm font-semibold text-slate-900 transition-colors hover:bg-slate-100"
               >
                 Quero saber mais
@@ -1487,6 +1523,46 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Signup-first choice on public landing entry; actual login remains a separate action. */}
+      {entryAudience && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4 backdrop-blur-md md:p-6">
+          <section role="dialog" aria-modal="true" aria-labelledby="public-entry-title"
+            className="relative w-full max-w-sm rounded-3xl bg-white p-6 shadow-xl sm:p-8">
+            <button type="button" aria-label="Fechar" onClick={() => setEntryAudience(null)}
+              className="absolute right-4 top-4 rounded-full p-2 text-slate-400 hover:bg-slate-100"><X size={19}/></button>
+            <LogoVerto size={36} showText={true}/>
+            <h2 id="public-entry-title" className="mt-7 text-xl font-semibold text-slate-900">
+              {entryAudience === 'professional' ? 'Conheça a Verto'
+                : entryAudience === 'patient' ? 'Portal do paciente' : 'Rede de Cuidado'}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">
+              {entryAudience === 'professional'
+                ? 'Ainda não utiliza a Verto? Registre seu interesse para nossa equipe entrar em contato.'
+                : entryAudience === 'patient'
+                  ? 'Comece seu cadastro ou entre com o acesso disponibilizado pela sua clínica.'
+                  : 'O acesso aos conteúdos compartilhados é concedido pela clínica responsável.'}
+            </p>
+            <button type="button" autoFocus onClick={openAudienceRegistration}
+              className="mt-7 flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 py-3 text-sm font-semibold text-white hover:bg-[#6726df] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2">
+              {entryAudience === 'professional' ? 'Tenho interesse em conhecer'
+                : entryAudience === 'patient' ? 'Quero me cadastrar' : 'Quero participar'} <ArrowRight size={16}/>
+            </button>
+            {careNetworkGuidance && entryAudience === 'care-network' && (
+              <p role="status" className="mt-3 rounded-xl bg-violet-50 p-3 text-sm leading-5 text-violet-800">
+                Peça à clínica que acompanha o paciente para enviar um convite e autorizar o compartilhamento.
+              </p>
+            )}
+            <p className="mt-6 text-center text-xs text-slate-500">
+              {entryAudience === 'care-network' ? 'Já recebeu um convite?' : 'Já é cliente?'}{' '}
+              <button type="button" onClick={openAudienceLogin}
+                className="font-medium text-violet-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:underline">
+                Fazer login
+              </button>
+            </p>
+          </section>
         </div>
       )}
 
