@@ -21,6 +21,11 @@ create table if not exists public.verto_partner_accounts (
   constraint approved_partner_requires_compliance check (status <> 'approved' or compliance_approved = true)
 );
 
+-- A verified email must identify at most one external partnership account.
+create unique index if not exists verto_partner_external_email_key
+  on public.verto_partner_accounts(lower(contact_email))
+  where partner_kind = 'external' and contact_email is not null;
+
 create index if not exists verto_partner_accounts_pending_idx
   on public.verto_partner_accounts(status, created_at desc);
 
