@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 const sql = readFileSync('supabase/migrations/20261110110000_ambassador_finance_foundation_v1.sql','utf8');
 const routes = readFileSync('services/ambassadorFinanceRoutes.ts','utf8');
+const hardening = readFileSync('supabase/migrations/20261110111000_ambassador_finance_hardening_v1.sql','utf8');
 const bridge = readFileSync('services/salesProspectingRoutes.ts','utf8');
 const checkout = readFileSync('services/salesAssistedCheckoutPaymentProcessor.ts','utf8');
 const financial = readFileSync('services/salesSubscriptionFinancialReconciliation.ts','utf8');
@@ -66,4 +67,17 @@ test('admin pagination and input validation limit query and write resource use',
   assert.match(routes,/\.range\(paging\.offset, paging\.offset \+ paging\.limit - 1\)/g);
   assert.match(routes,/\^\[A-Z0-9_-\]\{3,32\}\$/);
   assert.match(routes,/private, no-store/);
+});
+
+
+test('late invoice organization and subscription identity trigger a safe re-evaluation', () => {
+  assert.match(hardening,/organization_id,stripe_subscription_id/);
+  assert.match(hardening,/DROP TRIGGER IF EXISTS ambassador_invoice_commission_v1/);
+  assert.match(hardening,/CREATE TRIGGER ambassador_invoice_commission_v1/);
+  for (const index of ['ambassador_partners_linked_clinic_idx',
+                       'ambassador_partners_created_by_idx',
+                       'ambassador_referrals_attributed_by_idx']) {
+    assert.ok(hardening.includes(index));
+  }
+  assert.match(sql,/NEW.organization_id IS NULL OR v_partner.linked_clinic_id = NEW.organization_id/);
 });
