@@ -122,6 +122,11 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: Partnership public registration and authorization regressions
+        run: |
+          node --import tsx tests/partnershipSecurity.test.ts
+          node --import tsx tests/partnershipEmailCallback.test.ts
+
       - name: Notification and scheduling regression tests
         run: |
           node tests/mobileClinicHeaderOnlyMenuBell.regression.test.mjs

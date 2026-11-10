@@ -31,6 +31,57 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
     standardHeaders: 'draft-7', legacyHeaders: false,
     message: { success: false, error: 'TOO_MANY_LOGIN_ATTEMPTS' },
   });
+  const partnerApplicationLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 8,
+    standardHeaders: 'draft-7', legacyHeaders: false,
+    message: { success: false, error: 'TOO_MANY_APPLICATION_ATTEMPTS' },
+  });
+
+  // A public application requires a fresh, verified Supabase identity.
+  // Name is the only user-entered field; email is derived from the verified token.
+  // Neither the browser nor the applicant can approve a partner or create a referral.
+  app.post('/api/partnerships/apply',partnerApplicationLimiter,async(req:any,res:any)=>{
+    if(!req.is('application/json')||!req.body||Array.isArray(req.body)
+       ||Object.keys(req.body).some(k=>!['accessToken','displayName'].includes(k))
+       ||typeof req.body.accessToken!=='string'
+       ||req.body.accessToken.length<40||req.body.accessToken.length>8192
+       ||typeof req.body.displayName!=='string'
+       ||req.body.displayName.length>180)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    const displayName=safe(req.body.displayName,180);
+    if(displayName.length<2)return res.status(400).json({success:false,error:'INVALID_PARTNER'});
+    if(req.session?.user?.id)
+      return res.status(409).json({success:false,error:'CLINICAL_SESSION_ACTIVE'});
+    try{
+      const verified=await supabase.auth.getUser(req.body.accessToken);
+      const identity=verified.data?.user;
+      const email=safe(identity?.email,254).toLowerCase();
+      if(verified.error||!uuid(identity?.id)||!identity?.email_confirmed_at
+         ||!email||!isValidEmail(email))
+        return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
+      const created=await supabase.from('verto_partner_accounts')
+        .insert({
+          display_name:displayName,contact_email:email,
+          partner_kind:'external',referral_code:newCode(),status:'pending',
+          compliance_approved:false,
+        }).select('status').single();
+      if(!created.error){
+        res.setHeader('Cache-Control','no-store');
+        return res.status(201).json({success:true,status:'pending'});
+      }
+      if(!isConflict(created.error))throw created.error;
+      // DB's unique normalized-email index makes concurrent submissions idempotent.
+      // Never update an approved, suspended, or pending application from this route.
+      const existing=await supabase.from('verto_partner_accounts')
+        .select('status').eq('partner_kind','external')
+        .eq('contact_email',email).maybeSingle();
+      if(existing.error)throw existing.error;
+      if(!existing.data)return res.status(409).json({success:false,error:'APPLICATION_EXISTS'});
+      res.setHeader('Cache-Control','no-store');
+      return res.json({success:true,status:existing.data.status,idempotent:true});
+    }catch{return fail(res);}
+  });
 
   // Isolated external login: a verified Supabase identity is matched ONLY against
   // a previously registered partner email; no clinic role or session is created.
@@ -54,6 +105,9 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
         .eq('partner_kind','external').eq('contact_email',email).maybeSingle();
       if(found.error)throw found.error;
       if(!found.data)return res.status(403).json({success:false,error:'PARTNER_NOT_REGISTERED'});
+      if(found.data.status!=='approved'||found.data.compliance_approved!==true)
+        return res.status(403).json({success:false,
+          error:found.data.status==='pending'?'PARTNER_APPROVAL_PENDING':'PARTNER_ACCESS_DENIED'});
       if(!req.session)return fail(res);
       req.session.partnerAccountId=found.data.id;
       req.session.partnerAuthUserId=identity.id;
@@ -77,7 +131,8 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
         .select(PARTNER_ACCOUNT_FIELDS+',contact_email,partner_kind')
         .eq('id',id).eq('partner_kind','external').eq('contact_email',email).maybeSingle();
       if(found.error)throw found.error;
-      if(!found.data)return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
+      if(!found.data||found.data.status!=='approved'||found.data.compliance_approved!==true)
+        return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
       const overview=await supabase.rpc('verto_partner_referral_overview_v1',{
         p_partner_id:found.data.id,p_limit:50,p_offset:0
       });
