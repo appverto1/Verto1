@@ -162,7 +162,7 @@ BEGIN
   WHERE id=v_referral.partner_id;
   IF v_partner.status <> 'active'
      OR (v_partner.linked_clinic_id IS NOT NULL
-         AND v_partner.linked_clinic_id = NEW.organization_id) THEN
+         AND (NEW.organization_id IS NULL OR v_partner.linked_clinic_id = NEW.organization_id)) THEN
     RETURN NEW;
   END IF;
 
