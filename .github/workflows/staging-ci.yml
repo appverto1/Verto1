@@ -126,6 +126,8 @@ jobs:
         run: |
           node --import tsx tests/partnershipSecurity.test.ts
           node --import tsx tests/partnershipEmailCallback.test.ts
+          node tests/landingSignupFirstEntry.regression.test.mjs
+          node tests/externalPartnerOnboardingHub20260903.regression.test.mjs
 
       - name: Notification and scheduling regression tests
         run: |
