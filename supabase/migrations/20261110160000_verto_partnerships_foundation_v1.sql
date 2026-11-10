@@ -127,7 +127,7 @@ create or replace function public.verto_owner_attach_partner_referral_v1(
 ) returns boolean
 language plpgsql security invoker
 set search_path = pg_catalog, public
-as $
+as $$
 declare v_partner_id uuid; v_attached uuid; v_lead_id uuid;
 begin
   if p_partner_id is null or p_lead_id is null then return false; end if;
@@ -154,7 +154,7 @@ begin
   where sales_lead_id=p_lead_id;
   return v_attached = p_partner_id;
 end;
-$;
+$$;
 
 -- Return only clinic labels and payment status for the server-authorized partner account.
 -- This is a server-only read RPC, not an RLS bypass exposed to browser roles.
