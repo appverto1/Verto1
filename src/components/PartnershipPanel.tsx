@@ -17,7 +17,7 @@ const statusLabel:Record<string,string>={
   pending:'Inscrição em análise',approved:'Parceiro aprovado',suspended:'Parceria suspensa'
 };
 
-export function PartnershipPanel({onBack}:{onBack:()=>void}) {
+export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;mode?:'professional'|'external'}) {
   const [account,setAccount]=useState<Account|null>(null);
   const [referrals,setReferrals]=useState<Referral[]>([]);
   const [loading,setLoading]=useState(true);
@@ -27,12 +27,12 @@ export function PartnershipPanel({onBack}:{onBack:()=>void}) {
   const reload=useCallback(async()=>{
     setError('');
     try {
-      const data=await callApi('/api/partnerships/me');
+      const data=await callApi(mode==='external'?'/api/partnerships/portal':'/api/partnerships/me');
       setAccount(data.account||null);
       setReferrals(Array.isArray(data.referrals)?data.referrals:[]);
     }catch(e:any){setError(e?.message||'Serviço temporariamente indisponível.');}
     finally{setLoading(false);}
-  },[]);
+  },[mode]);
   useEffect(()=>{void reload();},[reload]);
   const enroll=async()=>{
     if(saving)return;
@@ -61,7 +61,7 @@ export function PartnershipPanel({onBack}:{onBack:()=>void}) {
     <div className="flex items-center gap-3">
       <button type="button" onClick={onBack} className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50" aria-label="Voltar"><ArrowLeft size={18}/></button>
       <div>
-        <h1 id="partner-page-title" className="text-xl font-semibold text-slate-900">Indique e Ganhe</h1>
+        <h1 id="partner-page-title" className="text-xl font-semibold text-slate-900">{mode==='external'?'Programa de Parcerias':'Indique e Ganhe'}</h1>
         <p className="text-sm text-slate-500">Programa de parcerias comerciais da Verto</p>
       </div>
     </div>
@@ -70,6 +70,7 @@ export function PartnershipPanel({onBack}:{onBack:()=>void}) {
       <p className="text-2xl font-semibold text-slate-900">10% por até 12 meses</p>
       <p className="mt-2 text-sm leading-6 text-slate-600">Comissão potencial sobre pagamentos recorrentes confirmados de novos clientes indicados. Participação, elegibilidade e repasses dependem de aprovação comercial e jurídica. Não se aplica à indicação de pacientes ou serviços assistenciais.</p>
       {loading ? <p className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={16}/> Carregando...</p>
+      : !account && mode==='external' ? <p className="mt-5 text-sm text-slate-500">Seu cadastro não foi encontrado. Solicite participação ao comercial da Verto.</p>
       : !account ? <button type="button" disabled={saving} onClick={enroll} className="mt-5 rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{saving?'Enviando...':'Solicitar participação'}</button>
       : <div className="mt-5 space-y-3">
         <p className="text-sm font-medium text-slate-800">{statusLabel[account.status]||'Status indisponível'}</p>
