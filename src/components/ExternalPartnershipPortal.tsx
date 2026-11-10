@@ -18,6 +18,7 @@ export function ExternalPartnershipPortal() {
   const [otp, setOtp] = useState('');
   const [codeSent, setCodeSent] = useState(false);
   const [signupMode, setSignupMode] = useState(false);
+  const [entryChoice, setEntryChoice] = useState<'signup' | 'login' | null>(null);
   const [verifiedSignupToken, setVerifiedSignupToken] = useState('');
   const [applicationName, setApplicationName] = useState('');
   const [applicationResult, setApplicationResult] = useState('');
@@ -60,7 +61,12 @@ export function ExternalPartnershipPortal() {
         const oauthReturn = callbackUrl.searchParams.get('partner_oauth') === '1';
         const signupReturn = oauthReturn && callbackUrl.searchParams.get('partner_apply') === '1';
         const emailReturn = oauthReturn ? readPartnerEmailCallbackHash(callbackUrl.hash) : null;
-        if (signupReturn) setSignupMode(true);
+        if (signupReturn) {
+          setSignupMode(true);
+          setEntryChoice('signup');
+        } else if (oauthReturn) {
+          setEntryChoice('login');
+        }
         if (oauthReturn) {
           // Scrub implicit-flow credentials from the address bar before any async work.
           window.history.replaceState(window.history.state, document.title,
@@ -192,7 +198,7 @@ export function ExternalPartnershipPortal() {
   };
 
   const resetApplication = () => {
-    setSignupMode(false); setApplicationResult(''); setVerifiedSignupToken('');
+    setSignupMode(false); setEntryChoice('login'); setApplicationResult(''); setVerifiedSignupToken('');
     setApplicationName(''); setCodeSent(false); setOtp(''); setError(''); setMessage('');
   };
 
@@ -204,7 +210,7 @@ export function ExternalPartnershipPortal() {
       if (!response.ok) throw new Error('LOGOUT_FAILED');
       const supabase = await getSupabase();
       await supabase.auth.signOut({ scope: 'local' });
-      setLoggedIn(false); setEmail(''); setOtp(''); setCodeSent(false);
+      setLoggedIn(false); setEntryChoice(null); setSignupMode(false); setEmail(''); setOtp(''); setCodeSent(false);
     } catch { setError('Não foi possível sair. Tente novamente.'); }
     finally { setBusy(false); }
   };
@@ -229,10 +235,24 @@ export function ExternalPartnershipPortal() {
         <LogoVerto size={40} showText={true}/>
         <div className="mt-7 flex items-center gap-2 text-violet-700"><ShieldCheck size={18}/><span className="text-xs font-semibold">Acesso exclusivo</span></div>
         <h1 id="partner-login-title" className="mt-2 text-2xl font-semibold text-slate-900">Portal do parceiro</h1>
-        <p className="mt-2 text-sm leading-6 text-slate-600">{signupMode
-          ? 'Confirme seu e-mail e envie sua inscrição. O acesso comercial exige aprovação da Verto.'
-          : 'Entre com o e-mail cadastrado no programa de parcerias comerciais. Este acesso é independente dos portais clínicos.'}</p>
-        {applicationResult ? <div className="mt-6 space-y-3">
+        <p className="mt-2 text-sm leading-6 text-slate-600">{entryChoice === null
+          ? 'Quero participar do programa de indicações da Verto, com cadastro e aprovação antes do acesso comercial.'
+          : signupMode
+            ? 'Confirme seu e-mail e envie sua inscrição. O acesso comercial exige aprovação da Verto.'
+            : 'Entre com o e-mail cadastrado no programa de parcerias comerciais. Este acesso é independente dos portais clínicos.'}</p>
+        {!entryChoice && !applicationResult ? <div className="mt-7">
+          <button type="button" onClick={() => { setEntryChoice('signup'); setSignupMode(true); setError(''); setMessage(''); }}
+            className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-violet-700 px-4 py-3 text-sm font-semibold text-white hover:bg-violet-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2">
+            Quero ser parceiro
+          </button>
+          <p className="mt-6 text-center text-xs text-slate-500">
+            Já é parceiro?{' '}
+            <button type="button" onClick={() => { setEntryChoice('login'); setSignupMode(false); setError(''); setMessage(''); }}
+              className="font-medium text-violet-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:underline">
+              Fazer login
+            </button>
+          </p>
+        </div> : applicationResult ? <div className="mt-6 space-y-3">
           <p role="status" className="text-sm font-semibold text-violet-800">{applicationResult === 'approved'
             ? 'Seu cadastro já foi aprovado. Entre com seu e-mail para acessar.'
             : applicationResult === 'suspended'
@@ -268,20 +288,26 @@ export function ExternalPartnershipPortal() {
           {codeSent && <button type="button" disabled={busy} onClick={() => { setCodeSent(false); setOtp(''); }}
             className="w-full text-center text-xs text-slate-500">Solicitar outro código</button>}
         </form>}
-        {!signupMode && !applicationResult && <>
+        {entryChoice === 'login' && !signupMode && !applicationResult && <>
         <div className="my-5 text-center text-xs text-slate-400">ou</div>
         <button type="button" disabled={busy} onClick={() => void loginGoogle()}
           className="flex min-h-11 w-full items-center justify-center gap-3 rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 disabled:opacity-50">
           <GoogleIcon/> Entrar com Google
         </button></>}
-        {!applicationResult && !(signupMode && verifiedSignupToken) && <button type="button"
-          onClick={() => {
-            setSignupMode(value => !value); setCodeSent(false); setOtp('');
-            setVerifiedSignupToken(''); setError(''); setMessage('');
-          }}
-          className="mt-5 w-full rounded-xl border border-violet-200 px-4 py-3 text-sm font-semibold text-violet-800">
-          {signupMode ? 'Já sou parceiro: entrar' : 'Quero ser parceiro'}
-        </button>}
+        {entryChoice !== null && !applicationResult && !(signupMode && verifiedSignupToken) && (
+          <p className="mt-6 text-center text-xs text-slate-500">
+            {signupMode ? 'Já é parceiro?' : 'Ainda não participa?'}{' '}
+            <button type="button"
+              onClick={() => {
+                setEntryChoice(signupMode ? 'login' : 'signup');
+                setSignupMode(value => !value); setCodeSent(false); setOtp('');
+                setVerifiedSignupToken(''); setError(''); setMessage('');
+              }}
+              className="font-medium text-violet-700 underline-offset-2 hover:underline focus-visible:outline-none focus-visible:underline">
+              {signupMode ? 'Fazer login' : 'Quero ser parceiro'}
+            </button>
+          </p>
+        )}
         {message && <p role="status" className="mt-4 text-sm text-slate-600">{message}</p>}
         {error && <p role="alert" className="mt-4 text-sm text-red-700">{error}</p>}
         <p className="mt-6 text-xs leading-5 text-slate-500">A inscrição é aberta. Aprovação, acesso ao portal, indicação de clínicas e comissões dependem da análise da Verto.</p>
