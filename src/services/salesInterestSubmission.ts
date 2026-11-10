@@ -8,6 +8,7 @@ export type PublicSalesInterestSubmission = {
   website: string;
   startedAt: number;
   idempotencyKey: string;
+  partnerCode?: string;
 };
 
 export async function submitSalesInterest({
@@ -18,7 +19,8 @@ export async function submitSalesInterest({
   website,
   startedAt,
   idempotencyKey,
-}: PublicSalesInterestSubmission): Promise<void> {
+  partnerCode,
+}: PublicSalesInterestSubmission): Promise<{referralRecorded?: boolean; referralWarning?: string}> {
       const response = await fetch("/api/public/sales-leads", {
         method: "POST",
         headers: {
@@ -35,6 +37,7 @@ export async function submitSalesInterest({
           source: "public_landing",
           website,
           formStartedAt: startedAt,
+          ...(partnerCode ? { partnerCode } : {}),
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -45,5 +48,6 @@ export async function submitSalesInterest({
             "Não foi possível registrar seu interesse.",
         );
       }
+      return { referralRecorded: data.referralRecorded, referralWarning: data.referralWarning };
 
 }

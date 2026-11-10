@@ -89,6 +89,12 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
         : clinicName
           ? "clinic"
           : "independent_professional";
+      const rawPartnerCode = req.body?.partnerCode;
+      const partnerCode = typeof rawPartnerCode === 'string' ? rawPartnerCode.trim().toUpperCase() : '';
+      if (rawPartnerCode !== undefined && (typeof rawPartnerCode !== 'string'
+          || rawPartnerCode.length > 24 || !/^VERTO-[A-F0-9]{18}$/.test(partnerCode))) {
+        return { ok: false as const, status: 400, error: 'Código de indicação inválido.' };
+      }
       const acquisitionChannel =
         sanitizeString(req.body?.acquisitionChannel, 120) || "public_landing";
       const jobTitle = sanitizeString(req.body?.jobTitle, 120);
@@ -148,6 +154,7 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
         operationType,
         acquisitionChannel,
         source,
+        partnerCode,
       });
       const idempotencyKey =
         suppliedIdempotencyKey.length >= 12
@@ -173,6 +180,7 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
         consentVersion,
         consentPurpose,
         source,
+        partnerCode,
         idempotencyKey,
       } };
 }

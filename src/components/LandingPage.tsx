@@ -851,13 +851,24 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
             >
               Sou Paciente
             </button>
-            <button
-              onClick={() => { window.location.href = '/rede-de-cuidado'; }}
-              className="hidden whitespace-nowrap rounded-full border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs font-medium text-[#6d2ee8] shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 sm:inline-flex sm:px-4 sm:text-sm"
-              title="Acesse conteúdos compartilhados por clínicas que utilizam a Verto"
-            >
-              Sou parceiro
-            </button>
+            <details className="group relative hidden sm:block">
+              <summary
+                className="inline-flex cursor-pointer list-none items-center gap-1.5 whitespace-nowrap rounded-full border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs font-medium text-[#6d2ee8] shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 sm:px-4 sm:text-sm [&::-webkit-details-marker]:hidden"
+                title="Acessos de parceiros da Verto"
+              >
+                Sou parceiro <ChevronDown size={14} aria-hidden="true" />
+              </summary>
+              <div className="absolute right-0 top-full z-50 mt-2 w-64 space-y-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                <a href="/rede-de-cuidado" className="block rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-violet-50">
+                  Rede de Cuidado
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos clínicos compartilhados</span>
+                </a>
+                <a href="/parcerias" className="block rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-violet-50">
+                  Programa de Parcerias
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Indicações comerciais e acompanhamento</span>
+                </a>
+              </div>
+            </details>
             <button
               onClick={() => {
                 setLoginType('professional');

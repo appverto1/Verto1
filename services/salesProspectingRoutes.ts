@@ -4,6 +4,7 @@ import { registerSalesKanbanOpportunityCreationRoutes } from './salesKanbanOppor
 import { registerSalesAcquisitionRoutes } from './salesAcquisitionRoutes';
 import { registerSalesScriptRoutes } from './salesScriptRoutes';
 import { registerSalesLossReasonsRoutes } from './salesLossReasonsRoutes';
+import { registerPartnershipRoutes } from './partnerships/partnershipRoutes';
 import { registerOwnerDreCostRoutes } from './ownerDreCostRoutes';
 import { registerOwnerLoyaltyDraftRoutes } from './ownerLoyaltyDraftRoutes';
 // Verto CRM prospecting endpoints. Backend permission checks are mandatory.
@@ -52,6 +53,7 @@ export function registerSalesProspectingRoutes(
       return next();
     });
 
+  registerPartnershipRoutes(app,{supabase,checkAuth,checkPlatformAdmin});
   registerSalesScriptRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
   registerSalesAcquisitionRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid,sanitizeString});
   registerSalesLossReasonsRoutes(app,{supabase,checkAuth,checkPlatformAdmin,isUuid});

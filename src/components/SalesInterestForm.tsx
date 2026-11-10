@@ -35,6 +35,11 @@ export const SalesInterestForm = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [referralWarning, setReferralWarning] = useState('');
+  // Shareable codes are untrusted; the server validates eligibility and attribution.
+  const partnerCode = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('ref') || ''
+    : '';
 
   useEffect(() => {
     if (initialName) setName(initialName);
@@ -64,7 +69,7 @@ export const SalesInterestForm = ({
     setLoading(true);
     let persisted = false;
     try {
-      await submitSalesInterest({
+      const result = await submitSalesInterest({
         normalizedName,
         phone,
         clinicName,
@@ -72,8 +77,10 @@ export const SalesInterestForm = ({
         website,
         startedAt: startedAtRef.current,
         idempotencyKey: idempotencyKeyRef.current,
+        ...(partnerCode ? {partnerCode} : {}),
       });
       persisted = true;
+      setReferralWarning(result.referralWarning || '');
       setSubmitted(true);
       onSubmitted?.({ name: normalizedName });
     } catch (submitError: any) {
@@ -101,6 +108,7 @@ export const SalesInterestForm = ({
         <p className="mx-auto mt-2 max-w-lg text-sm font-normal leading-6 text-slate-600">
           {SALES_INTEREST_SUCCESS_MESSAGE}
         </p>
+        {referralWarning && <p className="mt-3 text-xs text-amber-700" role="status">{referralWarning}</p>}
       </div>
     );
   }
