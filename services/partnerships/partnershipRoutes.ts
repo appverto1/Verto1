@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { rateLimit } from 'express-rate-limit';
 
 const PARTNER_ACCOUNT_FIELDS = 'id,user_id,display_name,partner_kind,referral_code,status,compliance_approved,created_at';
 const uuid = (value: unknown) => typeof value === 'string'
@@ -24,10 +25,16 @@ type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any};
 export function registerPartnershipRoutes(app:any, deps:Deps) {
   const {supabase,checkAuth,checkPlatformAdmin}=deps;
   const adminGuard=[checkAuth,checkPlatformAdmin];
+  const partnerLoginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 15,
+    standardHeaders: 'draft-7', legacyHeaders: false,
+    message: { success: false, error: 'TOO_MANY_LOGIN_ATTEMPTS' },
+  });
 
   // Isolated external login: a verified Supabase identity is matched ONLY against
   // a previously registered partner email; no clinic role or session is created.
-  app.post('/api/partnerships/auth/session',async(req:any,res:any)=>{
+  app.post('/api/partnerships/auth/session',partnerLoginLimiter,async(req:any,res:any)=>{
     if(!req.is('application/json') || !req.body || Array.isArray(req.body)
        || Object.keys(req.body).some(k=>k!=='accessToken')
        || typeof req.body.accessToken!=='string'
@@ -40,7 +47,7 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       if(auth.error || !uuid(identity?.id) || !email || !identity?.email_confirmed_at)
         return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
       // Prevent a partner login from silently changing an active clinical session.
-      if(req.session?.user?.id && req.session.user.id!==identity.id)
+      if(req.session?.user?.id)
         return res.status(409).json({success:false,error:'CLINICAL_SESSION_ACTIVE'});
       const found=await supabase.from('verto_partner_accounts')
         .select(PARTNER_ACCOUNT_FIELDS+',contact_email,partner_kind')
@@ -51,6 +58,7 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       req.session.partnerAccountId=found.data.id;
       req.session.partnerAuthUserId=identity.id;
       req.session.partnerEmail=email;
+      req.session.partnerAuthAt=Date.now();
       await saveSession(req);
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true});
@@ -60,7 +68,9 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
   app.get('/api/partnerships/portal',async(req:any,res:any)=>{
     const id=safe(req.session?.partnerAccountId,120);
     const email=safe(req.session?.partnerEmail,254).toLowerCase();
-    if(!uuid(id)||!uuid(req.session?.partnerAuthUserId)||!email)
+    const authAt=Number(req.session?.partnerAuthAt);
+    if(!uuid(id)||!uuid(req.session?.partnerAuthUserId)||!email || !Number.isFinite(authAt)
+       || authAt > Date.now() || Date.now()-authAt > 12*60*60*1000)
       return res.status(401).json({success:false,error:'PARTNER_LOGIN_REQUIRED'});
     try{
       const found=await supabase.from('verto_partner_accounts')
@@ -83,6 +93,7 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       delete req.session.partnerAccountId;
       delete req.session.partnerAuthUserId;
       delete req.session.partnerEmail;
+      delete req.session.partnerAuthAt;
       try{await saveSession(req);}catch{return fail(res);}
     }
     res.setHeader('Cache-Control','no-store');
@@ -174,7 +185,10 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
         .select(PARTNER_ACCOUNT_FIELDS+',contact_email').single();
       if(result.error)throw result.error;
       return res.status(201).json({success:true,account:result.data});
-    }catch{return fail(res);}
+    }catch(error:any){
+      if(isConflict(error))return res.status(409).json({success:false,error:'PARTNER_EMAIL_ALREADY_REGISTERED'});
+      return fail(res);
+    }
   });
 
   app.patch('/api/owner/partnerships/accounts/:id',...adminGuard,async(req:any,res:any)=>{
