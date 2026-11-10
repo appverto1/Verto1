@@ -54,9 +54,9 @@ assert.doesNotMatch(activation, /clinic_memberships/);
 assert.doesNotMatch(activation, /role\s*:/);
 assert.doesNotMatch(server, /role\s*:\s*['"]external_professional/);
 
-// Partner access is a distinct landing-page entry; existing professional access remains.
-assert.match(landing, /Sou profissional parceiro/);
-assert.match(landing, /window\.location\.href = '\/rede-de-cuidado'/);
+// Invitation-based care-network access remains separate from commercial partner registration.
+assert.match(landing, /Rede de Cuidado/);
+assert.match(landing, /window\.location\.assign\('\/rede-de-cuidado'\)/);
 assert.match(landing, /Sou Profissional/);
 assert.match(landing, /Área do profissional/);
 
