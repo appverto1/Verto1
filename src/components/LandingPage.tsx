@@ -837,11 +837,23 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                   <Users size={21} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-slate-900">Sou parceiro</span>
+                  <span className="block text-sm font-semibold text-slate-900">Rede de Cuidado</span>
                   <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos compartilhados por clínicas Verto</span>
                 </span>
                 <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400" />
               </button>
+
+              <a href="/parcerias"
+                className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-violet-100 bg-white px-4 py-4 text-left transition hover:border-[#7a32fc]/35 hover:bg-violet-50/40 active:scale-[0.99]">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]">
+                  <Users size={21}/>
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">Parcerias comerciais</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Indique clínicas e acompanhe suas parcerias</span>
+                </span>
+                <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400"/>
+              </a>
 
               <button
                 type="button"
