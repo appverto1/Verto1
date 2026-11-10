@@ -10,7 +10,7 @@ const account = { id: partnerId, user_id: null, display_name: 'Parceiro',
   contact_email: email, partner_kind: 'external', referral_code: 'VERTO-0123456789ABCDEF01',
   status: 'approved', compliance_approved: true, created_at: '2026-11-10T12:00:00Z' };
 
-function fixture(options: { auth?: any; account?: any; rpc?: any; memberships?: any[] } = {}) {
+function fixture(options: { auth?: any; account?: any; rpc?: any; memberships?: any[]; insertError?: any } = {}) {
   const calls: any[] = [];
   const routes: Record<string, any[]> = {};
   const app: any = {};
@@ -25,6 +25,8 @@ function fixture(options: { auth?: any; account?: any; rpc?: any; memberships?: 
     from: (table: string) => {
       const query: any = { filters: {} };
       query.select = () => query;
+      query.insert = (values: any) => { calls.push({ type: 'insert', table, values }); return query; };
+      query.single = async () => ({ data: options.insertError ? null : { status: 'pending' }, error: options.insertError || null });
       query.eq = (field: string, value: any) => { query.filters[field] = value; return query; };
       query.in = () => query;
       query.order = () => query;
@@ -137,4 +139,78 @@ test('an owner referral cannot override an ineligible or already attributed lead
     f.req({ partnerId, leadId }));
   assert.equal(denied.statusCode, 409);
   assert.equal(denied.body.error, 'REFERRAL_NOT_ELIGIBLE');
+});
+
+test('verified public application creates only a pending account, never a session or approval', async () => {
+  const f = fixture();
+  const session: any = { save(cb: any) { cb(null); } };
+  const result = await f.run('POST', '/api/partnerships/apply',
+    f.req({ accessToken: 'a'.repeat(80), displayName: 'Parceiro Novo' }, session));
+  assert.equal(result.statusCode, 201);
+  assert.deepEqual(result.body, { success: true, status: 'pending' });
+  const write = f.calls.find(call => call.type === 'insert');
+  assert.equal(write.table, 'verto_partner_accounts');
+  assert.equal(write.values.contact_email, email);
+  assert.equal(write.values.display_name, 'Parceiro Novo');
+  assert.equal(write.values.partner_kind, 'external');
+  assert.equal(write.values.status, 'pending');
+  assert.equal(write.values.compliance_approved, false);
+  assert.equal(write.values.user_id, undefined);
+  assert.equal(write.values.created_by, undefined);
+  assert.match(write.values.referral_code, /^VERTO-[A-F0-9]{18}$/);
+  assert.equal(session.partnerAccountId, undefined);
+  assert.equal(f.routes['POST /api/partnerships/apply'].length, 2, 'rate limiter required');
+});
+
+test('public application refuses unverified identity, clinical session and caller-supplied approval or email', async () => {
+  const unconfirmed = fixture({ auth: { data: { user: { id: userId, email } }, error: null } });
+  const body = { accessToken: 'a'.repeat(80), displayName: 'Parceiro Novo' };
+  const noEmail = await unconfirmed.run('POST', '/api/partnerships/apply', unconfirmed.req(body, {}));
+  assert.equal(noEmail.statusCode, 401);
+  assert.equal(noEmail.body.error, 'EMAIL_VERIFICATION_REQUIRED');
+  assert.equal(unconfirmed.calls.length, 0);
+
+  const f = fixture();
+  const forged = await f.run('POST', '/api/partnerships/apply',
+    f.req({ ...body, status: 'approved', complianceApproved: true, contactEmail: 'victim@example.test' }));
+  assert.equal(forged.statusCode, 400);
+  const invalid = await f.run('POST', '/api/partnerships/apply', f.req({
+    ...body, displayName: 'A'.repeat(181),
+  }));
+  assert.equal(invalid.statusCode, 400);
+  const clinical = await f.run('POST', '/api/partnerships/apply',
+    f.req(body, { user: { id: userId, role: 'therapist' } }));
+  assert.equal(clinical.statusCode, 409);
+  assert.equal(f.calls.length, 0);
+});
+
+test('duplicate public applications are idempotent and never reset an existing approval', async () => {
+  const f = fixture({ insertError: { code: '23505' } });
+  const result = await f.run('POST', '/api/partnerships/apply', f.req({
+    accessToken: 'a'.repeat(80), displayName: 'Alteração Não Autorizada',
+  }));
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.body, { success: true, status: 'approved', idempotent: true });
+  assert.equal(f.calls.filter(c => c.type === 'insert').length, 1);
+  // A uniqueness conflict is followed by one read, never an update.
+});
+
+test('pending or suspended partners cannot create or continue an external partner session', async () => {
+  for (const status of ['pending', 'suspended']) {
+    const f = fixture({ account: { ...account, status, compliance_approved: status === 'pending' ? false : true } });
+    const session: any = { save(cb: any) { cb(null); } };
+    const denied = await f.run('POST', '/api/partnerships/auth/session',
+      f.req({ accessToken: 'a'.repeat(80) }, session));
+    assert.equal(denied.statusCode, 403);
+    assert.equal(session.partnerAccountId, undefined);
+    assert.equal(denied.body.error, status === 'pending' ? 'PARTNER_APPROVAL_PENDING' : 'PARTNER_ACCESS_DENIED');
+    const alreadyLogged: any = {
+      partnerAccountId: partnerId, partnerAuthUserId: userId,
+      partnerEmail: email, partnerAuthAt: Date.now(),
+    };
+    const portal = await f.run('GET', '/api/partnerships/portal', f.req({}, alreadyLogged));
+    assert.equal(portal.statusCode, 403);
+    assert.equal(portal.body.error, 'PARTNER_ACCESS_DENIED');
+    assert.equal(f.calls.filter(c => c.name === 'verto_partner_referral_overview_v1').length, 0);
+  }
 });
