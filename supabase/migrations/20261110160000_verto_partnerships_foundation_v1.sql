@@ -109,6 +109,42 @@ begin
 end;
 $$;
 
+-- Manual attribution is restricted to the existing platform-admin + TOTP HTTP guard.
+-- This RPC still checks partner eligibility, lead eligibility and locks the lead.
+create or replace function public.verto_owner_attach_partner_referral_v1(
+  p_partner_id uuid, p_lead_id uuid
+) returns boolean
+language plpgsql security invoker
+set search_path = pg_catalog, public
+as $
+declare v_partner_id uuid; v_attached uuid; v_lead_id uuid;
+begin
+  if p_partner_id is null or p_lead_id is null then return false; end if;
+  select p.id into v_partner_id from public.verto_partner_accounts p
+  where p.id = p_partner_id and p.status = 'approved'
+    and p.compliance_approved is true;
+  if v_partner_id is null then return false; end if;
+
+  select l.id into v_lead_id from public.sales_leads l
+  where l.id = p_lead_id and l.deleted_at is null
+    and l.status not in ('converted','archived','lost')
+  for update;
+  if v_lead_id is null then return false; end if;
+  if exists (
+    select 1 from public.platform_billing_invoice_ledger il
+    where il.sales_lead_id = p_lead_id
+      and il.status='paid' and il.amount_paid_cents > 0
+  ) then return false; end if;
+
+  insert into public.verto_partner_referrals(partner_id,sales_lead_id,attributed_by)
+  values (p_partner_id,p_lead_id,'owner_review')
+  on conflict (sales_lead_id) do nothing;
+  select partner_id into v_attached from public.verto_partner_referrals
+  where sales_lead_id=p_lead_id;
+  return v_attached = p_partner_id;
+end;
+$;
+
 -- Return only clinic labels and payment status for this verified partner user.
 -- This is a server-only read RPC, not an RLS bypass exposed to browser roles.
 create or replace function public.verto_partner_referral_overview_v1(
@@ -139,6 +175,8 @@ as $$
 $$;
 
 revoke all on function public.verto_claim_partner_referral_v1(uuid,text,text) from public,anon,authenticated;
+revoke all on function public.verto_owner_attach_partner_referral_v1(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.verto_owner_attach_partner_referral_v1(uuid,uuid) to service_role;
 revoke all on function public.verto_partner_referral_overview_v1(uuid,integer,integer) from public,anon,authenticated;
 grant execute on function public.verto_claim_partner_referral_v1(uuid,text,text) to service_role;
 grant execute on function public.verto_partner_referral_overview_v1(uuid,integer,integer) to service_role;
