@@ -3410,11 +3410,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     const patientId = String(patient?.id || '');
-    if (!patientId || patientPortalKind === 'KIDS') {
+    if (!patientId) {
       assignedTasksLoadedForRef.current = '';
       setAssignedTasks([]);
       setIsLoadingAssignedTasks(false);
       setAssignedTasksLoadError(null);
+      return;
+    }
+    // For pediatric records, read the historical assigned tasks only on
+    // opening Histórico; no additional query on every patient visit.
+    if (patientPortalKind === 'KIDS' && activeTab !== 'history') {
+      if (assignedTasksLoadedForRef.current !== patientId) {
+        assignedTasksLoadedForRef.current = '';
+        setAssignedTasks([]);
+      }
       return;
     }
     if (assignedTasksLoadedForRef.current === patientId) return;
@@ -3457,7 +3466,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [assignedTasksReloadKey, patient?.id, patientPortalKind]);
+  }, [assignedTasksReloadKey, patient?.id, patientPortalKind, activeTab]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -4407,8 +4416,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const historyWithFamilyNotes = useMemo(() => {
     const baseHistory = Array.isArray(history) ? history : [];
-    if (!isKidsProfile) return baseHistory;
-
+    // Family records already stored for this patient remain visible after
+    // changing from the pediatric portal to an adult portal.
     // Patient identity comes from the selected clinical chart, not from note content.
     const scopedFamilyNotes = (Array.isArray(notes) ? notes : []).filter((note: any) => {
       const notePatientId = String(note?.patientId ?? note?.patient_id ?? '').trim();
@@ -4581,13 +4590,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const familyDiaryEntries = useMemo(() => {
     const currentPatientId = String(patient?.id || '').trim();
-    if (!isKidsProfile || !currentPatientId) return [];
+    if (!currentPatientId) return [];
     return visibleHistoryWithFamilyNotes.filter((item: any) => {
       const recordPatientId = String(item?.patientId ?? item?.patient_id ?? '').trim();
       return recordPatientId === currentPatientId &&
         (item?.type === 'family_note' || item?.type === 'photo');
     });
-  }, [visibleHistoryWithFamilyNotes, isKidsProfile, patient?.id]);
+  }, [visibleHistoryWithFamilyNotes, patient?.id]);
 
   // Read status is purely a cosmetic device-local preference, scoped to
   // actor, clinic and patient. Never use it for clinical authorization.
@@ -11322,7 +11331,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         <div className="mx-auto w-full max-w-[1480px]">
         {activeTab === 'history' ? (
           <div className="space-y-6">
-            {isKidsProfile && (
+            {(isKidsProfile || familyDiaryEntries.length > 0) && (
               <nav role="tablist" aria-label="Seções do histórico" className={`flex flex-wrap gap-2 rounded-2xl border p-2 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
                 {(['timeline', 'family'] as const).map((section) => (
                   <button
@@ -11346,7 +11355,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 ))}
               </nav>
             )}
-            {isKidsProfile && historySubtab === 'family' ? (
+            {(isKidsProfile || familyDiaryEntries.length > 0) && historySubtab === 'family' ? (
               <section aria-label="Diário da Família" className="space-y-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
