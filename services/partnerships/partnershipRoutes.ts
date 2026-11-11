@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { registerPartnerMarketplaceRoutes } from './marketplaceRoutes';
 import { rateLimit } from 'express-rate-limit';
 
 const PARTNER_ACCOUNT_FIELDS = 'id,user_id,display_name,partner_kind,referral_code,status,compliance_approved,created_at';
@@ -279,4 +280,5 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       return res.json({success:true});
     }catch{return fail(res);}
   });
+  registerPartnerMarketplaceRoutes(app,deps);
 }

@@ -20,6 +20,7 @@ import { SecureImage } from './SecureMedia';
 import { ModuleDiscoveryInterstitial } from './ModuleDiscoveryInterstitial';
 import { ClinicLoyaltyTermsPreview } from './ClinicLoyaltyTermsPreview';
 import { HelpButton } from './HelpButton';
+import { PartnerMarketplace } from './PartnerMarketplace';
 
 interface SettingsMenuProps {
   user: any;
@@ -192,6 +193,7 @@ export function SettingsMenu({
   const [logoutError, setLogoutError] = useState('');
   const [moduleDiscoveryOpen, setModuleDiscoveryOpen] = useState(false);
   const [loyaltyPreviewOpen, setLoyaltyPreviewOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const firstActionRef = useRef<HTMLButtonElement>(null);
@@ -333,6 +335,21 @@ export function SettingsMenu({
                   <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
               )}
+
+              <button type="button" role="menuitem"
+                onClick={() => {
+                  setIsOpen(false);
+                  onAction?.();
+                  if (onOpenMarketplace) onOpenMarketplace();
+                  else setMarketplaceOpen(true);
+                }}
+                className="w-full flex items-center justify-between rounded-xl p-3 text-slate-600 transition-all hover:bg-slate-50">
+                <span className="flex items-center gap-3">
+                  <ShoppingBag size={18} className="text-slate-400" />
+                  <span className="text-sm font-medium">Encontrar parceiros</span>
+                </span>
+                <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+              </button>
 
               {canSwitchAccessContext && (
                 <button
@@ -502,6 +519,10 @@ export function SettingsMenu({
           document.body,
         )
       : <ModuleDiscoveryInterstitial open={moduleDiscoveryOpen} onClose={() => setModuleDiscoveryOpen(false)} />}
+    {typeof document !== 'undefined' && createPortal(
+      <PartnerMarketplace open={marketplaceOpen} clinicId={String(user?.activeWorkspaceId || user?.clinicId || '')} onClose={() => setMarketplaceOpen(false)} />,
+      document.body
+    )}
     {typeof document !== 'undefined' && createPortal(
       <ClinicLoyaltyTermsPreview open={loyaltyPreviewOpen} onClose={() => setLoyaltyPreviewOpen(false)} />,
       document.body

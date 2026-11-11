@@ -1,4 +1,5 @@
 import React, {useCallback, useEffect, useState} from 'react';
+import { PartnerMarketplacePublisher } from './PartnerMarketplacePublisher';
 import {ArrowLeft, Check, Copy, Gift, Loader2, RefreshCw} from 'lucide-react';
 
 type Account = {
@@ -105,5 +106,6 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
       </ul>}
       <p className="mt-4 text-xs text-slate-500">A lista exibe até 50 indicações recentes. Pagamento confirmado não equivale a comissão aprovada ou repasse realizado.</p>
     </div>}
+    {approved && <PartnerMarketplacePublisher />}
   </section>;
 }

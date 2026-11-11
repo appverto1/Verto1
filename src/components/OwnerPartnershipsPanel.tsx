@@ -11,6 +11,9 @@ type Partner = {
   compliance_approved: boolean;
   created_at: string;
 };
+type Opportunity={id:string;status:string;agreed_monthly_cents:number|null;
+  created_at:string;clinic:{name:string}|null;partner:{display_name:string}|null};
+const brl=(cents:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(cents/100);
 const statusLabel: Record<Partner['status'], string> = {
   pending: 'Em análise', approved: 'Aprovado', suspended: 'Suspenso'
 };
@@ -24,6 +27,7 @@ const asJson = (body: unknown) => ({ headers: { 'Content-Type': 'application/jso
 
 export function OwnerPartnershipsPanel() {
   const [accounts, setAccounts] = useState<Partner[]>([]);
+  const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -37,8 +41,12 @@ export function OwnerPartnershipsPanel() {
   const reload = useCallback(async () => {
     setError('');
     try {
-      const result = await request('/api/owner/partnerships/accounts');
+      const [result, marketplace] = await Promise.all([
+        request('/api/owner/partnerships/accounts'),
+        request('/api/owner/partnerships/marketplace').catch(() => null)
+      ]);
       setAccounts(Array.isArray(result.accounts) ? result.accounts : []);
+      setOpportunities(Array.isArray(marketplace?.leads) ? marketplace.leads : []);
     } catch (e: any) { setError(e.message || 'Não foi possível consultar parceiros.'); }
     finally { setLoading(false); }
   }, []);
@@ -151,6 +159,26 @@ export function OwnerPartnershipsPanel() {
         </li>)}
       </ul>}
       <p className="mt-3 text-xs text-slate-500">Exibição limitada aos 100 parceiros mais recentes. Nenhum valor de paciente é exibido.</p>
+    </div>
+    <div className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
+      <h3 className="font-semibold text-slate-900">Negócios indicados pela Verto aos parceiros</h3>
+      <p className="text-sm text-slate-600">Oportunidades rastreadas, separadas das indicações para assinatura da Verto. Valores abaixo são projeções comerciais, não comissões devidas nem pagamentos confirmados.</p>
+      <div className="flex flex-wrap gap-5 text-sm text-slate-700">
+        <span><strong>{opportunities.length}</strong> oportunidades exibidas</span>
+        <span><strong>{opportunities.filter(o=>o.status==='active').length}</strong> contratações declaradas e confirmadas</span>
+        <span><strong>{brl(opportunities.filter(o=>o.status==='active').reduce((sum,o)=>sum+Math.round(Number(o.agreed_monthly_cents||0)*0.1)*6,0))}</strong> potencial de 6 meses*</span>
+      </div>
+      {opportunities.length===0 ? <p className="text-sm text-slate-500">Ainda não há encaminhamentos cadastrados.</p>
+       : <ul className="divide-y divide-slate-100">
+          {opportunities.map(o=><li key={o.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
+            <div>
+              <p className="font-medium text-slate-900">{o.clinic?.name||'Clínica'} → {o.partner?.display_name||'Parceiro'}</p>
+              <p className="text-xs text-slate-500">{o.status==='active'?'Contratação confirmada':o.status==='awaiting_clinic'?'Aguardando a clínica':'Interesse recebido'}</p>
+            </div>
+            {o.status==='active'&&o.agreed_monthly_cents!=null&&<span className="text-xs font-medium text-slate-700">{brl(Number(o.agreed_monthly_cents))}/mês declarado</span>}
+          </li>)}
+        </ul>}
+      <p className="text-xs text-slate-500">*Projeção hipotética de 10% da mensalidade de serviço por 6 meses. Não contempla pagamentos verificados, cancelamentos, contrato ou compensações. Nenhuma cobrança é iniciada por esta tela.</p>
     </div>
     <form onSubmit={attach} className="space-y-3 rounded-2xl border border-slate-200 bg-white p-5">
       <h3 className="font-semibold text-slate-900">Vincular indicação comercial existente</h3>
