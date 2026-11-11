@@ -160,7 +160,7 @@ export function PartnerMarketplacePublisher(){
                   <p className="mt-1 text-sm text-slate-700">{lead.contact_name}</p>
                   <p className="break-all text-sm text-slate-600">{lead.contact_email}</p>
                   {lead.contact_phone && <p className="text-sm text-slate-600">{lead.contact_phone}</p>}
-                  <p className="mt-1 text-xs text-slate-500">{lead.status==='active'?'Contratação confirmada por ambas as partes':lead.status==='awaiting_clinic'?'Aguardando confirmação da clínica':'Interesse recebido'}</p>
+                  <p className="mt-1 text-xs text-slate-500">{lead.status==='active'?'Contratação confirmada por ambas as partes':lead.status==='awaiting_clinic'?'Aguardando confirmação da clínica':lead.status==='declined'?'Parceria ou interesse encerrado':'Interesse recebido'}</p>
                 </div>
                 {lead.status==='interested' && <button type="button" onClick={()=>{setConfirming(lead.id);setAmount('');}}
                   className="rounded-xl border border-violet-300 px-3 py-2 text-sm font-semibold text-violet-700">Declarar contratação</button>}
