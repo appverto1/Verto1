@@ -11386,7 +11386,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       isTherapist={['director', 'coordinator', 'supervisor', 'therapist'].includes(effectiveCaseTeamRole)}
                       onEvaluate={onEvaluateHistoryItem}
                       protocols={protocols}
-                      isKid={patientCategory === 'Criança'}
+                      isKid={true}
                       fullHistory={(history || []).filter((record: any) => String(record?.patientId ?? record?.patient_id ?? '') === String(patient.id))}
                       peiGoals={peiGoals || []}
                     />
