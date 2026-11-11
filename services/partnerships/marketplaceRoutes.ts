@@ -9,11 +9,8 @@ const imageKind = (value:unknown):value is 'logo'|'photo' => value==='logo'||val
 const storedPath = (value:unknown) => typeof value==='string' && value.startsWith(STORED_PREFIX)
   ? value.slice(STORED_PREFIX.length) : null;
 const validStoredPath = (path:string,partnerId:string,kind:'logo'|'photo') =>
-  path.startsWith(`${partnerId}/${kind}-`) && new RegExp(`^${partnerId}/${kind}-[0-9a-f]{24}\\.(jpg|png|webp)import crypto from 'node:crypto';
-import { rateLimit } from 'express-rate-limit';
-
-type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any};
-).test(path);
+  path.startsWith(partnerId+'/'+kind+'-')
+  && new RegExp('^'+partnerId+'/'+kind+'-[0-9a-f]{24}\\.(jpg|png|webp)$').test(path);
 const sniffImage = (bytes:Buffer):'image/jpeg'|'image/png'|'image/webp'|null => {
   if(bytes.length>=3 && bytes[0]===0xff && bytes[1]===0xd8 && bytes[2]===0xff) return 'image/jpeg';
   if(bytes.length>=8 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png';
