@@ -100,7 +100,7 @@ function fixture(opts: {
 
 test('approved external partner can save FRATELLI10 once, without caller-supplied identity',async()=>{
   const f=fixture();
-  const saved=await f.run({couponCode:'Fratelli 10'});
+  const saved=await f.run({couponCode:'fratelli10'});
   assert.equal(saved.statusCode,200);
   assert.deepEqual(saved.body,{success:true,couponCode:'FRATELLI10'});
   assert.equal(f.row.referral_alias,'FRATELLI10');
@@ -119,7 +119,7 @@ test('approved external partner can save FRATELLI10 once, without caller-supplie
 
 test('coupon saving refuses forged identity, malformed codes and expired sessions',async()=>{
   const f=fixture();
-  for(const couponCode of ['abc','VERTO-1234','<script>','--','A'.repeat(25),'']){
+  for(const couponCode of ['abc','Fratelli 10','FRATELLI-10',' VERTO1234','<script>','--','A'.repeat(25),'']){
     const denied=await f.run({couponCode});
     assert.equal(denied.statusCode,400,couponCode);
   }
@@ -133,10 +133,10 @@ test('coupon saving refuses forged identity, malformed codes and expired session
 
 test('only Super Admin authorization chain can set a partner coupon by server-validated ID',async()=>{
   const f=fixture();
-  assert.equal((await f.runOwner({couponCode:'Fratelli 10'})).statusCode,200);
-  assert.equal(f.row.referral_alias,'FRATELLI10');
+  assert.equal((await f.runOwner({couponCode:'10fratelli'})).statusCode,200);
+  assert.equal(f.row.referral_alias,'10FRATELLI');
   assert.equal(f.calls.filter(c=>c.type==='update').length,1);
-  assert.equal((await f.runOwner({couponCode:'Fratelli 10'})).body.idempotent,true);
+  assert.equal((await f.runOwner({couponCode:'10fratelli'})).body.idempotent,true);
   assert.equal((await f.runOwner({couponCode:'OUTRO10'})).statusCode,409);
   const invalid=fixture();
   assert.equal((await invalid.runOwner({couponCode:'<script>'})).statusCode,400);
@@ -193,15 +193,15 @@ const lead=(partnerCode?:any):any=>({
 test('landing parses both old links and typed coupons with no extra DB reads',()=>{
   for(const [text,expected] of [
     [internalCode,internalCode],
-    ['fratelli 10','FRATELLI10'],
-    ['FRATELLI-10','FRATELLI-10'],
+    ['fratelli10','FRATELLI10'],
+    ['10fratelli','10FRATELLI'],
     ['',''],
   ]){
     const result=parsePublicSalesLeadInput(lead(text),deps);
     assert.equal(result.ok,true,text);
     if(result.ok)assert.equal(result.input.partnerCode,expected);
   }
-  for(const text of ['<script>','VERTO-INVALID','A'.repeat(70)]){
+  for(const text of ['<script>','VERTO-INVALID','fratelli 10','FRATELLI-10',' A123','A123 ','A'.repeat(70)]){
     const rejected=parsePublicSalesLeadInput(lead(text),deps);
     assert.equal(rejected.ok,false,text);
     if(!rejected.ok)assert.equal(rejected.status,400);
@@ -210,6 +210,7 @@ test('landing parses both old links and typed coupons with no extra DB reads',()
 
 test('migration preserves canonical referral uniqueness, existing anti-fraud RPC and RLS boundaries',()=>{
   const sql=readFileSync('supabase/migrations/20261111154000_verto_partner_referral_coupon_v1.sql','utf8');
+  const formatSql=readFileSync('supabase/migrations/20261111190000_verto_partner_coupon_compact_format_v1.sql','utf8');
   const ui=readFileSync('src/components/SalesInterestForm.tsx','utf8');
   const panel=readFileSync('src/components/PartnershipPanel.tsx','utf8');
   assert.equal(sql.split('create or replace function public.verto_claim_partner_referral_v1(').length,2);
@@ -218,6 +219,10 @@ test('migration preserves canonical referral uniqueness, existing anti-fraud RPC
   assert.ok(sql.includes("and p_referral_code !~ '^VERTO-'"));
   assert.ok(sql.includes("or char_length(coalesce(p_idempotency_key"));
   assert.match(sql,/add column if not exists referral_alias text/);
+  assert.match(formatSql,/referral_alias ~ '\^\[A-Z0-9\]\{4,24\}\$'/);
+  assert.match(formatSql,/p_referral_code ~ '\^\[A-Z0-9\]\{4,24\}\$'/);
+  assert.match(formatSql,/p_referral_code ~ '\^VERTO-\[A-F0-9\]\{18\}\$'/);
+  assert.equal(formatSql.split('create or replace function public.verto_claim_partner_referral_v1(').length,2);
   assert.match(sql,/create unique index if not exists verto_partner_referral_alias_uidx/);
   assert.match(sql,/p\.referral_code = p_referral_code or p\.referral_alias = p_referral_code/);
   assert.match(sql,/for update/);
