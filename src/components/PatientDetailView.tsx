@@ -5755,6 +5755,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return Array.from(deduped.values()).sort((a: any, b: any) => b.eventDate.getTime() - a.eventDate.getTime());
   }, [assignedTasks, patientTasks]);
 
+  // Historical tasks keep their original storage and are read-only here.
+  // Cross-check the patient ID to avoid showing rows from a previously opened chart.
+  const historicalAssignedTasksMissingFromTimeline = useMemo(() => {
+    if (!isKidsProfile || !patient?.id) return [];
+    const patientId = String(patient.id);
+    const visibleIds = new Set((Array.isArray(history) ? history : [])
+      .filter((item: any) => String(item?.patient_id || item?.patientId || '') === patientId)
+      .map((item: any) => String(item?.assigned_task_id || item?.assignedTaskId || ''))
+      .filter(Boolean));
+    return (assignedTasks || [])
+      .filter((item: any) =>
+        String(item?.patient_id || item?.patientId || '') === patientId &&
+        String(item?.status || '').toLowerCase() === 'completed' &&
+        !visibleIds.has(String(item?.id || '')))
+      .slice(0, 20);
+  }, [assignedTasks, history, isKidsProfile, patient?.id]);
+
   const adultScheduledTasks = useMemo(() => {
     if (isKidsProfile) return [];
 
@@ -11407,6 +11424,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </section>
             ) : (
               <React.Fragment>
+            {historicalAssignedTasksMissingFromTimeline.length > 0 && (
+              <section aria-label="Histórico de tarefas atribuídas em outro modo de portal"
+                className={`mb-5 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                <h2 className="text-sm font-semibold">Tarefas concluídas anteriormente</h2>
+                <p className="mt-1 text-xs text-slate-500">Registros históricos preservados. O tipo de portal atual não altera a avaliação original.</p>
+                <div className="mt-3 space-y-2">
+                  {historicalAssignedTasksMissingFromTimeline.map((task: any) => {
+                    const payload = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+                    const created = task?.completed_at || task?.reviewed_at || task?.created_at;
+                    return <article key={String(task.id)} className="rounded-lg border border-slate-200/60 p-3">
+                      <p className="text-sm font-medium">{String(payload.title || task.title || 'Atividade concluída')}</p>
+                      <p className="mt-1 text-xs text-slate-500">{created ? new Date(created).toLocaleDateString('pt-BR') : 'Data não informada'}
+                        {task.pro_score == null ? '' : ` · Avaliação registrada: ${Number(task.pro_score)}`}</p>
+                    </article>;
+                  })}
+                </div>
+              </section>
+            )}
             {conventionalSessionEvolutions.length > 0 && (
               <section className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-labelledby="conventional-session-evolutions-heading">
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
