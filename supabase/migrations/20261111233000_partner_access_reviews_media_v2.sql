@@ -72,6 +72,10 @@ revoke all on function public.verto_marketplace_save_review_v1(uuid,uuid,integer
 grant execute on function public.verto_marketplace_save_review_v1(uuid,uuid,integer,text) to service_role;
 revoke update,delete on public.verto_partner_marketplace_reviews from service_role;
 
+-- Timestamp de entrega permite reenviar convites sem alterar o status de aprovacao.
+alter table public.verto_partner_accounts
+  add column if not exists approval_email_sent_at timestamptz;
+
 -- Conteudo da vitrine e privado; URLs assinadas apenas para clinicas autorizadas.
 insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
 values('verto-partner-images','verto-partner-images',false,10485760,
