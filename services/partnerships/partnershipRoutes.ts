@@ -284,16 +284,21 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
   // Owner-only referral reporting. Read on demand; aggregate once, never per-partner.
   // Payment is derived exclusively from the canonical paid-invoice ledger.
   app.get('/api/owner/partnerships/referral-report',...adminGuard,async(req:any,res:any)=>{
+    const offset=Number(req.query?.offset??0);
+    if(!Number.isSafeInteger(offset)||offset<0||offset>100000)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
     try{
       const [accounts,summary]=await Promise.all([
         supabase.from('verto_partner_accounts')
           .select('id,display_name,status,referral_alias,referral_code')
-          .order('created_at',{ascending:false}).limit(100),
+          .order('created_at',{ascending:false}).order('id',{ascending:false})
+          .range(offset,offset+100),
         supabase.rpc('verto_owner_partner_referral_summary_v1'),
       ]);
       if(accounts.error||summary.error)throw accounts.error||summary.error;
       res.setHeader('Cache-Control','private, no-store');
-      return res.json({success:true,partners:accounts.data||[],summary:summary.data||[]});
+      return res.json({success:true,partners:(accounts.data||[]).slice(0,100),
+        summary:summary.data||[],hasMore:(accounts.data||[]).length>100});
     }catch{return fail(res);}
   });
 
