@@ -178,7 +178,7 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
        ||Object.keys(req.body).length!==1||typeof req.body.couponCode!=='string'
        ||req.body.couponCode.length>64)
       return res.status(400).json({success:false,error:'INVALID_REQUEST'});
-    const alias=req.body.couponCode.trim().toUpperCase();
+    const alias=req.body.couponCode.toUpperCase();
     if(!/^[A-Z0-9]{4,24}$/.test(alias))
       return res.status(400).json({success:false,error:'INVALID_REFERRAL_COUPON'});
     const external=mode==='external';
