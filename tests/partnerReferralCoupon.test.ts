@@ -183,7 +183,7 @@ test('migration preserves canonical referral uniqueness, existing anti-fraud RPC
   const ui=readFileSync('src/components/SalesInterestForm.tsx','utf8');
   const panel=readFileSync('src/components/PartnershipPanel.tsx','utf8');
   assert.equal(sql.split('create or replace function public.verto_claim_partner_referral_v1(').length,2);
-  assert.equal(sql.split('end;\\n$$;').length,2, 'exactly one complete SQL function');
+  assert.equal((sql.match(/end;\s*\$\$;/g)||[]).length,1, 'exactly one complete SQL function');
   assert.ok(sql.includes("p_referral_code ~ '^VERTO-[A-F0-9]{18}$'"));
   assert.ok(sql.includes("and p_referral_code !~ '^VERTO-'"));
   assert.ok(sql.includes("or char_length(coalesce(p_idempotency_key"));
