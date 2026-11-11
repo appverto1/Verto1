@@ -40,7 +40,7 @@ export const SalesInterestForm = ({
   const [partnerCode,setPartnerCode]=useState(() => typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('ref') || ''
     : '');
-  const normalizedReferralCode=partnerCode.trim().toUpperCase();
+  const normalizedReferralCode=partnerCode.toUpperCase();
   // Historical VERTO-* links remain usable; new coupons are compact alphanumeric only.
   const referralFormatError=partnerCode && !(/^[A-Z0-9]{4,24}$/.test(normalizedReferralCode)
     || /^VERTO-[A-F0-9]{18}$/.test(normalizedReferralCode))
