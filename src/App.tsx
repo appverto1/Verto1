@@ -1024,11 +1024,16 @@ export default function App() {
     const existing = baseAnamnesisData && typeof baseAnamnesisData === 'object' ? baseAnamnesisData : {};
     // Prefer an explicit patient registration category over an older anamnesis snapshot.
     const canonicalCategory = coalescePatientText(source?.grupo, source?.patient_group, source?.group, existing?.grupo);
-    const canonicalProfile = resolvePatientProfileTypeForCategory(
-      canonicalCategory,
-      source?.patientProfileType || source?.patient_profile_type || source?.panelType || source?.panel_type ||
-        source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType || existing?.panelType,
-    );
+    const selectedPortalProfile = source?.patientProfileType || source?.patient_profile_type ||
+      source?.panelType || source?.panel_type || source?.profileType || source?.profile_type || source?.type;
+    // The selected portal determines the operational profile. The demographic
+    // category is only a fallback for older records without a saved choice.
+    const canonicalProfile = selectedPortalProfile
+      ? normalizePatientProfileType(
+          selectedPortalProfile,
+          resolvePatientProfileTypeForCategory(canonicalCategory, null),
+        )
+      : resolvePatientProfileTypeForCategory(canonicalCategory, existing?.patientProfileType || existing?.panelType);
     const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const metadata = asObject(source?.metadata);
     const address = {
@@ -4845,7 +4850,10 @@ export default function App() {
     if (!currentTask) return { success: false, error: 'Tarefa não encontrada.' };
     const mergedTask: any = { ...currentTask, ...fields };
     const patient = allPatients.find(p => p.id === mergedTask.patientId);
-    const isAdultTask = resolvePatientPortalKind(patient) !== 'KIDS';
+    // Editing an existing task must use its original storage authority, not
+    // the patient's *current* portal after switching between adult and kids.
+    const isAdultTask = Boolean(mergedTask.assignedTaskId) ||
+      String(mergedTask._source || '').toLowerCase() === 'assigned_tasks';
 
     let persistenceResult: any = null;
     if (isAdultTask) {
@@ -6184,6 +6192,8 @@ export default function App() {
       Object.keys(updatedData || {}).every((key) =>
         key === 'id' || patientPhotoPatchKeys.includes(key as (typeof patientPhotoPatchKeys)[number])
       );
+    const hasExplicitPortalPatch = ['patientProfileType', 'panelType', 'profileType', 'profile_type', 'type']
+      .some((key) => Object.prototype.hasOwnProperty.call(updatedData || {}, key));
     const updatedProfileType = normalizePatientProfileType(
       updatedData?.patientProfileType ||
         updatedData?.panelType ||
@@ -6197,6 +6207,7 @@ export default function App() {
     const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
     const requestedPatientCategory = String(updatedData?.group ?? updatedData?.grupo ?? '').trim().toLowerCase();
     const mustConfirmPatientCategory = ['infantil', 'adolescente', 'adulto', 'idoso'].includes(requestedPatientCategory);
+    const mustConfirmSavedPatientProfile = mustConfirmPatientCategory || hasExplicitPortalPatch;
     const syncedAnamnesisData =
       isPatientPhotoOnlyPatch
         ? undefined
@@ -6233,7 +6244,7 @@ export default function App() {
         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
         lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
         ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
-        ...(updatedData?.type !== undefined || updatedData?.patientProfileType !== undefined || updatedData?.panelType !== undefined
+        ...(hasExplicitPortalPatch
           ? { patientProfileType: updatedProfileType, panelType: updatedProfileType, portalType: updatedPortalType }
           : {}),
         ...(updatedData?.financialPlans !== undefined && {
@@ -6416,10 +6427,14 @@ export default function App() {
           age: updatedData.age,
           gender: updatedData.gender || updatedData.genero,
           diagnosis: updatedData.diagnosis,
-          type: updatedPortalType,
-          patientProfileType: updatedProfileType,
-          panelType: updatedProfileType,
-          profileType: updatedProfileType,
+          ...(hasExplicitPortalPatch
+            ? {
+                type: updatedPortalType,
+                patientProfileType: updatedProfileType,
+                panelType: updatedProfileType,
+                profileType: updatedProfileType,
+              }
+            : {}),
           insuranceType: updatedData.insuranceType || updatedData.convenioTipo,
           insurancePayerId:
             updatedData.insurancePayerId ??
@@ -6482,23 +6497,25 @@ export default function App() {
           patientUpdatePayload,
           {
             recordPayload: recordPayloadForAtomicSave || undefined,
-            requireServerAck: mustConfirmPatientCategory,
+            requireServerAck: mustConfirmSavedPatientProfile,
           },
         );
-        if (!updateResult?.success || (mustConfirmPatientCategory && updateResult?.pending === true)) {
+        if (!updateResult?.success || (mustConfirmSavedPatientProfile && updateResult?.pending === true)) {
           rollbackOptimisticPatientState();
           const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
           alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
-        if (mustConfirmPatientCategory) {
+        if (mustConfirmSavedPatientProfile) {
           const confirmation = await dataService.confirmPatientCategoryOnServer(
             String(updatedData.id),
             String(user?.activeWorkspaceId || user?.clinicId || '').trim(),
           );
           const confirmedCategory = String(confirmation?.data?.group || '').trim().toLowerCase();
           const confirmedProfileType = normalizePatientProfileType(confirmation?.data?.patientProfileType);
-          if (!confirmation?.success || confirmedCategory !== requestedPatientCategory || confirmedProfileType !== updatedProfileType) {
+          if (!confirmation?.success ||
+              (mustConfirmPatientCategory && confirmedCategory !== requestedPatientCategory) ||
+              (hasExplicitPortalPatch && confirmedProfileType !== updatedProfileType)) {
             rollbackOptimisticPatientState();
             const errorMessage = confirmation?.error || 'Categoria ou perfil clínico divergente no banco. Atualize o cadastro e tente novamente.';
             alert(`Não foi possível confirmar a categoria salva no servidor: ${errorMessage}`);
@@ -7241,7 +7258,7 @@ export default function App() {
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
     const targetPatient = allPatients.find(p => p.id === pid);
     const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
-    const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
+    const isKid = resolvePatientPortalKind(targetPatient) === 'KIDS';
     const sourcePei = Array.isArray(clinicalRecord?.pei)
       ? clinicalRecord.pei
       : Array.isArray(targetPatient?.pei)
