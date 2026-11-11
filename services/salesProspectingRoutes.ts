@@ -112,7 +112,7 @@ export function registerSalesProspectingRoutes(
       if(visibleIds.length){
         try{
           const report=await supabase.from('verto_partner_referrals')
-            .select('sales_lead_id,entered_code,verto_partner_accounts(display_name,referral_alias,referral_code)')
+            .select('sales_lead_id,entered_code,verto_partner_accounts(display_name)')
             .in('sales_lead_id',visibleIds).limit(200);
           if(!report.error)referrals=(report.data||[]).map((item:any)=>{
             const partner=Array.isArray(item.verto_partner_accounts)
@@ -120,7 +120,8 @@ export function registerSalesProspectingRoutes(
             return {
               leadId:item.sales_lead_id,
               partnerName:partner?.display_name||'Parceiro',
-              couponCode:item.entered_code||partner?.referral_alias||partner?.referral_code||null,
+              // Legacy referrals never stored the submitted code; do not invent one.
+              couponCode:item.entered_code||null,
             };
           });
         }catch{ /* Keep the commercial board available without the referral annotation. */ }
