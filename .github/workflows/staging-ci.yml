@@ -128,6 +128,8 @@ jobs:
           node --import tsx tests/partnerReferralCoupon.test.ts
           node tests/partnerReferralCrmReporting.regression.test.mjs
           node --import tsx tests/partnerMarketplaceSecurity.test.ts
+          node --import tsx tests/partnerMarketplaceImageUpload.test.ts
+          node --import tsx tests/partnerApprovalFlow.test.ts
           node --import tsx tests/partnershipEmailCallback.test.ts
           node tests/landingSignupFirstEntry.regression.test.mjs
           node tests/externalPartnerOnboardingHub20260903.regression.test.mjs
