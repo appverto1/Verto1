@@ -5728,16 +5728,28 @@ export default function App() {
     let portabilityAvailable = false;
     
     // Identity Data (Pseudonymized)
-    const fallbackProfileType =
-      data.approach === 'ABA'
-        ? 'ABA'
-        : data.approach === 'TO'
-          ? 'ADULT'
-          : 'ADULT';
+    // Legacy reception / quick registration does not expose the portal selector.
+    // Preserve its child/anamnesis fallback only when a portal was NOT chosen.
+    // An explicit portal (from the patient form) always takes precedence.
+    const registrationGroup = String(data.group || data.grupo || '').trim().toLowerCase();
+    const formKind = String(data.anamnesisData?.formType || '').trim().toLowerCase();
+    const rawAge = data.anamnesisData?.idade ?? data.age ??
+      calculateAgeFromBirthDate(data.birthDate || data.dataNascimento || data.anamnesisData?.dataNascimento);
+    const registrationAge = rawAge === null || rawAge === undefined || String(rawAge).trim() === ''
+      ? null : Number(rawAge);
+    const inferredPediatric = formKind === 'child' ||
+      (!formKind && (['infantil', 'adolescente'].includes(registrationGroup) ||
+        (!['adulto', 'idoso'].includes(registrationGroup) &&
+          registrationAge !== null && Number.isFinite(registrationAge) &&
+          registrationAge >= 0 && registrationAge < 18)));
+    const fallbackProfileType = inferredPediatric ? 'KIDS' : data.approach === 'ABA' ? 'ABA' : 'ADULT';
     const resolvedProfileType = normalizePatientProfileType(
       data.patientProfileType || data.panelType || data.profileType || data.profile_type || data.type,
-      fallbackProfileType as any,
+      fallbackProfileType,
     );
+    const resolvedRegistrationGroup = resolvedProfileType === 'KIDS'
+      ? (registrationGroup === 'adolescente' ? 'adolescente' : 'infantil')
+      : (registrationGroup === 'idoso' ? 'idoso' : 'adulto');
     const resolvedPortalType = mapPatientProfileTypeToLegacyPortalType(resolvedProfileType);
     const resolvedBirthDate = data.birthDate || data.dataNascimento || data.anamnesisData?.dataNascimento || null;
     const resolvedGuardian =
@@ -5776,7 +5788,7 @@ export default function App() {
       insuranceHolderCpf: data.insuranceHolderCpf || data.insurance_holder_cpf || data.convenioTitularCpf || null,
       insuranceHolderRelationship: data.insuranceHolderRelationship || data.insurance_holder_relationship || data.convenioTitularRelacao || null,
       eligibilityNotes: data.eligibilityNotes || data.eligibility_notes || data.convenioElegibilidadeObs || null,
-      group: data.group || data.grupo || null,
+      group: resolvedRegistrationGroup,
       source: data.source || data.comoConheceu || null,
       rg: data.rg || null,
       cpf: data.cpf || data.anamnesisData?.cpf || null,
@@ -5862,7 +5874,7 @@ export default function App() {
           convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || '',
           insuranceName: data.insuranceName || data.convenioNome || '',
           insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
-          group: data.group || data.grupo || '',
+          group: resolvedRegistrationGroup,
           source: data.source || data.comoConheceu || '',
           rg: data.rg || '',
           cep: data.cep || data.address?.cep || '',
@@ -5965,7 +5977,7 @@ export default function App() {
       convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
       insuranceName: data.insuranceName || data.convenioNome || '',
       insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
-      group: data.group || data.grupo || '',
+      group: resolvedRegistrationGroup,
       source: data.source || data.comoConheceu || '',
       rg: data.rg || '',
       cep: data.cep || data.address?.cep || '',
