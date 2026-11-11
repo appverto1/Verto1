@@ -54,6 +54,9 @@ assert.match(app,/const isKid = resolvePatientPortalKind\(targetPatient\) === 'K
 assert.match(app,/verifiedPortalProfile \|\| user/,
   'current portal from canonical backend must govern patient tasks on login');
 assert.match(app,/effectivePatientPortalKind === 'ADULT_CONVENTIONAL'/);
+assert.match(app,/const effectivePatientDashboardUser = useMemo\(/,
+  'patient portal props must be stable to prevent repetitive reads');
+assert.match(app,/user=\{effectivePatientDashboardUser\}/);
 assert.match(app,/patientPortalProfile.patientId/);
 
 assert.match(profileRead,/resolveCanonicalPatientPortalScope\(req.session.user\)/);
