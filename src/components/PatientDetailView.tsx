@@ -4593,10 +4593,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     if (!currentPatientId) return [];
     return visibleHistoryWithFamilyNotes.filter((item: any) => {
       const recordPatientId = String(item?.patientId ?? item?.patient_id ?? '').trim();
+      const fromFamily = Boolean(item?.isFromNotes) ||
+        String(item?.sourceRef || '').startsWith('note-family-') ||
+        String(item?.source || '').toLowerCase().includes('family') ||
+        String(item?.subject || '').toLowerCase().includes('fam');
       return recordPatientId === currentPatientId &&
-        (item?.type === 'family_note' || item?.type === 'photo');
+        (item?.type === 'family_note' ||
+          (item?.type === 'photo' && (isKidsProfile || fromFamily)));
     });
-  }, [visibleHistoryWithFamilyNotes, patient?.id]);
+  }, [visibleHistoryWithFamilyNotes, patient?.id, isKidsProfile]);
 
   // Read status is purely a cosmetic device-local preference, scoped to
   // actor, clinic and patient. Never use it for clinical authorization.
