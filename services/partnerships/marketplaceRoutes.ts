@@ -12,9 +12,15 @@ const validStoredPath = (path:string,partnerId:string,kind:'logo'|'photo') =>
   path.startsWith(partnerId+'/'+kind+'-')
   && new RegExp('^'+partnerId+'/'+kind+'-[0-9a-f]{24}\\.(jpg|png|webp)$').test(path);
 const sniffImage = (bytes:Buffer):'image/jpeg'|'image/png'|'image/webp'|null => {
-  if(bytes.length>=3 && bytes[0]===0xff && bytes[1]===0xd8 && bytes[2]===0xff) return 'image/jpeg';
-  if(bytes.length>=8 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))) return 'image/png';
-  if(bytes.length>=12 && bytes.toString('ascii',0,4)==='RIFF' && bytes.toString('ascii',8,12)==='WEBP') return 'image/webp';
+  if(bytes.length>=4 && bytes[0]===0xff && bytes[1]===0xd8 && bytes[2]===0xff
+     && bytes[bytes.length-2]===0xff && bytes[bytes.length-1]===0xd9)return 'image/jpeg';
+  if(bytes.length>=45 && bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))
+    && bytes.toString('ascii',12,16)==='IHDR'
+    && bytes.toString('ascii',bytes.length-8,bytes.length-4)==='IEND')return 'image/png';
+  if(bytes.length>=20 && bytes.toString('ascii',0,4)==='RIFF'
+    && bytes.toString('ascii',8,12)==='WEBP'
+    && bytes.readUInt32LE(4)===bytes.length-8
+    && ['VP8 ','VP8L','VP8X'].includes(bytes.toString('ascii',12,16)))return 'image/webp';
   return null;
 };
 const fileExtension:Record<string,string>={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'};
@@ -248,15 +254,16 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
   });
 
   const uploadLimiter=rateLimit({
-    windowMs:60*60*1000,limit:20,standardHeaders:'draft-7',legacyHeaders:false,
+    windowMs:60*60*1000,limit:8,standardHeaders:'draft-7',legacyHeaders:false,
     message:{success:false,error:'TOO_MANY_PARTNER_IMAGES'}
   });
   app.post('/api/partnerships/marketplace/partner/image/:kind',uploadLimiter,async(req:any,res:any)=>{
     const kind=req.params?.kind;
     const contentType=String(req.headers?.['content-type']||'').toLowerCase();
     const length=Number(req.headers?.['content-length']||0);
-    if(!imageKind(kind)||!fileExtension[contentType]||!Number.isFinite(length)
-       ||length>IMAGE_LIMIT)return error(res,'INVALID_PARTNER_IMAGE',413);
+    if(!imageKind(kind)||!fileExtension[contentType]||!Number.isFinite(length))
+      return error(res,'INVALID_PARTNER_IMAGE');
+    if(length>IMAGE_LIMIT)return error(res,'PARTNER_IMAGE_TOO_LARGE',413);
     try{
       const partner=await partnerAccount(req);
       if(!partner)return error(res,'PARTNER_LOGIN_REQUIRED',401);
