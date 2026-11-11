@@ -257,7 +257,7 @@ export function ExternalPartnershipPortal() {
             ? 'Seu cadastro já foi aprovado. Entre com seu e-mail para acessar.'
             : applicationResult === 'suspended'
               ? 'Já existe um cadastro para este e-mail. Entre em contato com a Verto.'
-              : 'Inscrição recebida! Ela está pendente de análise pelo Super Admin.'}</p>
+              : 'Inscrição recebida'}</p>
           <p className="text-sm text-slate-600">O link de indicação e as comissões só ficam disponíveis após a aprovação.</p>
           <button type="button" onClick={resetApplication}
             className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm font-semibold text-slate-700">Voltar para o login</button>
