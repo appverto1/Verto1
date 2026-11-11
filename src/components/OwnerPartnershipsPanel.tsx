@@ -85,18 +85,27 @@ export function OwnerPartnershipsPanel() {
     });
   };
   const saveCoupon = async (item: Partner) => {
-    if (item.referral_alias || item.status !== 'approved') return;
+    if (busy || item.referral_alias || item.status !== 'approved') return;
     const couponCode = (couponDraft[item.id] || '').trim().replace(/\s+/g, '').toUpperCase();
     if (!/^[A-Z0-9][A-Z0-9-]{2,22}[A-Z0-9]$/.test(couponCode) || couponCode.startsWith('VERTO-')) {
       setError('Use de 4 a 24 letras, números ou hífens. Ex.: FRATELLI10.');
       return;
     }
-    await mutate(async () => {
-      await request('/api/owner/partnerships/accounts/' + encodeURIComponent(item.id) + '/referral-alias', {
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await request('/api/owner/partnerships/accounts/' + encodeURIComponent(item.id) + '/referral-alias', {
         method: 'PATCH', ...asJson({ couponCode })
       });
-      return 'Cupom salvo.';
-    });
+      // The server-confirmed save updates local state; no extra account/marketplace GET.
+      setAccounts(prev => prev.map(account => account.id === item.id
+        ? { ...account, referral_alias: result.couponCode } : account));
+      setMessage('Cupom salvo.');
+    } catch (e: any) {
+      const code = String(e?.message || '');
+      setError(code === 'REFERRAL_COUPON_TAKEN' ? 'Este cupom já está em uso. Escolha outro.'
+        : code === 'REFERRAL_COUPON_LOCKED' ? 'Este parceiro já possui um cupom definitivo.'
+        : 'Não foi possível salvar o cupom.');
+    } finally { setBusy(false); }
   };
   const attach = async (e: React.FormEvent) => {
     e.preventDefault();
