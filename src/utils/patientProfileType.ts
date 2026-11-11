@@ -102,6 +102,24 @@ const ageFromBirthDate = (value: any): number | null => {
 };
 
 export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
+  // The persisted triplet is written together by the clinical Save action.
+  // It is authoritative for current workflows even when age or a legacy
+  // registration category differs. Incomplete/mismatched legacy profiles
+  // retain the existing age/category safeguards until explicitly saved.
+  const savedProfile = patient?.patient_profile_type ?? patient?.patientProfileType;
+  const savedPanel = patient?.panel_type ?? patient?.panelType;
+  const savedLegacyType = patient?.type;
+  const isKnownProfile = (value: any) =>
+    typeof value === 'string' && ['KIDS', 'ABA', 'ADULT'].includes(value.trim().toUpperCase());
+  if (isKnownProfile(savedProfile) && isKnownProfile(savedPanel) &&
+      typeof savedLegacyType === 'string') {
+    const profile = normalizePatientProfileType(savedProfile);
+    if (normalizePatientProfileType(savedPanel) === profile &&
+        mapPatientProfileTypeToLegacyPortalType(profile) === cleanProfileKey(savedLegacyType)) {
+      return profile === 'KIDS' ? 'KIDS' : profile === 'ABA' ? 'ADULT_ABA' : 'ADULT_CONVENTIONAL';
+    }
+  }
+
   const explicitCandidates = [
     patient?.patientProfileType,
     patient?.patient_profile_type,
