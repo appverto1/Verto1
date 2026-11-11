@@ -29,6 +29,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
   const [couponSaving,setCouponSaving]=useState(false);
   const [couponCopied,setCouponCopied]=useState(false);
   const [couponFeedback,setCouponFeedback]=useState('');
+  const [couponAttempted,setCouponAttempted]=useState(false);
   const reload=useCallback(async()=>{
     setError('');
     try {
@@ -61,13 +62,13 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     try{await navigator.clipboard.writeText(referralLink);setCopied(true);}
     catch{window.prompt('Copie seu link:',referralLink);}
   };
+  const couponFormatError=(couponDraft || couponAttempted) && !/^[A-Z0-9]{4,24}$/.test(couponDraft.trim().toUpperCase())
+    ? 'Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.' : '';
   const saveCoupon=async()=>{
     if(couponSaving || !approved || account?.referral_alias)return;
-    const couponCode=couponDraft.trim().replace(/\s+/g,'').toUpperCase();
-    if(!/^[A-Z0-9][A-Z0-9-]{2,22}[A-Z0-9]$/.test(couponCode)||couponCode.startsWith('VERTO-')){
-      setError('Use de 4 a 24 letras, números ou hífens, começando e terminando com letra ou número.');
-      return;
-    }
+    const couponCode=couponDraft.trim().toUpperCase();
+    setCouponAttempted(true);
+    if(!/^[A-Z0-9]{4,24}$/.test(couponCode))return;
     setCouponSaving(true);setError('');setCouponFeedback('');
     try {
       const result=await callApi(mode==='external'
@@ -118,14 +119,16 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
             </div> : <>
               <div className="flex flex-wrap gap-2">
                 <input id="partner-coupon-code" type="text" value={couponDraft}
-                  onChange={event=>setCouponDraft(event.target.value)}
+                  onChange={event=>{setCouponDraft(event.target.value);setCouponAttempted(false);}}
                   maxLength={64} autoComplete="off" placeholder="Ex.: FRATELLI10"
+                  aria-invalid={!!couponFormatError} aria-describedby={couponFormatError?'partner-coupon-format-error':undefined}
                   className="min-w-0 flex-1 rounded-xl border border-slate-200 p-3 text-sm uppercase text-slate-800"/>
                 <button type="button" disabled={couponSaving} onClick={()=>{void saveCoupon();}}
                   className="rounded-xl bg-violet-700 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">
                   {couponSaving?'Salvando...':'Salvar cupom'}
                 </button>
               </div>
+              {couponFormatError && <p id="partner-coupon-format-error" role="alert" className="text-xs text-rose-600">{couponFormatError}</p>}
               <p className="text-xs text-slate-500">O cupom é exclusivo e não poderá ser alterado após salvar, para preservar as indicações.</p>
             </>}
             {couponFeedback && <p role="status" className="text-xs font-medium text-emerald-700">{couponFeedback}</p>}
