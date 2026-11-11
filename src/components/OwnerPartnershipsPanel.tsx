@@ -87,7 +87,7 @@ export function OwnerPartnershipsPanel() {
   };
   const saveCoupon = async (item: Partner) => {
     if (busy || item.referral_alias || item.status !== 'approved') return;
-    const couponCode = (couponDraft[item.id] || '').trim().toUpperCase();
+    const couponCode = (couponDraft[item.id] || '').toUpperCase();
     setCouponAttempted(prev => ({ ...prev, [item.id]: true }));
     if (!/^[A-Z0-9]{4,24}$/.test(couponCode))return;
     setBusy(true); setError(''); setMessage('');
@@ -169,7 +169,7 @@ export function OwnerPartnershipsPanel() {
                     autoComplete="off" placeholder="Ex.: FRATELLI10"
                     value={couponDraft[item.id] || ''}
                     onChange={e => { setCouponDraft(prev => ({ ...prev, [item.id]: e.target.value })); setCouponAttempted(prev => ({ ...prev, [item.id]: false })); }}
-                    aria-invalid={!!((couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').trim().toUpperCase()))}
+                    aria-invalid={!!((couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').toUpperCase()))}
                     aria-describedby={'partner-owner-coupon-error-' + item.id}
                     className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs uppercase" />
                   <button type="button" disabled={busy} onClick={() => { void saveCoupon(item); }}
@@ -177,7 +177,7 @@ export function OwnerPartnershipsPanel() {
                     Salvar cupom
                   </button>
                 </div>
-                {(couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').trim().toUpperCase()) &&
+                {(couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').toUpperCase()) &&
                   <p id={'partner-owner-coupon-error-' + item.id} role="alert" className="text-xs text-rose-600">Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.</p>}
                 <p className="text-xs text-slate-500">O interessado poderá informar o cupom em “Quem te indicou?”. O cupom não poderá ser alterado após salvar.</p>
               </div>}
