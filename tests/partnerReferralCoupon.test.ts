@@ -59,7 +59,8 @@ function fixture(opts: {
     },
   };
   const checkAuth=()=>{};
-  registerPartnershipRoutes(app,{supabase,checkAuth,checkPlatformAdmin:()=>{}});
+  const checkPlatformAdmin=()=>{};
+  registerPartnershipRoutes(app,{supabase,checkAuth,checkPlatformAdmin});
   const externalSession:any={
     partnerAccountId:externalId,
     partnerAuthUserId:professionalId,
@@ -81,7 +82,20 @@ function fixture(opts: {
     await route[route.length-1]({body,session,is:()=>true},res);
     return result;
   }
-  return {run,calls,routes,row,externalSession,clinicalSession,checkAuth};
+  async function runOwner(body:any,id=externalId){
+    const handlers=routes['PATCH /api/owner/partnerships/accounts/:id/referral-alias'];
+    assert.equal(handlers[0],checkAuth);
+    assert.equal(handlers[1],checkPlatformAdmin);
+    const result:any={statusCode:200,body:null};
+    const res:any={
+      status(value:number){result.statusCode=value;return res;},
+      setHeader(){return res;},
+      json(body:any){result.body=body;return res;},
+    };
+    await handlers[handlers.length-1]({body,params:{id},is:()=>true,session:{user:{id:professionalId}}},res);
+    return result;
+  }
+  return {run,runOwner,calls,routes,row,externalSession,clinicalSession,checkAuth,checkPlatformAdmin};
 }
 
 test('approved external partner can save FRATELLI10 once, without caller-supplied identity',async()=>{
@@ -115,6 +129,22 @@ test('coupon saving refuses forged identity, malformed codes and expired session
   assert.equal((await f.run({couponCode:'FRATELLI10'},{...f.externalSession,partnerEmail:'intruder@example.test'})).statusCode,403);
   assert.equal((await f.run({couponCode:'FRATELLI10'},{...f.externalSession,user:{id:professionalId}})).statusCode,401);
   assert.equal(f.calls.filter(c=>c.type==='update').length,0);
+});
+
+test('only Super Admin authorization chain can set a partner coupon by server-validated ID',async()=>{
+  const f=fixture();
+  assert.equal((await f.runOwner({couponCode:'Fratelli 10'})).statusCode,200);
+  assert.equal(f.row.referral_alias,'FRATELLI10');
+  assert.equal(f.calls.filter(c=>c.type==='update').length,1);
+  assert.equal((await f.runOwner({couponCode:'Fratelli 10'})).body.idempotent,true);
+  assert.equal((await f.runOwner({couponCode:'OUTRO10'})).statusCode,409);
+  const invalid=fixture();
+  assert.equal((await invalid.runOwner({couponCode:'<script>'})).statusCode,400);
+  assert.equal((await invalid.runOwner({couponCode:'FRATELLI10'},professionalId)).statusCode,404);
+  const pending=fixture({approved:false});
+  assert.equal((await pending.runOwner({couponCode:'FRATELLI10'})).statusCode,403);
+  const collision=fixture({updateError:{code:'23505'}});
+  assert.equal((await collision.runOwner({couponCode:'FRATELLI10'})).body.error,'REFERRAL_COUPON_TAKEN');
 });
 
 test('pending partner and duplicate coupon cannot register a referral alias',async()=>{
@@ -197,5 +227,6 @@ test('migration preserves canonical referral uniqueness, existing anti-fraud RPC
   assert.match(ui,/Quem te indicou\?/);
   assert.match(ui,/setPartnerCode/);
   assert.match(panel,/Salvar cupom/);
+  assert.match(readFileSync('src/components/OwnerPartnershipsPanel.tsx','utf8'),/Salvar cupom/);
   assert.match(panel,/referral_alias\|\|account\.referral_code/);
 });
