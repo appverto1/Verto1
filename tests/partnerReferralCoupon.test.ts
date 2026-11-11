@@ -182,25 +182,11 @@ test('migration preserves canonical referral uniqueness, existing anti-fraud RPC
   const sql=readFileSync('supabase/migrations/20261111154000_verto_partner_referral_coupon_v1.sql','utf8');
   const ui=readFileSync('src/components/SalesInterestForm.tsx','utf8');
   const panel=readFileSync('src/components/PartnershipPanel.tsx','utf8');
-  assert.equal((sql.match(/create or replace function public\\.verto_claim_partner_referral_v1\\(/g)||[]).length,1,
-    'migration must replace the referral function exactly once');
-  assert.match(sql,/or not \\(/);
-  assert.match(sql,/p_referral_code ~ '\\^VERTO-\\[A-F0-9\\]\\{18\\}\\
-  assert.match(sql,/create unique index if not exists verto_partner_referral_alias_uidx/);
-  assert.match(sql,/p\.referral_code = p_referral_code or p\.referral_alias = p_referral_code/);
-  assert.match(sql,/for update/);
-  assert.match(sql,/e\.idempotency_key = p_idempotency_key/);
-  assert.match(sql,/lower\(l\.normalized_email\)/);
-  assert.match(sql,/revoke all on function public\.verto_claim_partner_referral_v1/);
-  assert.match(ui,/Quem te indicou\?/);
-  assert.match(ui,/setPartnerCode/);
-  assert.match(panel,/Salvar cupom/);
-  assert.match(panel,/referral_alias\|\|account\.referral_code/);
-});
-/);
-  assert.match(sql,/\\)\\s*or char_length\\(coalesce\\(p_idempotency_key/);
-  assert.equal((sql.match(/end;\\s*\\$\\$;/g)||[]).length,1,
-    'no truncated or duplicated function body');
+  assert.equal(sql.split('create or replace function public.verto_claim_partner_referral_v1(').length,2);
+  assert.equal(sql.split('end;\\n$$;').length,2, 'exactly one complete SQL function');
+  assert.ok(sql.includes("p_referral_code ~ '^VERTO-[A-F0-9]{18}$'"));
+  assert.ok(sql.includes("and p_referral_code !~ '^VERTO-'"));
+  assert.ok(sql.includes("or char_length(coalesce(p_idempotency_key"));
   assert.match(sql,/add column if not exists referral_alias text/);
   assert.match(sql,/create unique index if not exists verto_partner_referral_alias_uidx/);
   assert.match(sql,/p\.referral_code = p_referral_code or p\.referral_alias = p_referral_code/);
