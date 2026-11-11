@@ -399,6 +399,7 @@ const criticalTests = [
   'tests/p1PortalRescheduleEmptyWeekMap.regression.test.ts',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/p000PatientCategoryPersistence.regression.test.mjs',
+  'tests/patientPortalAuthoritativeMode.regression.test.mjs',
   'tests/p000PediatricTargetCollection.regression.test.mjs',
   'tests/p000PtsActivationOptionalAndCas.regression.test.mjs',
   'tests/critical20TherapeuticPlanAck.regression.test.mjs',
