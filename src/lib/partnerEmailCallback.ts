@@ -20,6 +20,7 @@ export function cleanPartnerAuthReturnUrl(rawUrl: string) {
   const { hasAuthResponse } = readPartnerEmailCallbackHash(url.hash);
   url.searchParams.delete('partner_oauth');
   url.searchParams.delete('partner_apply');
+  url.searchParams.delete('partner_setup');
   if (hasAuthResponse) url.hash = '';
   return url.pathname + url.search + url.hash;
 }
