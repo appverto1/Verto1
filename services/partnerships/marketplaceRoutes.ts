@@ -247,7 +247,11 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
     }catch{return unavailable(res);}
   });
 
-  app.post('/api/partnerships/marketplace/partner/image/:kind',async(req:any,res:any)=>{
+  const uploadLimiter=rateLimit({
+    windowMs:60*60*1000,limit:20,standardHeaders:'draft-7',legacyHeaders:false,
+    message:{success:false,error:'TOO_MANY_PARTNER_IMAGES'}
+  });
+  app.post('/api/partnerships/marketplace/partner/image/:kind',uploadLimiter,async(req:any,res:any)=>{
     const kind=req.params?.kind;
     const contentType=String(req.headers?.['content-type']||'').toLowerCase();
     const length=Number(req.headers?.['content-length']||0);
