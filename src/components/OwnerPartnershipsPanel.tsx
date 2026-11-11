@@ -63,10 +63,12 @@ export function OwnerPartnershipsPanel() {
       await reload();
       setMessage(responseMessage);
     } catch (e: any) {
+      await reload();
       setError(e.message === 'APPROVAL_SAVED_EMAIL_FAILED'
         ? 'Parceria aprovada, mas o convite não foi entregue. Use Reenviar convite após conferir o e-mail.'
-        : e.message || 'Não foi possível salvar.');
-      await reload();
+        : e.message === 'INVITATION_ALREADY_SENT'
+          ? 'Um convite já foi enviado recentemente. Confira a caixa de entrada antes de reenviar.'
+          : e.message || 'Não foi possível salvar.');
     } finally { setBusy(false); }
   };
   const create = async (e: React.FormEvent) => {
