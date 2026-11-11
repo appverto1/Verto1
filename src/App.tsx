@@ -2340,6 +2340,18 @@ export default function App() {
     String(patientPortalProfile.patientId || '') === resolvedPatientPortalId &&
     resolvedPatientPortalId ? patientPortalProfile : null;
   const effectivePatientPortalKind = resolvePatientPortalKind(effectivePatientPortalProfile || user);
+  // Keep the PatientDashboard user prop referentially stable. A new object on
+  // every render would re-run existing profile/notes effects and waste requests.
+  const effectivePatientDashboardUser = useMemo(() => {
+    if (!effectivePatientPortalProfile || !user) return user;
+    return {
+      ...user,
+      ...effectivePatientPortalProfile,
+      patientProfileType: effectivePatientPortalProfile.patient_profile_type,
+      panelType: effectivePatientPortalProfile.panel_type,
+      type: effectivePatientPortalProfile.type,
+    };
+  }, [user, effectivePatientPortalProfile]);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
@@ -8856,15 +8868,7 @@ export default function App() {
           </div>
         ) : user.role === 'patient' ? (
           <PatientDashboard 
-            user={effectivePatientPortalProfile
-              ? {
-                  ...user,
-                  ...effectivePatientPortalProfile,
-                  patientProfileType: effectivePatientPortalProfile.patient_profile_type,
-                  panelType: effectivePatientPortalProfile.panel_type,
-                  type: effectivePatientPortalProfile.type,
-                }
-              : user}
+            user={effectivePatientDashboardUser}
             onLogout={handleLogout} 
             onMoodCheckin={handleMoodCheckin} 
             tasks={tasks} 
