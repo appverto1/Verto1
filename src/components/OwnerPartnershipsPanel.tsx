@@ -7,6 +7,7 @@ type Partner = {
   contact_email: string | null;
   partner_kind: 'professional' | 'external';
   referral_code: string;
+  referral_alias?: string | null;
   status: 'pending' | 'approved' | 'suspended';
   compliance_approved: boolean;
   created_at: string;
@@ -37,6 +38,8 @@ export function OwnerPartnershipsPanel() {
   const [selectedId, setSelectedId] = useState('');
   const [leadId, setLeadId] = useState('');
   const [confirmCompliance, setConfirmCompliance] = useState<Record<string, boolean>>({});
+  const [couponDraft, setCouponDraft] = useState<Record<string, string>>({});
+  const [couponAttempted, setCouponAttempted] = useState<Record<string, boolean>>({});
 
   const reload = useCallback(async () => {
     setError('');
@@ -81,6 +84,27 @@ export function OwnerPartnershipsPanel() {
       setConfirmCompliance(prev => ({ ...prev, [item.id]: false }));
       return status === 'approved' ? 'Parceiro aprovado.' : 'Status atualizado.';
     });
+  };
+  const saveCoupon = async (item: Partner) => {
+    if (busy || item.referral_alias || item.status !== 'approved') return;
+    const couponCode = (couponDraft[item.id] || '').toUpperCase();
+    setCouponAttempted(prev => ({ ...prev, [item.id]: true }));
+    if (!/^[A-Z0-9]{4,24}$/.test(couponCode))return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await request('/api/owner/partnerships/accounts/' + encodeURIComponent(item.id) + '/referral-alias', {
+        method: 'PATCH', ...asJson({ couponCode })
+      });
+      // The server-confirmed save updates local state; no extra account/marketplace GET.
+      setAccounts(prev => prev.map(account => account.id === item.id
+        ? { ...account, referral_alias: result.couponCode } : account));
+      setMessage('Cupom salvo.');
+    } catch (e: any) {
+      const code = String(e?.message || '');
+      setError(code === 'REFERRAL_COUPON_TAKEN' ? 'Este cupom já está em uso. Escolha outro.'
+        : code === 'REFERRAL_COUPON_LOCKED' ? 'Este parceiro já possui um cupom definitivo.'
+        : 'Não foi possível salvar o cupom.');
+    } finally { setBusy(false); }
   };
   const attach = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -133,9 +157,30 @@ export function OwnerPartnershipsPanel() {
               <p className="text-xs text-slate-500">{item.partner_kind === 'professional' ? 'Profissional' : 'Externo'} · {item.contact_email || 'E-mail não informado'} · {statusLabel[item.status]}</p>
               {item.status === 'approved' && <button type="button"
                 title="Copiar código de indicação" className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-violet-700"
-                onClick={() => void navigator.clipboard.writeText(item.referral_code)}>
-                <Copy size={13}/>{item.referral_code}
+                onClick={() => void navigator.clipboard.writeText(item.referral_alias || item.referral_code)}>
+                <Copy size={13}/>{item.referral_alias || item.referral_code}
               </button>}
+              {item.status === 'approved' && !item.referral_alias && <div className="mt-3 space-y-1.5">
+                <label htmlFor={'partner-owner-coupon-' + item.id} className="block text-xs font-medium text-slate-600">
+                  Cupom personalizado (opcional)
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <input id={'partner-owner-coupon-' + item.id} type="text" maxLength={64}
+                    autoComplete="off" placeholder="Ex.: FRATELLI10"
+                    value={couponDraft[item.id] || ''}
+                    onChange={e => { setCouponDraft(prev => ({ ...prev, [item.id]: e.target.value })); setCouponAttempted(prev => ({ ...prev, [item.id]: false })); }}
+                    aria-invalid={!!((couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').toUpperCase()))}
+                    aria-describedby={'partner-owner-coupon-error-' + item.id}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs uppercase" />
+                  <button type="button" disabled={busy} onClick={() => { void saveCoupon(item); }}
+                    className="rounded-lg border border-violet-300 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-50">
+                    Salvar cupom
+                  </button>
+                </div>
+                {(couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').toUpperCase()) &&
+                  <p id={'partner-owner-coupon-error-' + item.id} role="alert" className="text-xs text-rose-600">Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.</p>}
+                <p className="text-xs text-slate-500">O interessado poderá informar o cupom em “Quem te indicou?”. O cupom não poderá ser alterado após salvar.</p>
+              </div>}
             </div>
             <div className="flex items-center gap-2">
               {item.status !== 'approved' && <div className="space-y-2">

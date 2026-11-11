@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { registerPartnerMarketplaceRoutes } from './marketplaceRoutes';
 import { rateLimit } from 'express-rate-limit';
 
-const PARTNER_ACCOUNT_FIELDS = 'id,user_id,display_name,partner_kind,referral_code,status,compliance_approved,created_at';
+const PARTNER_ACCOUNT_FIELDS = 'id,user_id,display_name,partner_kind,referral_code,referral_alias,status,compliance_approved,created_at';
 const uuid = (value: unknown) => typeof value === 'string'
   && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const safe = (value: unknown, max: number) => typeof value === 'string' ? value.trim().slice(0,max) : '';
@@ -171,6 +171,77 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
     }catch{return fail(res);}
   });
 
+  // A coupon is reserved once: existing links and attribution keep working forever.
+  // The authenticated partner may claim their own alias, never a caller-supplied ID.
+  const saveReferralAlias = async(req:any,res:any,mode:'external'|'professional'|'owner')=>{
+    if(!req.is('application/json')||!req.body||Array.isArray(req.body)
+       ||Object.keys(req.body).length!==1||typeof req.body.couponCode!=='string'
+       ||req.body.couponCode.length>64)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    const alias=req.body.couponCode.toUpperCase();
+    if(!/^[A-Z0-9]{4,24}$/.test(alias))
+      return res.status(400).json({success:false,error:'INVALID_REFERRAL_COUPON'});
+    const external=mode==='external';
+    const owner=mode==='owner';
+    const identity=owner?safe(req.params?.id,120)
+      :external?safe(req.session?.partnerAccountId,120):ownId(req);
+    const email=safe(req.session?.partnerEmail,254).toLowerCase();
+    const authAt=Number(req.session?.partnerAuthAt);
+    if(!uuid(identity) || (external && (
+       !uuid(req.session?.partnerAuthUserId)||!email||!Number.isFinite(authAt)
+       ||authAt>Date.now()||Date.now()-authAt>12*60*60*1000
+       ||req.session?.user?.id)))
+      return res.status(owner?400:401).json({success:false,error:owner?'INVALID_REQUEST':'PARTNER_LOGIN_REQUIRED'});
+    try{
+      if(!external&&!owner){
+        // Reconfirm current clinic membership; a stale clinical role alone is insufficient.
+        const membership=await supabase.from('clinic_memberships').select('id')
+          .eq('user_id',identity).eq('status','active')
+          .in('role',['therapist','supervisor']).limit(1);
+        if(membership.error)throw membership.error;
+        if(!membership.data?.length)
+          return res.status(403).json({success:false,error:'ACTIVE_PROFESSIONAL_REQUIRED'});
+      }
+      let lookup=supabase.from('verto_partner_accounts')
+        .select('id,status,compliance_approved,referral_alias');
+      lookup=owner?lookup.eq('id',identity)
+        :external?lookup.eq('partner_kind','external').eq('id',identity).eq('contact_email',email)
+        :lookup.eq('partner_kind','professional').eq('user_id',identity);
+      const found=await lookup.maybeSingle();
+      if(found.error)throw found.error;
+      if(!found.data && owner)
+        return res.status(404).json({success:false,error:'PARTNER_NOT_FOUND'});
+      if(!found.data || found.data.status!=='approved' || found.data.compliance_approved!==true)
+        return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
+      if(found.data.referral_alias){
+        if(found.data.referral_alias!==alias)
+          return res.status(409).json({success:false,error:'REFERRAL_COUPON_LOCKED'});
+        return res.json({success:true,couponCode:alias,idempotent:true});
+      }
+      const updated=await supabase.from('verto_partner_accounts')
+        .update({referral_alias:alias,updated_at:new Date().toISOString()})
+        .eq('id',found.data.id).eq('status','approved').eq('compliance_approved',true)
+        .is('referral_alias',null).select('referral_alias').maybeSingle();
+      if(isConflict(updated.error))
+        return res.status(409).json({success:false,error:'REFERRAL_COUPON_TAKEN'});
+      if(updated.error)throw updated.error;
+      if(!updated.data){
+        const latest=await supabase.from('verto_partner_accounts')
+          .select('referral_alias').eq('id',found.data.id).maybeSingle();
+        if(latest.error)throw latest.error;
+        if(latest.data?.referral_alias===alias)
+          return res.json({success:true,couponCode:alias,idempotent:true});
+        return res.status(409).json({success:false,error:'REFERRAL_COUPON_LOCKED'});
+      }
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,couponCode:alias});
+    }catch{return fail(res);}
+  };
+  app.patch('/api/partnerships/portal/referral-alias',
+    (req:any,res:any)=>saveReferralAlias(req,res,'external'));
+  app.patch('/api/partnerships/me/referral-alias',checkAuth,
+    (req:any,res:any)=>saveReferralAlias(req,res,'professional'));
+
   app.post('/api/partnerships/me',checkAuth,async(req:any,res:any)=>{
     const userId=ownId(req);
     if(!uuid(userId))return res.status(401).json({success:false,error:'AUTH_REQUIRED'});
@@ -265,6 +336,9 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       return res.json({success:true,account:result.data});
     }catch{return fail(res);}
   });
+
+  app.patch('/api/owner/partnerships/accounts/:id/referral-alias',...adminGuard,
+    (req:any,res:any)=>saveReferralAlias(req,res,'owner'));
 
   app.post('/api/owner/partnerships/referrals',...adminGuard,async(req:any,res:any)=>{
     if(!req.is('application/json')||!req.body||Array.isArray(req.body)
