@@ -5,8 +5,8 @@ type Service={
   partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;
   partner:{display_name:string};
 };
-type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null};
-type Review={rating:number;comment:string;created_at:string};
+type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null};
+type Review={rating:number;comment:string;created_at:string;clinic?:{name:string}|null};
 async function api(path:string,init?:RequestInit){
   const r=await fetch(path,{credentials:'include',cache:'no-store',...init});
   const d=await r.json().catch(()=>({}));
@@ -19,7 +19,7 @@ const json=(payload:unknown):RequestInit=>({
 const money=(cents:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(cents/100);
 const status:Record<string,string>={
   interested:'Interesse enviado',awaiting_clinic:'Aguardando confirmação da clínica',
-  active:'Contratação confirmada',declined:'Interesse encerrado'
+  active:'Contratação confirmada',declined:'Parceria encerrada'
 };
 
 /** Isolated B2B surface. Backend checks canonical clinic membership on every request. */
@@ -79,12 +79,17 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       json({clinicId}));
     setNotice('Contratação confirmada pela clínica.');
   });
+  const endContract=(lead:Lead)=>void mutate(async()=>{
+    await api('/api/partnerships/marketplace/clinic-end/'+encodeURIComponent(lead.id),
+      json({clinicId}));
+    setNotice('Parceria encerrada neste catálogo. O histórico e as avaliações foram preservados.');
+  });
   const saveReview=()=>void mutate(async()=>{
     if(!reviewLead)return;
     await api('/api/partnerships/marketplace/review/'+encodeURIComponent(reviewLead.id),
       json({clinicId,rating,comment}));
-    setReviewLead(null);setComment('');setRating(5);
-    setNotice('Avaliação salva.');
+    setReviewLead(null);setComment('');setRating(5);setSelectedReviews(null);setReviews([]);
+    setNotice('Nova avaliação registrada de forma definitiva.');
   });
   const showReviews=async(partnerId:string)=>{
     if(selectedReviews===partnerId){setSelectedReviews(null);return;}
@@ -95,6 +100,21 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       setReviews(Array.isArray(d.reviews)?d.reviews:[]);
     }catch(e:any){setError(e.message);}
   };
+  const renderReviews=(partnerId:string)=>selectedReviews===partnerId&&
+    <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+      <h4 className="text-xs font-semibold text-slate-700">Avaliações de clínicas que contrataram este parceiro</h4>
+      {reviews.length===0?<p className="text-xs text-slate-500">Ainda não há avaliações.</p>
+        :reviews.map((r,i)=><div key={i} className="rounded-xl bg-slate-50 p-3">
+          <p className="text-xs font-semibold text-amber-600" aria-label={r.rating+' de 5 estrelas'}>
+            {'★'.repeat(r.rating)}{'☆'.repeat(5-r.rating)}
+          </p>
+          <p className="mt-1 text-xs text-slate-500">{r.clinic?.name||'Clínica contratante'}
+            {' · '}{new Date(r.created_at).toLocaleDateString('pt-BR')}</p>
+          {r.comment&&<p className="mt-1 break-words text-sm text-slate-700">{r.comment}</p>}
+        </div>)}
+    </div>;
+  const wasContracted=(lead:Lead)=>!!(lead.partner_confirmed_at&&lead.clinic_confirmed_at)
+    &&(lead.status==='active'||lead.status==='declined');
   const filtered=services.filter(s=>(s.service_name+' '+s.category+' '+s.partner?.display_name)
     .toLocaleLowerCase('pt-BR').includes(search.toLocaleLowerCase('pt-BR')));
   const linked=(partnerId:string)=>mine.find(l=>l.partner_id===partnerId);
@@ -117,7 +137,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
         </button>
         <button type="button" onClick={()=>setTab('mine')}
           className={'rounded-xl px-4 py-2 text-sm font-semibold '+(tab==='mine'?'bg-violet-700 text-white':'bg-white text-slate-600')}>
-          Meus parceiros ({mine.filter(l=>l.status==='active').length})
+          Meus parceiros ({mine.filter(wasContracted).length})
         </button>
       </div>
       {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
@@ -160,14 +180,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
                 </button>
               </div>
               {!canManage && !lead && <p className="mt-2 text-xs text-slate-500">Somente diretor ou coordenador pode autorizar o compartilhamento de contatos da clínica.</p>}
-              {selectedReviews===s.partner_id && <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
-                <h4 className="text-xs font-semibold text-slate-700">Avaliações recentes</h4>
-                {reviews.length===0?<p className="text-xs text-slate-500">Ainda não há avaliações.</p>
-                 :reviews.map((r,i)=><div key={i} className="rounded-xl bg-slate-50 p-3">
-                   <p className="text-xs font-semibold text-amber-600">{'★'.repeat(r.rating)}{'☆'.repeat(5-r.rating)}</p>
-                   {r.comment && <p className="mt-1 break-words text-sm text-slate-700">{r.comment}</p>}
-                 </div>)}
-              </div>}
+              {renderReviews(s.partner_id)}
             </article>;
           })}
         </div>
@@ -187,7 +200,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
                   className="rounded-xl bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
                   Confirmar contratação {lead.agreed_monthly_cents!=null?'('+money(Number(lead.agreed_monthly_cents))+'/mês)':''}
                 </button>}
-              {lead.status==='active'&&canManage&&
+              {wasContracted(lead)&&canManage&&
                 <button disabled={busy} onClick={()=>{setReviewLead(lead);setRating(5);setComment('');}}
                   className="rounded-xl border border-violet-300 px-3 py-2 text-sm font-semibold text-violet-700">
                   Avaliar parceiro
@@ -195,6 +208,18 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
             </div>
             {lead.status==='awaiting_clinic' && <p className="mt-2 text-xs text-slate-500">Confirme somente se a clínica realmente contratou o serviço e o valor está correto.</p>}
             {lead.status==='active' && <p className="mt-2 text-xs text-slate-500">Serviço contratado. Comissões externas ainda dependem de comprovação financeira e acordo comercial.</p>}
+            {wasContracted(lead)&&<div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={()=>void showReviews(lead.partner_id)}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">
+                <Star size={14} className="mr-1 inline"/> Ver avaliações
+              </button>
+              {lead.status==='active'&&canManage&&<button type="button" disabled={busy}
+                onClick={()=>{if(window.confirm('Marcar esta parceria como encerrada? O histórico será mantido.'))endContract(lead);}}
+                className="rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-600 disabled:opacity-50">
+                Encerrar parceria
+              </button>}
+            </div>}
+            {renderReviews(lead.partner_id)}
           </article>;
         })}
       </div>}
@@ -221,7 +246,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       {reviewLead && <div className="fixed inset-0 z-[230] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Avaliar parceiro">
         <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
           <h3 className="text-lg font-semibold text-slate-900">Avalie seu parceiro</h3>
-          <p className="mt-2 text-sm text-slate-500">Somente clínicas com contratação confirmada podem avaliar. Sua avaliação ficará visível no catálogo.</p>
+          <p className="mt-2 text-sm text-slate-500">Somente clínicas com contratação confirmada (ativa ou encerrada) podem avaliar. Sua avaliação ficará pública no catálogo, sem opção de edição ou exclusão. A clínica pode registrar até duas avaliações por parceiro.</p>
           <div className="mt-4 flex gap-2" role="group" aria-label="Nota de 1 a 5 estrelas">
             {[1,2,3,4,5].map(n=><button key={n} type="button" onClick={()=>setRating(n)}
               aria-label={n+' estrelas'} aria-pressed={rating===n} className="rounded-lg p-1 text-amber-500">
