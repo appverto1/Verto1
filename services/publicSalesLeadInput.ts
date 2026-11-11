@@ -90,9 +90,14 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
           ? "clinic"
           : "independent_professional";
       const rawPartnerCode = req.body?.partnerCode;
-      const partnerCode = typeof rawPartnerCode === 'string' ? rawPartnerCode.trim().toUpperCase() : '';
+      const partnerCode = typeof rawPartnerCode === 'string'
+        ? rawPartnerCode.trim().replace(/\s+/g,'').toUpperCase() : '';
+      const isInternalCode = /^VERTO-[A-F0-9]{18}$/.test(partnerCode);
+      const isCouponCode = /^[A-Z0-9][A-Z0-9-]{2,22}[A-Z0-9]$/.test(partnerCode)
+        && !partnerCode.startsWith('VERTO-');
       if (rawPartnerCode !== undefined && (typeof rawPartnerCode !== 'string'
-          || rawPartnerCode.length > 24 || !/^VERTO-[A-F0-9]{18}$/.test(partnerCode))) {
+          || rawPartnerCode.length > 64
+          || (partnerCode.length > 0 && !isInternalCode && !isCouponCode))) {
         return { ok: false as const, status: 400, error: 'Código de indicação inválido.' };
       }
       const acquisitionChannel =
