@@ -2333,6 +2333,13 @@ export default function App() {
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
   const [patientContextLoaded, setPatientContextLoaded] = useState(false);
   const [resolvedPatientPortalId, setResolvedPatientPortalId] = useState<string>('');
+  // Server-confirmed portal mode is scoped to the selected patient, never
+  // inferred from a stale or shared guardian account's user.type.
+  const [patientPortalProfile, setPatientPortalProfile] = useState<any>(null);
+  const effectivePatientPortalProfile = patientPortalProfile &&
+    String(patientPortalProfile.patientId || '') === resolvedPatientPortalId &&
+    resolvedPatientPortalId ? patientPortalProfile : null;
+  const effectivePatientPortalKind = resolvePatientPortalKind(effectivePatientPortalProfile || user);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
@@ -4405,6 +4412,7 @@ export default function App() {
           console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
           if (mounted) {
             setResolvedPatientPortalId('');
+            setPatientPortalProfile(null);
             setHistory([]);
             setTherapistNotes([]);
             setTasks([]);
@@ -4451,6 +4459,10 @@ export default function App() {
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
       const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
+      const verifiedPortalProfile = safeHistoryRes?.success === true &&
+        String(safeHistoryRes?.portalProfile?.patientId || '') === resolvedContextPatientId
+        ? safeHistoryRes.portalProfile : null;
+      if (mounted) setPatientPortalProfile(verifiedPortalProfile);
 
       const mergedHistoryRaw = [
         ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : [])
@@ -4493,7 +4505,7 @@ export default function App() {
         setPatientContextLoaded(true);
       }
 
-      const patientPortalTaskKind = resolvePatientPortalKind(user);
+      const patientPortalTaskKind = resolvePatientPortalKind(verifiedPortalProfile || user);
       const shouldLoadLegacyTasks = clinicalPortalEnabled && patientPortalTaskKind === 'KIDS';
       const shouldLoadAssignedTasks = clinicalPortalEnabled && patientPortalTaskKind !== 'KIDS';
       const [tasksRes, assignedTasksRes, protocolsRes] = await Promise.allSettled([
@@ -7084,7 +7096,7 @@ export default function App() {
 
   const handleMoodCheckin = async (l: number | null, n: string, i: string, t: any) => {
     const identity = resolvePatientIdentityForPortal();
-    const portalKind = resolvePatientPortalKind(user);
+    const portalKind = effectivePatientPortalKind;
     const isConventionalAdult = portalKind === 'ADULT_CONVENTIONAL';
     const metricKind: 'mood' | 'energy' = isConventionalAdult ? 'mood' : 'energy';
     const normalizedValue = typeof l === 'number' && Number.isFinite(l) ? Math.max(0, Math.min(100, l)) : null;
@@ -7135,7 +7147,7 @@ export default function App() {
     try {
     const identity = resolvePatientIdentityForPortal(t);
     const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
-    const portalKind = resolvePatientPortalKind(user);
+    const portalKind = effectivePatientPortalKind;
     const isKid = portalKind === 'KIDS';
     const normalizedEffort = typeof e === 'number' && Number.isFinite(e) ? e : null;
     const energyValue = isKid
@@ -7974,7 +7986,7 @@ export default function App() {
     const createdAt = new Date().toISOString();
     const isPhotoRecord = Boolean(image);
     const isSimpleNote = entryKind === 'note';
-    const actorKind = resolvePatientPortalKind(user) === 'KIDS' ? 'responsible' : 'patient';
+    const actorKind = effectivePatientPortalKind === 'KIDS' ? 'responsible' : 'patient';
     const patientAuthoredType = actorKind === 'patient' ? 'patient_note' : 'family_note';
     const patientAuthoredSource = actorKind === 'patient' ? 'patient_portal' : 'family_portal';
     const title = isPhotoRecord
@@ -8843,13 +8855,21 @@ export default function App() {
           </div>
         ) : user.role === 'patient' ? (
           <PatientDashboard 
-            user={user} 
+            user={effectivePatientPortalProfile
+              ? {
+                  ...user,
+                  ...effectivePatientPortalProfile,
+                  patientProfileType: effectivePatientPortalProfile.patient_profile_type,
+                  panelType: effectivePatientPortalProfile.panel_type,
+                  type: effectivePatientPortalProfile.type,
+                }
+              : user}
             onLogout={handleLogout} 
             onMoodCheckin={handleMoodCheckin} 
             tasks={tasks} 
             onCompleteTask={handleCompleteTask} 
             history={history} 
-            energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
+            energyTags={effectivePatientPortalKind === 'ADULT_CONVENTIONAL' ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
             sharedNotes={therapistNotes.filter(n => {
               const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
               const isPatientNote =
