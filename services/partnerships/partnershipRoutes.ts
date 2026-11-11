@@ -209,6 +209,8 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
         :lookup.eq('partner_kind','professional').eq('user_id',identity);
       const found=await lookup.maybeSingle();
       if(found.error)throw found.error;
+      if(!found.data && owner)
+        return res.status(404).json({success:false,error:'PARTNER_NOT_FOUND'});
       if(!found.data || found.data.status!=='approved' || found.data.compliance_approved!==true)
         return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
       if(found.data.referral_alias){
