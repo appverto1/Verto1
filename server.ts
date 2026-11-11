@@ -20939,6 +20939,13 @@ async function startServer() {
   const validateCriticalTissAuthorizationReservationSchema = async () => {
     const result = await checkCriticalSchema(supabase);
     if (result.compatible) return;
+    if (result.reason === 'rpc_pool_unavailable') {
+      // PostgREST may return 504 while its connection pool is unavailable. This is
+      // not evidence of a schema change; every TISS reservation still goes through
+      // the database RPC, which fails closed while the pool is unavailable.
+      console.error('[Schema] Pool PostgREST indisponível (PGRST003). API iniciando em modo degradado; reservas TISS continuam protegidas pela RPC.');
+      return;
+    }
     throw new Error(
       `Schema crítico de reserva TISS incompatível (${result.reason}; esperado ${TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION}). ` +
       'Aplique as migrations antes do deploy.'
