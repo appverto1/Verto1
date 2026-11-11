@@ -91,7 +91,7 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
           : "independent_professional";
       const rawPartnerCode = req.body?.partnerCode;
       const partnerCode = typeof rawPartnerCode === 'string'
-        ? rawPartnerCode.trim().toUpperCase() : '';
+        ? rawPartnerCode.toUpperCase() : '';
       const isInternalCode = /^VERTO-[A-F0-9]{18}$/.test(partnerCode);
       const isCouponCode = /^[A-Z0-9]{4,24}$/.test(partnerCode);
       if (rawPartnerCode !== undefined && (typeof rawPartnerCode !== 'string'
