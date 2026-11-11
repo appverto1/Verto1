@@ -194,6 +194,11 @@ export function classifyReservationSchemaProbe(error) {
     .join(' ')
     .toUpperCase();
 
+  // A saturated/unavailable PostgREST pool is infrastructure degradation, not a TISS schema mismatch.
+  // Keep real signature, permission and version mismatches fail-closed.
+  if (code === 'PGRST003' || message.includes('TIMED OUT ACQUIRING CONNECTION FROM CONNECTION POOL')) {
+    return { compatible: false, reason: 'rpc_pool_unavailable', retryable: true, failureKind: 'transient' };
+  }
   if (message.includes('TISS_AUTHORIZATION_SCOPE_INVALID')) {
     return { compatible: false, reason: 'rpc_legacy_version', retryable: false };
   }
