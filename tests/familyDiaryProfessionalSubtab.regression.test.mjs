@@ -22,7 +22,8 @@ const timeline = detail.slice(
 assert.match(detail, /role="tablist" aria-label="Seções do histórico"/);
 assert.match(detail, /\(\['timeline', 'family'\] as const\)\.map/);
 assert.match(detail, /historySubtab === 'family'/);
-assert.match(detail, /isKidsProfile && historySubtab === 'family'/);
+assert.match(detail, /\(isKidsProfile \|\| familyDiaryEntries\.length > 0\) && historySubtab === 'family'/,
+  'existing family diary must remain visible even after changing to an adult portal');
 assert.match(timeline, /Relatórios de sessão/);
 assert.match(timeline, /familyItems\.map/);
 
