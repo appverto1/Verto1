@@ -47,7 +47,17 @@ test('Kanban reuses its batched board endpoint, with optional referral read',()=
   assert.match(kanban,/setReferralsByLead\(referred\)/);
   assert.match(kanban,/Aquisição: Indicação/);
   assert.match(kanban,/Parceiro: \{partnerReferral\.partnerName\}/);
-  assert.match(kanban,/Cupom: \{partnerReferral\.couponCode\}/);
+  assert.match(kanban,/Cupom informado: \{partnerReferral\.couponCode\}/);
+  assert.match(boardRoutes,/verto_partner_accounts\(display_name,referral_alias,referral_code\)/);
+  assert.match(boardRoutes,/couponCode:item\.entered_code\|\|null/,'submitted coupon is not inferred');
+  assert.match(boardRoutes,/partnerCouponCode:partner\?\.referral_alias\|\|partner\?\.referral_code\|\|null/);
+  assert.match(kanban,/partnerCouponCode:item\.partnerCouponCode\|\|null/);
+  assert.match(kanban,/Cupom atual do parceiro: \{partnerReferral\.partnerCouponCode\}/);
+  assert.match(kanban,/aria-label="Indicação do parceiro"/);
+  assert.match(kanban,/Parceiro: <strong>\{referralsByLead\[selected\.id\]\.partnerName\}<\/strong>/);
+  assert.match(kanban,/Cupom informado: <strong>\{referralsByLead\[selected\.id\]\.couponCode\}<\/strong>/);
+  assert.match(kanban,/Cupom atual do parceiro: <strong>\{referralsByLead\[selected\.id\]\.partnerCouponCode\}<\/strong>/);
+  assert.match(kanban,/O código utilizado na inscrição anterior não ficou registrado/);
 });
 test('Super Admin has a separate partner attribution menu with on-demand details',()=>{
   assert.match(owner,/label="Indicações" active=\{activeTab === 'partner-referrals'\}/);
