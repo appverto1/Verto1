@@ -39,6 +39,7 @@ export function OwnerPartnershipsPanel() {
   const [leadId, setLeadId] = useState('');
   const [confirmCompliance, setConfirmCompliance] = useState<Record<string, boolean>>({});
   const [couponDraft, setCouponDraft] = useState<Record<string, string>>({});
+  const [couponAttempted, setCouponAttempted] = useState<Record<string, boolean>>({});
 
   const reload = useCallback(async () => {
     setError('');
@@ -86,11 +87,9 @@ export function OwnerPartnershipsPanel() {
   };
   const saveCoupon = async (item: Partner) => {
     if (busy || item.referral_alias || item.status !== 'approved') return;
-    const couponCode = (couponDraft[item.id] || '').trim().replace(/\s+/g, '').toUpperCase();
-    if (!/^[A-Z0-9][A-Z0-9-]{2,22}[A-Z0-9]$/.test(couponCode) || couponCode.startsWith('VERTO-')) {
-      setError('Use de 4 a 24 letras, números ou hífens. Ex.: FRATELLI10.');
-      return;
-    }
+    const couponCode = (couponDraft[item.id] || '').trim().toUpperCase();
+    setCouponAttempted(prev => ({ ...prev, [item.id]: true }));
+    if (!/^[A-Z0-9]{4,24}$/.test(couponCode))return;
     setBusy(true); setError(''); setMessage('');
     try {
       const result = await request('/api/owner/partnerships/accounts/' + encodeURIComponent(item.id) + '/referral-alias', {
@@ -169,13 +168,17 @@ export function OwnerPartnershipsPanel() {
                   <input id={'partner-owner-coupon-' + item.id} type="text" maxLength={64}
                     autoComplete="off" placeholder="Ex.: FRATELLI10"
                     value={couponDraft[item.id] || ''}
-                    onChange={e => setCouponDraft(prev => ({ ...prev, [item.id]: e.target.value }))}
+                    onChange={e => { setCouponDraft(prev => ({ ...prev, [item.id]: e.target.value })); setCouponAttempted(prev => ({ ...prev, [item.id]: false })); }}
+                    aria-invalid={!!((couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').trim().toUpperCase()))}
+                    aria-describedby={'partner-owner-coupon-error-' + item.id}
                     className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs uppercase" />
                   <button type="button" disabled={busy} onClick={() => { void saveCoupon(item); }}
                     className="rounded-lg border border-violet-300 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-50">
                     Salvar cupom
                   </button>
                 </div>
+                {(couponDraft[item.id] || couponAttempted[item.id]) && !/^[A-Z0-9]{4,24}$/.test((couponDraft[item.id] || '').trim().toUpperCase()) &&
+                  <p id={'partner-owner-coupon-error-' + item.id} role="alert" className="text-xs text-rose-600">Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.</p>}
                 <p className="text-xs text-slate-500">O interessado poderá informar o cupom em “Quem te indicou?”. O cupom não poderá ser alterado após salvar.</p>
               </div>}
             </div>
