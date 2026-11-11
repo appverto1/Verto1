@@ -49,6 +49,12 @@ test('non-auth anchors survive and regular URLs remain unchanged', () => {
   );
 });
 
+test('one-time activation markers and tokens are removed from the browser URL', () => {
+  assert.equal(cleanPartnerAuthReturnUrl(
+    'https://appverto.com.br/parcerias?partner_oauth=1&partner_setup=1#access_token=aa&refresh_token=bb',
+  ), '/parcerias');
+});
+
 test('public registration return markers are removed without deleting PKCE exchange code', () => {
   const cleaned = cleanPartnerAuthReturnUrl(
     'https://api.appverto.com.br/parcerias?partner_oauth=1&partner_apply=1&code=pkce-signup',
