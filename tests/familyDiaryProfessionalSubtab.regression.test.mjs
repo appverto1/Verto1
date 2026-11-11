@@ -30,7 +30,9 @@ assert.match(timeline, /familyItems\.map/);
 // One canonical, already-loaded patient history: never a second query or copy of clinical records.
 assert.match(diarySubset, /visibleHistoryWithFamilyNotes\.filter/);
 assert.match(diarySubset, /recordPatientId === currentPatientId/);
-assert.match(diarySubset, /item\?\.type === 'family_note' \|\| item\?\.type === 'photo'/);
+assert.match(diarySubset, /item\?\.type === 'family_note'/);
+assert.match(diarySubset, /item\?\.type === 'photo' && \(isKidsProfile \|\| fromFamily\)/,
+  'adult portal photos must not be mislabeled as family diary records');
 assert.doesNotMatch(diarySubset, /fetch\(|dataService\.|\.insert\(|\.upsert\(/);
 assert.match(detail, /const scopedFamilyNotes = \(Array\.isArray\(notes\) \? notes : \[\]\)\.filter/);
 assert.match(detail, /return Boolean\(currentPatientId && notePatientId && notePatientId === currentPatientId\)/);
