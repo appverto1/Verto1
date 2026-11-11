@@ -8124,6 +8124,7 @@ export default function App() {
     resetWorkspaceScopedState();
     setClinicStateHydrated(false);
     setResolvedPatientPortalId('');
+    setPatientPortalProfile(null);
     setPatientContextLoaded(false);
     setHistory([]);
     historyRef.current = [];
