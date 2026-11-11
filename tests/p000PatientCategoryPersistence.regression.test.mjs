@@ -86,7 +86,7 @@ assert.equal(vm.runInNewContext(patientCreateAckCondition[1], { addPatientResult
 assert.match(dataService, /async updatePatient\([\s\S]{0,410}requireServerAck: options\?\.requireServerAck === true/);
 assert.match(dataService, /async confirmPatientCategoryOnServer\([\s\S]{0,1000}fetchNoStoreJsonWithRetry/);
 assert.match(dataService, /persisted\.patient_group \?\? persisted\.group/);
-assert.match(app, /requireServerAck: mustConfirmPatientCategory/);
+assert.match(app, /requireServerAck: mustConfirmSavedPatientProfile/);
 assert.match(app, /confirmPatientCategoryOnServer\(/);
 assert.match(app, /mustConfirmSavedPatientProfile/);
 assert.match(app, /hasExplicitPortalPatch && confirmedProfileType !== updatedProfileType/);
