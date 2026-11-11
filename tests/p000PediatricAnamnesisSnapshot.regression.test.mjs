@@ -17,7 +17,9 @@ assert.equal(profile.resolvePatientPortalKind({patient_group:'adulto',patient_pr
 const app=read('src/App.tsx');
 const snapshot=app.slice(app.indexOf('const buildPatientAnamnesisSnapshot ='),app.indexOf('const enrichUserFromSessionMetadata ='));
 assert.match(snapshot,/const canonicalCategory = coalescePatientText\(source\?\.grupo, source\?\.patient_group, source\?\.group, existing\?\.grupo\)/);
-assert.match(snapshot,/const canonicalProfile = resolvePatientProfileTypeForCategory\(/);
+assert.match(snapshot,/const canonicalProfile = selectedPortalProfile/);
+assert.match(snapshot,/resolvePatientProfileTypeForCategory\(canonicalCategory/,
+  'category remains a fallback only when the portal was never explicitly chosen');
 assert.match(snapshot,/grupo: canonicalCategory/);
 assert.match(snapshot,/patientProfileType: canonicalProfile,\s*panelType: canonicalProfile/);
 assert.doesNotMatch(snapshot,/patientProfileType: normalizePatientProfileType/,'old ADULT snapshot defaults must not override category');
@@ -25,7 +27,8 @@ assert.doesNotMatch(snapshot,/patientProfileType: normalizePatientProfileType/,'
 const data=read('src/services/dataService.ts');
 assert.match(data,/group: patient\?\.patient_group \|\| patient\?\.group \|\| recordPayload\?\.grupo \|\| null/,'server-saved group must precede stale offline anamnesis');
 assert.match(data,/async confirmPatientCategoryOnServer\(/,'read-back confirms persisted category');
-assert.match(app,/requireServerAck: mustConfirmPatientCategory/,'category updates wait for server acknowledgement');
+assert.match(app,/requireServerAck: mustConfirmSavedPatientProfile/,
+  'portal and category changes wait for server acknowledgement');
 assert.match(app,/confirmPatientCategoryOnServer\(/,'category update read-back must be enforced');
 
 console.log('p000PediatricAnamnesisSnapshot: PASS');
