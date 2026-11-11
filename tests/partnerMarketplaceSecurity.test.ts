@@ -8,7 +8,7 @@ const partnerId='33333333-3333-4333-8333-333333333333';
 const leadId='44444444-4444-4444-8444-444444444444';
 const email='owner@example.test';
 
-function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null}={}){
+function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean}={}){
   const routes:Record<string,any[]>={};
   const calls:any[]=[];
   const app:any={};
@@ -21,7 +21,8 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
       const filters:Record<string,any>={};
       const q:any={
         select(){return q;},eq(k:string,v:any){filters[k]=v;return q;},
-        order(){return q;},in(){return q;},
+        order(){return q;},in(){return q;},not(){return q;},
+        update(values:any){calls.push({type:'update',table,values});return q;},
         upsert(values:any){calls.push({type:'upsert',table,values});return q;},
         limit:async()=>({
           data:table==='clinic_memberships'?(role?[{role}]:[])
@@ -37,7 +38,9 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
           data:table==='users'?{name:'Diretora Verto',email}
             :table==='clinics'?{phone_commercial:'11988887777'}
             :table==='verto_partner_accounts'?{id:partnerId,status:'approved',compliance_approved:true}
-            :table==='verto_partner_marketplace_leads'?{id:leadId}
+            :table==='verto_partner_marketplace_leads'?{id:leadId,
+              clinic_confirmed_at:options.confirmedContract===false?null:'2026-11-11T12:00:00Z',
+              partner_confirmed_at:options.confirmedContract===false?null:'2026-11-11T11:00:00Z'}
             :table==='verto_partner_marketplace_services'?null:null,error:null
         }),
         single:async()=>({data:{service_name:'Tráfego pago'},error:null}),
@@ -153,7 +156,7 @@ test('approved partner cannot confirm someone else’s ID via browser input',asy
   assert.equal(call.args.p_partner_id,partnerId);
 });
 
-test('reviews require active confirmed contract, rating range and clinic representative',async()=>{
+test('reviews require mutual confirmed contract, rating range and clinic representative',async()=>{
   const f=fixture();
   assert.equal((await f.run('POST','/api/partnerships/marketplace/review/:id',
     {clinicId,rating:0,comment:'ok'})).statusCode,400);
@@ -162,6 +165,33 @@ test('reviews require active confirmed contract, rating range and clinic represe
   const bad=fixture('therapist');
   assert.equal((await bad.run('POST','/api/partnerships/marketplace/review/:id',
     {clinicId,rating:5,comment:'ok'})).statusCode,403);
+});
+
+test('reviews reject interest-only leads and are authorized for completed contract history',async()=>{
+  const pending=fixture('director',{confirmedContract:false});
+  const denied=await pending.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:5,comment:'Boa experiência'});
+  assert.equal(denied.statusCode,403);
+  assert.equal(pending.calls.some(c=>c.name==='verto_marketplace_save_review_v1'),false);
+
+  const confirmed=fixture();
+  const accepted=await confirmed.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:4,comment:'Bom atendimento'});
+  assert.equal(accepted.statusCode,200);
+  const query=confirmed.calls.find(c=>c.type==='from'&&c.table==='verto_partner_marketplace_leads');
+  assert.equal(query.filters.clinic_id,clinicId);
+  assert.equal(confirmed.calls.some(c=>c.name==='verto_marketplace_save_review_v1'),true);
+});
+
+test('contract closure requires a verified clinic representative',async()=>{
+  const denied=fixture('therapist');
+  const result=await denied.run('POST','/api/partnerships/marketplace/clinic-end/:id',{clinicId});
+  assert.equal(result.statusCode,403);
+  assert.equal(denied.calls.some(c=>c.type==='update'),false);
+  const allowed=fixture();
+  const success=await allowed.run('POST','/api/partnerships/marketplace/clinic-end/:id',{clinicId});
+  assert.equal(success.statusCode,200);
+  assert.equal(allowed.calls.find(c=>c.type==='update').values.status,'declined');
 });
 
 test('owner opportunity report keeps both existing administrative guards',()=>{
