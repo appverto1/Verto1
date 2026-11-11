@@ -284,6 +284,7 @@ import {
   mapPatientProfileTypeToLegacyPortalType,
   normalizePatientProfileType,
   resolvePatientProfileTypeForCategory,
+  resolvePatientPortalKind,
   resolvePatientRegistrationCategory,
 } from "../utils/patientProfileType";
 import { normalizePatientInsuranceEligibility } from "../utils/patientInsuranceEligibility";
@@ -7098,9 +7099,11 @@ export function CoordinatorDashboard({
       0,
     );
     const primaryBillingPlan = financialPlans.find((plan: any) => getFinancialPlanPrimaryBillingMethod(plan));
-    const canonicalProfileType = resolvePatientProfileTypeForCategory(
-      newPatientForm.grupo,
+    // The selected portal controls the active clinical workflow. Demographic
+    // age/category never silently overrides that choice on Save.
+    const canonicalProfileType = normalizePatientProfileType(
       newPatientForm.patientProfileType,
+      resolvePatientProfileTypeForCategory(newPatientForm.grupo, null),
     );
     const legacyPortalType = mapPatientProfileTypeToLegacyPortalType(canonicalProfileType);
     const normalizedBirthDate = normalizeBirthDateForStorage(newPatientForm.dataNascimento);
@@ -7391,11 +7394,10 @@ export function CoordinatorDashboard({
         patient.responsible_relationship ||
         patient.metadata?.responsibleRelationship ||
         "",
-      patientProfileType: resolvePatientProfileTypeForCategory(
-        resolvePatientRegistrationCategory(patient),
-        patient.patientProfileType || patient.patient_profile_type || patient.panelType || patient.panel_type ||
-          patient.profileType || patient.profile_type || patient.type,
-      ),
+      patientProfileType: (() => {
+        const portal = resolvePatientPortalKind(patient);
+        return portal === 'KIDS' ? 'KIDS' : portal === 'ADULT_ABA' ? 'ABA' : 'ADULT';
+      })(),
       financialPlans: normalizePatientFinancialPlans(patient.financialPlans, {
         ...patient,
         convenioTipo: insuranceEligibility.convenioTipo === "convenio" ? "convenio" : "particular",
@@ -17927,7 +17929,7 @@ export function CoordinatorDashboard({
                   </FormField>
                   <FormField
                     label="Tipo de portal do paciente"
-                    helperText="Define a área de acesso do paciente no aplicativo."
+                    helperText="Define as abas, os novos planos, as sessões e as tarefas. O histórico anterior permanece preservado."
                   >
                     <select className={patientFormInputClass} value={newPatientForm.patientProfileType} onChange={(e) => handlePatientFormChange("patientProfileType", e.target.value)}>
                       {PATIENT_PROFILE_TYPE_OPTIONS.map((option) => (
