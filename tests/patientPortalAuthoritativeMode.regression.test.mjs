@@ -14,9 +14,12 @@ const saved=(profile,age,patient_group)=>({
   type:profile==='KIDS'?'kids_tea':profile==='ABA'?'adult_tea':'adult_conventional',
   age,patient_group,
 });
-assert.equal(resolvePatientPortalKind(saved('ADULT',8,'infantil')),'ADULT_CONVENTIONAL');
-assert.equal(resolvePatientPortalKind(saved('ABA',8,'infantil')),'ADULT_ABA');
-assert.equal(resolvePatientPortalKind(saved('KIDS',41,'adulto')),'KIDS');
+assert.equal(resolvePatientPortalKind(saved('ADULT',8,'adulto')),'ADULT_CONVENTIONAL');
+assert.equal(resolvePatientPortalKind(saved('ABA',8,'adulto')),'ADULT_ABA');
+assert.equal(resolvePatientPortalKind(saved('KIDS',41,'infantil')),'KIDS');
+// Contradictory legacy rows do not become adult before a deliberate Save.
+assert.equal(resolvePatientPortalKind(saved('ADULT',8,'infantil')),'KIDS');
+assert.equal(resolvePatientPortalKind(saved('ABA',8,'infantil')),'KIDS');
 assert.equal(resolvePatientPortalKind(saved('ADULT',41,'adulto')),'ADULT_CONVENTIONAL');
 assert.equal(resolvePatientPortalKind(saved('ABA',41,'adulto')),'ADULT_ABA');
 
