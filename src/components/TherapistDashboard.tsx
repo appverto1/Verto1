@@ -53,6 +53,7 @@ import {
 import { dataService } from "../services/dataService";
 import { ProfessionalReceipts } from "./ProfessionalReceipts";
 import { PartnershipPanel } from "./PartnershipPanel";
+import { PartnerMarketplace } from './PartnerMarketplace';
 import {
   getAgendaViewPreferenceKey,
   readAgendaViewPreference,
@@ -379,6 +380,7 @@ export const TherapistDashboard = ({
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [isDayDetailsModalOpen, setIsDayDetailsModalOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [anamnesisTemplate, setAnamnesisTemplate] = useState<any>(
@@ -1043,6 +1045,8 @@ export const TherapistDashboard = ({
           </div>
         )}
 
+        <PartnerMarketplace open={marketplaceOpen} clinicId={String(user?.activeWorkspaceId || user?.clinicId || '')} onClose={() => setMarketplaceOpen(false)} />
+
         {view === "partnerships" && (
           <div className="p-4 sm:p-8">
             <PartnershipPanel onBack={handleBackView} />
@@ -1673,6 +1677,11 @@ export const TherapistDashboard = ({
                         className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#7a32fc] transition-colors text-xs font-semibold uppercase tracking-wider text-left"
                       >
                         <Gift size={18} /> Indique e Ganhe
+                      </button>
+                      <button type="button"
+                        onClick={() => { setIsMenuOpen(false); setMarketplaceOpen(true); }}
+                        className="flex items-center gap-3 rounded-xl p-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-600 hover:bg-gray-50 hover:text-[#7a32fc]">
+                        <Gift size={18} /> Encontrar parceiros
                       </button>
 
                       <div className="h-px bg-gray-100 my-1"></div>
