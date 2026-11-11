@@ -14,15 +14,30 @@ export function registerSalesAcquisitionRoutes(app:any,deps:Deps){
     if(ids.length>100||ids.some(id=>!isUuid(id)))
       return res.status(400).json({success:false,error:'Lista de oportunidades inválida.'});
     try{
-      const [channels,links]=await Promise.all([
+      const [channels,links,referrals]=await Promise.all([
         supabase.from('sales_acquisition_channels')
           .select('id,name,is_active').order('name').limit(150),
         ids.length?supabase.from('sales_lead_acquisition_channels')
           .select('lead_id,channel_id').in('lead_id',ids).limit(2000):
           Promise.resolve({data:[],error:null}),
+        // One indexed batch lookup per loaded Kanban page. Referral registry is authoritative.
+        ids.length?supabase.from('verto_partner_referrals')
+          .select('sales_lead_id,partner:verto_partner_accounts!verto_partner_referrals_partner_id_fkey(id,display_name,referral_alias,referral_code)')
+          .in('sales_lead_id',ids).limit(100):
+          Promise.resolve({data:[],error:null}),
       ]);
-      if(channels.error||links.error)throw channels.error||links.error;
-      return res.json({success:true,channels:channels.data||[],links:links.data||[]});
+      if(channels.error||links.error||referrals.error)throw channels.error||links.error||referrals.error;
+      const referred=(referrals.data||[]).map((item:any)=>{
+        const partner=Array.isArray(item.partner)?item.partner[0]:item.partner;
+        return {
+          leadId:item.sales_lead_id,
+          partnerId:partner?.id||null,
+          partnerName:partner?.display_name||'Parceiro',
+          coupon:partner?.referral_alias||partner?.referral_code||'',
+        };
+      }).filter((item:any)=>item.partnerId);
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,channels:channels.data||[],links:links.data||[],referrals:referred});
     }catch{return res.status(503).json({success:false,error:'Não foi possível carregar os canais de aquisição.'});}
   });
 
