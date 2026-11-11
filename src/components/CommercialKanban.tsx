@@ -93,6 +93,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
   const [acquisitionRefreshKey,setAcquisitionRefreshKey]=useState(0);
   const [acquisitionChannels,setAcquisitionChannels]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
   const [acquisitionByLead,setAcquisitionByLead]=useState<Record<string,string[]>>({});
+  const [referralsByLead,setReferralsByLead]=useState<Record<string,{partnerName:string;couponCode:string|null}>>({});
   const [acquisitionDialog,setAcquisitionDialog]=useState<{leadId:string;channelIds:string[]}|null>(null);
   const [savingAcquisition,setSavingAcquisition]=useState(false);
   const [inlineChannelIds,setInlineChannelIds]=useState<string[]>([]);
@@ -322,6 +323,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
         const dedup = new Map<string,CommercialAttempt>();
         const loadedFollowups:Record<string,SalesFollowup>={};
         const acquired:Record<string,string[]>={};
+        const referred:Record<string,{partnerName:string;couponCode:string|null}>={};
         for (const page of pages) {
           for (const item of page.board.placements || []) nextPlacements[item.lead_id] = item.column_id;
           for (const item of page.board.overrides || []) {
@@ -329,6 +331,12 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
           }
           for (const item of page.history.data || []) dedup.set(item.id,item);
           for (const followup of page.history.followups || []) loadedFollowups[followup.lead_id]=followup;
+          for(const item of page.board.referrals||[]){
+            if(item.leadId)referred[item.leadId]={
+              partnerName:String(item.partnerName||'Parceiro'),
+              couponCode:item.couponCode||null,
+            };
+          }
           for(const link of page.acquisition.links||[]){
             const arr=acquired[link.lead_id]||[];
             arr.push(link.channel_id);acquired[link.lead_id]=arr;
@@ -343,6 +351,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
         }
         setAcquisitionChannels(pages[0]?.acquisition.channels||[]);
         setAcquisitionByLead(acquired);
+        setReferralsByLead(referred);
         setAttempts([...dedup.values()]);
         setHistoryReady(true);
         setFollowups(loadedFollowups);
@@ -1224,6 +1233,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
                   const newLead=historyReady&&total===0&&!['converted','lost','archived'].includes(lead.status);
                   const dueToday=callDueToday(lead);
+                  const partnerReferral=referralsByLead[lead.id];
                   return <article key={lead.id} draggable={!busyLead&&lead.status!=='converted'}
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
@@ -1254,6 +1264,11 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                         <GripVertical size={15} className="shrink-0 text-slate-300 group-hover:text-slate-500"/>
                       </div>
                       <p className="mt-1 truncate text-[11px] font-semibold text-slate-600">{lead.clinicName||'Clínica não informada'}</p>
+                      {partnerReferral&&<div className="mt-1.5 rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[10px] text-violet-950">
+                        <span className="font-bold">Aquisição: Indicação</span>
+                        <span className="block truncate" title={partnerReferral.partnerName}>Parceiro: {partnerReferral.partnerName}</span>
+                        {partnerReferral.couponCode&&<span className="block truncate">Cupom: {partnerReferral.couponCode}</span>}
+                      </div>}
                       <p className="mt-1 truncate text-[11px] text-slate-500">{lead.phone||'Telefone não informado'}</p>
                       <div className="mt-3 grid grid-cols-2 gap-1.5">
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total} ligações</b></div>

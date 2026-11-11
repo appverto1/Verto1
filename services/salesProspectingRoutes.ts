@@ -105,7 +105,28 @@ export function registerSalesProspectingRoutes(
           siteInterestAt: lead.site_interest_at,
         }));
       }
-      return res.json({success: true, columns: columns.data || [], placements, overrides, priorityLeads});
+      // Batch only the cards already requested (plus website priority cards).
+      // Referral display is optional: a reporting outage must never block the CRM.
+      let referrals: any[] = [];
+      const visibleIds=[...new Set([...leadIds,...priorityLeads.map((lead:any)=>lead.id)])].slice(0,200);
+      if(visibleIds.length){
+        try{
+          const report=await supabase.from('verto_partner_referrals')
+            .select('sales_lead_id,entered_code,verto_partner_accounts(display_name)')
+            .in('sales_lead_id',visibleIds).limit(200);
+          if(!report.error)referrals=(report.data||[]).map((item:any)=>{
+            const partner=Array.isArray(item.verto_partner_accounts)
+              ? item.verto_partner_accounts[0] : item.verto_partner_accounts;
+            return {
+              leadId:item.sales_lead_id,
+              partnerName:partner?.display_name||'Parceiro',
+              // Legacy referrals never stored the submitted code; do not invent one.
+              couponCode:item.entered_code||null,
+            };
+          });
+        }catch{ /* Keep the commercial board available without the referral annotation. */ }
+      }
+      return res.json({success: true, columns: columns.data || [], placements, overrides, priorityLeads, referrals});
     } catch { return boardError(res, 'Configuração do Kanban indisponível.'); }
   });
 

@@ -281,6 +281,46 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
     }catch{return fail(res);}
   });
 
+  // Owner-only referral reporting. Read on demand; aggregate once, never per-partner.
+  // Payment is derived exclusively from the canonical paid-invoice ledger.
+  app.get('/api/owner/partnerships/referral-report',...adminGuard,async(req:any,res:any)=>{
+    const offset=Number(req.query?.offset??0);
+    if(!Number.isSafeInteger(offset)||offset<0||offset>100000)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    try{
+      const [accounts,summary]=await Promise.all([
+        supabase.from('verto_partner_accounts')
+          .select('id,display_name,status,referral_alias,referral_code')
+          .order('created_at',{ascending:false}).order('id',{ascending:false})
+          .range(offset,offset+100),
+        supabase.rpc('verto_owner_partner_referral_summary_v1'),
+      ]);
+      if(accounts.error||summary.error)throw accounts.error||summary.error;
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,partners:(accounts.data||[]).slice(0,100),
+        summary:summary.data||[],hasMore:(accounts.data||[]).length>100});
+    }catch{return fail(res);}
+  });
+
+  app.get('/api/owner/partnerships/referral-report/:partnerId',...adminGuard,async(req:any,res:any)=>{
+    const partnerId=safe(req.params?.partnerId,120);
+    const offset=Number(req.query?.offset??0);
+    if(!uuid(partnerId)||!Number.isSafeInteger(offset)||offset<0||offset>5000)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    try{
+      const partner=await supabase.from('verto_partner_accounts').select('id')
+        .eq('id',partnerId).maybeSingle();
+      if(partner.error)throw partner.error;
+      if(!partner.data)return res.status(404).json({success:false,error:'PARTNER_NOT_FOUND'});
+      const details=await supabase.rpc('verto_partner_referral_overview_v1',{
+        p_partner_id:partnerId,p_limit:50,p_offset:offset
+      });
+      if(details.error)throw details.error;
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,referrals:details.data||[],offset});
+    }catch{return fail(res);}
+  });
+
   app.get('/api/owner/partnerships/accounts',...adminGuard,async(req:any,res:any)=>{
     try{
       const result=await supabase.from('verto_partner_accounts')
