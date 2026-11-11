@@ -62,11 +62,11 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     try{await navigator.clipboard.writeText(referralLink);setCopied(true);}
     catch{window.prompt('Copie seu link:',referralLink);}
   };
-  const couponFormatError=(couponDraft || couponAttempted) && !/^[A-Z0-9]{4,24}$/.test(couponDraft.trim().toUpperCase())
+  const couponFormatError=(couponDraft || couponAttempted) && !/^[A-Z0-9]{4,24}$/.test(couponDraft.toUpperCase())
     ? 'Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.' : '';
   const saveCoupon=async()=>{
     if(couponSaving || !approved || account?.referral_alias)return;
-    const couponCode=couponDraft.trim().toUpperCase();
+    const couponCode=couponDraft.toUpperCase();
     setCouponAttempted(true);
     if(!/^[A-Z0-9]{4,24}$/.test(couponCode))return;
     setCouponSaving(true);setError('');setCouponFeedback('');
