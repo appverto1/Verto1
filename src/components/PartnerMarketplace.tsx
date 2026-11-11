@@ -19,7 +19,7 @@ const json=(payload:unknown):RequestInit=>({
 const money=(cents:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(cents/100);
 const status:Record<string,string>={
   interested:'Interesse enviado',awaiting_clinic:'Aguardando confirmação da clínica',
-  active:'Contratação confirmada',declined:'Parceria encerrada'
+  active:'Contratação confirmada',declined:'Interesse encerrado'
 };
 
 /** Isolated B2B surface. Backend checks canonical clinic membership on every request. */
@@ -193,7 +193,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
             <div className="flex flex-wrap justify-between gap-2">
               <div>
                 <h3 className="font-semibold text-slate-900">{service?.partner?.display_name||'Parceiro'}</h3>
-                <p className="mt-1 text-xs text-slate-500">{status[lead.status]||lead.status}</p>
+                <p className="mt-1 text-xs text-slate-500">{lead.status==='declined'&&wasContracted(lead)?'Parceria encerrada':status[lead.status]||lead.status}</p>
               </div>
               {lead.status==='awaiting_clinic'&&canManage&&
                 <button disabled={busy} onClick={()=>confirmContract(lead)}
