@@ -84047,6 +84047,14 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
         return null;
       }
       return await task();
+    } catch (error: any) {
+      // Background jobs must never crash the API when the lease service is down.
+      // No task runs unless its distributed lease was confirmed.
+      console.warn('[Runtime Lease] Job interrompido; execução não confirmada.', {
+        jobKey,
+        message: sanitizeString(error?.message || String(error), 240),
+      });
+      return null;
     } finally {
       if (acquired) {
         try {
