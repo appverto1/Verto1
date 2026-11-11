@@ -81,3 +81,29 @@ test('late invoice organization and subscription identity trigger a safe re-eval
   }
   assert.match(sql,/NEW.organization_id IS NULL OR v_partner.linked_clinic_id = NEW.organization_id/);
 });
+
+const safety = readFileSync('supabase/migrations/20261111101500_ambassador_commission_safety_v1.sql','utf8');
+
+test('canonical and finance attribution registries reject double-credit across concurrent requests', () => {
+  assert.match(safety,/PERFORM 1 FROM public\.sales_leads[\s\S]*?FOR UPDATE/);
+  assert.match(safety,/IF TG_TABLE_NAME = 'ambassador_referrals'/);
+  assert.match(safety,/IF EXISTS \(SELECT 1 FROM public\.verto_partner_referrals/);
+  assert.match(safety,/ELSIF TG_TABLE_NAME = 'verto_partner_referrals'/);
+  assert.match(safety,/IF EXISTS \(SELECT 1 FROM public\.ambassador_referrals/);
+  assert.match(safety,/BEFORE INSERT OR UPDATE OF sales_lead_id ON public\.ambassador_referrals/);
+  assert.match(safety,/BEFORE INSERT OR UPDATE OF sales_lead_id ON public\.verto_partner_referrals/);
+  assert.match(safety,/PARTNER_REFERRAL_ALREADY_ATTRIBUTED/);
+});
+
+test('invalid invoice status or payer correction reverses provisional commissions without payout', () => {
+  assert.match(safety,/CREATE OR REPLACE FUNCTION public\.ambassador_reverse_invalid_invoice_v1/);
+  assert.match(safety,/NEW\.status <> 'paid'/);
+  assert.match(safety,/NEW\.amount_paid_cents <= 0/);
+  assert.match(safety,/NEW\.currency <> 'brl'/);
+  assert.match(safety,/NEW\.sales_lead_id IS DISTINCT FROM OLD\.sales_lead_id/);
+  assert.match(safety,/NEW\.organization_id = p\.linked_clinic_id/);
+  assert.match(safety,/INTERVAL '12 months'/);
+  assert.match(safety,/status = 'reversed'/);
+  assert.match(safety,/status IN \('provisional','needs_review'\)/);
+  assert.doesNotMatch(safety,/payouts_enabled\s*=\s*true|stripe\.transfers/i);
+});
