@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { registerPartnershipRoutes } from '../services/partnerships/partnershipRoutes';
+import { createSensitiveApiMutationProtectionMiddleware, isExternalPreAuthMutationPath } from '../src/utils/sensitiveApiMutationProtection.mjs';
 
 const userId = '11111111-1111-4111-8111-111111111111';
 const partnerId = '22222222-2222-4222-8222-222222222222';
@@ -212,5 +213,53 @@ test('pending or suspended partners cannot create or continue an external partne
     assert.equal(portal.statusCode, 403);
     assert.equal(portal.body.error, 'PARTNER_ACCESS_DENIED');
     assert.equal(f.calls.filter(c => c.name === 'verto_partner_referral_overview_v1').length, 0);
+  }
+});
+
+
+test('public partner signup and login reach token validators only from a trusted origin', () => {
+  const guard = createSensitiveApiMutationProtectionMiddleware({
+    configuredAppBase: () => 'https://appverto.com.br',
+  });
+  const check = (path: string, method = 'POST', origin = 'https://appverto.com.br') => {
+    let status = 200;
+    let nextCalled = false;
+    let payload: any = null;
+    const req: any = {
+      method, path, protocol: 'https',
+      headers: origin ? { origin } : {},
+      cookies: {},
+      get: () => 'api.appverto.com.br',
+    };
+    const res: any = {
+      status(code: number) { status = code; return this; },
+      json(data: any) { payload = data; return this; },
+    };
+    guard(req, res, () => { nextCalled = true; });
+    return { status, nextCalled, payload };
+  };
+
+  for (const path of ['/partnerships/apply', '/partnerships/auth/session']) {
+    assert.equal(isExternalPreAuthMutationPath(path), true);
+    assert.equal(check(path).nextCalled, true, path + ' must reach its own Supabase token validation');
+    const crossSite = check(path, 'POST', 'https://attacker.example');
+    assert.equal(crossSite.status, 403);
+    assert.equal(crossSite.nextCalled, false);
+    assert.equal(crossSite.payload.error, 'Origem inválida para operação sensível.');
+    assert.equal(check(path, 'POST', '').nextCalled, false);
+    assert.equal(check(path, 'PATCH').nextCalled, false);
+  }
+
+  for (const path of [
+    '/partnerships/auth/logout',
+    '/partnerships/marketplace/partner/confirm/11111111-1111-4111-8111-111111111111',
+    '/partnerships/apply/other',
+    '/owner/partnerships/accounts',
+  ]) {
+    assert.equal(isExternalPreAuthMutationPath(path), false);
+    const blocked = check(path);
+    assert.equal(blocked.nextCalled, false);
+    assert.equal(blocked.status, 403);
+    assert.equal(blocked.payload.error, 'Requisição sensível sem autenticação válida.');
   }
 });
