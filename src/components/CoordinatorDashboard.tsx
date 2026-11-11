@@ -6677,6 +6677,20 @@ export function CoordinatorDashboard({
   };
 
   const handlePatientFormChange = (field: string, value: any) => {
+    if (field === 'patientProfileType') {
+      const portalProfile = normalizePatientProfileType(value);
+      // The persisted backend category and the portal must agree: otherwise
+      // the legacy category guard can silently revert an explicitly chosen mode.
+      // This changes clinical routing only, never birth date or legal-minor data.
+      setNewPatientForm((prev: any) => ({
+        ...prev,
+        patientProfileType: portalProfile,
+        grupo: portalProfile === 'KIDS'
+          ? (prev.grupo === 'adolescente' ? 'adolescente' : 'infantil')
+          : (['adulto', 'idoso'].includes(prev.grupo) ? prev.grupo : 'adulto'),
+      }));
+      return;
+    }
     if (field === 'grupo') {
       setNewPatientForm((prev: any) => ({
         ...prev,
