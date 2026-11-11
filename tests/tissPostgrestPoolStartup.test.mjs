@@ -13,6 +13,13 @@ test('PGRST003 is a transient PostgREST pool failure, not a TISS schema mismatch
   assert.equal(classification.retryable, true);
   assert.equal(classification.failureKind, 'transient');
 
+  const cacheError = {
+    code: 'PGRST002',
+    message: 'Could not query the database for the schema cache. Retrying.',
+  };
+  assert.equal(classifyReservationSchemaProbe(cacheError).reason, 'rpc_pool_unavailable');
+  assert.equal(classifyReservationSchemaProbe(cacheError).compatible, false);
+
   const result = await checkCriticalSchema({
     rpc: async () => ({ data: null, error: poolError }),
   });
