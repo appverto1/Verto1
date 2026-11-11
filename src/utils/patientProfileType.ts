@@ -114,7 +114,14 @@ export const resolvePatientPortalKind = (patient: any): PatientPortalKind => {
   if (isKnownProfile(savedProfile) && isKnownProfile(savedPanel) &&
       typeof savedLegacyType === 'string') {
     const profile = normalizePatientProfileType(savedProfile);
-    if (normalizePatientProfileType(savedPanel) === profile &&
+    // The old registration pipeline sometimes wrote a generic adult default
+    // on an explicitly pediatric category. The new Save keeps them consistent.
+    // Do not reinterpret inconsistent historic rows until the portal is saved.
+    const storedCategory = cleanProfileKey(patient?.patient_group ?? patient?.group ?? patient?.grupo);
+    const conflictsWithLegacyChild = profile !== 'KIDS' &&
+      ['infantil', 'adolescente'].includes(storedCategory);
+    if (!conflictsWithLegacyChild &&
+        normalizePatientProfileType(savedPanel) === profile &&
         mapPatientProfileTypeToLegacyPortalType(profile) === cleanProfileKey(savedLegacyType)) {
       return profile === 'KIDS' ? 'KIDS' : profile === 'ABA' ? 'ADULT_ABA' : 'ADULT_CONVENTIONAL';
     }
