@@ -8,8 +8,10 @@ CREATE OR REPLACE FUNCTION public.verto_partner_exclusive_referral_registry_v1()
 RETURNS trigger LANGUAGE plpgsql SECURITY INVOKER
 SET search_path = pg_catalog, public AS $$
 BEGIN
-  IF TG_OP = 'UPDATE' AND NEW.sales_lead_id IS NOT DISTINCT FROM OLD.sales_lead_id THEN
-    RETURN NEW;
+  IF TG_OP = 'UPDATE' THEN
+    IF NEW.sales_lead_id IS NOT DISTINCT FROM OLD.sales_lead_id THEN
+      RETURN NEW;
+    END IF;
   END IF;
 
   -- Both attribution paths serialize on the same sales lead before checking.
