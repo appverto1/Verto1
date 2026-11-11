@@ -1,9 +1,12 @@
 const externalEvolutionPreAuthPattern = /^\/external\/evolution\/[^/]+\/(bootstrap|access-state|activate|resend-access)$/;
 const externalAuthPreAuthPattern = /^\/external\/auth\/(login|session)$/;
+// Public partner entry still requires trusted browser origin; route validates Supabase JWT.
+const partnerEntryPreAuthPattern = /^\/partnerships\/(apply|auth\/session)$/;
 
 export function isExternalPreAuthMutationPath(pathname) {
   const path = typeof pathname === 'string' ? pathname : '';
-  return externalEvolutionPreAuthPattern.test(path) || externalAuthPreAuthPattern.test(path);
+  return externalEvolutionPreAuthPattern.test(path) || externalAuthPreAuthPattern.test(path)
+    || partnerEntryPreAuthPattern.test(path);
 }
 
 function normalizeOrigin(value) {
