@@ -126,6 +126,7 @@ jobs:
         run: |
           node --import tsx tests/partnershipSecurity.test.ts
           node --import tsx tests/partnerReferralCoupon.test.ts
+          node tests/partnerReferralCrmReporting.regression.test.mjs
           node --import tsx tests/partnerMarketplaceSecurity.test.ts
           node --import tsx tests/partnershipEmailCallback.test.ts
           node tests/landingSignupFirstEntry.regression.test.mjs
