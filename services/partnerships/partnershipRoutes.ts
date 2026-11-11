@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { sendPartnerApprovalEmail } from './partnerApprovalEmail';
 import { registerPartnerMarketplaceRoutes } from './marketplaceRoutes';
 import { rateLimit } from 'express-rate-limit';
 
@@ -17,7 +18,7 @@ const saveSession = (req:any) => new Promise<void>((resolve,reject) => {
 });
 
 
-type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any};
+type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any; notifyPartnerApproval?: typeof sendPartnerApprovalEmail};
 
 /**
  * Isolated server boundary for commercial SaaS referrals. Never use the current
@@ -25,6 +26,7 @@ type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any};
  */
 export function registerPartnershipRoutes(app:any, deps:Deps) {
   const {supabase,checkAuth,checkPlatformAdmin}=deps;
+  const notifyApproval=deps.notifyPartnerApproval || sendPartnerApprovalEmail;
   const adminGuard=[checkAuth,checkPlatformAdmin];
   const partnerLoginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -39,48 +41,31 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
     message: { success: false, error: 'TOO_MANY_APPLICATION_ATTEMPTS' },
   });
 
-  // A public application requires a fresh, verified Supabase identity.
-  // Name is the only user-entered field; email is derived from the verified token.
-  // Neither the browser nor the applicant can approve a partner or create a referral.
+  // Applications collect an e-mail before authentication. No role/session is
+  // granted until the owner approves and the e-mail identity is verified.
   app.post('/api/partnerships/apply',partnerApplicationLimiter,async(req:any,res:any)=>{
     if(!req.is('application/json')||!req.body||Array.isArray(req.body)
-       ||Object.keys(req.body).some(k=>!['accessToken','displayName'].includes(k))
-       ||typeof req.body.accessToken!=='string'
-       ||req.body.accessToken.length<40||req.body.accessToken.length>8192
-       ||typeof req.body.displayName!=='string'
-       ||req.body.displayName.length>180)
+       ||Object.keys(req.body).sort().join(',')!=='contactEmail,displayName'
+       ||typeof req.body.displayName!=='string' ||req.body.displayName.length>180
+       ||typeof req.body.contactEmail!=='string' ||req.body.contactEmail.length>254)
       return res.status(400).json({success:false,error:'INVALID_REQUEST'});
     const displayName=safe(req.body.displayName,180);
-    if(displayName.length<2)return res.status(400).json({success:false,error:'INVALID_PARTNER'});
+    const email=safe(req.body.contactEmail,254).toLowerCase();
+    if(displayName.length<2||!email||!isValidEmail(email))
+      return res.status(400).json({success:false,error:'INVALID_PARTNER'});
     if(req.session?.user?.id)
       return res.status(409).json({success:false,error:'CLINICAL_SESSION_ACTIVE'});
     try{
-      const verified=await supabase.auth.getUser(req.body.accessToken);
-      const identity=verified.data?.user;
-      const email=safe(identity?.email,254).toLowerCase();
-      if(verified.error||!uuid(identity?.id)||!identity?.email_confirmed_at
-         ||!email||!isValidEmail(email))
-        return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
       const created=await supabase.from('verto_partner_accounts')
         .insert({
           display_name:displayName,contact_email:email,
           partner_kind:'external',referral_code:newCode(),status:'pending',
           compliance_approved:false,
-        }).select('status').single();
-      if(!created.error){
-        res.setHeader('Cache-Control','no-store');
-        return res.status(201).json({success:true,status:'pending'});
-      }
-      if(!isConflict(created.error))throw created.error;
-      // DB's unique normalized-email index makes concurrent submissions idempotent.
-      // Never update an approved, suspended, or pending application from this route.
-      const existing=await supabase.from('verto_partner_accounts')
-        .select('status').eq('partner_kind','external')
-        .eq('contact_email',email).maybeSingle();
-      if(existing.error)throw existing.error;
-      if(!existing.data)return res.status(409).json({success:false,error:'APPLICATION_EXISTS'});
+        }).select('id').single();
+      if(created.error&&!isConflict(created.error))throw created.error;
+      // Neutral response prevents enumeration of existing registrations/statuses.
       res.setHeader('Cache-Control','no-store');
-      return res.json({success:true,status:existing.data.status,idempotent:true});
+      return res.status(created.error?200:201).json({success:true,status:'pending'});
     }catch{return fail(res);}
   });
 
@@ -368,13 +353,64 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       ||(status==='approved'&&!complianceApproved))
       return res.status(400).json({success:false,error:'APPROVAL_REQUIRED'});
     try{
+      const previous=await supabase.from('verto_partner_accounts')
+        .select('id,status,partner_kind,contact_email,display_name')
+        .eq('id',id).maybeSingle();
+      if(previous.error)throw previous.error;
+      if(!previous.data)return res.status(404).json({success:false,error:'PARTNER_NOT_FOUND'});
       const result=await supabase.from('verto_partner_accounts')
         .update({status,compliance_approved:complianceApproved,updated_at:new Date().toISOString()})
-        .eq('id',id).select(PARTNER_ACCOUNT_FIELDS).maybeSingle();
+        .eq('id',id).eq('status',previous.data.status)
+        .select(PARTNER_ACCOUNT_FIELDS).maybeSingle();
       if(result.error)throw result.error;
-      if(!result.data)return res.status(404).json({success:false,error:'PARTNER_NOT_FOUND'});
-      return res.json({success:true,account:result.data});
+      if(!result.data)return res.status(409).json({success:false,error:'PARTNER_STATUS_CHANGED'});
+      const mustInvite=status==='approved'&&previous.data.status!=='approved'
+        &&previous.data.partner_kind==='external';
+      if(mustInvite){
+        try{
+          await notifyApproval(supabase,previous.data);
+          const marked=await supabase.from('verto_partner_accounts')
+            .update({approval_email_sent_at:new Date().toISOString()})
+            .eq('id',id).eq('status','approved');
+          if(marked.error)throw marked.error;
+        }catch{
+          // Approval is persisted. Owner may explicitly resend without losing it.
+          return res.status(502).json({success:false,error:'APPROVAL_SAVED_EMAIL_FAILED',approvalSaved:true});
+        }
+      }
+      return res.json({success:true,account:result.data,invitationSent:mustInvite});
     }catch{return fail(res);}
+  });
+
+  const partnerInviteLimiter=rateLimit({
+    windowMs:15*60*1000,limit:5,standardHeaders:'draft-7',legacyHeaders:false,
+    message:{success:false,error:'TOO_MANY_INVITATIONS'}
+  });
+  app.post('/api/owner/partnerships/accounts/:id/invite',
+    ...adminGuard,partnerInviteLimiter,async(req:any,res:any)=>{
+    const id=safe(req.params?.id,120);
+    if(!uuid(id)||!req.is('application/json')||!req.body
+       ||Array.isArray(req.body)||Object.keys(req.body).length!==0)
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    try{
+      const found=await supabase.from('verto_partner_accounts')
+        .select('id,display_name,contact_email,status,partner_kind,compliance_approved,approval_email_sent_at')
+        .eq('id',id).maybeSingle();
+      if(found.error)throw found.error;
+      const partner=found.data;
+      if(!partner||partner.partner_kind!=='external'||partner.status!=='approved'
+         ||partner.compliance_approved!==true||!partner.contact_email)
+        return res.status(403).json({success:false,error:'PARTNER_NOT_APPROVED'});
+      if(partner.approval_email_sent_at
+         && Date.now()-new Date(partner.approval_email_sent_at).getTime()<5*60*1000)
+        return res.status(429).json({success:false,error:'INVITATION_ALREADY_SENT'});
+      await notifyApproval(supabase,partner);
+      const marked=await supabase.from('verto_partner_accounts')
+        .update({approval_email_sent_at:new Date().toISOString()})
+        .eq('id',id).eq('status','approved');
+      if(marked.error)throw marked.error;
+      return res.json({success:true,invitationSent:true});
+    }catch{return res.status(502).json({success:false,error:'INVITATION_EMAIL_FAILED'});}
   });
 
   app.patch('/api/owner/partnerships/accounts/:id/referral-alias',...adminGuard,
