@@ -292,6 +292,51 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
     }catch{return fail(res);}
   });
 
+  // Paginated, read-only Super Admin partner directory. Never load all records.
+  // A Kanban navigation can focus a partner beyond the first page.
+  app.get('/api/owner/partnerships/directory',...adminGuard,async(req:any,res:any)=>{
+    const rawPage=String(req.query?.page??'1');
+    const focused=safe(req.query?.focusId,120);
+    if(!/^[1-9][0-9]{0,3}$/.test(rawPage)||(focused&&!uuid(focused)))
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    const offset=(Number(rawPage)-1)*25;
+    try{
+      const columns='id,display_name,partner_kind,status,referral_alias,referral_code,created_at';
+      const found=await supabase.from('verto_partner_accounts')
+        .select(columns).order('created_at',{ascending:false}).order('id',{ascending:false})
+        .range(offset,offset+25);
+      if(found.error)throw found.error;
+      const accounts=(found.data||[]).slice(0,25);
+      if(focused&&!accounts.some((item:any)=>item.id===focused)){
+        const selected=await supabase.from('verto_partner_accounts')
+          .select(columns).eq('id',focused).maybeSingle();
+        if(selected.error)throw selected.error;
+        if(selected.data)accounts.unshift(selected.data);
+      }
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,accounts,hasMore:(found.data||[]).length>25,page:Number(rawPage)});
+    }catch{return fail(res);}
+  });
+
+  // Fetch referrals only when the owner opens one partner. No N+1 and no patient data.
+  app.get('/api/owner/partnerships/accounts/:id/referrals',...adminGuard,async(req:any,res:any)=>{
+    const id=safe(req.params?.id,120);
+    const rawPage=String(req.query?.page??'1');
+    if(!uuid(id)||!/^[1-9][0-9]{0,3}$/.test(rawPage))
+      return res.status(400).json({success:false,error:'INVALID_REQUEST'});
+    const offset=(Number(rawPage)-1)*25;
+    try{
+      const result=await supabase.from('verto_partner_referrals')
+        .select('id,created_at,attributed_by,lead:sales_leads!verto_partner_referrals_sales_lead_id_fkey(id,clinic_name,name,status)')
+        .eq('partner_id',id).order('created_at',{ascending:false}).order('id',{ascending:false})
+        .range(offset,offset+25);
+      if(result.error)throw result.error;
+      res.setHeader('Cache-Control','private, no-store');
+      return res.json({success:true,referrals:(result.data||[]).slice(0,25),
+        hasMore:(result.data||[]).length>25,page:Number(rawPage)});
+    }catch{return fail(res);}
+  });
+
   app.post('/api/owner/partnerships/accounts',...adminGuard,async(req:any,res:any)=>{
     if(!req.is('application/json')||!req.body||Array.isArray(req.body)
       ||Object.keys(req.body).some(k=>!['displayName','contactEmail'].includes(k)))
