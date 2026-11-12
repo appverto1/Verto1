@@ -55,7 +55,9 @@ const patientLogsPost = server.slice(server.indexOf("app.post('/api/patient-logs
 assert.match(patientLogsPost, /requireClinicCapability\('clinical\.evolution\.create'\)/);
 assert.doesNotMatch(patientLogsPost, /canPortalSessionAccessPatient|requireClinicCapabilityOrPatientPortal/);
 
-assert.match(detail, /ADULT_EFFORT_SEMANTICS_V2/);
+const adultTaskProjection = fs.readFileSync(new URL('../src/utils/adultClinicalTaskProjection.ts', import.meta.url), 'utf8');
+assert.match(adultTaskProjection, /const ADULT_EFFORT_SEMANTICS_V2 = 'effort_min_0_max_100_v2'/);
+assert.match(detail, /hasCanonicalAdultEffortSemantics/, 'patient view keeps the canonical effort bridge');
 assert.match(detail, /Registro anterior à padronização da escala/);
 assert.match(detail, /Semântica legada não padronizada/);
 assert.match(detail, /from-\[#05CD99\][\s\S]{0,80}to-\[#fb5a4d\]/);
