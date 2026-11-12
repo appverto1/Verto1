@@ -20,7 +20,7 @@ assert.match(session, /const actionToastPositionClass = actionToastMinimal\s*\? 
 assert.match(session, /intervalToastCompact \|\| toast\.minimal \? 1500 : 2000/, 'minimal confirmation should disappear quickly');
 
 assert.match(session, /setOpenDurations\(\(prev\) => \[openEvent, \.\.\.prev\]\)/, 'duration start still opens a timed event');
-assert.match(session, /void saveBehaviorEvent\(payload/, 'clinical event persistence remains in place');
+assert.match(session, /void saveExistingBehaviorEvent\(payload/, 'clinical event persistence remains in place');
 assert.match(session, /const endDuration = async/, 'duration stop handler must remain present');
 
 console.log('abaDurationStartMinimalToast.regression.test.mjs: ok');
