@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const service = readFileSync('src/services/dataService.ts', 'utf8');
+const session = readFileSync('src/components/SessionMode.tsx', 'utf8');
+const outbox = readFileSync('src/services/localDb.ts', 'utf8');
+const closure = readFileSync('src/utils/sessionAutoFinalization.ts', 'utf8');
+const planWriter = readFileSync('services/clinicalMeasurementV3PlanRoutes.ts', 'utf8');
+
+const offlineStart = service.indexOf('async function saveOfflineFirst(');
+const offlineEnd = service.indexOf('async function requestGroupSession(', offlineStart);
+assert.ok(offlineStart >= 0 && offlineEnd > offlineStart);
+const offlineFirst = service.slice(offlineStart, offlineEnd);
+assert.match(offlineFirst, /const persisted = await saveEncryptedRecord\(/, 'offline acknowledgment must await encrypted outbox');
+assert.match(offlineFirst, /locallyPersisted = persisted === true/, 'must not declare durable when encrypted store returns false');
+assert.match(offlineFirst, /success: requireServerAck \? false : locallyPersisted/);
+assert.match(offlineFirst, /durable: requireServerAck \? false : locallyPersisted/);
+assert.match(outbox, /if \(!userId\) return false/, 'absent authenticated session must not create a fake durable write');
+assert.match(outbox, /await db\.records\.put\(row\)/, 'outbox must persist encrypted records');
+assert.match(outbox, /if \(isSessionCompletionQueueRecord\(record\)\)/, 'offline replay must keep causal completion barrier');
+assert.match(closure, /\['aba', 'aba_v3'\]\.includes\(record\.type\)/);
+assert.match(closure, /candidate\.sync_status !== 'synced'/, 'session close waits for prior writes');
+
+const planStart = service.indexOf('  async saveClinicalPlanMeasurementV3(');
+const planEnd = service.indexOf('  async getClinicalPlanOutcomesV3(', planStart);
+const plan = service.slice(planStart, planEnd);
+assert.ok(planStart >= 0 && planEnd > planStart);
+assert.match(plan, /clientEventId\.length < 16/, 'CMV3 must reject missing stable client event IDs');
+assert.match(plan, /saveOfflineFirst\(clientEventId, \{[\s\S]*?idempotencyKey: clientEventId[\s\S]*?\}, 'aba_v3', endpoint, 'POST', \{ idempotencyKey: clientEventId \}\)/);
+assert.match(plan, /result\?\.success === true && result\?\.pending !== true && result\?\.offline !== true/, 'only backend ACK refreshes charts');
+assert.doesNotMatch(plan, /await fetchWithAuthRetry/, 'CMV3 must use the same encrypted outbox as ABA V3');
+assert.match(planWriter, /checkAuth,requireClinicCapability\('clinical\.notes\.create'\),checkPatientAccess/);
+assert.match(planWriter, /p_client_event_id:clientEventId/, 'backend RPC owns idempotent measurement identity');
+assert.match(planWriter, /status==='IDEMPOTENT_REPLAY'/);
+
+const retryStart = session.indexOf('  const retryUnconfirmedSessionTrial = async ');
+const retryEnd = session.indexOf('  const retryFailedV3Trial = async ', retryStart);
+assert.ok(retryStart >= 0 && retryEnd > retryStart);
+const retry = session.slice(retryStart, retryEnd);
+assert.match(retry, /record\.kind !== 'trial' \|\| record\.syncStatus !== 'error'/);
+assert.match(retry, /record\.measurementModelVersion === 'V3'/, 'do not rewrite ABA V3 trials with legacy semantics');
+assert.match(retry, /'session_mode_trial', 'therapeutic_program_measurement'/);
+assert.match(retry, /record\.rawPayload\?\.clientTrialId \|\| ''\) !== record\.id/, 'legacy retry needs original event ID');
+assert.match(retry, /id: record\.id/g, 'use original ID for replays');
+assert.match(retry, /raw\.canonicalPlanWriter === true && !payload/, 'never silently downgrade a CMV3 metric to legacy');
+assert.match(retry, /saveClinicalPlanMeasurementV3\(patientId, payload\)/);
+assert.match(retry, /saveAbaTrial\(/);
+assert.match(retry, /const confirmed = result\?\.success === true && result\?\.pending !== true && result\?\.offline !== true/);
+assert.match(retry, /const queued = result\?\.pending === true && result\?\.durable === true/);
+assert.match(retry, /if \(!confirmed && !queued\) throw new Error/);
+assert.match(retry, /updateRecordStatus\(record\.id, confirmed \? 'synced' : 'local'\)/);
+assert.match(session, /await retryUnconfirmedSessionTrial\(record\);/, 'session completion must reconcile existing unprotected attempts');
+assert.match(session, /Há um registro ainda não confirmado que não está protegido pela fila local/, 'fail-closed clinical closure guard must remain');
+assert.match(session, /onClick=\{\(\) => void retryUnconfirmedSessionTrial\(record\)\}/, 'safe explicit recovery in history');
+assert.match(session, /canonicalPlanWriter: useCanonicalPlanWriter/, 'future legacy versus CMV3 semantics must be retained');
+assert.match(session, /showClinicalToast\(buildClinicalOfflineToast\(\), 'none'\)/, 'pending encrypted event must show pending, not confirmed');
+
+console.log('p0SessionOfflineUnconfirmedRecovery.regression.test.mjs: ok');

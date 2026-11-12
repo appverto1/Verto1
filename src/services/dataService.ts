@@ -1126,7 +1126,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
   // canonical when care actually began.
   if (!requireServerAck) {
     try {
-      await saveEncryptedRecord({
+      const persisted = await saveEncryptedRecord({
         id: queueId,
         entity_id: queueEntityId,
         data: payloadWithIdempotency,
@@ -1140,7 +1140,7 @@ async function saveOfflineFirst(id: string, data: any, type: OfflineType, endpoi
         method,
         endpoint
       });
-      locallyPersisted = true;
+      locallyPersisted = persisted === true;
     } catch (offlineError) {
       console.error(`[offline-cache] failed to persist ${type} locally:`, offlineError);
     }
@@ -7638,23 +7638,25 @@ export const dataService = {
   async saveClinicalPlanMeasurementV3(patientId: string, payload: any = {}) {
     const safePatientId = String(patientId || '').trim();
     if (!safePatientId) return { success: false, error: 'Paciente não identificado.', data: null };
-    try {
-      const response = await fetchWithAuthRetry(`/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`, {
-        method: 'POST',
-        headers: { ...(await getNoStoreAuthHeaders()), 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(payload || {})
-      });
-      const result = await safeJson(response);
-      if (!response.ok || result?.success === false) {
-        return { success: false, status: response.status, code: result?.error, error: result?.message || result?.error || 'Não foi possível registrar a medição clínica V3.', data: null };
-      }
-      const successResult = { ...result, success: true };
-      notifyClinicalOutcomesChanged(safePatientId);
-      return successResult;
-    } catch (error: any) {
-      return { success: false, error: error?.message || 'Não foi possível registrar a medição clínica V3.', data: null };
+    // The plan writer is idempotent by client event ID at the database RPC.
+    // A stable ID is mandatory: retries and the offline outbox must never
+    // manufacture a different clinical measurement.
+    const clientEventId = String(payload?.idempotencyKey || payload?.clientEventId || payload?.client_event_id || '').trim();
+    if (clientEventId.length < 16) {
+      return { success: false, durable: false, error: 'Medição clínica sem identificador idempotente.', data: null };
     }
+    const endpoint = `/api/clinical-measurement-v3/patients/${encodeURIComponent(safePatientId)}/plan-measurements`;
+    const result = await saveOfflineFirst(clientEventId, {
+      ...(payload || {}),
+      idempotencyKey: clientEventId,
+      patient_id: safePatientId
+    }, 'aba_v3', endpoint, 'POST', { idempotencyKey: clientEventId });
+    // The queue is protected locally until an explicit backend ACK. Never
+    // consider an enqueued write as confirmed clinical evidence on charts.
+    if (result?.success === true && result?.pending !== true && result?.offline !== true) {
+      notifyClinicalOutcomesChanged(safePatientId);
+    }
+    return result;
   },
 
   async getClinicalPlanOutcomesV3(patientId: string, options: { days?: number; planId?: string } = {}) {
