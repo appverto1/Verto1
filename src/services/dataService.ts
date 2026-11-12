@@ -2926,7 +2926,13 @@ export const dataService = {
         completionAttempt = await requestCompletion();
       }
 
-      if (completionAttempt.response.ok) return completionAttempt.result;
+      if (completionAttempt.response.ok) {
+        // Refresh patient charts only after an authoritative persisted completion.
+        if (completionAttempt.result?.success === true && completionAttempt.result?.pending !== true) {
+          notifyClinicalOutcomesChanged(String(payload?.patient_id || payload?.patientId || ''));
+        }
+        return completionAttempt.result;
+      }
 
       const retryableCompletion =
         completionAttempt.response.status === 408 ||
@@ -3048,6 +3054,8 @@ export const dataService = {
       }
     );
     const result = await response.json().catch(() => ({}));
+    // Refresh clinical charts only after authoritative server acknowledgement.
+    if (response.ok && result?.success === true) notifyClinicalOutcomesChanged(patientId);
     return response.ok ? result : { success: false, status: response.status, ...result };
   },
 

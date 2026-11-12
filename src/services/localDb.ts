@@ -772,6 +772,17 @@ const runOfflineSync = async (options: SessionSyncOptions) => {
 
         if ((response.ok && responsePayload?.queued !== true && responsePayload?.success !== false) || (response.status === 409 && isIdempotentConflictPayload(responsePayload))) {
           await markRecordSyncStatus(record.id, 'synced');
+          if (isSessionCompletionQueueRecord(record)) {
+            const completedPatientId = String(record.data?.patient_id || record.data?.patientId || '').trim();
+            if (completedPatientId) {
+              try {
+                const { invalidateClinicalAnalyticsPatient } = await import('./clinicalAnalyticsQueryCache');
+                invalidateClinicalAnalyticsPatient(completedPatientId, 'all');
+              } catch {
+                // Cache failures must never undo a durable server-acknowledged clinical write.
+              }
+            }
+          }
           console.log(`Synced ${record.type}: ${record.id}`);
         } else if (response.ok && (responsePayload?.queued === true || responsePayload?.success === false)) {
           const failure = await markRecordSyncFailure(record.id, {
