@@ -198,6 +198,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const [isUploading, setIsUploading] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const patientPortalMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [patientPortalMenuPosition, setPatientPortalMenuPosition] = useState({ top: 0, left: 8, maxHeight: 0 });
   const [showStarCelebration, setShowStarCelebration] = useState(false);
   const [celebrationKey, setCelebrationKey] = useState(0);
   const [milestoneCelebrationCount, setMilestoneCelebrationCount] = useState(0);
@@ -2696,6 +2698,45 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   const portalMenu = null; // Kids e adultos usam o mesmo menu hambúrguer compartilhado.
 
+  // Render the navigation above the portal scroll containers: those containers
+  // intentionally clip their content and would otherwise cut the dropdown.
+  const positionPatientPortalMenu = React.useCallback(() => {
+    const trigger = patientPortalMenuButtonRef.current;
+    if (!trigger || typeof window === 'undefined') return;
+    const rect = trigger.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const menuWidth = Math.min(isKidsProfile ? 240 : 224, Math.max(1, viewportWidth - 16));
+    const estimatedHeight = portalMenuItems.length * 44
+      + ((!isReadOnlyMode && (isKidsProfile ? clinicalPortalEnabled : true)) ? 112 : 64);
+    const spaceBelow = Math.max(0, viewportHeight - rect.bottom - 8);
+    const spaceAbove = Math.max(0, rect.top - 8);
+    const openAbove = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+    const availableHeight = openAbove ? spaceAbove : spaceBelow;
+    const top = openAbove
+      ? Math.max(8, rect.top - 8 - Math.min(estimatedHeight, availableHeight))
+      : rect.bottom + 8;
+    const left = Math.max(8, Math.min(viewportWidth - menuWidth - 8, rect.right - menuWidth));
+    setPatientPortalMenuPosition({ top, left, maxHeight: availableHeight });
+  }, [isKidsProfile, isReadOnlyMode, clinicalPortalEnabled, portalMenuItems.length]);
+
+  const togglePatientPortalMenu = () => {
+    if (!isMenuOpen) positionPatientPortalMenu();
+    setIsMenuOpen((open) => !open);
+  };
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    positionPatientPortalMenu();
+    window.addEventListener('resize', positionPatientPortalMenu);
+    window.addEventListener('scroll', positionPatientPortalMenu, true);
+    return () => {
+      window.removeEventListener('resize', positionPatientPortalMenu);
+      window.removeEventListener('scroll', positionPatientPortalMenu, true);
+    };
+  }, [isMenuOpen, positionPatientPortalMenu]);
+
+
 
   const portalAnamnesisTopNotice = (portalAnamnesisNeedsAction || (!portalAnamnesisChecked && hasPendingPortalAnamnesisHint)) ? (
     <button
@@ -3883,20 +3924,26 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                       <button
                         type="button"
                         data-tutorial-anchor="patient-portal-menu"
+                        ref={patientPortalMenuButtonRef}
+                        aria-expanded={isMenuOpen}
+                        aria-controls="patient-portal-navigation-menu"
                         aria-label="Abrir menu do paciente"
-                        onClick={() => setIsMenuOpen(!isMenuOpen)}
+                        onClick={togglePatientPortalMenu}
                         className="p-2.5 bg-white/80 backdrop-blur-md rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50"
                       >
                         <Menu size={20} />
                       </button>
 
-                    <AnimatePresence>
+                    {typeof document !== 'undefined' && createPortal(
+<AnimatePresence>
                         {isMenuOpen && (
                           <motion.div
                             initial={{ opacity: 0, scale: 0.95, y: -10 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                            className="absolute right-0 mt-2 w-60 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
+                            id="patient-portal-navigation-menu"
+                style={patientPortalMenuPosition}
+                className="fixed z-[80] w-60 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[24px] border border-blue-50 bg-white p-2 shadow-xl"
                           >
                             <div className="mb-2 border-b border-blue-50 pb-2">
                               {portalMenuItems.map((item) => {
@@ -3931,6 +3978,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
                           </motion.div>
                         )}
                     </AnimatePresence>
+, document.body)}
                   </div>
                 </div>
                 {isReadOnlyMode && (
@@ -4323,21 +4371,27 @@ ${interventionImages.join('\n')}` : ''
           <button
             type="button"
             data-tutorial-anchor="patient-portal-menu"
+            ref={patientPortalMenuButtonRef}
+            aria-expanded={isMenuOpen}
+            aria-controls="patient-portal-navigation-menu"
             aria-label="Abrir menu do paciente"
-            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            onClick={togglePatientPortalMenu}
             className="p-3 bg-white rounded-2xl shadow-sm text-gray-500 hover:bg-white transition-all border border-white/50 relative"
           >
             <Menu size={20} />
             {unreadPortalSharedNotes.length > 0 && <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white"></div>}
           </button>
 
-          <AnimatePresence>
+          {typeof document !== 'undefined' && createPortal(
+<AnimatePresence>
             {isMenuOpen && (
               <motion.div
                 initial={{ opacity: 0, scale: 0.95, y: -10 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                className="absolute right-0 mt-2 w-56 bg-white rounded-[24px] shadow-xl border border-blue-50 z-[60] overflow-hidden p-2"
+                id="patient-portal-navigation-menu"
+                style={patientPortalMenuPosition}
+                className="fixed z-[80] w-56 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain rounded-[24px] border border-blue-50 bg-white p-2 shadow-xl"
               >
                 <div className="mb-2 border-b border-blue-50 pb-2">
                   {portalMenuItems.map((item) => {
@@ -4379,6 +4433,7 @@ ${interventionImages.join('\n')}` : ''
               </motion.div>
             )}
           </AnimatePresence>
+, document.body)}
         </div>
       </div>
       {isReadOnlyMode && (
