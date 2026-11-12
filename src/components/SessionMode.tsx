@@ -3800,10 +3800,18 @@ export const SessionMode = ({
     }
   };
 
+  const canRecoverUnconfirmedSessionTrial = (record: SessionRecord) => {
+    const editedUnconfirmed = record.syncStatus === 'local' && Boolean(record.editedAt);
+    return record.kind === 'trial'
+      && record.measurementModelVersion !== 'V3'
+      && (record.syncStatus === 'error' || editedUnconfirmed)
+      && ['session_mode_trial', 'therapeutic_program_measurement'].includes(String(record.rawPayload?.source || ''))
+      && Boolean(record.id && record.targetId);
+  };
+
   const retryUnconfirmedSessionTrial = async (record: SessionRecord): Promise<boolean> => {
-    if (record.kind !== 'trial' || record.syncStatus !== 'error' || record.measurementModelVersion === 'V3') return false;
+    if (!canRecoverUnconfirmedSessionTrial(record)) return false;
     const source = String(record.rawPayload?.source || '');
-    if (!['session_mode_trial', 'therapeutic_program_measurement'].includes(source) || !record.id || !record.targetId) return false;
     if (source === 'session_mode_trial' && String(record.rawPayload?.clientTrialId || '') !== record.id) return false;
     const retryKey = `retry-unconfirmed:${record.id}`;
     if (!lockAction(retryKey, 0)) return false;
@@ -7697,7 +7705,9 @@ export const SessionMode = ({
       antecedent: editingRecordAntecedent.trim() || undefined,
       consequence: editingRecordConsequence.trim() || undefined,
       notes: editingRecordNotes.trim() || undefined,
-      syncStatus: 'local',
+      // Editing an unconfirmed trial is NOT a clinical save. Preserve ERROR
+      // until its original event is acknowledged by the server or outbox.
+      syncStatus: original.kind === 'trial' && original.syncStatus === 'error' ? 'error' : 'local',
       editedAt: new Date().toISOString()
     };
     if (inferRecordMeasurementType(editedRecord) === 'duration') {
@@ -11233,11 +11243,10 @@ export const SessionMode = ({
                         </div>
                       ) : (
                         <div className="flex flex-wrap justify-end gap-1.5">
-                          {record.kind === 'trial' && record.syncStatus === 'error'
-                            && ['session_mode_trial', 'therapeutic_program_measurement'].includes(String(record.rawPayload?.source || '')) && (
+                          {canRecoverUnconfirmedSessionTrial(record) && (
                               <button type="button" onClick={() => void retryUnconfirmedSessionTrial(record)}
                                 className="inline-flex min-h-[36px] items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-800">
-                                <RotateCcw size={11} /> Tentar novamente
+                                <RotateCcw size={11} /> Sincronizar registro
                               </button>
                             )}
                           <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
