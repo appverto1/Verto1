@@ -3803,6 +3803,9 @@ export const SessionMode = ({
   const canRecoverUnconfirmedSessionTrial = (record: SessionRecord) => {
     const editedUnconfirmed = record.syncStatus === 'local'
       && Boolean(record.editedAt)
+      // Existing pre-hotfix edits lack this marker; newer edits are handled
+      // by their own workflow and must not be mistaken for offline failures.
+      && record.rawPayload?.syncStatusBeforeEdit == null
       && record.rawPayload?.durableRecoveryQueued !== true;
     return record.kind === 'trial'
       && record.measurementModelVersion !== 'V3'
@@ -7715,6 +7718,7 @@ export const SessionMode = ({
       // Editing an unconfirmed trial is NOT a clinical save. Preserve ERROR
       // until its original event is acknowledged by the server or outbox.
       syncStatus: original.kind === 'trial' && original.syncStatus === 'error' ? 'error' : 'local',
+      rawPayload: { ...original.rawPayload, syncStatusBeforeEdit: original.syncStatus },
       editedAt: new Date().toISOString()
     };
     if (inferRecordMeasurementType(editedRecord) === 'duration') {
