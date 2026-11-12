@@ -1,4 +1,5 @@
 import type Stripe from 'stripe';
+import { SALES_CONTRACT_DOCUMENT } from '../src/constants/salesContractDocument';
 import type { SalesSimulationInput, SalesUsageProfile } from '../src/utils/salesProfitability';
 // Item 07: original public accept and card Checkout handlers, in original registration order.
 export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
@@ -14,6 +15,16 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
             error: "COMMERCIAL_VALUES_CONSENT_REQUIRED",
             message:
               "Confirme os valores promocionais e os valores posteriores.",
+          });
+        }
+        if (
+          req.body?.contractDocumentAcknowledged !== true
+          || req.body?.contractDocumentVersion !== SALES_CONTRACT_DOCUMENT.version
+        ) {
+          return res.status(400).json({
+            success: false,
+            error: "CONTRACT_DOCUMENT_ACCEPTANCE_REQUIRED",
+            message: "Leia e aceite a versão atual do Contrato Mestre antes de continuar.",
           });
         }
         const loaded = await loadPublicSalesOffer(req.params?.token);
@@ -32,7 +43,15 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
             message: "Esta proposta utiliza o fluxo de aceite legado.",
           });
         }
-        const acceptedAt = offer.accepted_at || new Date().toISOString();
+        // Never rewrite an existing acceptance to claim a later document was read.
+        if (offer.accepted_at) {
+          return res.json({
+            success: true,
+            acceptedAt: offer.accepted_at,
+            message: "Proposta já aceita.",
+          });
+        }
+        const acceptedAt = new Date().toISOString();
         const [offerResult, eventResult] = await Promise.all([
           supabase
             .from("sales_offers")
@@ -44,12 +63,19 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
                 statement: MODULAR_COMMERCIAL_CONSENT_TEXT,
                 source: "public_offer",
                 capturedAt: acceptedAt,
+                contractDocument: {
+                  version: SALES_CONTRACT_DOCUMENT.version,
+                  url: SALES_CONTRACT_DOCUMENT.url,
+                  sourceTextSha256: SALES_CONTRACT_DOCUMENT.sourceTextSha256,
+                  acknowledged: true,
+                },
               },
               updated_at: acceptedAt,
             })
             .eq("id", offer.id)
             .eq("lead_id", lead.id)
             .is("revoked_at", null)
+            .is("accepted_at", null)
             .select("id,accepted_at")
             .maybeSingle(),
           supabase.from("sales_lead_events").upsert(
@@ -67,7 +93,24 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
           ),
         ]);
         const persistenceError = offerResult.error || eventResult.error;
-        if (persistenceError || !offerResult.data) throw persistenceError;
+        if (persistenceError) throw persistenceError;
+        if (!offerResult.data) {
+          // A concurrent request may have registered the same offer first.
+          const { data: existingAcceptance, error: readError } = await supabase
+            .from("sales_offers")
+            .select("accepted_at")
+            .eq("id", offer.id)
+            .eq("lead_id", lead.id)
+            .maybeSingle();
+          if (readError || !existingAcceptance?.accepted_at) {
+            throw readError || new Error("OFFER_ACCEPTANCE_NOT_PERSISTED");
+          }
+          return res.json({
+            success: true,
+            acceptedAt: existingAcceptance.accepted_at,
+            message: "Proposta já aceita.",
+          });
+        }
         return res.json({
           success: true,
           acceptedAt: offerResult.data.accepted_at || acceptedAt,
