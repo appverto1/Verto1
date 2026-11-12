@@ -3422,11 +3422,20 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     const patientId = String(patient?.id || '');
-    if (!patientId || patientPortalKind === 'KIDS') {
+    if (!patientId) {
       assignedTasksLoadedForRef.current = '';
       setAssignedTasks([]);
       setIsLoadingAssignedTasks(false);
       setAssignedTasksLoadError(null);
+      return;
+    }
+    // For pediatric records, read the historical assigned tasks only on
+    // opening Histórico; no additional query on every patient visit.
+    if (patientPortalKind === 'KIDS' && activeTab !== 'history') {
+      if (assignedTasksLoadedForRef.current !== patientId) {
+        assignedTasksLoadedForRef.current = '';
+        setAssignedTasks([]);
+      }
       return;
     }
     if (assignedTasksLoadedForRef.current === patientId) return;
@@ -3469,7 +3478,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return () => {
       cancelled = true;
     };
-  }, [assignedTasksReloadKey, patient?.id, patientPortalKind]);
+  }, [assignedTasksReloadKey, patient?.id, patientPortalKind, activeTab]);
 
   const resolveProtocolAgeRange = (protocol: any): { min: number; max: number | null } => {
     const explicitMin = Number(
@@ -4419,8 +4428,8 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const historyWithFamilyNotes = useMemo(() => {
     const baseHistory = Array.isArray(history) ? history : [];
-    if (!isKidsProfile) return baseHistory;
-
+    // Family records already stored for this patient remain visible after
+    // changing from the pediatric portal to an adult portal.
     // Patient identity comes from the selected clinical chart, not from note content.
     const scopedFamilyNotes = (Array.isArray(notes) ? notes : []).filter((note: any) => {
       const notePatientId = String(note?.patientId ?? note?.patient_id ?? '').trim();
@@ -4593,13 +4602,18 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   const familyDiaryEntries = useMemo(() => {
     const currentPatientId = String(patient?.id || '').trim();
-    if (!isKidsProfile || !currentPatientId) return [];
+    if (!currentPatientId) return [];
     return visibleHistoryWithFamilyNotes.filter((item: any) => {
       const recordPatientId = String(item?.patientId ?? item?.patient_id ?? '').trim();
+      const fromFamily = Boolean(item?.isFromNotes) ||
+        String(item?.sourceRef || '').startsWith('note-family-') ||
+        String(item?.source || '').toLowerCase().includes('family') ||
+        String(item?.subject || '').toLowerCase().includes('fam');
       return recordPatientId === currentPatientId &&
-        (item?.type === 'family_note' || item?.type === 'photo');
+        (item?.type === 'family_note' ||
+          (item?.type === 'photo' && (isKidsProfile || fromFamily)));
     });
-  }, [visibleHistoryWithFamilyNotes, isKidsProfile, patient?.id]);
+  }, [visibleHistoryWithFamilyNotes, patient?.id, isKidsProfile]);
 
   // Read status is purely a cosmetic device-local preference, scoped to
   // actor, clinic and patient. Never use it for clinical authorization.
@@ -5575,6 +5589,23 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     () => buildAdultCompletedTasks(assignedTasks, patientTasks),
     [assignedTasks, patientTasks]
   );
+
+  // Historical tasks keep their original storage and are read-only here.
+  // Cross-check the patient ID to avoid showing rows from a previously opened chart.
+  const historicalAssignedTasksMissingFromTimeline = useMemo(() => {
+    if (!isKidsProfile || !patient?.id) return [];
+    const patientId = String(patient.id);
+    const visibleIds = new Set((Array.isArray(history) ? history : [])
+      .filter((item: any) => String(item?.patient_id || item?.patientId || '') === patientId)
+      .map((item: any) => String(item?.assigned_task_id || item?.assignedTaskId || ''))
+      .filter(Boolean));
+    return (assignedTasks || [])
+      .filter((item: any) =>
+        String(item?.patient_id || item?.patientId || '') === patientId &&
+        String(item?.status || '').toLowerCase() === 'completed' &&
+        !visibleIds.has(String(item?.id || '')))
+      .slice(0, 20);
+  }, [assignedTasks, history, isKidsProfile, patient?.id]);
 
   const adultScheduledTasks = useMemo(
     () => buildAdultScheduledTasks(patientTasks, assignedTasks, isKidsProfile),
@@ -11115,7 +11146,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
         <div className="mx-auto w-full max-w-[1480px]">
         {activeTab === 'history' ? (
           <div className="space-y-6">
-            {isKidsProfile && (
+            {(isKidsProfile || familyDiaryEntries.length > 0) && (
               <nav role="tablist" aria-label="Seções do histórico" className={`flex flex-wrap gap-2 rounded-2xl border p-2 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
                 {(['timeline', 'family'] as const).map((section) => (
                   <button
@@ -11139,7 +11170,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 ))}
               </nav>
             )}
-            {isKidsProfile && historySubtab === 'family' ? (
+            {(isKidsProfile || familyDiaryEntries.length > 0) && historySubtab === 'family' ? (
               <section aria-label="Diário da Família" className="space-y-4">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -11170,7 +11201,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       isTherapist={['director', 'coordinator', 'supervisor', 'therapist'].includes(effectiveCaseTeamRole)}
                       onEvaluate={onEvaluateHistoryItem}
                       protocols={protocols}
-                      isKid={patientCategory === 'Criança'}
+                      isKid={true}
                       fullHistory={(history || []).filter((record: any) => String(record?.patientId ?? record?.patient_id ?? '') === String(patient.id))}
                       peiGoals={peiGoals || []}
                     />
@@ -11191,6 +11222,24 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </section>
             ) : (
               <React.Fragment>
+            {historicalAssignedTasksMissingFromTimeline.length > 0 && (
+              <section aria-label="Histórico de tarefas atribuídas em outro modo de portal"
+                className={`mb-5 rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`}>
+                <h2 className="text-sm font-semibold">Tarefas concluídas anteriormente</h2>
+                <p className="mt-1 text-xs text-slate-500">Registros históricos preservados. O tipo de portal atual não altera a avaliação original.</p>
+                <div className="mt-3 space-y-2">
+                  {historicalAssignedTasksMissingFromTimeline.map((task: any) => {
+                    const payload = task?.task_data && typeof task.task_data === 'object' ? task.task_data : {};
+                    const created = task?.completed_at || task?.reviewed_at || task?.created_at;
+                    return <article key={String(task.id)} className="rounded-lg border border-slate-200/60 p-3">
+                      <p className="text-sm font-medium">{String(payload.title || task.title || 'Atividade concluída')}</p>
+                      <p className="mt-1 text-xs text-slate-500">{created ? new Date(created).toLocaleDateString('pt-BR') : 'Data não informada'}
+                        {task.pro_score == null ? '' : ` · Avaliação registrada: ${Number(task.pro_score)}`}</p>
+                    </article>;
+                  })}
+                </div>
+              </section>
+            )}
             {conventionalSessionEvolutions.length > 0 && (
               <section className={`rounded-2xl border p-4 sm:p-5 ${isPanelDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-200 bg-white'}`} aria-labelledby="conventional-session-evolutions-heading">
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">

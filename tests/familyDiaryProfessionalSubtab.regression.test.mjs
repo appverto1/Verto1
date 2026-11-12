@@ -22,14 +22,17 @@ const timeline = detail.slice(
 assert.match(detail, /role="tablist" aria-label="Seções do histórico"/);
 assert.match(detail, /\(\['timeline', 'family'\] as const\)\.map/);
 assert.match(detail, /historySubtab === 'family'/);
-assert.match(detail, /isKidsProfile && historySubtab === 'family'/);
+assert.match(detail, /\(isKidsProfile \|\| familyDiaryEntries\.length > 0\) && historySubtab === 'family'/,
+  'existing family diary must remain visible even after changing to an adult portal');
 assert.match(timeline, /Relatórios de sessão/);
 assert.match(timeline, /familyItems\.map/);
 
 // One canonical, already-loaded patient history: never a second query or copy of clinical records.
 assert.match(diarySubset, /visibleHistoryWithFamilyNotes\.filter/);
 assert.match(diarySubset, /recordPatientId === currentPatientId/);
-assert.match(diarySubset, /item\?\.type === 'family_note' \|\| item\?\.type === 'photo'/);
+assert.match(diarySubset, /item\?\.type === 'family_note'/);
+assert.match(diarySubset, /item\?\.type === 'photo' && \(isKidsProfile \|\| fromFamily\)/,
+  'adult portal photos must not be mislabeled as family diary records');
 assert.doesNotMatch(diarySubset, /fetch\(|dataService\.|\.insert\(|\.upsert\(/);
 assert.match(detail, /const scopedFamilyNotes = \(Array\.isArray\(notes\) \? notes : \[\]\)\.filter/);
 assert.match(detail, /return Boolean\(currentPatientId && notePatientId && notePatientId === currentPatientId\)/);

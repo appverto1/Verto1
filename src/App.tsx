@@ -1024,11 +1024,16 @@ export default function App() {
     const existing = baseAnamnesisData && typeof baseAnamnesisData === 'object' ? baseAnamnesisData : {};
     // Prefer an explicit patient registration category over an older anamnesis snapshot.
     const canonicalCategory = coalescePatientText(source?.grupo, source?.patient_group, source?.group, existing?.grupo);
-    const canonicalProfile = resolvePatientProfileTypeForCategory(
-      canonicalCategory,
-      source?.patientProfileType || source?.patient_profile_type || source?.panelType || source?.panel_type ||
-        source?.profileType || source?.profile_type || source?.type || existing?.patientProfileType || existing?.panelType,
-    );
+    const selectedPortalProfile = source?.patientProfileType || source?.patient_profile_type ||
+      source?.panelType || source?.panel_type || source?.profileType || source?.profile_type || source?.type;
+    // The selected portal determines the operational profile. The demographic
+    // category is only a fallback for older records without a saved choice.
+    const canonicalProfile = selectedPortalProfile
+      ? normalizePatientProfileType(
+          selectedPortalProfile,
+          resolvePatientProfileTypeForCategory(canonicalCategory, null),
+        )
+      : resolvePatientProfileTypeForCategory(canonicalCategory, existing?.patientProfileType || existing?.panelType);
     const asObject = (value: any) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const metadata = asObject(source?.metadata);
     const address = {
@@ -2328,6 +2333,25 @@ export default function App() {
   const [patientAssignedTasksLoadError, setPatientAssignedTasksLoadError] = useState(false);
   const [patientContextLoaded, setPatientContextLoaded] = useState(false);
   const [resolvedPatientPortalId, setResolvedPatientPortalId] = useState<string>('');
+  // Server-confirmed portal mode is scoped to the selected patient, never
+  // inferred from a stale or shared guardian account's user.type.
+  const [patientPortalProfile, setPatientPortalProfile] = useState<any>(null);
+  const effectivePatientPortalProfile = patientPortalProfile &&
+    String(patientPortalProfile.patientId || '') === resolvedPatientPortalId &&
+    resolvedPatientPortalId ? patientPortalProfile : null;
+  const effectivePatientPortalKind = resolvePatientPortalKind(effectivePatientPortalProfile || user);
+  // Keep the PatientDashboard user prop referentially stable. A new object on
+  // every render would re-run existing profile/notes effects and waste requests.
+  const effectivePatientDashboardUser = useMemo(() => {
+    if (!effectivePatientPortalProfile || !user) return user;
+    return {
+      ...user,
+      ...effectivePatientPortalProfile,
+      patientProfileType: effectivePatientPortalProfile.patient_profile_type,
+      panelType: effectivePatientPortalProfile.panel_type,
+      type: effectivePatientPortalProfile.type,
+    };
+  }, [user, effectivePatientPortalProfile]);
   const [clinicalRecords, setClinicalRecords] = useState<any[]>([]);
   const [activityLogs, setActivityLogs] = useState<any[]>([]);
   const todayStr = new Date().toISOString().split('T')[0];
@@ -4400,6 +4424,7 @@ export default function App() {
           console.warn('[PatientPortal] skipped patient-scoped fetch: missing resolvedPatientId');
           if (mounted) {
             setResolvedPatientPortalId('');
+            setPatientPortalProfile(null);
             setHistory([]);
             setTherapistNotes([]);
             setTasks([]);
@@ -4446,6 +4471,10 @@ export default function App() {
 
       const safeHistoryRes = historyRes.status === 'fulfilled' ? historyRes.value : null;
       const safeNotesRes = notesRes.status === 'fulfilled' ? notesRes.value : null;
+      const verifiedPortalProfile = safeHistoryRes?.success === true &&
+        String(safeHistoryRes?.portalProfile?.patientId || '') === resolvedContextPatientId
+        ? safeHistoryRes.portalProfile : null;
+      if (mounted) setPatientPortalProfile(verifiedPortalProfile);
 
       const mergedHistoryRaw = [
         ...(Array.isArray(safeHistoryRes?.data) ? safeHistoryRes.data : [])
@@ -4488,7 +4517,7 @@ export default function App() {
         setPatientContextLoaded(true);
       }
 
-      const patientPortalTaskKind = resolvePatientPortalKind(user);
+      const patientPortalTaskKind = resolvePatientPortalKind(verifiedPortalProfile || user);
       const shouldLoadLegacyTasks = clinicalPortalEnabled && patientPortalTaskKind === 'KIDS';
       const shouldLoadAssignedTasks = clinicalPortalEnabled && patientPortalTaskKind !== 'KIDS';
       const [tasksRes, assignedTasksRes, protocolsRes] = await Promise.allSettled([
@@ -4845,7 +4874,10 @@ export default function App() {
     if (!currentTask) return { success: false, error: 'Tarefa não encontrada.' };
     const mergedTask: any = { ...currentTask, ...fields };
     const patient = allPatients.find(p => p.id === mergedTask.patientId);
-    const isAdultTask = resolvePatientPortalKind(patient) !== 'KIDS';
+    // Editing an existing task must use its original storage authority, not
+    // the patient's *current* portal after switching between adult and kids.
+    const isAdultTask = Boolean(mergedTask.assignedTaskId) ||
+      String(mergedTask._source || '').toLowerCase() === 'assigned_tasks';
 
     let persistenceResult: any = null;
     if (isAdultTask) {
@@ -5696,16 +5728,28 @@ export default function App() {
     let portabilityAvailable = false;
     
     // Identity Data (Pseudonymized)
-    const fallbackProfileType =
-      data.approach === 'ABA'
-        ? 'ABA'
-        : data.approach === 'TO'
-          ? 'ADULT'
-          : 'ADULT';
+    // Legacy reception / quick registration does not expose the portal selector.
+    // Preserve its child/anamnesis fallback only when a portal was NOT chosen.
+    // An explicit portal (from the patient form) always takes precedence.
+    const registrationGroup = String(data.group || data.grupo || '').trim().toLowerCase();
+    const formKind = String(data.anamnesisData?.formType || '').trim().toLowerCase();
+    const rawAge = data.anamnesisData?.idade ?? data.age ??
+      calculateAgeFromBirthDate(data.birthDate || data.dataNascimento || data.anamnesisData?.dataNascimento);
+    const registrationAge = rawAge === null || rawAge === undefined || String(rawAge).trim() === ''
+      ? null : Number(rawAge);
+    const inferredPediatric = formKind === 'child' ||
+      (!formKind && (['infantil', 'adolescente'].includes(registrationGroup) ||
+        (!['adulto', 'idoso'].includes(registrationGroup) &&
+          registrationAge !== null && Number.isFinite(registrationAge) &&
+          registrationAge >= 0 && registrationAge < 18)));
+    const fallbackProfileType = inferredPediatric ? 'KIDS' : data.approach === 'ABA' ? 'ABA' : 'ADULT';
     const resolvedProfileType = normalizePatientProfileType(
       data.patientProfileType || data.panelType || data.profileType || data.profile_type || data.type,
-      fallbackProfileType as any,
+      fallbackProfileType,
     );
+    const resolvedRegistrationGroup = resolvedProfileType === 'KIDS'
+      ? (registrationGroup === 'adolescente' ? 'adolescente' : 'infantil')
+      : (registrationGroup === 'idoso' ? 'idoso' : 'adulto');
     const resolvedPortalType = mapPatientProfileTypeToLegacyPortalType(resolvedProfileType);
     const resolvedBirthDate = data.birthDate || data.dataNascimento || data.anamnesisData?.dataNascimento || null;
     const resolvedGuardian =
@@ -5744,7 +5788,7 @@ export default function App() {
       insuranceHolderCpf: data.insuranceHolderCpf || data.insurance_holder_cpf || data.convenioTitularCpf || null,
       insuranceHolderRelationship: data.insuranceHolderRelationship || data.insurance_holder_relationship || data.convenioTitularRelacao || null,
       eligibilityNotes: data.eligibilityNotes || data.eligibility_notes || data.convenioElegibilidadeObs || null,
-      group: data.group || data.grupo || null,
+      group: resolvedRegistrationGroup,
       source: data.source || data.comoConheceu || null,
       rg: data.rg || null,
       cpf: data.cpf || data.anamnesisData?.cpf || null,
@@ -5830,7 +5874,7 @@ export default function App() {
           convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || '',
           insuranceName: data.insuranceName || data.convenioNome || '',
           insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
-          group: data.group || data.grupo || '',
+          group: resolvedRegistrationGroup,
           source: data.source || data.comoConheceu || '',
           rg: data.rg || '',
           cep: data.cep || data.address?.cep || '',
@@ -5933,7 +5977,7 @@ export default function App() {
       convenioPayerId: data.insurancePayerId || data.insurance_payer_id || data.convenioPayerId || data.convenio_payer_id || null,
       insuranceName: data.insuranceName || data.convenioNome || '',
       insuranceCardNumber: data.cardNumber || data.convenioCarteirinha || '',
-      group: data.group || data.grupo || '',
+      group: resolvedRegistrationGroup,
       source: data.source || data.comoConheceu || '',
       rg: data.rg || '',
       cep: data.cep || data.address?.cep || '',
@@ -6184,6 +6228,8 @@ export default function App() {
       Object.keys(updatedData || {}).every((key) =>
         key === 'id' || patientPhotoPatchKeys.includes(key as (typeof patientPhotoPatchKeys)[number])
       );
+    const hasExplicitPortalPatch = ['patientProfileType', 'panelType', 'profileType', 'profile_type', 'type']
+      .some((key) => Object.prototype.hasOwnProperty.call(updatedData || {}, key));
     const updatedProfileType = normalizePatientProfileType(
       updatedData?.patientProfileType ||
         updatedData?.panelType ||
@@ -6197,6 +6243,7 @@ export default function App() {
     const updatedPortalType = mapPatientProfileTypeToLegacyPortalType(updatedProfileType);
     const requestedPatientCategory = String(updatedData?.group ?? updatedData?.grupo ?? '').trim().toLowerCase();
     const mustConfirmPatientCategory = ['infantil', 'adolescente', 'adulto', 'idoso'].includes(requestedPatientCategory);
+    const mustConfirmSavedPatientProfile = mustConfirmPatientCategory || hasExplicitPortalPatch;
     const syncedAnamnesisData =
       isPatientPhotoOnlyPatch
         ? undefined
@@ -6233,7 +6280,7 @@ export default function App() {
         workspace_id: String(user?.activeWorkspaceId || user?.clinicId || '').trim() || null,
         lastAnamnesisAt: updatedData?.lastAnamnesisAt || null,
         ...(diagnosis !== undefined && { diagnosis: diagnosis || "" }),
-        ...(updatedData?.type !== undefined || updatedData?.patientProfileType !== undefined || updatedData?.panelType !== undefined
+        ...(hasExplicitPortalPatch
           ? { patientProfileType: updatedProfileType, panelType: updatedProfileType, portalType: updatedPortalType }
           : {}),
         ...(updatedData?.financialPlans !== undefined && {
@@ -6416,10 +6463,14 @@ export default function App() {
           age: updatedData.age,
           gender: updatedData.gender || updatedData.genero,
           diagnosis: updatedData.diagnosis,
-          type: updatedPortalType,
-          patientProfileType: updatedProfileType,
-          panelType: updatedProfileType,
-          profileType: updatedProfileType,
+          ...(hasExplicitPortalPatch
+            ? {
+                type: updatedPortalType,
+                patientProfileType: updatedProfileType,
+                panelType: updatedProfileType,
+                profileType: updatedProfileType,
+              }
+            : {}),
           insuranceType: updatedData.insuranceType || updatedData.convenioTipo,
           insurancePayerId:
             updatedData.insurancePayerId ??
@@ -6482,23 +6533,25 @@ export default function App() {
           patientUpdatePayload,
           {
             recordPayload: recordPayloadForAtomicSave || undefined,
-            requireServerAck: mustConfirmPatientCategory,
+            requireServerAck: mustConfirmSavedPatientProfile,
           },
         );
-        if (!updateResult?.success || (mustConfirmPatientCategory && updateResult?.pending === true)) {
+        if (!updateResult?.success || (mustConfirmSavedPatientProfile && updateResult?.pending === true)) {
           rollbackOptimisticPatientState();
           const errorMessage = toReadableError(updateResult?.error || updateResult?.warning || 'Erro desconhecido');
           alert(`Não foi possível confirmar a persistência do cadastro: ${errorMessage}`);
           return { success: false, error: errorMessage };
         }
-        if (mustConfirmPatientCategory) {
+        if (mustConfirmSavedPatientProfile) {
           const confirmation = await dataService.confirmPatientCategoryOnServer(
             String(updatedData.id),
             String(user?.activeWorkspaceId || user?.clinicId || '').trim(),
           );
           const confirmedCategory = String(confirmation?.data?.group || '').trim().toLowerCase();
           const confirmedProfileType = normalizePatientProfileType(confirmation?.data?.patientProfileType);
-          if (!confirmation?.success || confirmedCategory !== requestedPatientCategory || confirmedProfileType !== updatedProfileType) {
+          if (!confirmation?.success ||
+              (mustConfirmPatientCategory && confirmedCategory !== requestedPatientCategory) ||
+              (hasExplicitPortalPatch && confirmedProfileType !== updatedProfileType)) {
             rollbackOptimisticPatientState();
             const errorMessage = confirmation?.error || 'Categoria ou perfil clínico divergente no banco. Atualize o cadastro e tente novamente.';
             alert(`Não foi possível confirmar a categoria salva no servidor: ${errorMessage}`);
@@ -7067,7 +7120,7 @@ export default function App() {
 
   const handleMoodCheckin = async (l: number | null, n: string, i: string, t: any) => {
     const identity = resolvePatientIdentityForPortal();
-    const portalKind = resolvePatientPortalKind(user);
+    const portalKind = effectivePatientPortalKind;
     const isConventionalAdult = portalKind === 'ADULT_CONVENTIONAL';
     const metricKind: 'mood' | 'energy' = isConventionalAdult ? 'mood' : 'energy';
     const normalizedValue = typeof l === 'number' && Number.isFinite(l) ? Math.max(0, Math.min(100, l)) : null;
@@ -7118,7 +7171,7 @@ export default function App() {
     try {
     const identity = resolvePatientIdentityForPortal(t);
     const targetPatientId = String(identity.patientId || t?.patientId || t?.patient_id || user?.id || '').trim();
-    const portalKind = resolvePatientPortalKind(user);
+    const portalKind = effectivePatientPortalKind;
     const isKid = portalKind === 'KIDS';
     const normalizedEffort = typeof e === 'number' && Number.isFinite(e) ? e : null;
     const energyValue = isKid
@@ -7241,7 +7294,7 @@ export default function App() {
   const handleRecordTrial = async (pid: any, title: string, score: number, evalComment?: string, sessionMeta?: any) => {
     const targetPatient = allPatients.find(p => p.id === pid);
     const clinicalRecord = clinicalRecords.find(r => r.patientId === pid);
-    const isKid = (targetPatient?.age !== undefined && targetPatient.age <= 12) || clinicalRecord?.anamnesisData?.formType === 'child';
+    const isKid = resolvePatientPortalKind(targetPatient) === 'KIDS';
     const sourcePei = Array.isArray(clinicalRecord?.pei)
       ? clinicalRecord.pei
       : Array.isArray(targetPatient?.pei)
@@ -7957,7 +8010,7 @@ export default function App() {
     const createdAt = new Date().toISOString();
     const isPhotoRecord = Boolean(image);
     const isSimpleNote = entryKind === 'note';
-    const actorKind = resolvePatientPortalKind(user) === 'KIDS' ? 'responsible' : 'patient';
+    const actorKind = effectivePatientPortalKind === 'KIDS' ? 'responsible' : 'patient';
     const patientAuthoredType = actorKind === 'patient' ? 'patient_note' : 'family_note';
     const patientAuthoredSource = actorKind === 'patient' ? 'patient_portal' : 'family_portal';
     const title = isPhotoRecord
@@ -8095,6 +8148,7 @@ export default function App() {
     resetWorkspaceScopedState();
     setClinicStateHydrated(false);
     setResolvedPatientPortalId('');
+    setPatientPortalProfile(null);
     setPatientContextLoaded(false);
     setHistory([]);
     historyRef.current = [];
@@ -8826,13 +8880,13 @@ export default function App() {
           </div>
         ) : user.role === 'patient' ? (
           <PatientDashboard 
-            user={user} 
+            user={effectivePatientDashboardUser}
             onLogout={handleLogout} 
             onMoodCheckin={handleMoodCheckin} 
             tasks={tasks} 
             onCompleteTask={handleCompleteTask} 
             history={history} 
-            energyTags={(user.type === 'conventional' || user.type === 'adult_conventional') ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
+            energyTags={effectivePatientPortalKind === 'ADULT_CONVENTIONAL' ? ADULT_CONVENTIONAL_TAGS : ENERGY_TAGS} 
             sharedNotes={therapistNotes.filter(n => {
               const noteVisibility = String(n?.visibility || n?.type || '').toLowerCase();
               const isPatientNote =

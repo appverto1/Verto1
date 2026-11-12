@@ -3,6 +3,7 @@ import { ChevronLeft, Filter, ChevronDown, Search, User, Activity, Brain, Phone,
 import { PatientInternalChatPreview } from './PatientInternalChatPreview';
 import { SecureImage } from './SecureMedia';
 import { patientMatchesNameFilter, sortPatientsAlphabetically } from '../utils/patientList';
+import { resolvePatientPortalKind } from '../utils/patientProfileType';
 
 const getPatientPhotoSource = (patient: any) =>
   String(
@@ -41,13 +42,10 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
     return matchName && matchAge && matchType && matchApproach; 
   })); 
 
-  const getPatientCategory = (p: any) => {
-    const clinicalRecord = clinicalRecords?.find((r: any) => r.patientId === p.id);
-    if (clinicalRecord?.anamnesisData?.formType) {
-        return clinicalRecord.anamnesisData.formType === 'child' ? 'Criança' : 'Adulto';
-    }
-    return (p.age !== undefined && p.age <= 12) ? 'Criança' : 'Adulto';
-  };
+  // The active portal, not age/an old anamnesis template, controls the card.
+  // The clinical history remains attached to the same patient ID.
+  const getPatientCategory = (p: any) =>
+    resolvePatientPortalKind(p) === 'KIDS' ? 'Criança' : 'Adulto';
 
   return ( 
     <div className="min-h-screen bg-gray-50 flex flex-col"> 

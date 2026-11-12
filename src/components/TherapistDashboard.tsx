@@ -38,6 +38,7 @@ import { AnamnesisModal } from "./Anamnesis";
 import { DayDetailsModal, CalendarWidget } from "./Calendar";
 import { ProtocolManagementSystem } from "./Protocols";
 import { PatientRegistry } from "./PatientRegistry";
+import { resolvePatientPortalKind } from "../utils/patientProfileType";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { TeamManagement } from "./TeamManagement";
@@ -1818,10 +1819,7 @@ export const TherapistDashboard = ({
                     const patientData = allPatients.find(
                       (p: any) => p.id === patientItem.patientId,
                     );
-                    const isKid =
-                      (patientData?.age !== undefined &&
-                        patientData.age <= 12) ||
-                      patientData?.anamnesisData?.formType === "child";
+                    const isKid = resolvePatientPortalKind(patientData) === 'KIDS';
                     const category = isKid ? "Criança" : "Adulto";
 
                     const normalizedStatus = String(patientItem.status || "pending").toLowerCase();

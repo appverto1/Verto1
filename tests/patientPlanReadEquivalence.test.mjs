@@ -15,12 +15,17 @@ function compile(source, deps = {}) {
   vm.runInNewContext(js, context, { timeout: 5000 }); return context.module.exports;
 }
 const modules = new Map([...new Set(manifest.routes.map(r => r.module))].map(name => [name, compile(readFileSync(`services/${name}.ts`, 'utf8'))]));
-function fixture(route, mode) {
+function fixture(route, mode, includePortalProfile = false) {
   const calls = [], error = mode === 'db-error' ? { message: 'DB_UNAVAILABLE' } : mode === 'schema-missing' ? { code: '42P01', message: 'missing relation' } : null;
   function query(table) {
     const chain = new Proxy({}, { get(_target, method) {
       if (method === 'then') return resolve => resolve({ data: [], error, count: 0 });
-      return (...args) => { calls.push([table, String(method), clean(args)]); return method === 'maybeSingle' || method === 'single' ? Promise.resolve({ data: null, error }) : chain; };
+      return (...args) => { calls.push([table, String(method), clean(args)]); return method === 'maybeSingle' || method === 'single' ? Promise.resolve({
+        data: includePortalProfile && table === 'patients' && !error
+          ? { patient_profile_type: 'ADULT', panel_type: 'ADULT', type: 'adult_conventional', patient_group: 'adulto', age: 35 }
+          : null,
+        error,
+      }) : chain; };
     } }); return chain;
   }
   const str = (value, max = 5000) => String(value ?? '').trim().slice(0, max);
@@ -67,12 +72,45 @@ function fixture(route, mode) {
 let scenarios = 0;
 for (const route of manifest.routes) {
   for (const mode of ['empty', 'invalid-id', 'db-error', 'schema-missing', 'portal-denied', 'history-denied', 'history-valid', 'bad-range']) {
-    const before = fixture(route, mode), after = fixture(route, mode); let captured = 0;
+    const isPortalHistory = route.name === 'createPatientSelfHistoryReadHandler';
+    const before = fixture(route, mode), after = fixture(route, mode, isPortalHistory); let captured = 0;
     const old = compile('module.exports = ' + historical.slice(route.start, route.end), before.deps);
     const next = modules.get(route.module)[route.name](() => { captured++; return after.deps; });
     assert.equal(captured, 0); await old(before.req, before.res); await next(after.req, after.res); assert.equal(captured, 1);
-    assert.deepEqual(clean(after.response), clean(before.response), `${route.name}: ${mode} HTTP`);
-    assert.deepEqual(clean(after.calls), clean(before.calls), `${route.name}: ${mode} exact DB/helper sequence`);
+    if (isPortalHistory && after.response.body?.success === true) {
+      // Only the selected clinic-scoped patient's portal mode is new.
+      // Existing clinical history fields and status must be unchanged.
+      const { portalProfile, ...originalBody } = after.response.body;
+      assert.deepEqual(clean(portalProfile), {
+        patientId: id, clinicId: clinic,
+        patient_profile_type: 'ADULT', panel_type: 'ADULT', type: 'adult_conventional',
+        patient_group: 'adulto', age: 35,
+      }, route.name + ': ' + mode + ' authenticated portal profile');
+      assert.deepEqual(clean({ ...after.response, body: originalBody }), clean(before.response),
+        route.name + ': ' + mode + ' historical HTTP fields');
+    } else {
+      assert.deepEqual(clean(after.response), clean(before.response), route.name + ': ' + mode + ' HTTP');
+    }
+    if (isPortalHistory && mode !== 'portal-denied') {
+      // One new read via the already-requested history HTTP response; never
+      // choose a patient by shared guardian email or change original reads.
+      const extraRead = [
+        ['from', 'patients'],
+        ['patients', 'select', ['patient_profile_type,panel_type,type,patient_group,age']],
+        ['patients', 'eq', ['id', id]],
+        ['patients', 'eq', ['clinic_id', clinic]],
+        ['patients', 'is', ['deleted_at', null]],
+        ['patients', 'maybeSingle', []],
+      ];
+      const first = after.calls.findIndex(call => call[0] === 'from' && call[1] === 'patients');
+      assert.ok(first >= 0, route.name + ': ' + mode + ' canonical read required');
+      assert.deepEqual(clean(after.calls.slice(first, first + extraRead.length)), clean(extraRead),
+        route.name + ': ' + mode + ' patient + clinic scope');
+      const unchangedCalls = after.calls.filter((_call, index) => index < first || index >= first + extraRead.length);
+      assert.deepEqual(clean(unchangedCalls), clean(before.calls), route.name + ': ' + mode + ' original DB/helper sequence');
+    } else {
+      assert.deepEqual(clean(after.calls), clean(before.calls), route.name + ': ' + mode + ' exact DB/helper sequence');
+    }
     if (mode === 'empty') assert.equal(after.response.code, 200, `${route.name}: ${JSON.stringify(after.response.body)}`);
     if (mode === 'portal-denied' && route.module === 'patientPortalRecordReadHandlers') { assert.equal(after.response.code, 409); assert.equal(after.calls.length, 0); }
     if (mode === 'history-denied' && route.name === 'createTherapeuticPlanReadHandler') { assert.equal(after.response.code, 403); assert.equal(after.calls.length, 0); }

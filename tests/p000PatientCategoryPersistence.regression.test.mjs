@@ -68,7 +68,9 @@ assert.equal(resolvePatientPortalKind({
 // Assegura os três limites: dropdown -> backend -> leitura autenticada após o Salvar.
 assert.match(coordinator, /field === 'grupo'[\s\S]{0,230}resolvePatientProfileTypeForCategory\(value, prev\.patientProfileType\)/);
 assert.match(coordinator, /grupo: resolvePatientRegistrationCategory\(patient\)/);
-assert.match(coordinator, /const canonicalProfileType = resolvePatientProfileTypeForCategory\(/);
+assert.match(coordinator, /const canonicalProfileType = normalizePatientProfileType\(/);
+assert.match(coordinator, /field === 'patientProfileType'[\s\S]{0,650}grupo: portalProfile === 'KIDS'/,
+  'explicit portal change must keep the server category guard consistent');
 assert.match(coordinator, /patientRegistrationSaveInFlightRef\.current = true/);
 assert.match(coordinator, /patientRegistrationSaveInFlightRef\.current = false/);
 assert.match(coordinator, /if \(updateResult\?\.success !== true\)/);
@@ -84,9 +86,10 @@ assert.equal(vm.runInNewContext(patientCreateAckCondition[1], { addPatientResult
 assert.match(dataService, /async updatePatient\([\s\S]{0,410}requireServerAck: options\?\.requireServerAck === true/);
 assert.match(dataService, /async confirmPatientCategoryOnServer\([\s\S]{0,1000}fetchNoStoreJsonWithRetry/);
 assert.match(dataService, /persisted\.patient_group \?\? persisted\.group/);
-assert.match(app, /requireServerAck: mustConfirmPatientCategory/);
+assert.match(app, /requireServerAck: mustConfirmSavedPatientProfile/);
 assert.match(app, /confirmPatientCategoryOnServer\(/);
-assert.match(app, /confirmedCategory !== requestedPatientCategory \|\| confirmedProfileType !== updatedProfileType/);
+assert.match(app, /mustConfirmSavedPatientProfile/);
+assert.match(app, /hasExplicitPortalPatch && confirmedProfileType !== updatedProfileType/);
 assert.match(app, /rollbackOptimisticPatientState\(\)/);
 assert.match(server, /patient_group: sanitizeString\(body\?\.group \|\| body\?\.patient_group \|\| body\?\.grupo, 80\)/);
 assert.match(server, /supabase\.rpc\('verto_update_patient_aggregate_atomic'/);

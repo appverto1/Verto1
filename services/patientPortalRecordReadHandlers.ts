@@ -14,14 +14,28 @@ export function createPatientSelfHistoryReadHandler(getDeps: () => { resolveCano
       }
 
       const limit = parseBoundedListLimit(req.query?.limit, 20, 50);
-      const historyByIdResult = await fetchHistoryWithSchemaFallback({
-        supabase,
-        patientId: portalScope.patientId,
-        limit,
-        route: '/api/patient/self/history',
-        logger: console
-      });
+      // Use the clinic-scoped patient record as the current portal authority.
+      // A guardian session can represent several children: never resolve by email.
+      // Reuse the already requested history response (no extra browser request).
+      const [historyByIdResult, portalProfileResult] = await Promise.all([
+        fetchHistoryWithSchemaFallback({
+          supabase,
+          patientId: portalScope.patientId,
+          limit,
+          route: '/api/patient/self/history',
+          logger: console
+        }),
+        supabase.from('patients')
+          .select('patient_profile_type,panel_type,type,patient_group,age')
+          .eq('id', portalScope.patientId)
+          .eq('clinic_id', portalScope.clinicId)
+          .is('deleted_at', null)
+          .maybeSingle()
+      ]);
       if (historyByIdResult.error) throw historyByIdResult.error;
+      if (portalProfileResult.error || !portalProfileResult.data) {
+        throw portalProfileResult.error || new Error('PATIENT_PORTAL_PROFILE_NOT_FOUND');
+      }
       const historyById = Array.isArray(historyByIdResult.data) ? historyByIdResult.data : [];
 
       const dedupedHistory = Array.from(
@@ -134,7 +148,20 @@ export function createPatientSelfHistoryReadHandler(getDeps: () => { resolveCano
       req.session.user = buildSessionUserPayload(req.session.user);
       void req.session.save(() => {});
 
-      res.json({ success: true, data: enrichedHistory, treatmentStatus });
+      res.json({
+        success: true,
+        data: enrichedHistory,
+        treatmentStatus,
+        portalProfile: {
+          patientId: portalScope.patientId,
+          clinicId: portalScope.clinicId,
+          patient_profile_type: portalProfileResult.data.patient_profile_type,
+          panel_type: portalProfileResult.data.panel_type,
+          type: portalProfileResult.data.type,
+          patient_group: portalProfileResult.data.patient_group,
+          age: portalProfileResult.data.age
+        }
+      });
     } catch (error) {
       res.status(500).json({ success: false, error: 'Erro interno do servidor.' });
     }
