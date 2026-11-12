@@ -500,16 +500,16 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                   <ModularOfferDetails offer={offer} />
                   <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4">
                     <p className="mb-3 text-sm leading-6 text-slate-700">
-                      Leia o{' '}
+                      Antes de continuar, leia o{' '}
                       <a
                         href={SALES_CONTRACT_DOCUMENT.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="font-semibold text-violet-700 underline underline-offset-2 hover:text-violet-900"
                       >
-                        Contrato Mestre SaaS Verto (versão 2.2)
+                        Contrato
                       </a>{' '}
-                      antes de registrar o aceite.
+                      e confira as condições vinculadas à sua proposta.
                     </p>
                     {acceptedAt ? (
                       <div className="flex items-start gap-3 text-sm text-emerald-800">
@@ -531,7 +531,7 @@ export const PublicSalesOffer = ({ token }: { token: string }) => {
                             className="mt-1 h-5 w-5 shrink-0 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
                           />
                           <span>
-                            Declaro que li e aceito o Contrato Mestre SaaS Verto (versão 2.2) e estou ciente dos valores promocionais e dos valores aplicáveis após o término de cada benefício.
+                            Declaro que li e aceito o Contrato e estou ciente dos valores promocionais e dos valores aplicáveis após o término de cada benefício.
                           </span>
                         </label>
                         <button

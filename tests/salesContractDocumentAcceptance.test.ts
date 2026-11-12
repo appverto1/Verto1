@@ -18,6 +18,9 @@ test('public contract document is versioned and rendered from the approved v2.2 
   assert.equal(crypto.createHash('sha256').update(text).digest('hex'),
     SALES_CONTRACT_DOCUMENT.sourceTextSha256, 'the published legal text must not drift');
   assert.match(text, /29\. VIGÊNCIA DA VERSÃO 2\.2/);
+  assert.match(html, /<title>Contrato<\/title>/);
+  assert.match(html, /<h1>Contrato<\/h1>/);
+  assert.match(html, /Leia atentamente as condições deste contrato antes de confirmar o aceite da proposta comercial\./);
 });
 
 test('public acceptance records explicit document acknowledgement without changing checkout', async () => {
@@ -55,5 +58,7 @@ test('backend rejects omitted document acknowledgement and does not overwrite hi
   assert.match(accept, /\.is\("accepted_at", null\)/);
   const ui = fs.readFileSync('src/components/PublicSalesOffer.tsx', 'utf8');
   assert.match(ui, /href=\{SALES_CONTRACT_DOCUMENT\.url\}/);
-  assert.match(ui, /Declaro que li e aceito o Contrato Mestre SaaS Verto/);
+  assert.match(ui, />\s*Contrato\s*<\/a>/);
+  assert.match(ui, /Declaro que li e aceito o Contrato e estou ciente/);
+  assert.doesNotMatch(ui, /Contrato Mestre SaaS Verto \(versão 2\.2\)/);
 });
