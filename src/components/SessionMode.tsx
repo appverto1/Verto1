@@ -431,7 +431,7 @@ const AbaSessionToast = ({ toast, compact = false }: { toast: ClinicalActionToas
   }[toast.variant];
   const Icon = toast.variant === 'success' ? CheckCircle2 : toast.variant === 'error' ? AlertCircle : toast.variant === 'warning' ? Clock : Zap;
   const title = compact ? (toast.compactTitle || toast.title) : toast.title;
-  const subtitle = compact ? (toast.compactSubtitle || toast.subtitle) : toast.subtitle;
+  const subtitle = toast.minimal ? null : compact ? (toast.compactSubtitle || toast.subtitle) : toast.subtitle;
 
   return (
     <div
@@ -1638,7 +1638,7 @@ export const SessionMode = ({
     actionToastTimerRef.current = window.setTimeout(() => {
       setActionToast(null);
       actionToastTimerRef.current = null;
-    }, intervalToastCompact ? 1500 : 2000);
+    }, intervalToastCompact || toast.minimal ? 1500 : 2000);
   };
 
   const showPersistResultToast = (result: any) => {
@@ -7941,11 +7941,14 @@ export const SessionMode = ({
     paddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`,
     scrollPaddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`
   };
-  const actionToastPositionClass = intervalRun
-    ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
-    : intervalToastCompact
-      ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
-    : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
+  const actionToastMinimal = Boolean(actionToast?.minimal);
+  const actionToastPositionClass = actionToastMinimal
+    ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
+    : intervalRun
+      ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
+      : intervalToastCompact
+        ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
+        : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
   const closeCompletedSession = () => {
     if (isCompletedSessionReview) {
       onClose?.();
@@ -7960,7 +7963,7 @@ export const SessionMode = ({
   const actionToastPortal = actionToast && typeof document !== 'undefined'
     ? createPortal(
         <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:top-auto xl:justify-end ${actionToastPositionClass}`}>
-          <AbaSessionToast toast={actionToast} compact={intervalToastCompact} />
+          <AbaSessionToast toast={actionToast} compact={intervalToastCompact || actionToastMinimal} />
         </div>,
         document.body
       )
