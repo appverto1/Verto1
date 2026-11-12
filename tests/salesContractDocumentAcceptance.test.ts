@@ -24,7 +24,7 @@ test('public acceptance records explicit document acknowledgement without changi
   const calls: Array<{url: string; init?: RequestInit}> = [];
   const request = (async (url: string, init?: RequestInit) => {
     calls.push({url, init});
-    return new Response(JSON.stringify({success:true, acceptedAt:'2026-11-12T15:00:00.000Z'}), {status:200});
+    return new Response(JSON.stringify({success:true, acceptedAt:'2026-11-12T15:00:00.000Z', url:'https://checkout.stripe.com/c/pay/cs_test_fixture'}), {status:200});
   }) as typeof fetch;
 
   await acceptPublicSalesModularOffer('opaque-token', request);
