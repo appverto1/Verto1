@@ -189,8 +189,8 @@ export const buildClinicalSaveErrorToast = (): ClinicalActionToast => ({
   variant: 'error',
   title: 'Não foi possível salvar',
   compactTitle: 'Não salvou',
-  subtitle: 'Tente novamente. Nenhum dado foi perdido.',
-  compactSubtitle: 'Tente novamente'
+  subtitle: 'Salvamento não confirmado. Mantenha a sessão aberta e tente recuperar o registro.',
+  compactSubtitle: 'Não confirmado'
 });
 
 export const buildClinicalOfflineToast = (): ClinicalActionToast => ({
