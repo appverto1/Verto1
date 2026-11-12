@@ -33,6 +33,7 @@ import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../services/localDb';
 import { AUTOMATIC_SESSION_CLOSURE_KEYS, partitionSessionQueueForClosure, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
+import { AbaActiveDurationsPanel, AbaQuickAbcPanel } from './AbaSessionBehaviorPanels';
 import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
   normalizeAbaPromptTypeConfig,
@@ -8222,76 +8223,32 @@ export const SessionMode = ({
   ) : null;
 
   const abcModal = abcModalOpen ? (
-    <div
-      data-aba-abc-nonblocking={sessionCompleted ? undefined : 'true'}
-      className={sessionCompleted
-        ? 'fixed inset-0 z-[140] flex items-end justify-center bg-black/30 p-3 sm:items-center sm:p-4'
-        : 'pointer-events-none fixed inset-x-2 top-[calc(5.5rem+env(safe-area-inset-top))] z-[140] flex justify-end sm:inset-x-auto sm:right-4'}
-    >
-      <div className={sessionCompleted
-        ? 'w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-purple-100 bg-white p-4 shadow-2xl'
-        : 'pointer-events-auto w-full max-w-[320px] max-h-[min(56dvh,430px)] overflow-y-auto rounded-2xl border border-purple-100 bg-white p-3 shadow-lg sm:max-w-sm'}>
-        <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
-          <p className="min-w-0 truncate text-sm font-bold text-gray-800" title={sessionBehaviorPresets.find((item) => item.id === abcBehaviorId)?.name || selectedBehavior.name}>
-            ABC · {sessionBehaviorPresets.find((item) => item.id === abcBehaviorId)?.name || selectedBehavior.name}
-          </p>
-          <div className="flex shrink-0 items-center gap-1">
-            {!sessionCompleted && (
-              <button type="button" onClick={() => setAbcPanelMinimized((minimized) => !minimized)} className="min-h-[36px] rounded-lg px-2 text-xs font-semibold text-[#7a32fc]" aria-label={abcPanelMinimized ? 'Expandir ABC' : 'Minimizar ABC'}>
-                {abcPanelMinimized ? 'Abrir' : 'Reduzir'}
-              </button>
-            )}
-            <button type="button" onClick={() => setAbcModalOpen(false)} className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg hover:bg-gray-100" aria-label="Fechar ABC">
-              <X size={17} />
-            </button>
-          </div>
-        </div>
-        {(!abcPanelMinimized || sessionCompleted) && (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="text-[10px] font-bold text-gray-500">
-                Comportamento
-                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
-                  {sessionBehaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-500">
-                Antecedente
-                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
-                  {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-500">
-                Consequência
-                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
-                  {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-500">
-                Local
-                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
-                  {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="col-span-2 text-[10px] font-bold text-gray-500">
-                Severidade
-                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
-                  {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <details className="col-span-2">
-                <summary className="cursor-pointer py-1 text-[10px] font-bold text-gray-500">Observação opcional</summary>
-                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 min-h-[64px] w-full resize-y rounded-lg border border-blue-100 bg-[#F4F7FE] p-2 text-xs text-gray-700" />
-              </details>
-            </div>
-            <div className="mt-3 flex gap-2">
-              <button type="button" onClick={() => setAbcModalOpen(false)} className="min-h-[40px] flex-1 rounded-lg bg-gray-100 px-2 text-xs font-semibold text-gray-600">Cancelar</button>
-              <button type="button" onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="min-h-[40px] flex-1 rounded-lg bg-[#7a32fc] px-2 text-xs font-semibold text-white disabled:opacity-60">Salvar ABC</button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+    <AbaQuickAbcPanel
+      completed={sessionCompleted}
+      minimized={abcPanelMinimized}
+      behaviors={sessionBehaviorPresets}
+      behaviorId={abcBehaviorId}
+      selectedBehaviorName={sessionBehaviorPresets.find((item) => item.id === abcBehaviorId)?.name || selectedBehavior.name}
+      antecedent={abcAntecedent}
+      consequence={abcConsequence}
+      location={abcLocation}
+      severity={abcSeverity}
+      note={abcNote}
+      antecedentOptions={antecedentOptions}
+      consequenceOptions={consequenceOptions}
+      locationOptions={locationOptions}
+      severityOptions={severityOptions}
+      saving={Boolean(actionLocks['abc:save'])}
+      onChangeBehavior={setAbcBehaviorId}
+      onChangeAntecedent={setAbcAntecedent}
+      onChangeConsequence={setAbcConsequence}
+      onChangeLocation={setAbcLocation}
+      onChangeSeverity={setAbcSeverity}
+      onChangeNote={setAbcNote}
+      onToggleMinimized={() => setAbcPanelMinimized((minimized) => !minimized)}
+      onClose={() => setAbcModalOpen(false)}
+      onSave={() => void saveAbcEvent()}
+    />
   ) : null;
 
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
@@ -8952,33 +8909,14 @@ export const SessionMode = ({
   }
 
   const openDurationsPanel = openDurations.length > 0 ? (
-    <section data-aba-active-duration-panel aria-label="Comportamentos em duração" className="rounded-xl border border-purple-100 bg-white p-2">
-      <div className="flex flex-col gap-1.5">
-        {openDurations.map((event) => (
-          <div key={event.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-1.5">
-            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-gray-800" title={event.behaviorName}>{event.behaviorName}</span>
-            <span className="shrink-0 tabular-nums text-sm font-bold text-[#7a32fc]" aria-label={`Duração de ${event.behaviorName}`}>{formatElapsed(event.startedAt, nowMs)}</span>
-            <button
-              type="button"
-              onClick={() => endDuration(event.id)}
-              disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
-              aria-label={`Parar duração de ${event.behaviorName}`}
-              className="min-h-[40px] shrink-0 rounded-lg bg-[#1B254B] px-3 text-xs font-bold text-white disabled:opacity-60"
-            >
-              Stop
-            </button>
-            <button
-              type="button"
-              onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
-              aria-label={`Abrir ABC de ${event.behaviorName}`}
-              className="min-h-[40px] shrink-0 rounded-lg border border-purple-100 bg-white px-3 text-xs font-bold text-[#7a32fc]"
-            >
-              ABC
-            </button>
-          </div>
-        ))}
-      </div>
-    </section>
+    <AbaActiveDurationsPanel
+      events={openDurations}
+      nowMs={nowMs}
+      lockedStops={actionLocks}
+      elapsed={formatElapsed}
+      onStop={endDuration}
+      onOpenAbc={openAbcModalForBehaviorName}
+    />
   ) : null;
 
   const getDockButtonClass = (color: string, active = false) => {
