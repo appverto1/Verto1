@@ -3801,7 +3801,9 @@ export const SessionMode = ({
   };
 
   const canRecoverUnconfirmedSessionTrial = (record: SessionRecord) => {
-    const editedUnconfirmed = record.syncStatus === 'local' && Boolean(record.editedAt);
+    const editedUnconfirmed = record.syncStatus === 'local'
+      && Boolean(record.editedAt)
+      && record.rawPayload?.durableRecoveryQueued !== true;
     return record.kind === 'trial'
       && record.measurementModelVersion !== 'V3'
       && (record.syncStatus === 'error' || editedUnconfirmed)
@@ -3884,7 +3886,12 @@ export const SessionMode = ({
       const confirmed = result?.success === true && result?.pending !== true && result?.offline !== true;
       const queued = result?.pending === true && result?.durable === true;
       if (!confirmed && !queued) throw new Error(result?.error || 'Servidor e fila local não confirmaram esta tentativa.');
-      updateRecordStatus(record.id, confirmed ? 'synced' : 'local');
+      updateRecord(record.id, {
+        syncStatus: confirmed ? 'synced' : 'local',
+        // Once an encrypted queue entry exists, prevent repeated clicks from
+        // adding redundant replay intents for the same edited local record.
+        rawPayload: { ...record.rawPayload, durableRecoveryQueued: queued },
+      });
       if (queued) showClinicalToast(buildClinicalOfflineToast(), 'none');
       else showClinicalToast({ variant: 'success', title: 'Tentativa recuperada', subtitle: 'Registro confirmado pelo servidor.' });
       if (confirmed) onSessionRecordSaved?.();
