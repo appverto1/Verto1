@@ -1253,6 +1253,7 @@ export const SessionMode = ({
     ? Math.max(1, Math.floor(Number(intervalCustomSeconds) || 1))
     : Number(intervalDurationOptions.find((option) => option.key === intervalDurationMode)?.seconds || 30);
   const [abcModalOpen, setAbcModalOpen] = useState(false);
+  const [abcPanelMinimized, setAbcPanelMinimized] = useState(false);
   const [abcBehaviorId, setAbcBehaviorId] = useState('crying');
   const [abcAntecedent, setAbcAntecedent] = useState(antecedentOptions[0]);
   const [abcConsequence, setAbcConsequence] = useState(consequenceOptions[0]);
@@ -5704,6 +5705,7 @@ export const SessionMode = ({
   const openAbcModal = (behaviorId = selectedBehaviorId) => {
     const behavior = sessionBehaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
     setAbcBehaviorId(behavior.id);
+    setAbcPanelMinimized(false);
     setAbcModalOpen(true);
   };
 
@@ -8219,59 +8221,76 @@ export const SessionMode = ({
   ) : null;
 
   const abcModal = abcModalOpen ? (
-        <div className="fixed inset-0 z-[140] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-purple-100">
-            <div className="flex items-center justify-between gap-3 mb-5">
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rápido</p>
-                <h2 className="text-xl font-bold text-gray-800">Evento comportamental</h2>
-              </div>
-              <button onClick={() => setAbcModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">
-                <X size={20} />
+    <div
+      data-aba-abc-nonblocking={sessionCompleted ? undefined : 'true'}
+      className={sessionCompleted
+        ? 'fixed inset-0 z-[140] flex items-end justify-center bg-black/30 p-3 sm:items-center sm:p-4'
+        : 'pointer-events-none fixed inset-x-2 top-[calc(5.5rem+env(safe-area-inset-top))] z-[140] flex justify-end sm:inset-x-auto sm:right-4'}
+    >
+      <div className={sessionCompleted
+        ? 'w-full max-w-lg max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl border border-purple-100 bg-white p-4 shadow-2xl'
+        : 'pointer-events-auto w-full max-w-[320px] max-h-[min(56dvh,430px)] overflow-y-auto rounded-2xl border border-purple-100 bg-white p-3 shadow-lg sm:max-w-sm'}>
+        <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-sm font-bold text-gray-800" title={sessionBehaviorPresets.find((item) => item.id === abcBehaviorId)?.name || selectedBehavior.name}>
+            ABC · {sessionBehaviorPresets.find((item) => item.id === abcBehaviorId)?.name || selectedBehavior.name}
+          </p>
+          <div className="flex shrink-0 items-center gap-1">
+            {!sessionCompleted && (
+              <button type="button" onClick={() => setAbcPanelMinimized((minimized) => !minimized)} className="min-h-[36px] rounded-lg px-2 text-xs font-semibold text-[#7a32fc]" aria-label={abcPanelMinimized ? 'Expandir ABC' : 'Minimizar ABC'}>
+                {abcPanelMinimized ? 'Abrir' : 'Reduzir'}
               </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+            )}
+            <button type="button" onClick={() => setAbcModalOpen(false)} className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg hover:bg-gray-100" aria-label="Fechar ABC">
+              <X size={17} />
+            </button>
+          </div>
+        </div>
+        {(!abcPanelMinimized || sessionCompleted) && (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-[10px] font-bold text-gray-500">
                 Comportamento
-                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
                   {sessionBehaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
                 </select>
               </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              <label className="text-[10px] font-bold text-gray-500">
                 Antecedente
-                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
                   {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Consequencia
-                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+              <label className="text-[10px] font-bold text-gray-500">
+                Consequência
+                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
                   {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              <label className="text-[10px] font-bold text-gray-500">
                 Local
-                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full min-w-0 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
                   {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+              <label className="col-span-2 text-[10px] font-bold text-gray-500">
                 Severidade
-                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
+                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-2 text-xs text-gray-700">
                   {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
                 </select>
               </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest sm:col-span-2">
-                Observação opcional
-                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 w-full min-h-[84px] bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-sm text-gray-700 outline-none resize-none" />
-              </label>
+              <details className="col-span-2">
+                <summary className="cursor-pointer py-1 text-[10px] font-bold text-gray-500">Observação opcional</summary>
+                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 min-h-[64px] w-full resize-y rounded-lg border border-blue-100 bg-[#F4F7FE] p-2 text-xs text-gray-700" />
+              </details>
             </div>
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
-              <button onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
+            <div className="mt-3 flex gap-2">
+              <button type="button" onClick={() => setAbcModalOpen(false)} className="min-h-[40px] flex-1 rounded-lg bg-gray-100 px-2 text-xs font-semibold text-gray-600">Cancelar</button>
+              <button type="button" onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="min-h-[40px] flex-1 rounded-lg bg-[#7a32fc] px-2 text-xs font-semibold text-white disabled:opacity-60">Salvar ABC</button>
             </div>
-          </div>
-        </div>
+          </>
+        )}
+      </div>
+    </div>
   ) : null;
 
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
@@ -8932,44 +8951,33 @@ export const SessionMode = ({
   }
 
   const openDurationsPanel = openDurations.length > 0 ? (
-    <div className="bg-white rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
-      <div className="flex items-center gap-2 mb-3 sm:mb-4">
-        <Timer size={18} className="text-[#7a32fc]" />
-        <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <section data-aba-active-duration-panel aria-label="Comportamentos em duração" className="rounded-xl border border-purple-100 bg-white p-2">
+      <div className="flex flex-col gap-1.5">
         {openDurations.map((event) => (
-          <div key={event.id} className="min-w-0 overflow-hidden rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-bold text-gray-800" title={event.behaviorName}>{event.behaviorName}</p>
-                <p className="mt-1 truncate text-xs text-gray-500" title={`${event.location || 'Sem local'} - severidade ${event.severity || '-'}`}>{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                <p className="mt-1 truncate text-[11px] text-gray-400">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-              </div>
-              <div className="text-right shrink-0">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
-                <p className="text-3xl sm:text-2xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => endDuration(event.id)}
-                disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
-                className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all active:scale-95 disabled:opacity-60"
-              >
-                Encerrar
-              </button>
-              <button
-                onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
-                className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-3 py-2 text-[11px] sm:text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
-              >
-                <FileText size={14} /> ABC rápido
-              </button>
-            </div>
+          <div key={event.id} className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-blue-100 bg-[#F4F7FE] px-2 py-1.5">
+            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-gray-800" title={event.behaviorName}>{event.behaviorName}</span>
+            <span className="shrink-0 tabular-nums text-sm font-bold text-[#7a32fc]" aria-label={`Duração de ${event.behaviorName}`}>{formatElapsed(event.startedAt, nowMs)}</span>
+            <button
+              type="button"
+              onClick={() => endDuration(event.id)}
+              disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
+              aria-label={`Parar duração de ${event.behaviorName}`}
+              className="min-h-[40px] shrink-0 rounded-lg bg-[#1B254B] px-3 text-xs font-bold text-white disabled:opacity-60"
+            >
+              Stop
+            </button>
+            <button
+              type="button"
+              onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
+              aria-label={`Abrir ABC de ${event.behaviorName}`}
+              className="min-h-[40px] shrink-0 rounded-lg border border-purple-100 bg-white px-3 text-xs font-bold text-[#7a32fc]"
+            >
+              ABC
+            </button>
           </div>
         ))}
       </div>
-    </div>
+    </section>
   ) : null;
 
   const getDockButtonClass = (color: string, active = false) => {
@@ -9829,46 +9837,7 @@ export const SessionMode = ({
             </div>
           )}
 
-          {!intervalRun && openDurations.length > 0 && (
-            <div className="sticky top-0 z-30 bg-white rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
-              <div className="flex items-center gap-2 mb-4">
-                <Timer size={18} className="text-[#7a32fc]" />
-                <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {openDurations.map((event) => (
-                  <div key={event.id} className="min-w-0 overflow-hidden rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
-                    <div className="flex min-w-0 items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-gray-800" title={event.behaviorName}>{event.behaviorName}</p>
-                        <p className="mt-1 truncate text-xs text-gray-500" title={`${event.location || 'Sem local'} - severidade ${event.severity || '-'}`}>{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                        <p className="mt-1 truncate text-[11px] text-gray-400">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
-                        <p className="text-3xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                      <button
-                        onClick={() => endDuration(event.id)}
-                        disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
-                        className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all active:scale-95 disabled:opacity-60"
-                      >
-                        Encerrar
-                      </button>
-                      <button
-                        onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
-                        className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
-                      >
-                <FileText size={14} /> ABC rápido
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {!intervalRun && openDurationsPanel}
 
           {intervalRun && (
             <div
