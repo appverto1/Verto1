@@ -138,6 +138,7 @@ jobs:
         run: |
           node tests/mobileClinicHeaderOnlyMenuBell.regression.test.mjs
           node tests/p0PatientSharedChartPortalPriority.regression.test.mjs
+          node tests/patientPortalMenuClipping.regression.test.mjs
           node tests/patientNotificationPushPresentation.test.mjs
           node --import tsx tests/notificationBranding.test.ts
           node tests/notificationAgendaPresentation.regression.test.mjs
