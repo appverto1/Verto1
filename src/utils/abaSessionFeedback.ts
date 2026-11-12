@@ -78,6 +78,7 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
     const count = Number(input.countDelta || 1);
     return {
       variant: 'success',
+      minimal: true,
       title: `${input.behaviorName} registrada`,
       compactTitle: `✓ ${input.behaviorName} ${count > 0 ? '+' : ''}${count}`,
       compactSubtitle: compactContext(input.location, input.severity),
@@ -106,6 +107,7 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
   if (input.action === 'duration_end') {
     return {
       variant: 'success',
+      minimal: true,
       title: `${input.behaviorName} encerrado`,
       compactTitle: `✓ ${input.behaviorName} ${formatClinicalDuration(input.durationSeconds)}`,
       compactSubtitle: 'Duração encerrada',
@@ -145,6 +147,7 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
   if (input.action === 'interval') {
     return {
       variant: 'success',
+      minimal: true,
       title: 'Intervalo registrado',
       compactTitle: `✓ Intervalo ${input.intervalNumber}: ${input.occurred ? 'SIM' : 'NÃO'}`,
       compactSubtitle: input.behaviorName,
@@ -155,6 +158,7 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
   if (input.action === 'abc') {
     return {
       variant: 'success',
+      minimal: true,
       title: 'ABC salvo',
       compactTitle: '✓ ABC salvo',
       compactSubtitle: 'Complemento registrado',
