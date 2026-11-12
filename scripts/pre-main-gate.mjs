@@ -238,6 +238,7 @@ const criticalTests = [
   'tests/p1ClinicalChartHydration.regression.test.mjs',
   'tests/clinicalChartRefreshOnSessionCompletion.regression.test.mjs',
   'tests/p1AdultChartsSessionFinancial.regression.test.mjs',
+  'tests/adultClinicalTaskProjection.test.ts',
   'tests/p1AgendaReceptionRoomStatus.regression.test.mjs',
   'tests/p000PediatricSessionRoute.regression.test.mjs',
   'tests/p000PatientCategoryPersistence.regression.test.mjs',
