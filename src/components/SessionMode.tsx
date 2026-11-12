@@ -33,6 +33,7 @@ import { resolvePatientPortalKind } from '../utils/patientProfileType';
 import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../services/localDb';
 import { AUTOMATIC_SESSION_CLOSURE_KEYS, partitionSessionQueueForClosure, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
+import { AbaActiveDurationsPanel, AbaQuickAbcPanel } from './AbaSessionBehaviorPanels';
 import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
   normalizeAbaPromptTypeConfig,
@@ -431,7 +432,7 @@ const AbaSessionToast = ({ toast, compact = false }: { toast: ClinicalActionToas
   }[toast.variant];
   const Icon = toast.variant === 'success' ? CheckCircle2 : toast.variant === 'error' ? AlertCircle : toast.variant === 'warning' ? Clock : Zap;
   const title = compact ? (toast.compactTitle || toast.title) : toast.title;
-  const subtitle = compact ? (toast.compactSubtitle || toast.subtitle) : toast.subtitle;
+  const subtitle = toast.minimal ? null : compact ? (toast.compactSubtitle || toast.subtitle) : toast.subtitle;
 
   return (
     <div
@@ -1253,6 +1254,7 @@ export const SessionMode = ({
     ? Math.max(1, Math.floor(Number(intervalCustomSeconds) || 1))
     : Number(intervalDurationOptions.find((option) => option.key === intervalDurationMode)?.seconds || 30);
   const [abcModalOpen, setAbcModalOpen] = useState(false);
+  const [abcPanelMinimized, setAbcPanelMinimized] = useState(false);
   const [abcBehaviorId, setAbcBehaviorId] = useState('crying');
   const [abcAntecedent, setAbcAntecedent] = useState(antecedentOptions[0]);
   const [abcConsequence, setAbcConsequence] = useState(consequenceOptions[0]);
@@ -1638,7 +1640,7 @@ export const SessionMode = ({
     actionToastTimerRef.current = window.setTimeout(() => {
       setActionToast(null);
       actionToastTimerRef.current = null;
-    }, intervalToastCompact ? 1500 : 2000);
+    }, intervalToastCompact || toast.minimal ? 1500 : 2000);
   };
 
   const showPersistResultToast = (result: any) => {
@@ -5704,6 +5706,8 @@ export const SessionMode = ({
   const openAbcModal = (behaviorId = selectedBehaviorId) => {
     const behavior = sessionBehaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
     setAbcBehaviorId(behavior.id);
+    setAbcPanelMinimized(false);
+    if (!sessionCompleted) setClinicalDockSheetOpen(false);
     setAbcModalOpen(true);
   };
 
@@ -7941,11 +7945,14 @@ export const SessionMode = ({
     paddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`,
     scrollPaddingBottom: `calc(${scrollBottomPaddingPx}px + env(safe-area-inset-bottom))`
   };
-  const actionToastPositionClass = intervalRun
-    ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
-    : intervalToastCompact
-      ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
-    : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
+  const actionToastMinimal = Boolean(actionToast?.minimal);
+  const actionToastPositionClass = actionToastMinimal
+    ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
+    : intervalRun
+      ? 'top-[calc(5rem+env(safe-area-inset-top))] bottom-auto'
+      : intervalToastCompact
+        ? 'top-[calc(4.75rem+env(safe-area-inset-top))] bottom-auto'
+        : 'bottom-[calc(6.75rem+env(safe-area-inset-bottom))]';
   const closeCompletedSession = () => {
     if (isCompletedSessionReview) {
       onClose?.();
@@ -7959,8 +7966,8 @@ export const SessionMode = ({
   };
   const actionToastPortal = actionToast && typeof document !== 'undefined'
     ? createPortal(
-        <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:top-auto xl:justify-end ${actionToastPositionClass}`}>
-          <AbaSessionToast toast={actionToast} compact={intervalToastCompact} />
+        <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:justify-end ${actionToastMinimal ? 'xl:top-[calc(4.75rem+env(safe-area-inset-top))] xl:bottom-auto' : 'xl:bottom-4 xl:top-auto'} ${actionToastPositionClass}`}>
+          <AbaSessionToast toast={actionToast} compact={intervalToastCompact || actionToastMinimal} />
         </div>,
         document.body
       )
@@ -8216,59 +8223,32 @@ export const SessionMode = ({
   ) : null;
 
   const abcModal = abcModalOpen ? (
-        <div className="fixed inset-0 z-[140] flex items-end sm:items-center justify-center p-3 sm:p-4 bg-black/30 backdrop-blur-sm">
-          <div className="bg-white rounded-[28px] sm:rounded-[32px] p-4 sm:p-6 shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto border border-purple-100">
-            <div className="flex items-center justify-between gap-3 mb-5">
-              <div>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">ABC rápido</p>
-                <h2 className="text-xl font-bold text-gray-800">Evento comportamental</h2>
-              </div>
-              <button onClick={() => setAbcModalOpen(false)} className="p-2 rounded-full hover:bg-gray-100">
-                <X size={20} />
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Comportamento
-                <select value={abcBehaviorId} onChange={(event) => setAbcBehaviorId(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {sessionBehaviorPresets.map((behavior) => <option key={behavior.id} value={behavior.id}>{behavior.name}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Antecedente
-                <select value={abcAntecedent} onChange={(event) => setAbcAntecedent(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {antecedentOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Consequencia
-                <select value={abcConsequence} onChange={(event) => setAbcConsequence(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {consequenceOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Local
-                <select value={abcLocation} onChange={(event) => setAbcLocation(event.target.value)} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {locationOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
-                Severidade
-                <select value={abcSeverity} onChange={(event) => setAbcSeverity(Number(event.target.value))} className="mt-1 w-full bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-xs font-bold text-gray-700 outline-none">
-                  {severityOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-                </select>
-              </label>
-              <label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest sm:col-span-2">
-                Observação opcional
-                <textarea value={abcNote} onChange={(event) => setAbcNote(event.target.value)} maxLength={600} className="mt-1 w-full min-h-[84px] bg-[#F4F7FE] border border-blue-100 rounded-xl px-3 py-3 text-sm text-gray-700 outline-none resize-none" />
-              </label>
-            </div>
-            <div className="flex gap-3 mt-5">
-              <button onClick={() => setAbcModalOpen(false)} className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 font-bold">Cancelar</button>
-              <button onClick={() => void saveAbcEvent()} disabled={Boolean(actionLocks['abc:save'])} className="flex-1 py-3 rounded-2xl bg-[#7a32fc] text-white font-bold shadow-lg shadow-purple-500/20 transition-all active:scale-95 disabled:opacity-60">Salvar ABC</button>
-            </div>
-          </div>
-        </div>
+    <AbaQuickAbcPanel
+      completed={sessionCompleted}
+      minimized={abcPanelMinimized}
+      behaviors={sessionBehaviorPresets}
+      behaviorId={abcBehaviorId}
+      selectedBehaviorName={sessionBehaviorPresets.find((item) => item.id === abcBehaviorId)?.name || selectedBehavior.name}
+      antecedent={abcAntecedent}
+      consequence={abcConsequence}
+      location={abcLocation}
+      severity={abcSeverity}
+      note={abcNote}
+      antecedentOptions={antecedentOptions}
+      consequenceOptions={consequenceOptions}
+      locationOptions={locationOptions}
+      severityOptions={severityOptions}
+      saving={Boolean(actionLocks['abc:save'])}
+      onChangeBehavior={setAbcBehaviorId}
+      onChangeAntecedent={setAbcAntecedent}
+      onChangeConsequence={setAbcConsequence}
+      onChangeLocation={setAbcLocation}
+      onChangeSeverity={setAbcSeverity}
+      onChangeNote={setAbcNote}
+      onToggleMinimized={() => setAbcPanelMinimized((minimized) => !minimized)}
+      onClose={() => setAbcModalOpen(false)}
+      onSave={() => void saveAbcEvent()}
+    />
   ) : null;
 
   if (sessionCompleted && postClosureSummary && !showSessionSummary) {
@@ -8929,44 +8909,14 @@ export const SessionMode = ({
   }
 
   const openDurationsPanel = openDurations.length > 0 ? (
-    <div className="bg-white rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
-      <div className="flex items-center gap-2 mb-3 sm:mb-4">
-        <Timer size={18} className="text-[#7a32fc]" />
-        <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {openDurations.map((event) => (
-          <div key={event.id} className="min-w-0 overflow-hidden rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-bold text-gray-800" title={event.behaviorName}>{event.behaviorName}</p>
-                <p className="mt-1 truncate text-xs text-gray-500" title={`${event.location || 'Sem local'} - severidade ${event.severity || '-'}`}>{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                <p className="mt-1 truncate text-[11px] text-gray-400">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-              </div>
-              <div className="text-right shrink-0">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
-                <p className="text-3xl sm:text-2xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => endDuration(event.id)}
-                disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
-                className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all active:scale-95 disabled:opacity-60"
-              >
-                Encerrar
-              </button>
-              <button
-                onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
-                className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-3 py-2 text-[11px] sm:text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
-              >
-                <FileText size={14} /> ABC rápido
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
+    <AbaActiveDurationsPanel
+      events={openDurations}
+      nowMs={nowMs}
+      lockedStops={actionLocks}
+      elapsed={formatElapsed}
+      onStop={endDuration}
+      onOpenAbc={openAbcModalForBehaviorName}
+    />
   ) : null;
 
   const getDockButtonClass = (color: string, active = false) => {
@@ -9826,46 +9776,7 @@ export const SessionMode = ({
             </div>
           )}
 
-          {!intervalRun && openDurations.length > 0 && (
-            <div className="sticky top-0 z-30 bg-white rounded-[24px] sm:rounded-[28px] p-3 sm:p-5 shadow-2xl shadow-blue-900/10 border border-blue-100">
-              <div className="flex items-center gap-2 mb-4">
-                <Timer size={18} className="text-[#7a32fc]" />
-                <h2 className="text-sm font-bold text-gray-800">Eventos em andamento</h2>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {openDurations.map((event) => (
-                  <div key={event.id} className="min-w-0 overflow-hidden rounded-2xl bg-[#F4F7FE] border border-blue-100 p-3 sm:p-4 flex flex-col gap-3">
-                    <div className="flex min-w-0 items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-gray-800" title={event.behaviorName}>{event.behaviorName}</p>
-                        <p className="mt-1 truncate text-xs text-gray-500" title={`${event.location || 'Sem local'} - severidade ${event.severity || '-'}`}>{event.location || 'Sem local'} - severidade {event.severity || '-'}</p>
-                        <p className="mt-1 truncate text-[11px] text-gray-400">Início {new Date(event.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
-                      </div>
-                      <div className="shrink-0 text-right">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Cronômetro</p>
-                        <p className="text-3xl font-bold text-[#7a32fc] leading-none">{formatElapsed(event.startedAt, nowMs)}</p>
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-                      <button
-                        onClick={() => endDuration(event.id)}
-                        disabled={Boolean(actionLocks[`duration:end:${event.id}`])}
-                        className="min-h-[48px] bg-[#1B254B] text-white rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest transition-all active:scale-95 disabled:opacity-60"
-                      >
-                        Encerrar
-                      </button>
-                      <button
-                        onClick={() => openAbcModalForBehaviorName(event.behaviorName)}
-                        className="min-h-[48px] bg-white text-[#7a32fc] border border-purple-100 rounded-xl px-4 py-2 text-xs font-bold uppercase tracking-widest inline-flex items-center justify-center gap-2"
-                      >
-                <FileText size={14} /> ABC rápido
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {!intervalRun && openDurationsPanel}
 
           {intervalRun && (
             <div
