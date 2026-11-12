@@ -16,7 +16,6 @@ const actor = {
     modules: new Set(['clinical', 'scheduling'])
   }
 };
-const clinic = (req: any) => String(req.session?.user?.clinicId || clinic1);
 
 test('identical context projection preserves role, clinic and stable SHA-256 fingerprint', () => {
   const actual = buildHelpContext(actor, () => clinic1);
