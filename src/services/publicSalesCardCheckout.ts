@@ -1,3 +1,5 @@
+import { SALES_CONTRACT_DOCUMENT } from '../constants/salesContractDocument';
+
 // Task 07: public Checkout initiation after explicit commercial acceptance.
 // This transport retains the current single request/response contract. Stripe keys,
 // payment confirmation, customer identity and idempotency remain server-authoritative.
@@ -35,7 +37,9 @@ export const acceptPublicSalesModularOffer = async (
           headers: { 'Content-Type': 'application/json' },
           credentials: 'omit',
           body: JSON.stringify({
-            commercialValuesConsent: true
+            commercialValuesConsent: true,
+            contractDocumentAcknowledged: true,
+            contractDocumentVersion: SALES_CONTRACT_DOCUMENT.version
           })
         }
       );
