@@ -18,6 +18,7 @@ assert.match(session, /const actionToastMinimal = Boolean\(actionToast\?\.minima
 assert.match(session, /compact=\{intervalToastCompact \|\| actionToastMinimal\}/, 'only opt-in and existing interval toasts should render compactly');
 assert.match(session, /const actionToastPositionClass = actionToastMinimal\s*\? 'top-\[calc\(4\.75rem/, 'minimal confirmation should not obscure the collection area');
 assert.match(session, /intervalToastCompact \|\| toast\.minimal \? 1500 : 2000/, 'minimal confirmation should disappear quickly');
+assert.match(session, /actionToastMinimal \? 'xl:top-\[calc\(4\.75rem/, 'minimal duration notice should stay at the top on desktop too');
 
 assert.match(session, /setOpenDurations\(\(prev\) => \[openEvent, \.\.\.prev\]\)/, 'duration start still opens a timed event');
 assert.match(session, /void saveExistingBehaviorEvent\(payload/, 'clinical event persistence remains in place');
