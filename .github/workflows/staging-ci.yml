@@ -122,6 +122,11 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: ABA behavior capture UI regressions
+        run: |
+          node tests/abaDurationStartMinimalToast.regression.test.mjs
+          node tests/abaBehaviorCollectionMinimalPanels.regression.test.mjs
+
       - name: Partnership public registration and authorization regressions
         run: |
           node --import tsx tests/partnershipSecurity.test.ts
