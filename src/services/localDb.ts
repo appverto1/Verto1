@@ -772,6 +772,20 @@ const runOfflineSync = async (options: SessionSyncOptions) => {
 
         if ((response.ok && responsePayload?.queued !== true && responsePayload?.success !== false) || (response.status === 409 && isIdempotentConflictPayload(responsePayload))) {
           await markRecordSyncStatus(record.id, 'synced');
+          if (isSessionCompletionQueueRecord(record)) {
+            // Replayed completion is now server-confirmed. Refresh only this
+            // patient's mounted clinical graphs; never invalidate on enqueue.
+            const completedPatientId = String(record.data?.patient_id || record.data?.patientId || '').trim();
+            if (completedPatientId) {
+              try {
+                const { invalidateClinicalAnalyticsPatient } = await import('./clinicalAnalyticsQueryCache');
+                invalidateClinicalAnalyticsPatient(completedPatientId, 'all');
+              } catch {
+                // A cache refresh failure must never undo an acknowledged
+                // clinical write or make the durable outbox replay fail.
+              }
+            }
+          }
           console.log(`Synced ${record.type}: ${record.id}`);
         } else if (response.ok && (responsePayload?.queued === true || responsePayload?.success === false)) {
           const failure = await markRecordSyncFailure(record.id, {
