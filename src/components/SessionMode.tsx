@@ -5706,6 +5706,7 @@ export const SessionMode = ({
     const behavior = sessionBehaviorPresets.find((item) => item.id === behaviorId) || selectedBehavior;
     setAbcBehaviorId(behavior.id);
     setAbcPanelMinimized(false);
+    if (!sessionCompleted) setClinicalDockSheetOpen(false);
     setAbcModalOpen(true);
   };
 
