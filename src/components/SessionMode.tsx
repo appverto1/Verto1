@@ -7962,7 +7962,7 @@ export const SessionMode = ({
   };
   const actionToastPortal = actionToast && typeof document !== 'undefined'
     ? createPortal(
-        <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:bottom-4 xl:top-auto xl:justify-end ${actionToastPositionClass}`}>
+        <div className={`pointer-events-none fixed inset-x-0 z-[220] flex justify-center px-3 xl:inset-x-auto xl:right-4 xl:justify-end ${actionToastMinimal ? 'xl:top-[calc(4.75rem+env(safe-area-inset-top))] xl:bottom-auto' : 'xl:bottom-4 xl:top-auto'} ${actionToastPositionClass}`}>
           <AbaSessionToast toast={actionToast} compact={intervalToastCompact || actionToastMinimal} />
         </div>,
         document.body
