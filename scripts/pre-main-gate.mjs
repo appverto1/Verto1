@@ -255,6 +255,7 @@ const criticalTests = [
   'tests/sidebarHoverExpansion.regression.test.mjs',
   'tests/vertoBrandingAssets.regression.test.mjs',
   'tests/salesSuperAdminCommercialModel20260830.regression.test.mjs',
+  'tests/salesContractDocumentAcceptance.test.ts',
   'tests/salesExactPerPatientBillingP0000.test.ts',
   'tests/salesExactPerPatientStripeQuantityP0000.test.ts',
   'tests/salesExactPatientCheckoutUiP0000.regression.test.mjs',
