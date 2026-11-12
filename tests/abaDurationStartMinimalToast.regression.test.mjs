@@ -11,7 +11,7 @@ const startToast = feedback.slice(durationStartAt, durationEndAt);
 const endToast = feedback.slice(durationEndAt, feedback.indexOf("if (input.action === 'trial')", durationEndAt));
 assert.match(startToast, /minimal:\s*true/, 'duration start confirmation should use minimal presentation');
 assert.match(startToast, /compactTitle:\s*`⏱ \$\{input\.behaviorName\} iniciado`/, 'duration start confirmation should identify the behavior');
-assert.doesNotMatch(endToast, /minimal:\s*true/, 'duration end confirmation should keep the existing presentation');
+assert.match(endToast, /minimal:\s*true/, 'duration stop confirmation should also be minimal');
 
 assert.match(session, /const subtitle = toast\.minimal \? null : compact \?/, 'minimal confirmation should take only one line');
 assert.match(session, /const actionToastMinimal = Boolean\(actionToast\?\.minimal\)/);
