@@ -3048,6 +3048,8 @@ export const dataService = {
       }
     );
     const result = await response.json().catch(() => ({}));
+    // Refresh clinical charts only after authoritative server acknowledgement.
+    if (response.ok && result?.success === true) notifyClinicalOutcomesChanged(patientId);
     return response.ok ? result : { success: false, status: response.status, ...result };
   },
 
