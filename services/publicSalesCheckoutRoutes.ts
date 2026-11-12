@@ -24,7 +24,7 @@ export function registerPublicSalesCheckoutRoutes(deps: Record<string, any>) {
           return res.status(400).json({
             success: false,
             error: "CONTRACT_DOCUMENT_ACCEPTANCE_REQUIRED",
-            message: "Leia e aceite a versão atual do Contrato Mestre antes de continuar.",
+            message: "Leia e aceite o Contrato antes de continuar.",
           });
         }
         const loaded = await loadPublicSalesOffer(req.params?.token);
