@@ -7,6 +7,7 @@ export type ClinicalActionToast = {
   subtitle?: string;
   compactTitle?: string;
   compactSubtitle?: string;
+  minimal?: boolean;
 };
 
 type TrialToastInput = {
@@ -91,6 +92,7 @@ export const buildClinicalActionToast = (input: BuildClinicalActionToastInput): 
   if (input.action === 'duration_start') {
     return {
       variant: 'success',
+      minimal: true,
       title: `${input.behaviorName} iniciado`,
       compactTitle: `⏱ ${input.behaviorName} iniciado`,
       compactSubtitle: compactContext(input.location, input.severity),
