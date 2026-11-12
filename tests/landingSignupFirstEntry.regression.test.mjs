@@ -32,14 +32,18 @@ test('care network remains invitation-only and commercial partners have separate
   assert.match(landing, /Parcerias comerciais/);
 });
 
-test('commercial partner shows enrollment before login, preserving verified application and OAuth returns', () => {
+test('commercial partner shows signup first, password/Google login and approval-only activation', () => {
   assert.match(partnership, /entryChoice, setEntryChoice/);
-  assert.match(partnership, /!entryChoice && !applicationResult/);
-  assert.match(partnership, /setEntryChoice\('signup'\); setSignupMode\(true\)/);
-  assert.match(partnership, /setEntryChoice\('login'\); setSignupMode\(false\)/);
+  assert.match(partnership, /entryChoice === null && !applicationResult/);
+  assert.match(partnership, /setEntryChoice\('signup'\)/);
+  assert.match(partnership, /setEntryChoice\('login'\)/);
   assert.match(partnership, /Já é parceiro\?/);
   assert.match(partnership, /Fazer login/);
-  assert.match(partnership, /if \(signupReturn\) \{/);
+  assert.match(partnership, /if \(setupReturn\) \{/);
   assert.match(partnership, /await exchangeSession\(session\.access_token\)/);
   assert.match(partnership, /fetch\('\/api\/partnerships\/apply'/);
+  assert.match(partnership, /signInWithPassword/);
+  assert.match(partnership, /signInWithOAuth/);
+  assert.match(partnership, /updateUser\(\{ password \}\)/);
+  assert.doesNotMatch(partnership, /signInWithOtp|verifyOtp/);
 });

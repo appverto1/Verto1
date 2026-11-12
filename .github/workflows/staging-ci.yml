@@ -122,12 +122,19 @@ jobs:
       - name: Production build
         run: npm run build
 
+      - name: ABA behavior capture UI regressions
+        run: |
+          node tests/abaDurationStartMinimalToast.regression.test.mjs
+          node tests/abaBehaviorCollectionMinimalPanels.regression.test.mjs
+
       - name: Partnership public registration and authorization regressions
         run: |
           node --import tsx tests/partnershipSecurity.test.ts
           node --import tsx tests/partnerReferralCoupon.test.ts
           node tests/partnerReferralCrmReporting.regression.test.mjs
           node --import tsx tests/partnerMarketplaceSecurity.test.ts
+          node --import tsx tests/partnerMarketplaceImageUpload.test.ts
+          node --import tsx tests/partnerApprovalFlow.test.ts
           node --import tsx tests/partnershipEmailCallback.test.ts
           node tests/landingSignupFirstEntry.regression.test.mjs
           node tests/externalPartnerOnboardingHub20260903.regression.test.mjs
@@ -136,6 +143,7 @@ jobs:
         run: |
           node tests/mobileClinicHeaderOnlyMenuBell.regression.test.mjs
           node tests/p0PatientSharedChartPortalPriority.regression.test.mjs
+          node tests/patientPortalMenuClipping.regression.test.mjs
           node tests/patientNotificationPushPresentation.test.mjs
           node --import tsx tests/notificationBranding.test.ts
           node tests/notificationAgendaPresentation.regression.test.mjs

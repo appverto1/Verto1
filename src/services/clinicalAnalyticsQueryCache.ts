@@ -26,6 +26,7 @@ type QueryEntry<T = any> = {
   status: QueryStatus;
   updatedAt: number;
   invalidatedAt: number;
+  invalidationVersion: number;
   revision: number;
   requestId: number;
   promise: Promise<T> | null;
@@ -93,6 +94,7 @@ function getOrCreateEntry<T>(scope: ClinicalAnalyticsQueryScope): QueryEntry<T> 
     status: 'idle',
     updatedAt: 0,
     invalidatedAt: 0,
+    invalidationVersion: 0,
     revision: 0,
     requestId: 0,
     promise: null,
@@ -120,6 +122,7 @@ function ensureBroadcastChannel() {
       if (entry.patientHash !== patientHash) continue;
       if (family && family !== 'all' && entry.family !== family) continue;
       entry.invalidatedAt = Math.max(entry.invalidatedAt, Number(payload.revision || Date.now()));
+      entry.invalidationVersion += 1;
       emit(entry);
     }
   });
@@ -140,6 +143,7 @@ export function invalidateClinicalAnalyticsPatient(patientId: string, family: Cl
     if (entry.patientHash !== patientHash) continue;
     if (family !== 'all' && entry.family !== family) continue;
     entry.invalidatedAt = Math.max(entry.invalidatedAt, revision);
+    entry.invalidationVersion += 1;
     emit(entry);
   }
   broadcastInvalidation(patientHash, family, revision);
@@ -157,6 +161,8 @@ async function fetchClinicalAnalyticsQuery<T>(
   if (entry.promise) return entry.promise;
 
   const requestId = entry.requestId + 1;
+  // An invalidation arriving during an in-flight read must outlive that response.
+  const invalidationVersionAtStart = entry.invalidationVersion;
   entry.requestId = requestId;
   entry.status = 'loading';
   entry.error = '';
@@ -170,8 +176,14 @@ async function fetchClinicalAnalyticsQuery<T>(
       entry.data = result;
       entry.error = '';
       entry.status = 'success';
-      entry.updatedAt = Date.now();
-      entry.invalidatedAt = 0;
+      if (entry.invalidationVersion === invalidationVersionAtStart) {
+        entry.updatedAt = Date.now();
+        entry.invalidatedAt = 0;
+      } else {
+        // Keep previously displayed evidence while the cache refetches the
+        // authoritative post-write snapshot; never mark the older read fresh.
+        entry.updatedAt = 0;
+      }
       return result;
     })
     .catch((error: any) => {

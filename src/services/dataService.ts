@@ -3132,6 +3132,9 @@ export const dataService = {
       }
     );
     const result = await response.json().catch(() => ({}));
+    // Only a server-acknowledged completion can refresh adult clinical graphs.
+    // Draft notes, failed writes and pending closures must never be treated as final.
+    if (response.ok && result?.success === true) notifyClinicalOutcomesChanged(patientId);
     return response.ok ? result : { success: false, status: response.status, ...result };
   },
 

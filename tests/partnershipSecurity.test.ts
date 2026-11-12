@@ -142,11 +142,11 @@ test('an owner referral cannot override an ineligible or already attributed lead
   assert.equal(denied.body.error, 'REFERRAL_NOT_ELIGIBLE');
 });
 
-test('verified public application creates only a pending account, never a session or approval', async () => {
+test('public application collects the login e-mail without creating clinical access', async () => {
   const f = fixture();
   const session: any = { save(cb: any) { cb(null); } };
   const result = await f.run('POST', '/api/partnerships/apply',
-    f.req({ accessToken: 'a'.repeat(80), displayName: 'Parceiro Novo' }, session));
+    f.req({ contactEmail: email, displayName: 'Parceiro Novo' }, session));
   assert.equal(result.statusCode, 201);
   assert.deepEqual(result.body, { success: true, status: 'pending' });
   const write = f.calls.find(call => call.type === 'insert');
@@ -163,37 +163,31 @@ test('verified public application creates only a pending account, never a sessio
   assert.equal(f.routes['POST /api/partnerships/apply'].length, 2, 'rate limiter required');
 });
 
-test('public application refuses unverified identity, clinical session and caller-supplied approval or email', async () => {
-  const unconfirmed = fixture({ auth: { data: { user: { id: userId, email } }, error: null } });
-  const body = { accessToken: 'a'.repeat(80), displayName: 'Parceiro Novo' };
-  const noEmail = await unconfirmed.run('POST', '/api/partnerships/apply', unconfirmed.req(body, {}));
-  assert.equal(noEmail.statusCode, 401);
-  assert.equal(noEmail.body.error, 'EMAIL_VERIFICATION_REQUIRED');
-  assert.equal(unconfirmed.calls.length, 0);
-
+test('public application rejects clinical sessions, forged authority and invalid e-mails', async () => {
   const f = fixture();
-  const forged = await f.run('POST', '/api/partnerships/apply',
-    f.req({ ...body, status: 'approved', complianceApproved: true, contactEmail: 'victim@example.test' }));
-  assert.equal(forged.statusCode, 400);
-  const invalid = await f.run('POST', '/api/partnerships/apply', f.req({
-    ...body, displayName: 'A'.repeat(181),
-  }));
-  assert.equal(invalid.statusCode, 400);
+  const body = { contactEmail: email, displayName: 'Parceiro Novo' };
+  for (const forged of [
+    { ...body, status: 'approved', complianceApproved: true },
+    { ...body, user_id: userId },
+    { ...body, contactEmail: 'not-an-email' },
+    { ...body, displayName: 'A'.repeat(181) },
+  ]) {
+    assert.equal((await f.run('POST','/api/partnerships/apply', f.req(forged))).statusCode,400);
+  }
   const clinical = await f.run('POST', '/api/partnerships/apply',
     f.req(body, { user: { id: userId, role: 'therapist' } }));
   assert.equal(clinical.statusCode, 409);
   assert.equal(f.calls.length, 0);
 });
 
-test('duplicate public applications are idempotent and never reset an existing approval', async () => {
+test('duplicate public applications are neutral and never reset an existing approval', async () => {
   const f = fixture({ insertError: { code: '23505' } });
   const result = await f.run('POST', '/api/partnerships/apply', f.req({
-    accessToken: 'a'.repeat(80), displayName: 'Alteração Não Autorizada',
+    contactEmail: email, displayName: 'Alteração Não Autorizada',
   }));
   assert.equal(result.statusCode, 200);
-  assert.deepEqual(result.body, { success: true, status: 'approved', idempotent: true });
+  assert.deepEqual(result.body, { success: true, status: 'pending' });
   assert.equal(f.calls.filter(c => c.type === 'insert').length, 1);
-  // A uniqueness conflict is followed by one read, never an update.
 });
 
 test('pending or suspended partners cannot create or continue an external partner session', async () => {

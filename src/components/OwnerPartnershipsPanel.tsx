@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { CheckCircle2, Copy, Loader2, RefreshCw, ShieldCheck, UserPlus } from 'lucide-react';
+import { CheckCircle2, Copy, Loader2, Mail, RefreshCw, ShieldCheck, UserPlus } from 'lucide-react';
 
 type Partner = {
   id: string;
@@ -62,8 +62,14 @@ export function OwnerPartnershipsPanel() {
       const responseMessage = await fn();
       await reload();
       setMessage(responseMessage);
-    } catch (e: any) { setError(e.message || 'Não foi possível salvar.'); }
-    finally { setBusy(false); }
+    } catch (e: any) {
+      await reload();
+      setError(e.message === 'APPROVAL_SAVED_EMAIL_FAILED'
+        ? 'Parceria aprovada, mas o convite não foi entregue. Use Reenviar convite após conferir o e-mail.'
+        : e.message === 'INVITATION_ALREADY_SENT'
+          ? 'Um convite já foi enviado recentemente. Confira a caixa de entrada antes de reenviar.'
+          : e.message || 'Não foi possível salvar.');
+    } finally { setBusy(false); }
   };
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,9 +88,20 @@ export function OwnerPartnershipsPanel() {
         ...asJson({ status, complianceApproved: status === 'approved' })
       });
       setConfirmCompliance(prev => ({ ...prev, [item.id]: false }));
-      return status === 'approved' ? 'Parceiro aprovado.' : 'Status atualizado.';
+      return status === 'approved'
+        ? (item.partner_kind === 'external' ? 'Parceiro aprovado. Convite enviado para o e-mail cadastrado.' : 'Parceiro aprovado.')
+        : 'Status atualizado.';
     });
   };
+  const resendInvitation = async (item: Partner) => {
+    await mutate(async () => {
+      await request('/api/owner/partnerships/accounts/' + encodeURIComponent(item.id) + '/invite', {
+        method: 'POST', ...asJson({})
+      });
+      return 'Convite de ativação reenviado ao e-mail cadastrado.';
+    });
+  };
+
   const saveCoupon = async (item: Partner) => {
     if (busy || item.referral_alias || item.status !== 'approved') return;
     const couponCode = (couponDraft[item.id] || '').toUpperCase();
@@ -195,6 +212,11 @@ export function OwnerPartnershipsPanel() {
                   <ShieldCheck size={14} className="mr-1 inline"/>Aprovar
                 </button>
               </div>}
+              {item.status === 'approved' && item.partner_kind === 'external' && <button type="button"
+                disabled={busy} onClick={() => void resendInvitation(item)}
+                className="rounded-lg border border-violet-300 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-50">
+                <Mail size={14} className="mr-1 inline"/>Reenviar convite
+              </button>}
               {item.status === 'approved' && <button type="button" disabled={busy} onClick={() => void setStatus(item, 'suspended')}
                 className="rounded-lg border border-slate-300 px-3 py-2 text-xs text-slate-700 disabled:opacity-50">Suspender</button>}
               {item.status === 'suspended' && <button type="button" disabled={busy} onClick={() => void setStatus(item, 'pending')}
