@@ -2479,6 +2479,7 @@ export const SessionMode = ({
         cmv3Payload.censorReason = 'SESSION_FINALIZATION';
       }
       const useCanonicalPlanWriter = Boolean(cmv3Payload);
+      updateRecord(trialId, { rawPayload: { ...rawPayload, canonicalPlanWriter: useCanonicalPlanWriter } });
       const result = useCanonicalPlanWriter
         ? await dataService.saveClinicalPlanMeasurementV3(patientId, cmv3Payload)
         : await dataService.saveAbaTrial({
@@ -2508,14 +2509,21 @@ export const SessionMode = ({
             }
           });
       if (result?.success === false) {
-        updateRecordStatus(trialId, result?.durable ? 'local' : 'error');
-        if (!result?.durable) {
+        // Permanent server rejection is not a queued clinical success, even if
+        // the encrypted outbox retained its evidence for later review.
+        const pendingDurable = result?.durable === true && result?.pending === true;
+        updateRecordStatus(trialId, pendingDurable ? 'local' : 'error');
+        if (!pendingDurable) {
           setSessionWarning(result?.error || (useCanonicalPlanWriter ? 'Não foi possível salvar esta medida no registro clínico V3. Nenhum registro Legacy foi criado.' : 'Não foi possível salvar esta medida clínica.'));
           showClinicalToast(buildClinicalSaveErrorToast(), 'error');
           return false;
         }
       } else {
         updateRecordStatus(trialId, result?.pending ? 'local' : 'synced');
+      }
+      if (result?.pending === true) {
+        showClinicalToast(buildClinicalOfflineToast(), 'none');
+        return true;
       }
       triggerMicroFeedback(actionKey, normalizedMeasurementType === 'frequency' ? 'plus' : 'check');
       const measurementFeedback = displayLabel || formatTherapeuticMeasurementValue(normalizedMeasurementType, numericValue);
@@ -3789,6 +3797,97 @@ export const SessionMode = ({
       setSessionWarning(error?.message || 'Não foi possível persistir a tentativa V3.');
       showClinicalToast(buildClinicalSaveErrorToast(), 'error');
       console.error('Falha ao persistir tentativa ABA V3:', error);
+    }
+  };
+
+  const retryUnconfirmedSessionTrial = async (record: SessionRecord): Promise<boolean> => {
+    if (record.kind !== 'trial' || record.syncStatus !== 'error' || record.measurementModelVersion === 'V3') return false;
+    const source = String(record.rawPayload?.source || '');
+    if (!['session_mode_trial', 'therapeutic_program_measurement'].includes(source) || !record.id || !record.targetId) return false;
+    if (source === 'session_mode_trial' && String(record.rawPayload?.clientTrialId || '') !== record.id) return false;
+    const retryKey = `retry-unconfirmed:${record.id}`;
+    if (!lockAction(retryKey, 0)) return false;
+    updateRecordStatus(record.id, 'syncing');
+    try {
+      const raw = record.rawPayload || {};
+      let result: any;
+      if (source === 'therapeutic_program_measurement') {
+        const goal = sessionGoals.find((item: any) => goalTargetId(item) === String(record.targetId));
+        if (!goal || !Number.isFinite(Number(record.measuredValue ?? raw.measurementValue))) {
+          throw new Error('A medição não possui o alvo e o valor necessários para recuperação segura.');
+        }
+        const measurementType = String(record.measurementType || raw.measurementType || '');
+        const payload = buildClinicalPlanMeasurementV3Payload({
+          goal,
+          measurementType,
+          numericValue: Number(record.measuredValue ?? raw.measurementValue),
+          measurementUnit: record.measurementUnit || raw.measurementUnit || null,
+          timestamp: record.timestamp,
+          startedAt: raw.startedAt || record.timestamp,
+          endedAt: raw.endedAt || record.timestamp,
+          trialId: record.id,
+        });
+        if (raw.canonicalPlanWriter === true && !payload) {
+          throw new Error('A identidade clínica V3 original não está disponível; a medição não pode ser convertida em Legacy.');
+        }
+        result = payload
+          ? await dataService.saveClinicalPlanMeasurementV3(patientId, payload)
+          : await dataService.saveAbaTrial({
+              id: record.id, patient_id: patientId, clinic_id: resolvedClinicId || undefined,
+              session_id: sessionId, target_id: record.targetId,
+              target_name: record.targetName || record.title, program_id: record.programId || undefined,
+              collection_type: normalizeAbaCollectionType(record.collectionType),
+              trial_type: normalizeAbaCollectionType(record.collectionType),
+              ...(measurementType === 'correct_incorrect' ? {
+                response_score: Number(record.measuredValue ?? raw.measurementValue),
+                max_score: 1, correct: Number(record.measuredValue ?? raw.measurementValue) > 0,
+              } : {}),
+              independent: false, occurred_at: record.timestamp,
+              therapist_id: record.therapistId || resolvedTherapistId || undefined,
+              source: 'therapeutic_program_measurement_legacy_fallback',
+              raw_payload: { ...raw, canonicalPlanWriterFallback: true, therapeuticObjectiveId: goalTherapeuticObjectiveId(goal) || null },
+            });
+      } else {
+        const maxScore = Number(raw.targetMaxScore || 1);
+        if (!Number.isFinite(maxScore) || maxScore <= 0 || !Number.isFinite(Number(record.score))) {
+          throw new Error('A tentativa original não contém pontuação válida para um reenvio seguro.');
+        }
+        result = await dataService.saveAbaTrial({
+          id: record.id, clinic_id: resolvedClinicId || undefined,
+          patient_id: patientId, session_id: sessionId,
+          target_id: record.targetId, target_name: record.targetName || record.title,
+          program_id: record.programId || undefined,
+          collection_type: normalizeAbaCollectionType(record.collectionType),
+          trial_type: normalizeAbaCollectionType(record.collectionType),
+          response_score: Number(record.score), max_score: maxScore,
+          correct: Boolean(record.correct), independent: Boolean(record.independent),
+          prompt_level_key: record.promptLevelKey || undefined,
+          prompt_level_name: record.promptLevelName || undefined,
+          prompt_type_id: record.promptTypeId || undefined,
+          prompt_type_name_snapshot: record.promptTypeNameSnapshot || undefined,
+          prompt_category_snapshot: record.promptCategorySnapshot || undefined,
+          prompt_independence_score_snapshot: record.promptIndependenceScoreSnapshot ?? undefined,
+          prompt_intrusiveness_order_snapshot: record.promptIntrusivenessOrderSnapshot ?? undefined,
+          occurred_at: record.timestamp,
+          therapist_id: record.therapistId || resolvedTherapistId || undefined,
+          source: 'verto_web', raw_payload: raw,
+        });
+      }
+      const confirmed = result?.success === true && result?.pending !== true && result?.offline !== true;
+      const queued = result?.pending === true && result?.durable === true;
+      if (!confirmed && !queued) throw new Error(result?.error || 'Servidor e fila local não confirmaram esta tentativa.');
+      updateRecordStatus(record.id, confirmed ? 'synced' : 'local');
+      if (queued) showClinicalToast(buildClinicalOfflineToast(), 'none');
+      else showClinicalToast({ variant: 'success', title: 'Tentativa recuperada', subtitle: 'Registro confirmado pelo servidor.' });
+      if (confirmed) onSessionRecordSaved?.();
+      return true;
+    } catch (error: any) {
+      updateRecordStatus(record.id, 'error');
+      setSessionWarning(error?.message || 'Falha ao reenviar a tentativa.');
+      showClinicalToast({ variant: 'error', title: 'Tentativa ainda não confirmada', subtitle: error?.message || 'Não foi possível recuperar o registro.' }, 'error');
+      return false;
+    } finally {
+      releaseActionLock(retryKey);
     }
   };
 
@@ -5972,6 +6071,15 @@ export const SessionMode = ({
         await waitForSessionWrites(() => recordsRef.current.some((record) => record.syncStatus === 'syncing'));
         for (const record of recordsRef.current.filter((item) => item.kind === 'trial' && item.measurementModelVersion === 'V3' && item.syncStatus === 'error')) {
           await retryFailedV3Trial(record);
+        }
+        // Existing session records may have failed while offline before they
+        // had a durable queue entry. Reconcile using their ORIGINAL event IDs,
+        // never by blindly allowing completion or recreating a new attempt.
+        for (const record of recordsRef.current.filter((item) =>
+          item.kind === 'trial' && item.measurementModelVersion !== 'V3' && item.syncStatus === 'error'
+          && ['session_mode_trial', 'therapeutic_program_measurement'].includes(String(item.rawPayload?.source || ''))
+        )) {
+          await retryUnconfirmedSessionTrial(record);
         }
         setReinforcerClosureSyncing(true);
       setSessionWarning('Sincronizando registros antes de encerrar…');
@@ -11124,9 +11232,18 @@ export const SessionMode = ({
                           )}
                         </div>
                       ) : (
-                        <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
-                          <Pencil size={11} /> Editar
-                        </button>
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {record.kind === 'trial' && record.syncStatus === 'error'
+                            && ['session_mode_trial', 'therapeutic_program_measurement'].includes(String(record.rawPayload?.source || '')) && (
+                              <button type="button" onClick={() => void retryUnconfirmedSessionTrial(record)}
+                                className="inline-flex min-h-[36px] items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-amber-800">
+                                <RotateCcw size={11} /> Tentar novamente
+                              </button>
+                            )}
+                          <button onClick={() => startEditingRecord(record)} className="inline-flex min-h-[36px] items-center gap-1 rounded-full bg-white border border-gray-100 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-gray-500 hover:text-[#7a32fc]">
+                            <Pencil size={11} /> Editar
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>
