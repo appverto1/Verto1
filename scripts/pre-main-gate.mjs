@@ -204,6 +204,7 @@ const criticalTests = [
   'tests/ptsTherapeuticDashboard.test.mjs',
   'tests/clinicCanonicalTimeZone.regression.test.mjs',
   'tests/helpContextExtraction.test.ts',
+  'tests/schoolManagementModularization.test.ts',
   'tests/abaSessionClinicalDateTimezone.regression.test.mjs',
   'tests/abaReinforcersRuntime.regression.test.mjs',
   'tests/sessionCompletionMissingSessionRecovery.regression.test.mjs',

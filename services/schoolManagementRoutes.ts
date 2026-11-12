@@ -1,5 +1,7 @@
 import crypto from 'crypto';
 import type { Express } from 'express';
+import { payloadHash } from './schoolPayloadHash';
+import { createSchoolErrorResponse } from './schoolErrorResponse';
 import { filterPatientFilesForActor } from '../src/utils/patientFileAccess';
 
 type SchoolRouteDeps = {
@@ -15,15 +17,6 @@ type SchoolRouteDeps = {
 };
 
 
-const stableValue = (value: any): any => {
-  if (Array.isArray(value)) return value.map(stableValue);
-  if (value && typeof value === 'object') return Object.keys(value).sort().reduce((acc: any, key) => {
-    if (value[key] !== undefined) acc[key] = stableValue(value[key]);
-    return acc;
-  }, {});
-  return value;
-};
-const payloadHash = (payload: any) => crypto.createHash('sha256').update(JSON.stringify(stableValue(payload))).digest('hex');
 const safeIdempotencyKey = (value: any) => String(value || '').trim().slice(0, 180);
 const safeArray = (value: any) => Array.isArray(value) ? value : [];
 const uniq = (values: any[]) => Array.from(new Set(values.map(String).filter(Boolean)));
@@ -140,23 +133,7 @@ export function registerSchoolManagementRoutes(app: Express, deps: SchoolRouteDe
     };
   };
 
-  const errorResponse = (res: any, error: any, fallback = 'Não foi possível concluir a operação escolar.') => {
-    const raw = String(error?.message || error?.code || error || '');
-    const conflictMatch = raw.match(/SCHOOL_PROFESSIONAL_CONFLICT:(\{.*\})/);
-    if (conflictMatch) {
-      let conflict: any = null;
-      try { conflict = JSON.parse(conflictMatch[1]); } catch { conflict = { detail: conflictMatch[1] }; }
-      return res.status(409).json({ success: false, error: 'SCHOOL_PROFESSIONAL_CONFLICT', message: 'Um profissional já possui outro compromisso nesse horário.', conflict });
-    }
-    if (/IDEMPOTENCY_CONFLICT|23505|duplicate/i.test(raw)) return res.status(409).json({ success: false, error: 'SCHOOL_CONFLICT', message: 'A operação conflita com um registro existente ou com outra tentativa.' });
-    if (/CONSENT_REQUIRED|CONSENT_INVALID|ACCESS_DENIED|PATIENT_ACCESS_DENIED/i.test(raw)) return res.status(/CONSENT/i.test(raw) ? 422 : 403).json({ success: false, error: /CONSENT/i.test(raw) ? 'SCHOOL_CONSENT_REQUIRED' : 'SCHOOL_ACCESS_DENIED', message: /CONSENT/i.test(raw) ? 'A autorização necessária não está válida.' : 'Você não possui acesso a este recurso.' });
-    if (/NOT_FOUND|PGRST116/i.test(raw)) return res.status(404).json({ success: false, error: 'SCHOOL_NOT_FOUND', message: 'Recurso não encontrado no seu escopo.' });
-    if (/SCHOOL_UNIT_REQUIRED/i.test(raw)) return res.status(422).json({ success: false, error: 'SCHOOL_UNIT_REQUIRED', message: 'Selecione a unidade correta: esta escola possui unidades ativas.' });
-    if (/INVALID|MISMATCH|TRANSITION|CHECK|REQUIRED/i.test(raw)) return res.status(422).json({ success: false, error: 'SCHOOL_BUSINESS_RULE', message: 'Os dados não atendem às regras da operação escolar.' });
-    if (error?.statusCode) return res.status(error.statusCode).json({ success: false, error: raw, message: fallback });
-    console.error('[SchoolManagement]', { code: sanitizeString(error?.code, 80), message: sanitizeString(raw, 240) });
-    return res.status(500).json({ success: false, error: 'SCHOOL_OPERATION_FAILED', message: fallback });
-  };
+  const errorResponse = createSchoolErrorResponse(sanitizeString);
 
   const rpc = async (name: string, scope: any, payload: any, operationPayload: any) => {
     const idempotencyKey = safeIdempotencyKey(operationPayload?.idempotencyKey);
