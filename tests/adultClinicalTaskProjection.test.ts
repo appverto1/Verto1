@@ -83,13 +83,13 @@ assert.equal(getEffortEmoji(80), '😫');
 
 const source = readFileSync('src/utils/adultClinicalTaskProjection.ts', 'utf8');
 const panel = readFileSync('src/components/PatientDetailView.tsx', 'utf8');
-assert.doesNotMatch(source, /dataService|supabase|fetch\\(|axios|\.insert\\(|\.update\\(/,
+assert.doesNotMatch(source, /dataService|supabase|fetch\(|axios|\.insert\(|\.update\(/,
   'projection module must not read or write the server or database');
 assert.match(panel, /const normalizeReviewedAssignedTask =/,
   'clinical review merging remains in patient panel');
 assert.match(panel, /const handleSchedule = async/,
   'explicit task scheduling persistence remains in patient panel');
-assert.match(panel, /\\(\\) => buildAdultCompletedTasks\\(assignedTasks, patientTasks\\)/);
-assert.match(panel, /\\(\\) => buildAdultScheduledTasks\\(patientTasks, assignedTasks, isKidsProfile\\)/);
+assert.match(panel, /\(\) => buildAdultCompletedTasks\(assignedTasks, patientTasks\)/);
+assert.match(panel, /\(\) => buildAdultScheduledTasks\(patientTasks, assignedTasks, isKidsProfile\)/);
 
 console.log('adultClinicalTaskProjection.test.ts: PASS');
