@@ -15,8 +15,20 @@ const req=async(path:string,init?:RequestInit)=>{
 const asJson=(method:string,body:unknown):RequestInit=>({
   method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
 });
+const PARTNER_CATEGORIES:readonly string[]=[
+  'Marketing',
+  'Publicidade',
+  'Tecnologia e software',
+  'Consultoria e gestão',
+  'Contabilidade e finanças',
+  'Jurídico e compliance',
+  'Recursos humanos',
+  'Treinamento e capacitação',
+  'Equipamentos e suprimentos',
+  'Infraestrutura e manutenção'
+];
 
-export function PartnerMarketplacePublisher({activeSection='store'}:{activeSection?:'store'|'interests'}){
+export function PartnerMarketplacePublisher({activeSection='store',onPendingInterestsChange}:{activeSection?:'store'|'interests';onPendingInterestsChange?:(count:number|null)=>void}){
   const [profile,setProfile]=useState({serviceName:'',category:'',description:'',logoUrl:'',photoUrl:''});
   const [logoFile,setLogoFile]=useState<File|null>(null);
   const [photoFile,setPhotoFile]=useState<File|null>(null);
@@ -38,10 +50,12 @@ export function PartnerMarketplacePublisher({activeSection='store'}:{activeSecti
         description:p?.description||'',logoUrl:p?.logo_url||'',photoUrl:p?.photo_url||''
       });
       setImagePreview({logo:p?.logo_preview_url||'',photo:p?.photo_preview_url||''});
-      setInbox(Array.isArray(d.inbox)?d.inbox:[]);
-    }catch(e:any){setError(e.message);}
+      const leads:PartnerLead[]=Array.isArray(d.inbox)?d.inbox:[];
+      setInbox(leads);
+      onPendingInterestsChange?.(leads.filter(lead=>lead.status==='interested').length);
+    }catch(e:any){setError(e.message);onPendingInterestsChange?.(null);}
     finally{setLoading(false);}
-  },[]);
+  },[onPendingInterestsChange]);
   useEffect(()=>{void load();},[load]);
   const selectImage=(kind:'logo'|'photo',file:File|null)=>{
     if(file && (file.size>10*1024*1024 || !['image/jpeg','image/png','image/webp'].includes(file.type))){
@@ -116,9 +130,14 @@ export function PartnerMarketplacePublisher({activeSection='store'}:{activeSecti
               className="mt-1 w-full rounded-xl border border-slate-300 p-3 text-sm" placeholder="Gestão de tráfego pago"/>
           </label>
           <label className="block text-sm font-medium text-slate-700">Categoria
-            <input required minLength={2} maxLength={70} value={profile.category}
+            <select required value={profile.category}
               onChange={e=>setProfile({...profile,category:e.target.value})}
-              className="mt-1 w-full rounded-xl border border-slate-300 p-3 text-sm" placeholder="Marketing e publicidade"/>
+              className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 text-sm">
+              <option value="" disabled>Selecione uma categoria</option>
+              {profile.category&&!PARTNER_CATEGORIES.includes(profile.category)&&
+                <option value={profile.category}>{profile.category} (categoria atual)</option>}
+              {PARTNER_CATEGORIES.map(category=><option key={category} value={category}>{category}</option>)}
+            </select>
           </label>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -128,6 +147,7 @@ export function PartnerMarketplacePublisher({activeSection='store'}:{activeSecti
               className="mt-1 block w-full rounded-xl border border-slate-300 p-3 text-sm"/>
             {logoFile?<span className="mt-1 block text-xs text-violet-700">{logoFile.name} — será enviado ao salvar</span>
               :imagePreview.logo?<img src={imagePreview.logo} alt="Logo atual" className="mt-2 h-20 w-20 rounded-xl object-contain"/>:null}
+            <span className="mt-1 block text-xs font-normal text-slate-500">Formato recomendado: quadrado (1:1), 800 × 800 px. Prefira PNG ou WebP; fundo transparente é opcional.</span>
           </label>
           <label className="block text-sm font-medium text-slate-700">Foto de apresentação (até 10 MB)
             <input type="file" accept="image/jpeg,image/png,image/webp"
@@ -135,6 +155,7 @@ export function PartnerMarketplacePublisher({activeSection='store'}:{activeSecti
               className="mt-1 block w-full rounded-xl border border-slate-300 p-3 text-sm"/>
             {photoFile?<span className="mt-1 block text-xs text-violet-700">{photoFile.name} — será enviado ao salvar</span>
               :imagePreview.photo?<img src={imagePreview.photo} alt="Foto atual" className="mt-2 h-20 max-w-full rounded-xl object-cover"/>:null}
+            <span className="mt-1 block text-xs font-normal text-slate-500">Formato recomendado: horizontal (16:9), 1200 × 675 px. Deixe textos e elementos importantes longe das bordas, que podem ser recortadas.</span>
           </label>
         </div>
         <p className="text-xs text-slate-500">
