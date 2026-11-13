@@ -23,11 +23,10 @@ assert.match(provision, /normalized === "database error creating new user"/);
 assert.match(provision, /sanitizeEmail\(authUser\.email\) !== email/);
 assert.match(provision, /authUser\?\.user_metadata\?\.sales_activation_offer_id/);
 assert.match(provision, /authUser = await findAuthUserByEmail\(email\)/);
-assert.doesNotMatch(
-  provision.match(/if \(createError\)[^]*?\n\s*}\n\s*if \(!authUser\?\.id\)/)?.[0] || '',
-  /throw conflict/,
-  'a concurrent Auth create race must not be converted directly into review_required',
-);
+assert.match(provision, /if \(!authUser\?\.id \|\| sanitizeEmail\(authUser\.email\) !== email\) throw createError;/);
+assert.match(provision, /if \(isAmbiguousAuthCreateError[\s\S]*sales_activation_offer_id[\s\S]*SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED/);
+// Same-offer retries continue into the normal authorization checks. Only a different
+// sales offer is sent to review; executable race cases live in the dedicated test.
 
 assert.match(provision, /from\("clinic_memberships"\)/);
 assert.match(provision, /membershipClinicId === authUser\.id/);
