@@ -5,7 +5,7 @@ type Service={
   partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;
   partner:{display_name:string};rating_average:number;review_count:number;
 };
-type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null;my_review_count:number};
+type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null;my_review_count:number;partner?:{display_name:string}|null};
 type Review={id:string;rating:number;comment:string;created_at:string;clinic?:{name:string}|null};
 async function api(path:string,init?:RequestInit){
   const r=await fetch(path,{credentials:'include',cache:'no-store',...init});
@@ -252,14 +252,14 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
           return <article key={lead.id} className="rounded-2xl border border-slate-200 bg-white p-5">
             <div className="flex items-start gap-3">
               {service?.logo_url
-                ?<img src={service.logo_url} alt={'Logo '+(service.partner?.display_name||'do parceiro')}
+                ?<img src={service.logo_url} alt={'Logo '+(service.partner?.display_name||lead.partner?.display_name||'do parceiro')}
                   referrerPolicy="no-referrer" loading="lazy"
                   className="h-14 w-14 shrink-0 rounded-xl border border-slate-100 object-contain"/>
                 :<div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-xl font-bold text-violet-700">
-                  {service?.partner?.display_name?.slice(0,1)||'V'}
+                  {(service?.partner?.display_name||lead.partner?.display_name)?.slice(0,1)||'V'}
                 </div>}
               <div className="min-w-0">
-                <h3 className="font-semibold text-slate-900">{service?.partner?.display_name||'Parceiro'}</h3>
+                <h3 className="font-semibold text-slate-900">{service?.partner?.display_name||lead.partner?.display_name||'Parceiro'}</h3>
                 {service?.category&&<p className="text-xs text-violet-700">{service.category}</p>}
                 {service?.service_name&&<p className="mt-1 text-sm font-medium text-slate-800">{service.service_name}</p>}
                 <p className="mt-1 text-xs text-slate-500">
