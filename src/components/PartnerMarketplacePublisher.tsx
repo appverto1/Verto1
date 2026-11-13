@@ -4,7 +4,7 @@ import {CheckCircle2, Loader2, MessageSquare, Store} from 'lucide-react';
 type Profile={service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;logo_preview_url?:string|null;photo_preview_url?:string|null};
 type PartnerLead={
   id:string;contact_name:string;contact_email:string;contact_phone?:string|null;status:string;
-  agreed_monthly_cents:number|null;created_at:string;clinic:{name:string}|null;
+  created_at:string;clinic:{name:string}|null;
 };
 const req=async(path:string,init?:RequestInit)=>{
   const r=await fetch(path,{credentials:'include',cache:'no-store',...init});
@@ -39,7 +39,6 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const [confirming,setConfirming]=useState<string|null>(null);
-  const [amount,setAmount]=useState('');
   const load=useCallback(async()=>{
     setError('');
     try{
@@ -93,17 +92,12 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
   };
   const confirm=async(e:React.FormEvent)=>{
     e.preventDefault();if(!confirming||saving)return;
-    const value=Number(amount);
-    const cents=Math.round(value*100);
-    if(!Number.isSafeInteger(cents)||cents<1||cents>100000000){
-      setError('Informe uma mensalidade válida.');return;
-    }
     setSaving(true);setError('');setNotice('');
     try{
       await req('/api/partnerships/marketplace/partner/confirm/'+encodeURIComponent(confirming),
-        asJson('POST',{monthlyCents:cents}));
-      setNotice('Valor declarado. A clínica deverá confirmar a contratação.');
-      setConfirming(null);setAmount('');
+        asJson('POST',{}));
+      setNotice('Declaração registrada. A clínica poderá confirmar a contratação.');
+      setConfirming(null);
       await load();
     }catch(e:any){setError(e.message);}
     finally{setSaving(false);}
@@ -184,23 +178,19 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
                   {lead.contact_phone && <p className="text-sm text-slate-600">{lead.contact_phone}</p>}
                   <p className="mt-1 text-xs text-slate-500">{lead.status==='active'?'Contratação confirmada por ambas as partes':lead.status==='awaiting_clinic'?'Aguardando confirmação da clínica':lead.status==='declined'?'Parceria ou interesse encerrado':'Interesse recebido'}</p>
                 </div>
-                {lead.status==='interested' && <button type="button" onClick={()=>{setConfirming(lead.id);setAmount('');}}
+                {lead.status==='interested' && <button type="button" onClick={()=>setConfirming(lead.id)}
                   className="rounded-xl border border-violet-300 px-3 py-2 text-sm font-semibold text-violet-700">Declarar contratação</button>}
                 {lead.status==='active' && <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700"><CheckCircle2 size={16}/> Confirmada</span>}
               </div>
             </li>)}
           </ul>}
-        <p className="mt-3 text-xs text-slate-500">Comissões de indicação da Verto ao parceiro (proposta: 10% por 6 meses) dependem de contrato e comprovação de pagamentos. Não há repasse automático.</p>
+        <p className="mt-3 text-xs text-slate-500">Negociação e pagamento de serviços são realizados diretamente entre a clínica e o parceiro. A Verto não cobra comissão por esses fechamentos.</p>
       </div>}
     </>}
     {confirming&&<div className="fixed inset-0 z-[240] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Declarar contratação">
       <form onSubmit={confirm} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
         <h3 className="font-semibold text-slate-900">Declarar contratação</h3>
-        <p className="mt-2 text-sm text-slate-600">Informe o valor mensal real do serviço contratado, sem incluir a verba de anúncios. A clínica deverá confirmar esse valor.</p>
-        <label className="mt-4 block text-sm font-medium text-slate-700">Mensalidade do serviço (R$)
-          <input type="number" required min="0.01" max="1000000" step="0.01" value={amount} onChange={e=>setAmount(e.target.value)}
-            className="mt-1 w-full rounded-xl border border-slate-300 p-3 text-sm"/>
-        </label>
+        <p className="mt-2 text-sm text-slate-600">Confirme apenas se a clínica contratou seu serviço. A clínica também deverá confirmar a contratação. Valores e pagamentos são tratados diretamente entre vocês, sem comissão da Verto sobre esse fechamento.</p>
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" onClick={()=>setConfirming(null)} className="rounded-xl px-4 py-2 text-sm">Cancelar</button>
           <button type="submit" disabled={saving} className="rounded-xl bg-violet-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Salvar declaração</button>
