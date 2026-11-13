@@ -109,11 +109,11 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       if(!member)return error(res,'CLINIC_MEMBERSHIP_REQUIRED',403);
       const [directory,mine,contact,clinic]=await Promise.all([
         supabase.from('verto_partner_marketplace_services')
-          .select('partner_id,service_name,category,description,logo_url,photo_url,partner:verto_partner_accounts!inner(display_name,status,compliance_approved)')
+          .select('partner_id,service_name,category,description,logo_url,partner:verto_partner_accounts!inner(display_name,status,compliance_approved)')
           .eq('is_published',true).eq('partner.status','approved')
           .eq('partner.compliance_approved',true).order('updated_at',{ascending:false}).limit(50),
         supabase.from('verto_partner_marketplace_leads')
-          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at,reviews:verto_partner_marketplace_reviews(id)')
+          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at,partner:verto_partner_accounts(display_name),reviews:verto_partner_marketplace_reviews(id)')
           .eq('clinic_id',member.clinicId).order('created_at',{ascending:false}).limit(50),
         supabase.from('users').select('name,email').eq('id',member.userId).maybeSingle(),
         supabase.from('clinics').select('phone_commercial').eq('id',member.clinicId).maybeSingle()
@@ -122,7 +122,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       const services=directory.data||[];
       const partnerIds=Array.from(new Set(services.map((service:any)=>service.partner_id)));
       const [resolveImage,summaries]=await Promise.all([
-        signedImages(services.flatMap((service:any)=>[service.logo_url,service.photo_url])),
+        signedImages(services.map((service:any)=>service.logo_url)),
         partnerIds.length?supabase.rpc('verto_marketplace_review_summaries_v1',{
           p_partner_ids:partnerIds
         }):Promise.resolve({data:[],error:null})
@@ -132,7 +132,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       const visibleServices=services.map((service:any)=>{
         const summary:any=byPartner.get(service.partner_id);
         return {...service,
-          logo_url:resolveImage(service.logo_url),photo_url:resolveImage(service.photo_url),
+          logo_url:resolveImage(service.logo_url),
           rating_average:summary?Number(summary.rating_average):0,
           review_count:summary?Number(summary.review_count):0};
       });
@@ -246,13 +246,13 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       });
       if(result.error)throw result.error;
       if(result.data!==true){
-        // The RPC enforces the two-review cap atomically; diagnose an exceeded cap
+        // The RPC enforces the five-review cap atomically; diagnose an exceeded cap
         // only on failure, without changing its authorization or concurrency controls.
         const existing=await supabase.from('verto_partner_marketplace_reviews')
           .select('id').eq('clinic_id',member.clinicId)
-          .eq('partner_id',lead.data.partner_id).limit(2);
+          .eq('partner_id',lead.data.partner_id).limit(5);
         if(existing.error)throw existing.error;
-        return error(res,(existing.data||[]).length>=2?'REVIEW_LIMIT_REACHED':'REVIEW_NOT_ALLOWED',409);
+        return error(res,(existing.data||[]).length>=5?'REVIEW_LIMIT_REACHED':'REVIEW_NOT_ALLOWED',409);
       }
       return res.json({success:true});
     }catch{return unavailable(res);}
@@ -272,11 +272,10 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       ]);
       if(profile.error||inbox.error)throw profile.error||inbox.error;
       const savedProfile=profile.data||null;
-      const resolveImage=await signedImages(savedProfile?[savedProfile.logo_url,savedProfile.photo_url]:[]);
+      const resolveImage=await signedImages(savedProfile?[savedProfile.logo_url]:[]);
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,profile:savedProfile?{...savedProfile,
-        logo_preview_url:resolveImage(savedProfile.logo_url),
-        photo_preview_url:resolveImage(savedProfile.photo_url)}:null,inbox:inbox.data||[]});
+        logo_preview_url:resolveImage(savedProfile.logo_url)}:null,inbox:inbox.data||[]});
     }catch{return unavailable(res);}
   });
 

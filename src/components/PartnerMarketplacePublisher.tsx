@@ -1,7 +1,7 @@
 import React,{useCallback,useEffect,useState} from 'react';
 import {CheckCircle2, Loader2, MessageSquare, Store} from 'lucide-react';
 
-type Profile={service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;logo_preview_url?:string|null;photo_preview_url?:string|null};
+type Profile={service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;logo_preview_url?:string|null};
 type PartnerLead={
   id:string;contact_name:string;contact_email:string;contact_phone?:string|null;status:string;
   agreed_monthly_cents:number|null;created_at:string;clinic:{name:string}|null;
@@ -31,8 +31,7 @@ const PARTNER_CATEGORIES:readonly string[]=[
 export function PartnerMarketplacePublisher({activeSection='store',onPendingInterestsChange}:{activeSection?:'store'|'interests';onPendingInterestsChange?:(count:number|null)=>void}){
   const [profile,setProfile]=useState({serviceName:'',category:'',description:'',logoUrl:'',photoUrl:''});
   const [logoFile,setLogoFile]=useState<File|null>(null);
-  const [photoFile,setPhotoFile]=useState<File|null>(null);
-  const [imagePreview,setImagePreview]=useState({logo:'',photo:''});
+  const [imagePreview,setImagePreview]=useState({logo:''});
   const [inbox,setInbox]=useState<PartnerLead[]>([]);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
@@ -49,7 +48,7 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
         serviceName:p?.service_name||'',category:p?.category||'',
         description:p?.description||'',logoUrl:p?.logo_url||'',photoUrl:p?.photo_url||''
       });
-      setImagePreview({logo:p?.logo_preview_url||'',photo:p?.photo_preview_url||''});
+      setImagePreview({logo:p?.logo_preview_url||''});
       const leads:PartnerLead[]=Array.isArray(d.inbox)?d.inbox:[];
       setInbox(leads);
       onPendingInterestsChange?.(leads.filter(lead=>lead.status==='interested').length);
@@ -57,17 +56,16 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
     finally{setLoading(false);}
   },[onPendingInterestsChange]);
   useEffect(()=>{void load();},[load]);
-  const selectImage=(kind:'logo'|'photo',file:File|null)=>{
+  const selectImage=(file:File|null)=>{
     if(file && (file.size>10*1024*1024 || !['image/jpeg','image/png','image/webp'].includes(file.type))){
       setError('Escolha uma imagem JPG, PNG ou WebP com no máximo 10 MB.');
       return;
     }
     setError('');
-    if(kind==='logo')setLogoFile(file);
-    else setPhotoFile(file);
+    setLogoFile(file);
   };
-  const uploadImage=async(kind:'logo'|'photo',file:File)=>{
-    const response=await fetch('/api/partnerships/marketplace/partner/image/'+kind,{
+  const uploadImage=async(file:File)=>{
+    const response=await fetch('/api/partnerships/marketplace/partner/image/logo',{
       method:'POST',credentials:'include',cache:'no-store',
       headers:{'Content-Type':file.type},body:file
     });
@@ -82,11 +80,10 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
     try{
       // Persist only when Salvar is pressed; no automatic upload on file selection.
       const values={...profile};
-      if(logoFile)values.logoUrl=await uploadImage('logo',logoFile);
-      if(photoFile)values.photoUrl=await uploadImage('photo',photoFile);
+      if(logoFile)values.logoUrl=await uploadImage(logoFile);
       await req('/api/partnerships/marketplace/partner/profile',asJson('PATCH',values));
-      setLogoFile(null);setPhotoFile(null);
-      setNotice('Perfil comercial e fotos salvos na vitrine.');
+      setLogoFile(null);
+      setNotice('Perfil comercial e logo salvos na vitrine.');
       await load();
     }catch(e:any){setError(e.message);}
     finally{setSaving(false);}
@@ -140,27 +137,18 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
             </select>
           </label>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div>
           <label className="block text-sm font-medium text-slate-700">Logo da empresa (até 10 MB)
             <input type="file" accept="image/jpeg,image/png,image/webp"
-              onChange={e=>selectImage('logo',e.target.files?.[0]||null)}
+              onChange={e=>selectImage(e.target.files?.[0]||null)}
               className="mt-1 block w-full rounded-xl border border-slate-300 p-3 text-sm"/>
             {logoFile?<span className="mt-1 block text-xs text-violet-700">{logoFile.name} — será enviado ao salvar</span>
               :imagePreview.logo?<img src={imagePreview.logo} alt="Logo atual" className="mt-2 h-20 w-20 rounded-xl object-contain"/>:null}
             <span className="mt-1 block text-xs font-normal text-slate-500">Formato recomendado: quadrado (1:1), 800 × 800 px. Prefira PNG ou WebP; fundo transparente é opcional.</span>
           </label>
-          <label className="block text-sm font-medium text-slate-700">Foto de apresentação (até 10 MB)
-            <input type="file" accept="image/jpeg,image/png,image/webp"
-              onChange={e=>selectImage('photo',e.target.files?.[0]||null)}
-              className="mt-1 block w-full rounded-xl border border-slate-300 p-3 text-sm"/>
-            {photoFile?<span className="mt-1 block text-xs text-violet-700">{photoFile.name} — será enviado ao salvar</span>
-              :imagePreview.photo?<img src={imagePreview.photo} alt="Foto atual" className="mt-2 h-20 max-w-full rounded-xl object-cover"/>:null}
-            <span className="mt-1 block text-xs font-normal text-slate-500">Formato recomendado: horizontal (16:9), 1200 × 675 px. Deixe textos e elementos importantes longe das bordas, que podem ser recortadas.</span>
-          </label>
         </div>
         <p className="text-xs text-slate-500">
-          Arquivos JPG, PNG ou WebP. Use fotos autorizadas da empresa ou do serviço;
-          não publique imagens identificáveis de pacientes sem consentimento específico.
+          Logo em JPG, PNG ou WebP. Não publique imagens identificáveis de pacientes sem consentimento específico.
         </p>
         <label className="block text-sm font-medium text-slate-700">Descrição do serviço
           <textarea required minLength={20} maxLength={2000} rows={4} value={profile.description}

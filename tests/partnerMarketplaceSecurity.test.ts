@@ -27,7 +27,9 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
         range:async(start:number,end:number)=>({
           data:table==='verto_partner_marketplace_reviews'?(options.reviewRows||[]).slice(start,end+1):[],error:null
         }),
-        limit:async()=>({
+        limit:async(value:number)=>{
+          calls.push({type:'limit',table,value});
+          return {
           data:table==='clinic_memberships'?(role?[{role}]:[])
             :table==='verto_partner_marketplace_services'?[{
               partner_id:partnerId,service_name:'Tráfego pago',category:'Marketing',
@@ -37,7 +39,8 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
             :table==='verto_partner_marketplace_leads'?(options.leadRows||[])
             :table==='verto_partner_marketplace_reviews'?(options.existingReviewRows||[]):[],
           error:null
-        }),
+          };
+        },
         maybeSingle:async()=>({
           data:table==='users'?{name:'Diretora Verto',email}
             :table==='clinics'?{phone_commercial:'11988887777'}
@@ -215,15 +218,17 @@ test('directory reports only this clinic’s review count using the existing lea
 
 test('exhausted review allowance returns a meaningful 409 without bypassing the RPC',async()=>{
   const maxed=fixture('director',{reviewSaveResult:false,
-    existingReviewRows:[{id:'review-1'},{id:'review-2'}]});
+    existingReviewRows:Array.from({length:5},(_,i)=>({id:'review-'+(i+1)}))});
   const denied=await maxed.run('POST','/api/partnerships/marketplace/review/:id',{
     clinicId,rating:5,comment:'Nova tentativa'
   });
   assert.equal(denied.statusCode,409);
   assert.equal(denied.body.error,'REVIEW_LIMIT_REACHED');
   assert.equal(maxed.calls.filter(c=>c.name==='verto_marketplace_save_review_v1').length,1);
-  assert.equal(maxed.calls.filter(c=>c.table==='verto_partner_marketplace_reviews').length,1,
+  assert.equal(maxed.calls.filter(c=>c.table==='verto_partner_marketplace_reviews'&&c.type==='from').length,1,
     'only failed writes should query the review count');
+  assert.equal(maxed.calls.find(c=>c.table==='verto_partner_marketplace_reviews'&&c.type==='limit')?.value,5,
+    'failure diagnostics must check the full five-review allowance');
   const otherReason=fixture('director',{reviewSaveResult:false,existingReviewRows:[]});
   const other=await otherReason.run('POST','/api/partnerships/marketplace/review/:id',{
     clinicId,rating:4,comment:'Nova tentativa'
