@@ -113,7 +113,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
           .eq('is_published',true).eq('partner.status','approved')
           .eq('partner.compliance_approved',true).order('updated_at',{ascending:false}).limit(50),
         supabase.from('verto_partner_marketplace_leads')
-          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at,reviews:verto_partner_marketplace_reviews(id)')
+          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at,partner:verto_partner_accounts(display_name),reviews:verto_partner_marketplace_reviews(id)')
           .eq('clinic_id',member.clinicId).order('created_at',{ascending:false}).limit(50),
         supabase.from('users').select('name,email').eq('id',member.userId).maybeSingle(),
         supabase.from('clinics').select('phone_commercial').eq('id',member.clinicId).maybeSingle()
