@@ -129,6 +129,8 @@ export function registerPublicSalesActivationPasswordRoute(
               email: loaded.email,
               password,
               email_confirm: true,
+              // Keep the same server-only Checkout marker as webhook provisioning.
+              app_metadata: { sales_activation_offer_id: loaded.offerId },
               user_metadata: {
                 full_name:
                   sanitizeString(loaded.lead.name, 180) ||

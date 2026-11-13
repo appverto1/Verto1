@@ -8,7 +8,7 @@ const sections=[
   {file:"services/paidDirectorSessionBootstrap.ts",hash:"098eb3652859b3efe50221ed264ae5010929375816c81dce41d26462c29e53ba",factory:"createPaidDirectorSessionBootstrap"},
   {file:"services/publicSalesPostPaymentReconciliationRoute.ts",hash:"9cbf303224762eaeaccc594d7601ddbad2ea9e0cf932c13802e2df695667c4c0",factory:"registerPublicSalesPostPaymentReconciliationRoute"},
   {file:"services/salesDirectorContractAccess.ts",hash:"d3e346bbc21e96892d7c4c12b30987f2bfb3eb1cf202dcc2de64dc0fdd61882d",factory:"createSalesDirectorContractAccess"},
-  {file:"services/salesPaidDirectorAccountProvisioning.ts",hash:"ce9d9b2bc5297799909c717628c3e277c943ad9a4c3605812fe3db18635283fb",factory:"createSalesPaidDirectorAccountProvisioning"},
+  {file:"services/salesPaidDirectorAccountProvisioning.ts",hash:"ee6a0e70d81578a55af6b3214f352edf224444a618de1c5f55c296999cab5a8d",factory:"createSalesPaidDirectorAccountProvisioning"},
 
 ];
 test('Item 10 all four backend responsibilities retain source-exact statements and are registered once',()=>{
