@@ -19,6 +19,9 @@ const reconcile = item10ReconcileSource.match(/"\/api\/public\/sales-offers\/:to
 
 assert.match(provision, /createUser\(\{/);
 assert.match(provision, /normalized\.includes\("already"\)/);
+assert.match(provision, /normalized === "database error creating new user"/);
+assert.match(provision, /sanitizeEmail\(authUser\.email\) !== email/);
+assert.match(provision, /authUser\?\.user_metadata\?\.sales_activation_offer_id/);
 assert.match(provision, /authUser = await findAuthUserByEmail\(email\)/);
 assert.doesNotMatch(
   provision.match(/if \(createError\)[^]*?\n\s*}\n\s*if \(!authUser\?\.id\)/)?.[0] || '',
