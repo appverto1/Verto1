@@ -36,12 +36,23 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
         });
       if (createError) {
         const normalized = sanitizeString(createError.message, 240).toLowerCase();
-        if (!normalized.includes("already")) throw createError;
-        // Webhook and browser reconciliation can race after the same paid Checkout.
-        // If the other request created this exact commercial identity first, reuse it
-        // only after the same compatibility checks applied to any pre-existing user.
+        const isKnownDuplicate = normalized.includes("already") || normalized.includes("duplicate")
+          || sanitizeString((createError as any).code, 20) === "23505";
+        // GoTrue can report an email UNIQUE violation as a generic HTTP 500
+        // "Database error creating new user" instead of "already registered".
+        // This message can also describe unrelated DB failures: only recover
+        // after reading the exact persisted Auth identity. Never create a new
+        // clinic from an unverified or unrelated user.
+        const isAmbiguousAuthCreateError = normalized === "database error creating new user";
+        if (!isKnownDuplicate && !isAmbiguousAuthCreateError) throw createError;
         authUser = await findAuthUserByEmail(email);
-        if (!authUser?.id) throw createError;
+        if (!authUser?.id || sanitizeEmail(authUser.email) !== email) throw createError;
+        if (isAmbiguousAuthCreateError
+          && sanitizeString(authUser?.user_metadata?.sales_activation_offer_id, 120) !== offerId) {
+          const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+          (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+          throw conflict;
+        }
       } else {
         authUser = createdUser?.user || null;
       }
