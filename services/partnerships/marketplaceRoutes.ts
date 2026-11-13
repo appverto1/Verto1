@@ -113,7 +113,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
           .eq('is_published',true).eq('partner.status','approved')
           .eq('partner.compliance_approved',true).order('updated_at',{ascending:false}).limit(50),
         supabase.from('verto_partner_marketplace_leads')
-          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at')
+          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at,reviews:verto_partner_marketplace_reviews(id)')
           .eq('clinic_id',member.clinicId).order('created_at',{ascending:false}).limit(50),
         supabase.from('users').select('name,email').eq('id',member.userId).maybeSingle(),
         supabase.from('clinics').select('phone_commercial').eq('id',member.clinicId).maybeSingle()
@@ -136,9 +136,12 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
           rating_average:summary?Number(summary.rating_average):0,
           review_count:summary?Number(summary.review_count):0};
       });
+      const mineWithReviewCounts=(mine.data||[]).map(({reviews,...lead}:any)=>({
+        ...lead,my_review_count:Array.isArray(reviews)?reviews.length:0
+      }));
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,services:visibleServices,
-        mine:member.canManage?(mine.data||[]):(mine.data||[]).filter((l:any)=>l.status==='active'||(l.status==='declined'&&l.clinic_confirmed_at&&l.partner_confirmed_at)).map((l:any)=>({...l,agreed_monthly_cents:null})),
+        mine:member.canManage?mineWithReviewCounts:mineWithReviewCounts.filter((l:any)=>l.status==='active'||(l.status==='declined'&&l.clinic_confirmed_at&&l.partner_confirmed_at)).map((l:any)=>({...l,agreed_monthly_cents:null})),
         canManage:member.canManage,contact:member.canManage?{name:contact.data?.name,email:contact.data?.email,phone:clinic.data?.phone_commercial}:null});
     }catch{return unavailable(res);}
   });
@@ -232,7 +235,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       const member=await membership(req,req.body.clinicId);
       if(!member||!member.canManage)return error(res,'CLINIC_REPRESENTATIVE_REQUIRED',403);
       const lead=await supabase.from('verto_partner_marketplace_leads')
-        .select('id,partner_confirmed_at,clinic_confirmed_at').eq('id',req.params.id)
+        .select('id,partner_id,partner_confirmed_at,clinic_confirmed_at').eq('id',req.params.id)
         .eq('clinic_id',member.clinicId).in('status',['active','declined']).maybeSingle();
       if(lead.error)throw lead.error;
       if(!lead.data?.clinic_confirmed_at||!lead.data?.partner_confirmed_at)
@@ -242,7 +245,15 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
         p_rating:req.body.rating,p_comment:req.body.comment.trim()
       });
       if(result.error)throw result.error;
-      if(result.data!==true)return error(res,'REVIEW_NOT_ALLOWED',409);
+      if(result.data!==true){
+        // The RPC enforces the two-review cap atomically; diagnose an exceeded cap
+        // only on failure, without changing its authorization or concurrency controls.
+        const existing=await supabase.from('verto_partner_marketplace_reviews')
+          .select('id').eq('clinic_id',member.clinicId)
+          .eq('partner_id',lead.data.partner_id).limit(2);
+        if(existing.error)throw existing.error;
+        return error(res,(existing.data||[]).length>=2?'REVIEW_LIMIT_REACHED':'REVIEW_NOT_ALLOWED',409);
+      }
       return res.json({success:true});
     }catch{return unavailable(res);}
   });

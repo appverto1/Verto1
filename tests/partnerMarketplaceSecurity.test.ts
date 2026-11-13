@@ -8,7 +8,7 @@ const partnerId='33333333-3333-4333-8333-333333333333';
 const leadId='44444444-4444-4444-8444-444444444444';
 const email='owner@example.test';
 
-function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean;summaryRows?:any[];reviewRows?:any[]}={}){
+function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean;summaryRows?:any[];reviewRows?:any[];leadRows?:any[];existingReviewRows?:any[];reviewSaveResult?:boolean}={}){
   const routes:Record<string,any[]>={};
   const calls:any[]=[];
   const app:any={};
@@ -34,14 +34,15 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
               description:'Descrição de serviço que atende empresas.',logo_url:null,
               partner:{display_name:'Somar'}
             }]
-            :table==='verto_partner_marketplace_leads'?[]:[],
+            :table==='verto_partner_marketplace_leads'?(options.leadRows||[])
+            :table==='verto_partner_marketplace_reviews'?(options.existingReviewRows||[]):[],
           error:null
         }),
         maybeSingle:async()=>({
           data:table==='users'?{name:'Diretora Verto',email}
             :table==='clinics'?{phone_commercial:'11988887777'}
             :table==='verto_partner_accounts'?{id:partnerId,status:'approved',compliance_approved:true}
-            :table==='verto_partner_marketplace_leads'?{id:leadId,
+            :table==='verto_partner_marketplace_leads'?{id:leadId,partner_id:partnerId,
               clinic_confirmed_at:options.confirmedContract===false?null:'2026-11-11T12:00:00Z',
               partner_confirmed_at:options.confirmedContract===false?null:'2026-11-11T11:00:00Z'}
             :table==='verto_partner_marketplace_services'?null:null,error:null
@@ -54,7 +55,8 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
     rpc:async(name:string,args:any)=>{
       calls.push({type:'rpc',name,args});
       return {data:name==='verto_marketplace_review_summaries_v1'?(options.summaryRows||[]):
-        name==='verto_marketplace_request_v1'?(options.requestResult===undefined?leadId:options.requestResult):true,error:null};
+        name==='verto_marketplace_request_v1'?(options.requestResult===undefined?leadId:options.requestResult):
+        name==='verto_marketplace_save_review_v1'?(options.reviewSaveResult??true):true,error:null};
     }
   };
   const checkAuth=()=>{};
@@ -196,6 +198,44 @@ test('contract closure requires a verified clinic representative',async()=>{
   const success=await allowed.run('POST','/api/partnerships/marketplace/clinic-end/:id',{clinicId});
   assert.equal(success.statusCode,200);
   assert.equal(allowed.calls.find(c=>c.type==='update').values.status,'declined');
+});
+
+test('directory reports only this clinic’s review count using the existing leads fetch',async()=>{
+  const f=fixture('director',{leadRows:[{
+    id:leadId,partner_id:partnerId,status:'active',agreed_monthly_cents:10000,
+    partner_confirmed_at:'2026-11-11T11:00:00Z',clinic_confirmed_at:'2026-11-11T12:00:00Z',
+    reviews:[{id:'review-1'},{id:'review-2'}]
+  }]});
+  const result=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(result.statusCode,200);
+  assert.equal(result.body.mine[0].my_review_count,2);
+  assert.equal(Object.hasOwn(result.body.mine[0],'reviews'),false,'review IDs must not be exposed');
+  assert.equal(f.calls.filter(c=>c.type==='from'&&c.table==='verto_partner_marketplace_reviews').length,0);
+});
+
+test('exhausted review allowance returns a meaningful 409 without bypassing the RPC',async()=>{
+  const maxed=fixture('director',{reviewSaveResult:false,
+    existingReviewRows:[{id:'review-1'},{id:'review-2'}]});
+  const denied=await maxed.run('POST','/api/partnerships/marketplace/review/:id',{
+    clinicId,rating:5,comment:'Nova tentativa'
+  });
+  assert.equal(denied.statusCode,409);
+  assert.equal(denied.body.error,'REVIEW_LIMIT_REACHED');
+  assert.equal(maxed.calls.filter(c=>c.name==='verto_marketplace_save_review_v1').length,1);
+  assert.equal(maxed.calls.filter(c=>c.table==='verto_partner_marketplace_reviews').length,1,
+    'only failed writes should query the review count');
+  const otherReason=fixture('director',{reviewSaveResult:false,existingReviewRows:[]});
+  const other=await otherReason.run('POST','/api/partnerships/marketplace/review/:id',{
+    clinicId,rating:4,comment:'Nova tentativa'
+  });
+  assert.equal(other.statusCode,409);
+  assert.equal(other.body.error,'REVIEW_NOT_ALLOWED');
+  const unconfirmed=fixture('director',{confirmedContract:false,reviewSaveResult:false});
+  const blocked=await unconfirmed.run('POST','/api/partnerships/marketplace/review/:id',{
+    clinicId,rating:4,comment:'Sem contrato'
+  });
+  assert.equal(blocked.statusCode,403);
+  assert.equal(unconfirmed.calls.some(c=>c.table==='verto_partner_marketplace_reviews'),false);
 });
 
 test('owner opportunity report keeps both existing administrative guards',()=>{
