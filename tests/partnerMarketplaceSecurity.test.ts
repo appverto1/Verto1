@@ -143,9 +143,9 @@ test('partner inbox and contract declaration are denied without isolated verifie
   const read=await f.run('GET','/api/partnerships/marketplace/partner',{}, {});
   assert.equal(read.statusCode,401);
   const write=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
-    {monthlyCents:10000},{});
+    {},{});
   assert.equal(write.statusCode,401);
-  assert.equal(f.calls.some(c=>c.name==='verto_marketplace_partner_confirm_v1'),false);
+  assert.equal(f.calls.some(c=>c.name==='verto_marketplace_partner_confirm_no_price_v1'),false);
 });
 
 test('approved partner cannot confirm someone else’s ID via browser input',async()=>{
@@ -153,13 +153,17 @@ test('approved partner cannot confirm someone else’s ID via browser input',asy
   const session={partnerAccountId:partnerId,partnerAuthUserId:userId,partnerEmail:email,
     partnerAuthAt:Date.now()};
   const result=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
-    {monthlyCents:150000,partnerId:clinicId},session);
+    {partnerId:clinicId},session);
   assert.equal(result.statusCode,400);
   const accepted=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
-    {monthlyCents:150000},session);
+    {},session);
   assert.equal(accepted.statusCode,200);
-  const call=f.calls.find(c=>c.name==='verto_marketplace_partner_confirm_v1');
+  const call=f.calls.find(c=>c.name==='verto_marketplace_partner_confirm_no_price_v1');
   assert.equal(call.args.p_partner_id,partnerId);
+  assert.deepEqual(Object.keys(call.args).sort(),['p_lead_id','p_partner_id']);
+  const smuggled=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
+    {monthlyCents:150000},session);
+  assert.equal(smuggled.statusCode,400,'partner price must not be accepted or persisted');
 });
 
 test('reviews require mutual confirmed contract, rating range and clinic representative',async()=>{
