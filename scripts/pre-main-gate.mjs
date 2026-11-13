@@ -433,6 +433,7 @@ const criticalTests = [
   'tests/moduleSubscriptionUpgradeInvoiceEvidence.test.ts',
   'tests/moduleSubscriptionUpgradeFrozenPrice.test.ts',
   'tests/moduleSubscriptionUpgradeContract.test.ts',
+  'tests/professionalOnboardingPresentation.test.ts',
   'tests/moduleUpgradeV5S1Finalization.regression.test.mjs',
   'tests/moduleUpgradeV5S1Http.test.ts',
   'tests/abaChartReadHandlers.test.ts',
