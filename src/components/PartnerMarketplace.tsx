@@ -5,7 +5,7 @@ type Service={
   partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;
   partner:{display_name:string};rating_average:number;review_count:number;
 };
-type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null;my_review_count:number};
+type Lead={id:string;partner_id:string;status:string;clinic_confirmed_at:string|null;partner_confirmed_at:string|null;my_review_count:number};
 type Review={id:string;rating:number;comment:string;created_at:string;clinic?:{name:string}|null};
 async function api(path:string,init?:RequestInit){
   const r=await fetch(path,{credentials:'include',cache:'no-store',...init});
@@ -16,7 +16,6 @@ async function api(path:string,init?:RequestInit){
 const json=(payload:unknown):RequestInit=>({
   method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
 });
-const money=(cents:number)=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(cents/100);
 const status:Record<string,string>={
   interested:'Interesse enviado',awaiting_clinic:'Aguardando confirmação da clínica',
   active:'Contratação confirmada',declined:'Interesse encerrado'
@@ -249,7 +248,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
               {lead.status==='awaiting_clinic'&&canManage&&
                 <button disabled={busy} onClick={()=>confirmContract(lead)}
                   className="rounded-xl bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                  Confirmar contratação {lead.agreed_monthly_cents!=null?'('+money(Number(lead.agreed_monthly_cents))+'/mês)':''}
+                  Confirmar contratação
                 </button>}
               {wasContracted(lead)&&canManage&&Number(lead.my_review_count||0)<2&&
                 <button disabled={busy} onClick={()=>{setReviewLead(lead);setRating(5);setComment('');}}
@@ -259,8 +258,8 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
               {wasContracted(lead)&&canManage&&Number(lead.my_review_count||0)>=2&&
                 <span className="text-xs text-slate-600" role="status">Limite de duas avaliações desta clínica atingido.</span>}
             </div>
-            {lead.status==='awaiting_clinic' && <p className="mt-2 text-xs text-slate-500">Confirme somente se a clínica realmente contratou o serviço e o valor está correto.</p>}
-            {lead.status==='active' && <p className="mt-2 text-xs text-slate-500">Serviço contratado. Comissões externas ainda dependem de comprovação financeira e acordo comercial.</p>}
+            {lead.status==='awaiting_clinic' && <p className="mt-2 text-xs text-slate-500">Confirme somente se a clínica realmente contratou o serviço. A negociação e o pagamento são realizados diretamente entre as partes.</p>}
+            {lead.status==='active' && <p className="mt-2 text-xs text-slate-500">Serviço contratado. Valores e pagamentos são tratados diretamente entre clínica e parceiro; a Verto não cobra comissão por esse fechamento.</p>}
             {wasContracted(lead)&&<div className="mt-3 flex flex-wrap gap-2">
               <button type="button" onClick={()=>void showReviews(lead.partner_id)}
                 className="rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">

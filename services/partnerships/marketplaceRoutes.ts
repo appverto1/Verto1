@@ -113,7 +113,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
           .eq('is_published',true).eq('partner.status','approved')
           .eq('partner.compliance_approved',true).order('updated_at',{ascending:false}).limit(50),
         supabase.from('verto_partner_marketplace_leads')
-          .select('id,partner_id,status,agreed_monthly_cents,clinic_confirmed_at,partner_confirmed_at,reviews:verto_partner_marketplace_reviews(id)')
+          .select('id,partner_id,status,clinic_confirmed_at,partner_confirmed_at,reviews:verto_partner_marketplace_reviews(id)')
           .eq('clinic_id',member.clinicId).order('created_at',{ascending:false}).limit(50),
         supabase.from('users').select('name,email').eq('id',member.userId).maybeSingle(),
         supabase.from('clinics').select('phone_commercial').eq('id',member.clinicId).maybeSingle()
@@ -141,7 +141,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       }));
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,services:visibleServices,
-        mine:member.canManage?mineWithReviewCounts:mineWithReviewCounts.filter((l:any)=>l.status==='active'||(l.status==='declined'&&l.clinic_confirmed_at&&l.partner_confirmed_at)).map((l:any)=>({...l,agreed_monthly_cents:null})),
+        mine:member.canManage?mineWithReviewCounts:mineWithReviewCounts.filter((l:any)=>l.status==='active'||(l.status==='declined'&&l.clinic_confirmed_at&&l.partner_confirmed_at)),
         canManage:member.canManage,contact:member.canManage?{name:contact.data?.name,email:contact.data?.email,phone:clinic.data?.phone_commercial}:null});
     }catch{return unavailable(res);}
   });
@@ -267,7 +267,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
           .select('service_name,category,description,logo_url,photo_url,is_published')
           .eq('partner_id',partner.id).maybeSingle(),
         supabase.from('verto_partner_marketplace_leads')
-          .select('id,contact_name,contact_email,contact_phone,status,agreed_monthly_cents,created_at,clinic:clinics(name)')
+          .select('id,contact_name,contact_email,contact_phone,status,created_at,clinic:clinics(name)')
           .eq('partner_id',partner.id).order('created_at',{ascending:false}).limit(50)
       ]);
       if(profile.error||inbox.error)throw profile.error||inbox.error;
@@ -353,15 +353,13 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
   });
 
   app.post('/api/partnerships/marketplace/partner/confirm/:id',async(req:any,res:any)=>{
-    if(!isUuid(req.params?.id)||!allowedBody(req,['monthlyCents'])
-       ||!Number.isSafeInteger(req.body.monthlyCents)
-       ||req.body.monthlyCents<1||req.body.monthlyCents>100000000)
-      return error(res,'INVALID_AMOUNT');
+    if(!isUuid(req.params?.id)||!allowedBody(req,[]))
+      return error(res,'INVALID_REQUEST');
     try{
       const partner=await partnerAccount(req);
       if(!partner)return error(res,'PARTNER_LOGIN_REQUIRED',401);
-      const result=await supabase.rpc('verto_marketplace_partner_confirm_v1',{
-        p_lead_id:req.params.id,p_partner_id:partner.id,p_monthly_cents:req.body.monthlyCents
+      const result=await supabase.rpc('verto_marketplace_partner_confirm_no_price_v1',{
+        p_lead_id:req.params.id,p_partner_id:partner.id
       });
       if(result.error)throw result.error;
       if(result.data!==true)return error(res,'CONTRACT_NOT_CONFIRMABLE',409);
