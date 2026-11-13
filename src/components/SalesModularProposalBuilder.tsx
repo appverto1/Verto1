@@ -180,6 +180,9 @@ const proposalCalculationErrorMessage = (
   if (code === 'PROPOSAL_SIMULATION_INVALID') {
     return `Há um valor comercial incompleto ou inconsistente em ${itemName}.`;
   }
+  if (code === 'CUSTOM_CAPACITY_INVALID' && detail === 'basePriceCents') {
+    return 'Revise os preços propostos por paciente e a capacidade contratada. O preço-base calculado está fora dos limites permitidos.';
+  }
   if (code === 'PRICING_TOTAL_MISMATCH') {
     return 'O resumo financeiro ficou inconsistente durante o recálculo. Revise os valores da proposta.';
   }
@@ -627,24 +630,8 @@ export const SalesModularProposalBuilder = ({
     if (!selectedTier || (!selectedTier.isCustom && selectedTier.maximumQuantity !== null)) {
       return;
     }
-    const recurringLines = input.lines.filter((line) => {
-      const item = catalog.items.find(
-        (candidate) => candidate.itemKey === line.itemKey
-      );
-      return item?.billingInterval !== 'one_time';
-    });
-    const basePriceCents = recurringLines.reduce((sum, line) => {
-      if (
-        line.pricingEditMode === 'per_patient' &&
-        typeof line.proposedPricePerPatientCents === 'number'
-      ) {
-        return sum + Math.round(
-          Number(input.customBasePackageLimit || 0) *
-            line.proposedPricePerPatientCents
-        );
-      }
-      return sum + Number(line.customRecurringAmountCents || 0);
-    }, 0);
+    // Block selection depends on patient capacity, not on editable prices.
+    // The proposal preview validates monetary values separately.
     if (
       !Number.isInteger(input.customBasePackageLimit) ||
       Number(input.customBasePackageLimit) < 1 ||
@@ -656,12 +643,12 @@ export const SalesModularProposalBuilder = ({
     const capacity = calculateCustomCapacity(
       {
         currentPatients: input.patientQuantity,
-          expectedPatients:
-            input.commercialCapacityBasis === 'current_patients'
-              ? input.patientQuantity
-              : input.expectedPatientQuantity12Months,
-          baseLimitPatients: Number(input.customBasePackageLimit),
-          basePriceCents,
+        expectedPatients:
+          input.commercialCapacityBasis === 'current_patients'
+            ? input.patientQuantity
+            : input.expectedPatientQuantity12Months,
+        baseLimitPatients: Number(input.customBasePackageLimit),
+        basePriceCents: 0,
         selection: {
           mode: input.customCapacitySelectionMode === 'manual' ? 'manual' : 'automatic',
           selectedBlocks: input.customCapacityBlocks
