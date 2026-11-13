@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 const tests = [
+  'tests/ia01PrivilegedRpcAcl.regression.test.mjs',
   'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/sessionCompletionNoShow.regression.test.mjs',
   'tests/sessionAutoFinalization.regression.test.mjs',
