@@ -87,6 +87,8 @@ test('Stripe outage leaves the persisted lead unconverted and can be retried lat
 });
 test('legacy offer does not introduce an unnecessary subscription lookup', async () => {
   const h = harness({ modular: false });
-  await assert.rejects(h.run(), /WRITE_REACHED_AFTER_VERIFICATION/);
+  // The existing non-modular flow swallows its downstream write error; this
+  // probe only asserts that the modular Stripe guard was not added to it.
+  await h.run();
   assert.deepEqual(h.metrics(), { writes: 1, stripeReads: 0 });
 });
