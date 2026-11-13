@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 const migration = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20261113110000_ia01_privileged_rpc_execute_lockdown.sql'),
+  join(process.cwd(), 'supabase/migrations/20261113110038_ia01_privileged_rpc_execute_lockdown.sql'),
   'utf8',
 );
 
