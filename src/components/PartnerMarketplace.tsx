@@ -1,12 +1,12 @@
-import React, {useCallback,useEffect,useState} from 'react';
+import React, {useCallback,useEffect,useRef,useState} from 'react';
 import {ArrowLeft, CheckCircle2, Loader2, Search, Star, X} from 'lucide-react';
 
 type Service={
   partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;
-  partner:{display_name:string};
+  partner:{display_name:string};rating_average:number;review_count:number;
 };
 type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null};
-type Review={rating:number;comment:string;created_at:string;clinic?:{name:string}|null};
+type Review={id:string;rating:number;comment:string;created_at:string;clinic?:{name:string}|null};
 async function api(path:string,init?:RequestInit){
   const r=await fetch(path,{credentials:'include',cache:'no-store',...init});
   const d=await r.json().catch(()=>({}));
@@ -21,6 +21,26 @@ const status:Record<string,string>={
   interested:'Interesse enviado',awaiting_clinic:'Aguardando confirmação da clínica',
   active:'Contratação confirmada',declined:'Interesse encerrado'
 };
+
+function RatingSummary({average,count}:{average:number;count:number}){
+  const score=Number.isFinite(average)?Math.min(5,Math.max(0,average)):0;
+  const total=Number.isFinite(count)?Math.max(0,count):0;
+  return <div className="mt-3 flex flex-wrap items-center gap-2 text-xs"
+    role="img" aria-label={total?`Nota média ${score.toLocaleString('pt-BR')} de 5, com ${total} avaliações`:'Sem avaliações'}>
+    <span className="flex gap-0.5" aria-hidden="true">
+      {[0,1,2,3,4].map(i=>{
+        const filled=Math.max(0,Math.min(1,score-i))*100;
+        return <span key={i} className="relative inline-flex h-[18px] w-[18px]">
+          <Star size={18} className="text-slate-300"/>
+          <Star size={18} fill="currentColor" className="absolute inset-0 text-amber-500"
+            style={{clipPath:`inset(0 ${100-filled}% 0 0)`}}/>
+        </span>;
+      })}
+    </span>
+    <span className="font-semibold text-slate-800">{total?score.toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1}):'Sem nota'}</span>
+    <span className="text-slate-500">({total} {total===1?'avaliação':'avaliações'})</span>
+  </div>;
+}
 
 /** Isolated B2B surface. Backend checks canonical clinic membership on every request. */
 export function PartnerMarketplace({open,clinicId,onClose}:{
@@ -40,6 +60,9 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
   const [consent,setConsent]=useState(false);
   const [selectedReviews,setSelectedReviews]=useState<string|null>(null);
   const [reviews,setReviews]=useState<Review[]>([]);
+  const [reviewsHasMore,setReviewsHasMore]=useState(false);
+  const [reviewsLoading,setReviewsLoading]=useState(false);
+  const reviewRequestId=useRef(0);
   const [reviewLead,setReviewLead]=useState<Lead|null>(null);
   const [rating,setRating]=useState(5);
   const [comment,setComment]=useState('');
@@ -56,7 +79,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
     }catch(e:any){setError(e.message||'Serviço indisponível.');}
     finally{setLoading(false);}
   },[clinicId]);
-  useEffect(()=>{if(open){void reload();setTab('discover');setInterest(null);setSelectedReviews(null);}},[open,reload]);
+  useEffect(()=>{if(open){void reload();setTab('discover');setInterest(null);setSelectedReviews(null);reviewRequestId.current++;}},[open,reload]);
   if(!open)return null;
 
   const mutate=async(fn:()=>Promise<void>)=>{
@@ -89,22 +112,34 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
     await api('/api/partnerships/marketplace/review/'+encodeURIComponent(reviewLead.id),
       json({clinicId,rating,comment}));
     setReviewLead(null);setComment('');setRating(5);setSelectedReviews(null);setReviews([]);
+    setReviewsHasMore(false);reviewRequestId.current++;
     setNotice('Nova avaliação registrada de forma definitiva.');
   });
-  const showReviews=async(partnerId:string)=>{
-    if(selectedReviews===partnerId){setSelectedReviews(null);return;}
-    setSelectedReviews(partnerId);setReviews([]);
+  const loadReviews=async(partnerId:string,offset:number,append:boolean)=>{
+    const requestId=++reviewRequestId.current;
+    setReviewsLoading(true);
     try{
       const d=await api('/api/partnerships/marketplace/reviews/'+encodeURIComponent(partnerId)
-        +'?clinicId='+encodeURIComponent(clinicId));
-      setReviews(Array.isArray(d.reviews)?d.reviews:[]);
-    }catch(e:any){setError(e.message);}
+        +'?clinicId='+encodeURIComponent(clinicId)+'&offset='+offset);
+      if(requestId!==reviewRequestId.current)return;
+      const page:Review[]=Array.isArray(d.reviews)?d.reviews:[];
+      setReviews(current=>append?[...current,...page]:page);
+      setReviewsHasMore(d.hasMore===true);
+    }catch(e:any){if(requestId===reviewRequestId.current)setError(e.message||'Não foi possível carregar avaliações.');}
+    finally{if(requestId===reviewRequestId.current)setReviewsLoading(false);}
+  };
+  const showReviews=(partnerId:string)=>{
+    reviewRequestId.current++;
+    if(selectedReviews===partnerId){setSelectedReviews(null);setReviewsHasMore(false);return;}
+    setSelectedReviews(partnerId);setReviews([]);setReviewsHasMore(false);
+    void loadReviews(partnerId,0,false);
   };
   const renderReviews=(partnerId:string)=>selectedReviews===partnerId&&
     <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
       <h4 className="text-xs font-semibold text-slate-700">Avaliações de clínicas que contrataram este parceiro</h4>
-      {reviews.length===0?<p className="text-xs text-slate-500">Ainda não há avaliações.</p>
-        :reviews.map((r,i)=><div key={i} className="rounded-xl bg-slate-50 p-3">
+      {reviewsLoading && reviews.length===0?<p className="text-xs text-slate-500">Carregando avaliações...</p>
+        :reviews.length===0?<p className="text-xs text-slate-500">Ainda não há avaliações.</p>
+        :reviews.map(r=><div key={r.id} className="rounded-xl bg-slate-50 p-3">
           <p className="text-xs font-semibold text-amber-600" aria-label={r.rating+' de 5 estrelas'}>
             {'★'.repeat(r.rating)}{'☆'.repeat(5-r.rating)}
           </p>
@@ -112,6 +147,11 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
             {' · '}{new Date(r.created_at).toLocaleDateString('pt-BR')}</p>
           {r.comment&&<p className="mt-1 break-words text-sm text-slate-700">{r.comment}</p>}
         </div>)}
+      {reviewsHasMore&&<button type="button" disabled={reviewsLoading}
+        onClick={()=>void loadReviews(partnerId,reviews.length,true)}
+        className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-violet-700 disabled:opacity-50">
+        {reviewsLoading?'Carregando...':'Carregar mais avaliações'}
+      </button>}
     </div>;
   const wasContracted=(lead:Lead)=>!!(lead.partner_confirmed_at&&lead.clinic_confirmed_at)
     &&(lead.status==='active'||lead.status==='declined');
@@ -166,6 +206,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
                   <p className="mt-1 text-sm font-medium text-slate-800">{s.service_name}</p>
                 </div>
               </div>
+              <RatingSummary average={s.rating_average} count={s.review_count}/>
               <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">{s.description}</p>
               {s.photo_url && <img src={s.photo_url} alt={'Apresentação de '+s.partner?.display_name} referrerPolicy="no-referrer" loading="lazy" className="mt-3 max-h-40 w-full rounded-xl object-cover"/>}
               <div className="mt-4 flex flex-wrap items-center gap-2">
@@ -194,6 +235,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
               <div>
                 <h3 className="font-semibold text-slate-900">{service?.partner?.display_name||'Parceiro'}</h3>
                 <p className="mt-1 text-xs text-slate-500">{lead.status==='declined'&&wasContracted(lead)?'Parceria encerrada':status[lead.status]||lead.status}</p>
+                {service&&<RatingSummary average={service.rating_average} count={service.review_count}/>}
               </div>
               {lead.status==='awaiting_clinic'&&canManage&&
                 <button disabled={busy} onClick={()=>confirmContract(lead)}
