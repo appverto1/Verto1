@@ -1,6 +1,7 @@
 ﻿import { createClient } from '@supabase/supabase-js';
 
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
+import { shouldDetectSalesActivationImplicitOAuthReturn } from '../utils/salesActivationImplicitOAuthReturn';
 
 // Fetch the Supabase configuration from the server to keep it out of the bundle
 const fetchConfig = async (retries = 3, delay = 1000) => {
@@ -38,6 +39,15 @@ let initPromise: Promise<any> | null = null;
 let sessionRetryPromise: Promise<any> | null = null;
 let authUrlExchangePromise: Promise<any> | null = null;
 let authUrlExchangeCode = '';
+
+const shouldHandleSalesActivationImplicitOAuthReturn = (): boolean => {
+  try {
+    return typeof window !== 'undefined' &&
+      shouldDetectSalesActivationImplicitOAuthReturn(window.location, window.localStorage);
+  } catch {
+    return false;
+  }
+};
 
 const AUTH_SESSION_READ_TIMEOUT_MS = 1600;
 const AUTH_URL_EXCHANGE_TIMEOUT_MS = 8000;
@@ -203,7 +213,10 @@ export const getSupabase = async () => {
         auth: {
           autoRefreshToken: true,
           persistSession: true,
-          detectSessionInUrl: false
+          // Only a matching paid-Director Google implicit callback may be
+          // consumed automatically. PKCE ?code= callbacks retain the existing
+          // single-owner manual exchange; every other route remains unchanged.
+          detectSessionInUrl: shouldHandleSalesActivationImplicitOAuthReturn()
         }
       });
       
