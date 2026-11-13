@@ -8,7 +8,7 @@ const partnerId='33333333-3333-4333-8333-333333333333';
 const leadId='44444444-4444-4444-8444-444444444444';
 const email='owner@example.test';
 
-function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean}={}){
+function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean;summaryRows?:any[];reviewRows?:any[]}={}){
   const routes:Record<string,any[]>={};
   const calls:any[]=[];
   const app:any={};
@@ -24,6 +24,9 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
         order(){return q;},in(){return q;},not(){return q;},
         update(values:any){calls.push({type:'update',table,values});return q;},
         upsert(values:any){calls.push({type:'upsert',table,values});return q;},
+        range:async(start:number,end:number)=>({
+          data:table==='verto_partner_marketplace_reviews'?(options.reviewRows||[]).slice(start,end+1):[],error:null
+        }),
         limit:async()=>({
           data:table==='clinic_memberships'?(role?[{role}]:[])
             :table==='verto_partner_marketplace_services'?[{
@@ -50,7 +53,8 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
     },
     rpc:async(name:string,args:any)=>{
       calls.push({type:'rpc',name,args});
-      return {data:name==='verto_marketplace_request_v1'?(options.requestResult===undefined?leadId:options.requestResult):true,error:null};
+      return {data:name==='verto_marketplace_review_summaries_v1'?(options.summaryRows||[]):
+        name==='verto_marketplace_request_v1'?(options.requestResult===undefined?leadId:options.requestResult):true,error:null};
     }
   };
   const checkAuth=()=>{};
@@ -199,4 +203,38 @@ test('owner opportunity report keeps both existing administrative guards',()=>{
   const chain=f.routes['GET /api/owner/partnerships/marketplace'];
   assert.equal(chain[0],f.checkAuth);
   assert.equal(chain[1],f.checkPlatformAdmin);
+});
+
+test('directory aggregates reviews in one RPC and returns average plus count without exposing review text',async()=>{
+  const f=fixture('director',{summaryRows:[{partner_id:partnerId,review_count:2,rating_average:3}]});
+  const result=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(result.statusCode,200);
+  assert.equal(result.body.services[0].review_count,2);
+  assert.equal(result.body.services[0].rating_average,3);
+  assert.equal(f.calls.filter(c=>c.type==='rpc'&&c.name==='verto_marketplace_review_summaries_v1').length,1);
+  assert.deepEqual(f.calls.find(c=>c.name==='verto_marketplace_review_summaries_v1').args.p_partner_ids,[partnerId]);
+  assert.equal(f.calls.some(c=>c.type==='from'&&c.table==='verto_partner_marketplace_reviews'),false);
+});
+
+test('directory shows zero reviews without inventing ratings',async()=>{
+  const f=fixture();
+  const result=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(result.body.services[0].review_count,0);
+  assert.equal(result.body.services[0].rating_average,0);
+});
+
+test('review comments are paginated in stable batches of twenty and offsets are validated',async()=>{
+  const reviewRows=Array.from({length:21},(_,i)=>({id:String(i),rating:i%2?1:5,comment:'Avaliação',created_at:'2026-11-13T15:00:00Z',clinic:{name:'Clínica'}}));
+  const f=fixture('director',{reviewRows});
+  const first=await f.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId});
+  assert.equal(first.statusCode,200);
+  assert.equal(first.body.reviews.length,20);
+  assert.equal(first.body.hasMore,true);
+  const second=await f.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId,offset:'20'});
+  assert.equal(second.body.reviews.length,1);
+  assert.equal(second.body.hasMore,false);
+  const invalid=await f.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId,offset:'-1'});
+  assert.equal(invalid.statusCode,400);
+  const forbidden=fixture('');
+  assert.equal((await forbidden.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId})).statusCode,403);
 });

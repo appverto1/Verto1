@@ -120,9 +120,22 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       ]);
       if(directory.error||mine.error||contact.error||clinic.error)throw directory.error||mine.error||contact.error||clinic.error;
       const services=directory.data||[];
-      const resolveImage=await signedImages(services.flatMap((service:any)=>[service.logo_url,service.photo_url]));
-      const visibleServices=services.map((service:any)=>({...service,
-        logo_url:resolveImage(service.logo_url),photo_url:resolveImage(service.photo_url)}));
+      const partnerIds=Array.from(new Set(services.map((service:any)=>service.partner_id)));
+      const [resolveImage,summaries]=await Promise.all([
+        signedImages(services.flatMap((service:any)=>[service.logo_url,service.photo_url])),
+        partnerIds.length?supabase.rpc('verto_marketplace_review_summaries_v1',{
+          p_partner_ids:partnerIds
+        }):Promise.resolve({data:[],error:null})
+      ]);
+      if(summaries.error)throw summaries.error;
+      const byPartner=new Map((summaries.data||[]).map((item:any)=>[item.partner_id,item]));
+      const visibleServices=services.map((service:any)=>{
+        const summary:any=byPartner.get(service.partner_id);
+        return {...service,
+          logo_url:resolveImage(service.logo_url),photo_url:resolveImage(service.photo_url),
+          rating_average:summary?Number(summary.rating_average):0,
+          review_count:summary?Number(summary.review_count):0};
+      });
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,services:visibleServices,
         mine:member.canManage?(mine.data||[]):(mine.data||[]).filter((l:any)=>l.status==='active'||(l.status==='declined'&&l.clinic_confirmed_at&&l.partner_confirmed_at)).map((l:any)=>({...l,agreed_monthly_cents:null})),
@@ -135,12 +148,15 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       if(!isUuid(req.params?.partnerId))return error(res,'INVALID_PARTNER');
       const member=await membership(req,req.query?.clinicId);
       if(!member)return error(res,'CLINIC_MEMBERSHIP_REQUIRED',403);
+      const rawOffset=req.query?.offset;
+      const offset=rawOffset===undefined?0:typeof rawOffset==='string' && /^\d{1,5}$/.test(rawOffset)?Number(rawOffset):NaN;
+      if(!Number.isSafeInteger(offset)||offset<0||offset>10000)return error(res,'INVALID_REVIEW_OFFSET');
       const reviews=await supabase.from('verto_partner_marketplace_reviews')
-        .select('rating,comment,created_at,clinic:clinics(name)').eq('partner_id',req.params.partnerId)
-        .order('created_at',{ascending:false}).limit(20);
+        .select('id,rating,comment,created_at,clinic:clinics(name)').eq('partner_id',req.params.partnerId)
+        .order('created_at',{ascending:false}).order('id',{ascending:false}).range(offset,offset+20);
       if(reviews.error)throw reviews.error;
       res.setHeader('Cache-Control','private, no-store');
-      return res.json({success:true,reviews:reviews.data||[]});
+      return res.json({success:true,reviews:(reviews.data||[]).slice(0,20),hasMore:(reviews.data||[]).length>20});
     }catch{return unavailable(res);}
   });
 
