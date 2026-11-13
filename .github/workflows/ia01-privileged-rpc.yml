@@ -1,0 +1,26 @@
+name: IA-01 privileged RPC ACL regression
+
+on:
+  pull_request:
+    branches: [staging, main]
+    paths:
+      - 'supabase/migrations/20261113110038_ia01_privileged_rpc_execute_lockdown.sql'
+      - 'tests/ia01PrivilegedRpcAcl.regression.test.mjs'
+      - '.github/workflows/ia01-privileged-rpc.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ia01-acl-gate:
+    name: privileged-rpc-acl
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Verify SQL permission hardening
+        run: node --test tests/ia01PrivilegedRpcAcl.regression.test.mjs
