@@ -203,7 +203,13 @@ export const getSupabase = async () => {
         auth: {
           autoRefreshToken: true,
           persistSession: true,
-          detectSessionInUrl: false
+          detectSessionInUrl: false,
+          // The commercial Director Google callback uses the existing manual
+          // PKCE ?code= exchange. Other portals retain their implicit OAuth.
+          flowType: typeof window !== 'undefined' &&
+            /^\/ativacao-comercial\/[^/]+\/?$/i.test(window.location.pathname)
+              ? 'pkce'
+              : 'implicit'
         }
       });
       
