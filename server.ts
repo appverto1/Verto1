@@ -26774,7 +26774,6 @@ async function startServer() {
         req.session.cookie.maxAge = patientPortalSessionMaxAgeDays * 24 * 60 * 60 * 1000;
       }
       const loginResponse = { success: true, user: sessionUser, isFirstLogin: Boolean(req.session.isFirstLogin) };
-      console.log(`[Auth] Saving session for ${user.email}. Session ID: ${req.sessionID}`);
       req.session.save(async (err) => {
         if (err) {
           console.error("Session save error in login:", err);
