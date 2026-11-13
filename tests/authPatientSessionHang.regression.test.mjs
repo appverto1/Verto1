@@ -27,7 +27,7 @@ assert.match(authHeaders, /sessão HTTP existente/);
 // OAuth code exchange has exactly one owner and automatic URL detection is disabled.
 assert.match(supabase, /exchangeOAuthCodeOnce/);
 assert.match(supabase, /\.exchangeCodeForSession\(code\)/);
-assert.match(supabase, /detectSessionInUrl:\s*shouldHandleSalesActivationImplicitOAuthReturn\(\)/);
+assert.match(supabase, /detectSessionInUrl:\s*false/);
 assert.doesNotMatch(activationSession, /exchangeCodeForSession/);
 assert.doesNotMatch(activationSession, /signOut\(\{\s*scope:\s*'local'/);
 assert.match(activationSession, /ensureFreshSession\(\{\s*sessionTimeoutMs:\s*2500,\s*urlExchangeTimeoutMs:\s*8000\s*\}\)/s);
