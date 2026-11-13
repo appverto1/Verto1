@@ -210,6 +210,9 @@ jobs:
       - name: Clinic authorization-denial guidance regression
         run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
 
+      - name: IA-01 privileged RPC ACL regression
+        run: node --test tests/ia01PrivilegedRpcAcl.regression.test.mjs
+
       - name: Professional onboarding bearer regression
         run: node tests/professionalOnboardingAuth.regression.test.mjs
 
