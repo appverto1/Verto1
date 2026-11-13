@@ -5,7 +5,7 @@ import test from 'node:test';
 
 const read = (path) => readFileSync(join(process.cwd(), path), 'utf8');
 const original = read('supabase/migrations/20260826154500_specialty_session_pts_context_binding_v1.sql');
-const migration = read('supabase/migrations/20261113135000_aba_v3_pts_collection_context_idempotency.sql');
+const migration = read('supabase/migrations/20261113130609_aba_v3_pts_collection_context_idempotency.sql');
 const immutableGuardMigration = read('supabase/migrations/20260826143000_pts_document_lineage_events_v2.sql');
 const server = read('server.ts');
 
