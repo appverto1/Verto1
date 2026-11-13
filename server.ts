@@ -12056,7 +12056,8 @@ async function resolvePatientIdForRequest(
 
     let byIdQuery = supabase
       .from('patients')
-      .select('id, created_at, created_by')
+      // Only the canonical ID is used; created_by does not exist on patients.
+      .select('id')
       .eq('id', safeRaw)
       .eq('is_active', true)
       .is('deleted_at', null)
