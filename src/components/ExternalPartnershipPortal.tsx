@@ -212,7 +212,7 @@ export function ExternalPartnershipPortal() {
     <div className="mx-auto mb-4 flex max-w-4xl justify-end">
       <button type="button" disabled={busy} onClick={() => void logout()}
         className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 disabled:opacity-50">
-        <LogOut size={16}/> Sair da parceria
+        <LogOut size={16}/> Sair
       </button>
     </div>
     <PartnershipPanel mode="external" onBack={() => window.location.assign('/')} />

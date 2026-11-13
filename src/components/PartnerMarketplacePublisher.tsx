@@ -1,5 +1,5 @@
 import React,{useCallback,useEffect,useState} from 'react';
-import {CheckCircle2, Loader2, Store} from 'lucide-react';
+import {CheckCircle2, Loader2, MessageSquare, Store} from 'lucide-react';
 
 type Profile={service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;logo_preview_url?:string|null;photo_preview_url?:string|null};
 type PartnerLead={
@@ -16,7 +16,7 @@ const asJson=(method:string,body:unknown):RequestInit=>({
   method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
 });
 
-export function PartnerMarketplacePublisher(){
+export function PartnerMarketplacePublisher({activeSection='store'}:{activeSection?:'store'|'interests'}){
   const [profile,setProfile]=useState({serviceName:'',category:'',description:'',logoUrl:'',photoUrl:''});
   const [logoFile,setLogoFile]=useState<File|null>(null);
   const [photoFile,setPhotoFile]=useState<File|null>(null);
@@ -94,18 +94,20 @@ export function PartnerMarketplacePublisher(){
     }catch(e:any){setError(e.message);}
     finally{setSaving(false);}
   };
-  return <section className="space-y-5" aria-label="Sua vitrine de serviços">
+  return <section className="space-y-5" aria-label={activeSection==='store'?'Sua vitrine de serviços':'Interesses recebidos'}>
     <div className="flex items-start gap-3">
-      <Store size={21} className="mt-1 text-violet-700"/>
+      {activeSection==='store'?<Store size={20} className="text-violet-700"/>:<MessageSquare size={20} className="text-violet-700"/>}
       <div>
-        <h2 className="text-lg font-semibold text-slate-900">Sua vitrine na Verto</h2>
-        <p className="text-sm text-slate-600">Divulgue seu serviço a clínicas da plataforma e acompanhe contatos autorizados.</p>
+        <h2 className="text-sm font-semibold text-violet-700">{activeSection==='store'?'Sua vitrine na Verto':'Interesses recebidos'}</h2>
+        <p className="mt-1 text-sm text-slate-600">{activeSection==='store'
+          ?'Divulgue seu serviço a clínicas da plataforma e acompanhe contatos autorizados.'
+          :'Acompanhe solicitações de clínicas interessadas nos seus serviços.'}</p>
       </div>
     </div>
     {error&&<p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
     {notice&&<p role="status" className="rounded-xl bg-emerald-50 p-3 text-sm text-emerald-700">{notice}</p>}
     {loading?<p className="flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin"/>Carregando...</p>:<>
-      <form onSubmit={saveProfile} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
+      {activeSection==='store' && <form onSubmit={saveProfile} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5">
         <h3 className="font-semibold text-slate-900">Apresentação comercial</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block text-sm font-medium text-slate-700">Nome do serviço
@@ -147,9 +149,8 @@ export function PartnerMarketplacePublisher(){
         <button type="submit" disabled={saving} className="rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
           {saving?'Salvando...':'Salvar apresentação'}
         </button>
-      </form>
-      <div className="rounded-2xl border border-slate-200 bg-white p-5">
-        <h3 className="font-semibold text-slate-900">Interesses recebidos</h3>
+      </form>}
+      {activeSection==='interests' && <div className="rounded-2xl border border-slate-200 bg-white p-5">
         <p className="mt-1 text-xs text-slate-500">Contato liberado expressamente pelo representante da clínica. Não use para outras finalidades.</p>
         {inbox.length===0?<p className="mt-4 text-sm text-slate-500">Nenhuma indicação recebida.</p>
           :<ul className="mt-3 divide-y divide-slate-100">
@@ -169,7 +170,7 @@ export function PartnerMarketplacePublisher(){
             </li>)}
           </ul>}
         <p className="mt-3 text-xs text-slate-500">Comissões de indicação da Verto ao parceiro (proposta: 10% por 6 meses) dependem de contrato e comprovação de pagamentos. Não há repasse automático.</p>
-      </div>
+      </div>}
     </>}
     {confirming&&<div className="fixed inset-0 z-[240] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Declarar contratação">
       <form onSubmit={confirm} className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
