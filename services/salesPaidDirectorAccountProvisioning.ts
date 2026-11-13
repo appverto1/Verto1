@@ -26,6 +26,9 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
         await supabase.auth.admin.createUser({
           email,
           email_confirm: true,
+          // Server-owned marker for matching concurrent paid Checkout creates.
+          // raw_user_meta_data is user-editable and MUST NOT authorize reuse.
+          app_metadata: { sales_activation_offer_id: offerId },
           user_metadata: {
             full_name: ownerName,
             sales_activation_offer_id: offerId,
@@ -48,7 +51,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
         authUser = await findAuthUserByEmail(email);
         if (!authUser?.id || sanitizeEmail(authUser.email) !== email) throw createError;
         if (isAmbiguousAuthCreateError
-          && sanitizeString(authUser?.user_metadata?.sales_activation_offer_id, 120) !== offerId) {
+          && sanitizeString(authUser?.app_metadata?.sales_activation_offer_id, 120) !== offerId) {
           const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
           (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
           throw conflict;
