@@ -28,6 +28,7 @@ type PartnerTab = (typeof partnerTabs)[number]['key'];
 export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;mode?:'professional'|'external'}) {
   const [account,setAccount]=useState<Account|null>(null);
   const [activeTab,setActiveTab]=useState<PartnerTab>('program');
+  const [pendingInterests,setPendingInterests]=useState<number|null>(null);
   const [referrals,setReferrals]=useState<Referral[]>([]);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
@@ -119,10 +120,14 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     {approved && <div role="tablist" aria-label="Seções do portal de parceiros" className="flex gap-2 overflow-x-auto pb-1">
       {partnerTabs.map(({key,label,icon:Icon})=><button key={key} id={'partner-tab-'+key} type="button" role="tab"
         aria-controls={key==='store'||key==='interests'?'partner-panel-marketplace':'partner-panel-'+key} aria-selected={activeTab===key} tabIndex={activeTab===key?0:-1}
+        aria-label={key==='interests'&&pendingInterests!==null&&pendingInterests>0
+          ?'Interesses recebidos: '+pendingInterests+(pendingInterests===1?' solicitação pendente':' solicitações pendentes'):undefined}
         onClick={()=>setActiveTab(key)} onKeyDown={event=>navigateTabs(event,key)}
         className={'inline-flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-semibold transition-colors '+
           (activeTab===key?'border-violet-300 bg-violet-50 text-violet-700':'border-slate-200 bg-white text-slate-600 hover:bg-slate-50')}>
         <Icon size={17} aria-hidden="true"/>{label}
+        {key==='interests'&&pendingInterests!==null&&pendingInterests>0&&
+          <span aria-hidden="true" className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-violet-700 px-1 text-xs font-bold text-white">{pendingInterests}</span>}
       </button>)}
     </div>}
     {approved && activeTab!=='program' && error && <p role="alert" className="text-sm text-red-700">{error}</p>}
@@ -202,7 +207,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     {approved && <div id="partner-panel-marketplace" role="tabpanel"
       aria-labelledby={'partner-tab-'+(activeTab==='interests'?'interests':'store')}
       hidden={activeTab!=='store'&&activeTab!=='interests'}>
-      <PartnerMarketplacePublisher activeSection={activeTab==='interests'?'interests':'store'}/>
+      <PartnerMarketplacePublisher activeSection={activeTab==='interests'?'interests':'store'} onPendingInterestsChange={setPendingInterests}/>
     </div>}
   </section>;
 }

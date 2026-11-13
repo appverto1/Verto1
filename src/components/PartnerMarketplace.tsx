@@ -5,7 +5,7 @@ type Service={
   partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;
   partner:{display_name:string};rating_average:number;review_count:number;
 };
-type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null};
+type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null;my_review_count:number};
 type Review={id:string;rating:number;comment:string;created_at:string;clinic?:{name:string}|null};
 async function api(path:string,init?:RequestInit){
   const r=await fetch(path,{credentials:'include',cache:'no-store',...init});
@@ -109,8 +109,17 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
   });
   const saveReview=()=>void mutate(async()=>{
     if(!reviewLead)return;
-    await api('/api/partnerships/marketplace/review/'+encodeURIComponent(reviewLead.id),
-      json({clinicId,rating,comment}));
+    try{
+      await api('/api/partnerships/marketplace/review/'+encodeURIComponent(reviewLead.id),
+        json({clinicId,rating,comment}));
+    }catch(e:any){
+      if(e?.message==='REVIEW_LIMIT_REACHED'){
+        setReviewLead(null);
+        await reload();
+        throw new Error('Esta clínica já registrou o limite de duas avaliações para este parceiro.');
+      }
+      throw e;
+    }
     setReviewLead(null);setComment('');setRating(5);setSelectedReviews(null);setReviews([]);
     setReviewsHasMore(false);reviewRequestId.current++;
     setNotice('Nova avaliação registrada de forma definitiva.');
@@ -242,11 +251,13 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
                   className="rounded-xl bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
                   Confirmar contratação {lead.agreed_monthly_cents!=null?'('+money(Number(lead.agreed_monthly_cents))+'/mês)':''}
                 </button>}
-              {wasContracted(lead)&&canManage&&
+              {wasContracted(lead)&&canManage&&Number(lead.my_review_count||0)<2&&
                 <button disabled={busy} onClick={()=>{setReviewLead(lead);setRating(5);setComment('');}}
                   className="rounded-xl border border-violet-300 px-3 py-2 text-sm font-semibold text-violet-700">
                   Avaliar parceiro
                 </button>}
+              {wasContracted(lead)&&canManage&&Number(lead.my_review_count||0)>=2&&
+                <span className="text-xs text-slate-600" role="status">Limite de duas avaliações desta clínica atingido.</span>}
             </div>
             {lead.status==='awaiting_clinic' && <p className="mt-2 text-xs text-slate-500">Confirme somente se a clínica realmente contratou o serviço e o valor está correto.</p>}
             {lead.status==='active' && <p className="mt-2 text-xs text-slate-500">Serviço contratado. Comissões externas ainda dependem de comprovação financeira e acordo comercial.</p>}
