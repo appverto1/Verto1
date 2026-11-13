@@ -4,6 +4,7 @@
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 const tests = [
+  'tests/protocolImportClinicListEgress.regression.test.ts',
   'tests/salesSubscriptionActiveBeforeLeadConversion.regression.test.ts',
   'tests/salesPaidDirectorConcurrentAuthCreate.regression.test.ts',
   'tests/abaV3PtsCollectionContextIdempotency.regression.test.mjs',
