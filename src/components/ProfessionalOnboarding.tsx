@@ -12,6 +12,7 @@ import {
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
+import { WEEKDAYS, roleLabel, buildProfessionalOnboardingSchedule } from '../utils/professionalOnboardingPresentation';
 import {
   digitsOnly,
   formatDocument,
@@ -52,28 +53,6 @@ interface ProfessionalOnboardingProps {
   onComplete: (data: any) => void;
   onClose?: () => void;
 }
-
-const WEEKDAYS = [
-  ['monday', 'Segunda'],
-  ['tuesday', 'Terça'],
-  ['wednesday', 'Quarta'],
-  ['thursday', 'Quinta'],
-  ['friday', 'Sexta'],
-  ['saturday', 'Sábado'],
-  ['sunday', 'Domingo'],
-] as const;
-
-const roleLabel = (role: string) => {
-  if (role === 'director') return 'Diretor';
-  if (role === 'coordinator') return 'Coordenador';
-  if (role === 'supervisor') return 'Profissional · Supervisor';
-  if (role === 'receptionist') return 'Recepcionista/Assistente';
-  if (role === 'biller') return 'Faturista';
-  if (role === 'admin') return 'Administrador';
-  if (role === 'owner') return 'Proprietário';
-  return 'Profissional de atendimento';
-};
-
 
 export function ProfessionalOnboarding({ user, onComplete, onClose }: ProfessionalOnboardingProps) {
   const initialContext = (user?.onboardingContext || null) as OnboardingContext | null;
@@ -144,27 +123,9 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const specialty = context?.membership?.specialty || user?.specialties || '';
   const effectiveRole = context?.membership?.role || user?.role || 'therapist';
 
-  const schedule = useMemo(() => {
-    const days = Object.fromEntries(
-      WEEKDAYS.map(([key]) => [
-        key,
-        selectedDays.includes(key)
-          ? { enabled: true, periods: [{ start: workStart, end: workEnd }], intervals: [] }
-          : { enabled: false, periods: [], intervals: [] },
-      ]),
-    );
-    const duration = Number(sessionDurationMinutes) || 50;
-    return {
-      active: true,
-      stepMinutes: duration,
-      defaultSessionDurationMinutes: duration,
-      minLeadMinutes: 120,
-      maxSlotsPerDay: 8,
-      sessionBufferMinutes: 0,
-      days,
-      exceptions: [],
-    };
-  }, [selectedDays, sessionDurationMinutes, workStart, workEnd]);
+  const schedule = useMemo(() => buildProfessionalOnboardingSchedule({
+    selectedDays, sessionDurationMinutes, workStart, workEnd,
+  }), [selectedDays, sessionDurationMinutes, workStart, workEnd]);
 
   useEffect(() => {
     localStorage.setItem(stepKey, String(Math.min(step, maxStep)));
