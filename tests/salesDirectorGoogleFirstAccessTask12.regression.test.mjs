@@ -65,7 +65,7 @@ test('backend login exception returns actionable error without consuming the pen
 });
 
 test('OAuth code exchange stays single-owner and auth callback remains deferred', () => {
-  assert.match(auth, /detectSessionInUrl: false/);
+  assert.match(auth, /detectSessionInUrl: shouldHandleSalesActivationImplicitOAuthReturn\(\)/);
   assert.match(auth, /exchangeOAuthCodeOnce\(client, urlExchangeTimeoutMs\)/);
   assert.match(auth, /client\.auth[\s\S]*?\.exchangeCodeForSession\(code\)/);
   assert.match(authListener, /onAuthStateChange\(\(event, session\) => \{/);
