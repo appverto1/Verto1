@@ -2,7 +2,7 @@ import React, {useCallback,useEffect,useRef,useState} from 'react';
 import {ArrowLeft, CheckCircle2, Loader2, Search, Star, X} from 'lucide-react';
 
 type Service={
-  partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;
+  partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;
   partner:{display_name:string};rating_average:number;review_count:number;
 };
 type Lead={id:string;partner_id:string;status:string;agreed_monthly_cents:number|null;clinic_confirmed_at:string|null;partner_confirmed_at:string|null;my_review_count:number};
@@ -116,7 +116,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       if(e?.message==='REVIEW_LIMIT_REACHED'){
         setReviewLead(null);
         await reload();
-        throw new Error('Esta clínica já registrou o limite de duas avaliações para este parceiro.');
+        throw new Error('Esta clínica já registrou o limite de cinco avaliações para este parceiro.');
       }
       throw e;
     }
@@ -167,6 +167,16 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
   const filtered=services.filter(s=>(s.service_name+' '+s.category+' '+s.partner?.display_name)
     .toLocaleLowerCase('pt-BR').includes(search.toLocaleLowerCase('pt-BR')));
   const linked=(partnerId:string)=>mine.find(l=>l.partner_id===partnerId);
+  const renderReviewAction=(lead:Lead)=>{
+    if(!wasContracted(lead)||!canManage)return null;
+    return Number(lead.my_review_count||0)<5
+      ?<button type="button" disabled={busy}
+        onClick={()=>{setReviewLead(lead);setRating(5);setComment('');}}
+        className="rounded-xl border border-violet-300 px-3 py-2 text-sm font-semibold text-violet-700 disabled:opacity-50">
+        Avaliar parceiro
+      </button>
+      :<span className="text-xs text-slate-600" role="status">Limite de cinco avaliações desta clínica atingido.</span>;
+  };
   return <div className="fixed inset-0 z-[220] flex items-start justify-center overflow-y-auto bg-slate-950/65 p-3 sm:p-6"
     role="dialog" aria-modal="true" aria-label="Encontrar parceiros"
     onKeyDown={e=>{if(e.key==='Escape')onClose();}}>
@@ -217,7 +227,6 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
               </div>
               <RatingSummary average={s.rating_average} count={s.review_count}/>
               <p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">{s.description}</p>
-              {s.photo_url && <img src={s.photo_url} alt={'Apresentação de '+s.partner?.display_name} referrerPolicy="no-referrer" loading="lazy" className="mt-3 max-h-40 w-full rounded-xl object-cover"/>}
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {lead?<span className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700">{status[lead.status]||lead.status}</span>
                   : <button type="button" disabled={!canManage||busy} onClick={()=>{setInterest(s);setConsent(false);}}
@@ -228,6 +237,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
                   className="rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">
                   <Star size={14} className="mr-1 inline"/> Ver avaliações
                 </button>
+                {lead&&renderReviewAction(lead)}
               </div>
               {!canManage && !lead && <p className="mt-2 text-xs text-slate-500">Somente diretor ou coordenador pode autorizar o compartilhamento de contatos da clínica.</p>}
               {renderReviews(s.partner_id)}
@@ -235,43 +245,51 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
           })}
         </div>
       </>}
-      {tab==='mine' && !!clinicId && <div className="mt-5 space-y-3">
-        {!loading&&mine.length===0 && <p className="text-sm text-slate-500">Nenhum interesse registrado. Encontre serviços em Explorar serviços.</p>}
+      {tab==='mine' && !!clinicId && <div className="mt-4 grid gap-4 md:grid-cols-2">
+        {!loading&&mine.length===0 && <p className="text-sm text-slate-500 md:col-span-2">Nenhum interesse registrado. Encontre serviços em Explorar serviços.</p>}
         {mine.map(lead=>{
           const service=services.find(s=>s.partner_id===lead.partner_id);
           return <article key={lead.id} className="rounded-2xl border border-slate-200 bg-white p-5">
-            <div className="flex flex-wrap justify-between gap-2">
-              <div>
+            <div className="flex items-start gap-3">
+              {service?.logo_url
+                ?<img src={service.logo_url} alt={'Logo '+(service.partner?.display_name||'do parceiro')}
+                  referrerPolicy="no-referrer" loading="lazy"
+                  className="h-14 w-14 shrink-0 rounded-xl border border-slate-100 object-contain"/>
+                :<div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-xl font-bold text-violet-700">
+                  {service?.partner?.display_name?.slice(0,1)||'V'}
+                </div>}
+              <div className="min-w-0">
                 <h3 className="font-semibold text-slate-900">{service?.partner?.display_name||'Parceiro'}</h3>
-                <p className="mt-1 text-xs text-slate-500">{lead.status==='declined'&&wasContracted(lead)?'Parceria encerrada':status[lead.status]||lead.status}</p>
-                {service&&<RatingSummary average={service.rating_average} count={service.review_count}/>}
+                {service?.category&&<p className="text-xs text-violet-700">{service.category}</p>}
+                {service?.service_name&&<p className="mt-1 text-sm font-medium text-slate-800">{service.service_name}</p>}
+                <p className="mt-1 text-xs text-slate-500">
+                  {lead.status==='declined'&&wasContracted(lead)?'Parceria encerrada':status[lead.status]||lead.status}
+                </p>
               </div>
+            </div>
+            {service&&<RatingSummary average={service.rating_average} count={service.review_count}/>}
+            {service?.description&&<p className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">{service.description}</p>}
+            <div className="mt-4 flex flex-wrap items-center gap-2">
               {lead.status==='awaiting_clinic'&&canManage&&
-                <button disabled={busy} onClick={()=>confirmContract(lead)}
+                <button type="button" disabled={busy} onClick={()=>confirmContract(lead)}
                   className="rounded-xl bg-violet-700 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">
                   Confirmar contratação {lead.agreed_monthly_cents!=null?'('+money(Number(lead.agreed_monthly_cents))+'/mês)':''}
                 </button>}
-              {wasContracted(lead)&&canManage&&Number(lead.my_review_count||0)<2&&
-                <button disabled={busy} onClick={()=>{setReviewLead(lead);setRating(5);setComment('');}}
-                  className="rounded-xl border border-violet-300 px-3 py-2 text-sm font-semibold text-violet-700">
-                  Avaliar parceiro
+              {renderReviewAction(lead)}
+              {wasContracted(lead)&&<>
+                <button type="button" onClick={()=>void showReviews(lead.partner_id)}
+                  className="rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">
+                  <Star size={14} className="mr-1 inline"/> Ver avaliações
+                </button>
+                {lead.status==='active'&&canManage&&<button type="button" disabled={busy}
+                  onClick={()=>{if(window.confirm('Marcar esta parceria como encerrada? O histórico será mantido.'))endContract(lead);}}
+                  className="rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-600 disabled:opacity-50">
+                  Encerrar parceria
                 </button>}
-              {wasContracted(lead)&&canManage&&Number(lead.my_review_count||0)>=2&&
-                <span className="text-xs text-slate-600" role="status">Limite de duas avaliações desta clínica atingido.</span>}
+              </>}
             </div>
             {lead.status==='awaiting_clinic' && <p className="mt-2 text-xs text-slate-500">Confirme somente se a clínica realmente contratou o serviço e o valor está correto.</p>}
             {lead.status==='active' && <p className="mt-2 text-xs text-slate-500">Serviço contratado. Comissões externas ainda dependem de comprovação financeira e acordo comercial.</p>}
-            {wasContracted(lead)&&<div className="mt-3 flex flex-wrap gap-2">
-              <button type="button" onClick={()=>void showReviews(lead.partner_id)}
-                className="rounded-xl border border-slate-200 px-3 py-2 text-xs text-slate-700">
-                <Star size={14} className="mr-1 inline"/> Ver avaliações
-              </button>
-              {lead.status==='active'&&canManage&&<button type="button" disabled={busy}
-                onClick={()=>{if(window.confirm('Marcar esta parceria como encerrada? O histórico será mantido.'))endContract(lead);}}
-                className="rounded-xl border border-slate-300 px-3 py-2 text-xs text-slate-600 disabled:opacity-50">
-                Encerrar parceria
-              </button>}
-            </div>}
             {renderReviews(lead.partner_id)}
           </article>;
         })}
@@ -299,7 +317,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       {reviewLead && <div className="fixed inset-0 z-[230] flex items-center justify-center bg-slate-950/70 p-4" role="dialog" aria-modal="true" aria-label="Avaliar parceiro">
         <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
           <h3 className="text-lg font-semibold text-slate-900">Avalie seu parceiro</h3>
-          <p className="mt-2 text-sm text-slate-500">Somente clínicas com contratação confirmada (ativa ou encerrada) podem avaliar. Sua avaliação ficará pública no catálogo, sem opção de edição ou exclusão. A clínica pode registrar até duas avaliações por parceiro.</p>
+          <p className="mt-2 text-sm text-slate-500">Somente clínicas com contratação confirmada (ativa ou encerrada) podem avaliar. Sua avaliação ficará pública no catálogo, sem opção de edição ou exclusão. A clínica pode registrar até cinco avaliações por parceiro.</p>
           <div className="mt-4 flex gap-2" role="group" aria-label="Nota de 1 a 5 estrelas">
             {[1,2,3,4,5].map(n=><button key={n} type="button" onClick={()=>setRating(n)}
               aria-label={n+' estrelas'} aria-pressed={rating===n} className="rounded-lg p-1 text-amber-500">
