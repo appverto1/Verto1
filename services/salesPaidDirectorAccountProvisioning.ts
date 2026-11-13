@@ -304,6 +304,25 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       const now = new Date().toISOString();
       const conversionKey = `activation-completed:${leadId}:${params.userId}`;
 
+      // Stripe can deliver a paid Checkout webhook before the subscription is
+      // active. Verify the persisted subscription BEFORE converting the lead or
+      // creating tenant entitlements. A later webhook replay can safely retry.
+      const subscriptionId = modularContract
+        ? sanitizeString(offerResult.data.stripe_subscription_id, 200)
+        : "";
+      if (modularContract && !subscriptionId) {
+        throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
+      }
+      const subscription = modularContract
+        ? await getStripe().subscriptions.retrieve(subscriptionId)
+        : null;
+      const entitlementStatus = subscription
+        ? stripeSubscriptionToEntitlementStatus(subscription.status)
+        : null;
+      if (modularContract && !["active", "trial", "grace"].includes(entitlementStatus || "")) {
+        throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
+      }
+
       // Persist the canonical tenant relationship first. The entitlement RPC
       // validates this relationship itself, preventing an offer from activating
       // modules in another clinic. This update is idempotent on retries.
@@ -333,20 +352,8 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       }
 
       if (modularContract) {
-        const subscriptionId = sanitizeString(
-          offerResult.data.stripe_subscription_id,
-          200,
-        );
-        if (!subscriptionId) {
-          throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
-        }
-        const subscription = await getStripe().subscriptions.retrieve(
-          subscriptionId,
-        );
-        const entitlementStatus = stripeSubscriptionToEntitlementStatus(
-          subscription.status,
-        );
-        if (!["active", "trial", "grace"].includes(entitlementStatus)) {
+        // Both values were checked before any tenant or lead write above.
+        if (!subscription || !entitlementStatus) {
           throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
         }
         await applyModularEntitlementsForOrganization({
