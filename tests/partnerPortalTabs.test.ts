@@ -16,6 +16,8 @@ const {PartnershipPanel}=await import('../src/components/PartnershipPanel');
 const requests:string[]=[];
 let failNextPortalRead=false;
 let savedCategory='Categoria histórica';
+let confirmationCalls=0;
+let leadStatus:'interested'|'awaiting_clinic'='interested';
 const account={
   id:'11111111-1111-4111-8111-111111111111',display_name:'Parceiro de Teste',
   referral_code:'DEMO0001',referral_alias:'TESTE1234',status:'approved',compliance_approved:true,
@@ -27,6 +29,12 @@ const referrals=[{
 globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const path=String(input);
   requests.push(path);
+  if(path==='/api/partnerships/marketplace/partner/confirm/33333333-3333-4333-8333-333333333333'&&init?.method==='POST'){
+    assert.deepEqual(JSON.parse(String(init.body)),{},'the partner cannot submit a negotiated amount');
+    confirmationCalls++;
+    leadStatus='awaiting_clinic';
+    return {ok:true,json:async()=>({success:true})} as Response;
+  }
   if(path==='/api/partnerships/marketplace/partner/profile'&&init?.method==='PATCH'){
     savedCategory=JSON.parse(String(init.body)).category;
     return {ok:true,json:async()=>({success:true})} as Response;
@@ -41,8 +49,8 @@ globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
       ?{success:true,profile:{service_name:'Serviço de teste',category:savedCategory,
         description:'Descrição comercial de teste disponível para clínicas.'},inbox:[
           {id:'33333333-3333-4333-8333-333333333333',contact_name:'Contato de Teste',
-          contact_email:'contato@example.test',status:'interested',created_at:'2026-11-13T12:00:00Z',
-          agreed_monthly_cents:null,clinic:{name:'Clínica Interessada'}},
+          contact_email:'contato@example.test',status:leadStatus,created_at:'2026-11-13T12:00:00Z',
+          clinic:{name:'Clínica Interessada'}},
         ]}
       :null;
   assert.ok(result,'Unexpected API request: '+path);
@@ -130,6 +138,19 @@ try{
   assert.equal(panel('partner-panel-marketplace').querySelector<HTMLSelectElement>('select')?.value,'Marketing',
     'categoria salva deve permanecer após recarregar dados');
   assert.equal(tab('Interesses recebidos').querySelector('span[aria-hidden="true"]')?.textContent,'1');
+  await act(async()=>tab('Interesses recebidos').click());
+  await act(async()=>Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+    .find(button=>button.textContent?.trim()==='Declarar contratação')!.click());
+  const dealDialog=document.querySelector<HTMLElement>('[role="dialog"][aria-label="Declarar contratação"]')!;
+  assert.ok(dealDialog);
+  assert.equal(dealDialog.querySelector('input[type="number"]'),null,'no negotiated amount is requested');
+  assert.doesNotMatch(dealDialog.textContent||'',/mensalidade do serviço|informe o valor mensal/i);
+  await act(async()=>dealDialog.querySelector('form')!.dispatchEvent(
+    new window.Event('submit',{bubbles:true,cancelable:true})));
+  assert.equal(confirmationCalls,1,'confirmation only persists after the form submit');
+  assert.equal(tab('Interesses recebidos').querySelector('span[aria-hidden="true"]'),null,
+    'pending badge clears when partner confirms');
+  assert.match(document.body.textContent||'',/Aguardando confirmação da clínica/);
   console.log('partnerPortalTabs: four tabs, interest counter, image sizing, category dropdown, legacy values, save authority and bounded reads passed');
 } finally {
   await act(async()=>root.unmount());
