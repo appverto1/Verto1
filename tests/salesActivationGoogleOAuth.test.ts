@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { shouldDetectSalesActivationImplicitOAuthReturn } from '../src/utils/salesActivationImplicitOAuthReturn';
 import {
   beginSalesActivationGoogleOAuth,
   readSalesActivationOAuthContext,
@@ -91,4 +92,52 @@ test('callback rejects absent, forged, cross-offer and malformed return links', 
   }
   storage.removeItem('verto_activation_email');
   assert.equal(readSalesActivationOAuthContext('/ativacao-comercial/offer_123', storage), null);
+});
+
+test('paid Director implicit Google callback restores a session only for the matching pending token', () => {
+  const { storage } = createStorage({
+    [SALES_ACTIVATION_OAUTH_PENDING_KEY]: 'offer/with space',
+    verto_activation_email: 'director@example.test',
+  });
+  const location = {
+    pathname: '/ativacao-comercial/offer%2Fwith%20space',
+    search: '',
+    hash: '#access_token=jwt-test&refresh_token=refresh-test&token_type=bearer',
+  };
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn(location, storage), true);
+
+  for (const pathname of [
+    '/', '/entrar', '/ativar', '/parcerias', '/ativacao-comercial/other',
+    '/ativacao-comercial/%E0%A4%A', '/ativacao-comercial/offer%2Fwith%20space/extra',
+  ]) {
+    assert.equal(shouldDetectSalesActivationImplicitOAuthReturn({ ...location, pathname }, storage), false, pathname);
+  }
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn({
+    ...location, search: '?code=pkce-code',
+  }, storage), false, 'PKCE callback keeps its single manual owner');
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn({
+    ...location, hash: '#access_token=jwt-test',
+  }, storage), false, 'never accept a partial OAuth fragment');
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn({
+    ...location, hash: '#error=access_denied',
+  }, storage), false, 'OAuth provider errors cannot establish sessions');
+});
+
+test('implicit callback rejects absent, stale and blocked browser activation context', () => {
+  const location = {
+    pathname: '/ativacao-comercial/test-offer',
+    search: '',
+    hash: '#access_token=jwt-test&refresh_token=refresh-test',
+  };
+  const { storage } = createStorage({ verto_activation_email: 'director@example.test' });
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn(location, storage), false);
+  storage.setItem(SALES_ACTIVATION_OAUTH_PENDING_KEY, 'different-offer');
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn(location, storage), false);
+  storage.setItem(SALES_ACTIVATION_OAUTH_PENDING_KEY, 'test-offer');
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn(location, storage), true);
+  storage.removeItem('verto_activation_email');
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn(location, storage), false);
+  assert.equal(shouldDetectSalesActivationImplicitOAuthReturn(location, {
+    getItem: () => { throw new Error('Storage blocked'); },
+  }), false);
 });
