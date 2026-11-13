@@ -17,6 +17,8 @@ ARG VITE_FEATURE_ABA_V3_UI=false
 ENV VITE_FEATURE_ABA_V3_UI=${VITE_FEATURE_ABA_V3_UI}
 
 RUN npm run build
+# IA-01 regression: no external services, no credentials, fail build on unsafe RPC grants.
+RUN node --test tests/ia01PrivilegedRpcAcl.regression.test.mjs
 RUN npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
