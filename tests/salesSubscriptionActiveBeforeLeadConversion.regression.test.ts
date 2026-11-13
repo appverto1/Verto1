@@ -9,7 +9,7 @@ const userId = '33333333-3333-4333-8333-333333333333';
 const checkoutSessionId = 'cs_test_pending_subscription';
 const subscriptionId = 'sub_test_pending_subscription';
 
-function harness({ status = 'incomplete', subscriptionPresent = true, modular = true, retrievalFails = false } = {}) {
+function harness({ status = 'incomplete', subscriptionPresent = true, modular = true, retrievalFails = false, verifiedSubscription = null } = {}) {
   let writes = 0;
   let stripeReads = 0;
   const rows = {
@@ -52,7 +52,7 @@ function harness({ status = 'incomplete', subscriptionPresent = true, modular = 
   return {
     run: () => finalizeSalesActivationForUser({
       email: 'buyer@example.invalid', userId, clinicId: userId,
-      offerId, leadId, checkoutSessionId, requireActivationRecord: false,
+      offerId, leadId, checkoutSessionId, requireActivationRecord: false, verifiedSubscription,
     }),
     metrics: () => ({ writes, stripeReads }),
   };
@@ -91,4 +91,15 @@ test('legacy offer does not introduce an unnecessary subscription lookup', async
   // probe only asserts that the modular Stripe guard was not added to it.
   await h.run();
   assert.deepEqual(h.metrics(), { writes: 1, stripeReads: 0 });
+});
+
+test('server-verified subscription proof avoids a second Stripe request during activation', async () => {
+  const h = harness({ status: 'active', verifiedSubscription: { id: subscriptionId, status: 'active' } });
+  await assert.rejects(h.run(), /WRITE_REACHED_AFTER_VERIFICATION/);
+  assert.deepEqual(h.metrics(), { writes: 1, stripeReads: 0 });
+});
+test('a proof for a different subscription never bypasses real Stripe verification', async () => {
+  const h = harness({ status: 'incomplete', verifiedSubscription: { id: 'sub_other_tenant', status: 'active' } });
+  await assert.rejects(h.run(), /SALES_SUBSCRIPTION_NOT_ACTIVE/);
+  assert.deepEqual(h.metrics(), { writes: 0, stripeReads: 1 });
 });

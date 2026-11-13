@@ -11,13 +11,20 @@ const otherClinicId = '44444444-4444-4444-8444-444444444444';
 const originalError = new Error('Database error creating new user');
 const validAuth = { id: userId, email, app_metadata: { sales_activation_offer_id: offerId }, user_metadata: {} };
 
-function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memberships = [], authCreateError = originalError } = {}) {
+function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memberships = [], authCreateError = originalError, paidOfferVisible = true, subscriptionStatus = 'active', legacyOffer = false } = {}) {
   let lookups = 0;
   let createAttempts = 0;
   let mutations = 0;
   let profileReads = 0;
   let createPayload = null;
+  let stripeReads = 0;
   const deps = {
+    getStripe: () => ({ subscriptions: { retrieve: async (subscriptionId) => {
+      stripeReads++;
+      assert.equal(subscriptionId, 'sub_test_verified_paid');
+      return { id: subscriptionId, status: subscriptionStatus };
+    } } }),
+    stripeSubscriptionToEntitlementStatus: (status) => status === 'active' ? 'active' : 'inactive',
     sanitizeEmail: (value) => typeof value === 'string' ? value.trim().toLowerCase() : '',
     sanitizeString: (value, maxLength = 240) => String(value ?? '').slice(0, maxLength),
     isUuid: (value) => typeof value === 'string' && /^[0-9a-f-]{36}$/i.test(value),
@@ -33,6 +40,16 @@ function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memb
         updateUserById: async () => { ++mutations; throw new Error('UNEXPECTED_AUTH_UPDATE'); },
       }},
       from: (table) => {
+        if (table === 'sales_offers') {
+          const scope = { id: offerId, lead_id: leadId, stripe_checkout_session_id: 'cs_test_race_1', status: 'paid' };
+          const query = {
+            eq: (column, value) => { assert.equal(value, scope[column], 'checkout scope: ' + column); return query; },
+            maybeSingle: async () => ({ data: paidOfferVisible
+              ? { offer_type: legacyOffer ? 'legacy' : 'modular', stripe_subscription_id: 'sub_test_verified_paid' }
+              : null, error: null }),
+          };
+          return { select: () => query };
+        }
         if (table !== 'clinic_memberships') {
           ++mutations;
           throw new Error('UNEXPECTED_TABLE_WRITE');
@@ -53,7 +70,7 @@ function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memb
   const run = () => service.provisionPaidSalesDirectorAccount({
     email, offerId, leadId, checkoutSessionId: 'cs_test_race_1',
   });
-  return { run, createdPayload: () => createPayload, metrics: () => ({ lookups, createAttempts, mutations, profileReads }) };
+  return { run, createdPayload: () => createPayload, stripeReads: () => stripeReads, metrics: () => ({ lookups, createAttempts, mutations, profileReads }) };
 }
 
 test('generic GoTrue 500 for already-created Auth identity retries lookup, not signup', async () => {
@@ -91,4 +108,23 @@ test('other Auth create failures are not masked as duplicate retries', async () 
   const h = buildHarness({ authCreateError: new Error('Database timeout') });
   await assert.rejects(h.run(), /Database timeout/);
   assert.deepEqual(h.metrics(), { lookups: 1, createAttempts: 1, mutations: 0, profileReads: 0 });
+});
+
+test('inactive Stripe subscription blocks paid Director creation before touching Auth or clinic', async () => {
+  const h = buildHarness({ subscriptionStatus: 'incomplete' });
+  await assert.rejects(h.run(), /SALES_SUBSCRIPTION_NOT_ACTIVE/);
+  assert.deepEqual(h.metrics(), { lookups: 0, createAttempts: 0, mutations: 0, profileReads: 0 });
+  assert.equal(h.stripeReads(), 1);
+});
+test('absence of confirmed paid offer prevents all Director and Stripe mutations', async () => {
+  const h = buildHarness({ paidOfferVisible: false });
+  await assert.rejects(h.run(), /SALES_DIRECTOR_PROVISIONING_PAYMENT_NOT_CONFIRMED/);
+  assert.deepEqual(h.metrics(), { lookups: 0, createAttempts: 0, mutations: 0, profileReads: 0 });
+  assert.equal(h.stripeReads(), 0);
+});
+test('legacy paid Checkout path retains Auth recovery without a Stripe subscription lookup', async () => {
+  const h = buildHarness({ legacyOffer: true });
+  await assert.rejects(h.run(), /RECOVERY_REACHED_COMPATIBILITY_CHECKS/);
+  assert.deepEqual(h.metrics(), { lookups: 2, createAttempts: 1, mutations: 0, profileReads: 1 });
+  assert.equal(h.stripeReads(), 0);
 });
