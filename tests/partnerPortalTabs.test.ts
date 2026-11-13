@@ -16,6 +16,8 @@ const {PartnershipPanel}=await import('../src/components/PartnershipPanel');
 const requests:string[]=[];
 let failNextPortalRead=false;
 let savedCategory='Categoria histórica';
+const legacyPhotoPath='storage://verto-partner-images/previous/photo-legacy.png';
+let savedPhotoUrl='';
 const account={
   id:'11111111-1111-4111-8111-111111111111',display_name:'Parceiro de Teste',
   referral_code:'DEMO0001',referral_alias:'TESTE1234',status:'approved',compliance_approved:true,
@@ -29,6 +31,7 @@ globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
   requests.push(path);
   if(path==='/api/partnerships/marketplace/partner/profile'&&init?.method==='PATCH'){
     savedCategory=JSON.parse(String(init.body)).category;
+    savedPhotoUrl=JSON.parse(String(init.body)).photoUrl;
     return {ok:true,json:async()=>({success:true})} as Response;
   }
   if(path==='/api/partnerships/portal' && failNextPortalRead){
@@ -39,7 +42,7 @@ globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
     ?{success:true,account,referrals}
     :path==='/api/partnerships/marketplace/partner'
       ?{success:true,profile:{service_name:'Serviço de teste',category:savedCategory,
-        description:'Descrição comercial de teste disponível para clínicas.'},inbox:[
+        description:'Descrição comercial de teste disponível para clínicas.',photo_url:legacyPhotoPath},inbox:[
           {id:'33333333-3333-4333-8333-333333333333',contact_name:'Contato de Teste',
           contact_email:'contato@example.test',status:'interested',created_at:'2026-11-13T12:00:00Z',
           agreed_monthly_cents:null,clinic:{name:'Clínica Interessada'}},
@@ -79,7 +82,10 @@ try{
   const categories=panel('partner-panel-marketplace').querySelector<HTMLSelectElement>('select')!;
   assert.ok(categories,'categoria deve ser um dropdown');
   assert.match(panel('partner-panel-marketplace').textContent||'',/800 × 800 px/);
-  assert.match(panel('partner-panel-marketplace').textContent||'',/1200 × 675 px/);
+  assert.doesNotMatch(panel('partner-panel-marketplace').textContent||'',/Foto de apresentação|1200 × 675 px/,
+    'promotional artwork and its format guidance should be hidden');
+  assert.equal(panel('partner-panel-marketplace').querySelectorAll('input[type="file"]').length,1,
+    'only the company logo may be uploaded');
   assert.equal(categories.required,true);
   assert.equal(categories.value,'Categoria histórica','categorias legadas devem continuar editáveis');
   assert.deepEqual(Array.from(categories.options).filter(o=>!o.disabled&&o.value!=='Categoria histórica').map(o=>o.value),[
@@ -126,11 +132,12 @@ try{
     form.dispatchEvent(new window.Event('submit',{bubbles:true,cancelable:true}));
   });
   assert.equal(savedCategory,'Marketing','somente Salvar deve persistir a categoria selecionada');
+  assert.equal(savedPhotoUrl,legacyPhotoPath,'removing promotional art must not erase previously saved media');
   assert.equal(requests.filter(path=>path==='/api/partnerships/marketplace/partner/profile').length,1);
   assert.equal(panel('partner-panel-marketplace').querySelector<HTMLSelectElement>('select')?.value,'Marketing',
     'categoria salva deve permanecer após recarregar dados');
   assert.equal(tab('Interesses recebidos').querySelector('span[aria-hidden="true"]')?.textContent,'1');
-  console.log('partnerPortalTabs: four tabs, interest counter, image sizing, category dropdown, legacy values, save authority and bounded reads passed');
+  console.log('partnerPortalTabs: four tabs, interest badge, logo-only, legacy media retained on save, category selector and bounded reads passed');
 } finally {
   await act(async()=>root.unmount());
   dom.window.close();
