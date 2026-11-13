@@ -19,6 +19,31 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       throw new Error("SALES_DIRECTOR_PROVISIONING_INPUT_INVALID");
     }
 
+    // A paid Checkout can arrive before the Stripe subscription is active.
+    // Verify the persisted paid offer and subscription before touching Auth,
+    // profiles or clinic membership, rather than creating an early Director.
+    const { data: paidOffer, error: paidOfferError } = await supabase
+      .from("sales_offers")
+      .select("offer_type,stripe_subscription_id")
+      .eq("id", offerId)
+      .eq("lead_id", leadId)
+      .eq("stripe_checkout_session_id", checkoutSessionId)
+      .eq("status", "paid")
+      .maybeSingle();
+    if (paidOfferError) throw paidOfferError;
+    if (!paidOffer) throw new Error("SALES_DIRECTOR_PROVISIONING_PAYMENT_NOT_CONFIRMED");
+    let verifiedSubscription: Stripe.Subscription | null = null;
+    if (sanitizeString(paidOffer.offer_type, 30) === "modular") {
+      const verifiedSubscriptionId = sanitizeString(paidOffer.stripe_subscription_id, 200);
+      if (!verifiedSubscriptionId) throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
+      const candidateSubscription = await getStripe().subscriptions.retrieve(verifiedSubscriptionId);
+      const candidateStatus = stripeSubscriptionToEntitlementStatus(candidateSubscription.status);
+      if (!["active", "trial", "grace"].includes(candidateStatus)) {
+        throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
+      }
+      verifiedSubscription = candidateSubscription;
+    }
+
     let authUser = await findAuthUserByEmail(email);
     const ownerName = sanitizeString(params.leadName, 180) || email.split("@")[0];
     if (!authUser?.id) {
@@ -215,6 +240,8 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       leadId,
       checkoutSessionId,
       requireActivationRecord: false,
+      // Reuse the one Stripe read just verified by this server invocation.
+      verifiedSubscription,
     });
 
     const { error: metadataError } = await supabase.auth.admin.updateUserById(authUser.id, {
@@ -239,6 +266,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
     leadId: string;
     checkoutSessionId: string;
     requireActivationRecord?: boolean;
+    verifiedSubscription?: Stripe.Subscription | null;
   }) {
     const normalizedEmail = sanitizeEmail(params.email);
     const offerId = sanitizeString(params.offerId, 120);
@@ -314,7 +342,9 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
         throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
       }
       const subscription = modularContract
-        ? await getStripe().subscriptions.retrieve(subscriptionId)
+        ? (params.verifiedSubscription?.id === subscriptionId
+          ? params.verifiedSubscription
+          : await getStripe().subscriptions.retrieve(subscriptionId))
         : null;
       const entitlementStatus = subscription
         ? stripeSubscriptionToEntitlementStatus(subscription.status)
