@@ -125,6 +125,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
         <Icon size={17} aria-hidden="true"/>{label}
       </button>)}
     </div>}
+    {approved && activeTab!=='program' && error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     <div id="partner-panel-program" role={approved?'tabpanel':undefined} aria-labelledby={approved?'partner-tab-program':undefined}
       hidden={approved&&activeTab!=='program'}>
     <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
@@ -179,7 +180,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
       <div className="mb-5 flex items-center justify-between gap-2">
         <h2 className="inline-flex items-center gap-2 text-sm font-semibold text-violet-700"><UsersRound size={18}/> Suas indicações</h2>
-        <button type="button" onClick={()=>{setLoading(true);void reload();}} aria-label="Atualizar indicações" className="rounded-lg p-2 text-slate-600 hover:bg-slate-100"><RefreshCw size={17}/></button>
+        <button type="button" disabled={loading} onClick={()=>{setLoading(true);void reload();}} aria-label="Atualizar indicações" className="rounded-lg p-2 text-slate-600 hover:bg-slate-100 disabled:opacity-50"><RefreshCw size={17} className={loading?'animate-spin':undefined}/></button>
       </div>
       <div className="mb-5 flex flex-wrap gap-5 text-sm text-slate-600">
         <span><strong className="text-slate-900">{referrals.length}</strong> indicações exibidas</span>

@@ -14,6 +14,7 @@ const {createRoot}=await import('react-dom/client');
 const {PartnershipPanel}=await import('../src/components/PartnershipPanel');
 
 const requests:string[]=[];
+let failNextPortalRead=false;
 const account={
   id:'11111111-1111-4111-8111-111111111111',display_name:'Parceiro de Teste',
   referral_code:'DEMO0001',referral_alias:'TESTE1234',status:'approved',compliance_approved:true,
@@ -25,6 +26,10 @@ const referrals=[{
 globalThis.fetch=(async(input:RequestInfo|URL)=>{
   const path=String(input);
   requests.push(path);
+  if(path==='/api/partnerships/portal' && failNextPortalRead){
+    failNextPortalRead=false;
+    throw new Error('Falha ao atualizar indicações de teste.');
+  }
   const result=path==='/api/partnerships/portal'
     ?{success:true,account,referrals}
     :path==='/api/partnerships/marketplace/partner'
@@ -82,7 +87,12 @@ try{
     tab('Sua vitrine na Verto').dispatchEvent(key);
   });
   assert.equal(tab('Interesses recebidos').getAttribute('aria-selected'),'true');
-  console.log('partnerPortalTabs: four tabs, referral isolation, unsaved draft, keyboard navigation and no extra API reads passed');
+  await act(async()=>tab('Suas indicações').click());
+  failNextPortalRead=true;
+  await act(async()=>document.querySelector<HTMLButtonElement>('button[aria-label="Atualizar indicações"]')!.click());
+  assert.match(document.querySelector('[role="alert"]')?.textContent||'',/Falha ao atualizar indicações de teste/,
+    'refresh errors must remain visible in the referrals tab');
+  console.log('partnerPortalTabs: four tabs, referral isolation, drafts, keyboard, bounded reads and visible refresh errors passed');
 } finally {
   await act(async()=>root.unmount());
   dom.window.close();
