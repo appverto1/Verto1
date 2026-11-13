@@ -254,6 +254,26 @@ export function createProtocolImportRequestHandler(getDeps: () => { enforcePaylo
   };
 }
 
+// The clinic list only renders compact request metadata. The legacy shared
+// projection included scan_report (large screenshot evidence) on every GET.
+// Keep the admin review's evidence lookup unchanged and use JSON scalars here.
+const PROTOCOL_IMPORT_CLINIC_LIST_SELECT = [
+  'id',
+  'protocol_name',
+  'file_name',
+  'status',
+  'suggested_canonical_key',
+  'suggested_canonical_name',
+  'suggested_confidence',
+  'approved_canonical_key',
+  'approved_canonical_name',
+  'created_at',
+  'reviewed_at',
+  'applicable_age_group:scan_report->evidence->>applicableAgeGroup',
+  'age_min:scan_report->evidence->>ageMin',
+  'age_max:scan_report->evidence->>ageMax'
+].join(',');
+
 export function createClinicProtocolImportsReadHandler(getDeps: () => { applyNoStoreHeaders: any; sanitizeString: (value: unknown, maxLength?: number) => string; currentClinicId: any; VERTO_PROTOCOL_PANEL_RESET_AT: any; isUuid: any; isProd: any; supabase: any; PROTOCOL_IMPORT_REQUEST_SELECT: any; parseStoredJsonObject: any; asSafeNumber: any; extractSupabaseErrorMessage: any; loadProtocolAccessMap: any; buildProtocolAccessScopeKeys: any; VERTO_PROTOCOL_BY_KEY: any; normalizeApprovedProtocolKey: any; identifyVertoProtocolCandidate: any; redactForLogs: any; sendNoStoreJson: any }) {
   return async (req: any, res) => {
     const { applyNoStoreHeaders, sanitizeString, currentClinicId, VERTO_PROTOCOL_PANEL_RESET_AT, isUuid, isProd, supabase, PROTOCOL_IMPORT_REQUEST_SELECT, parseStoredJsonObject, asSafeNumber, extractSupabaseErrorMessage, loadProtocolAccessMap, buildProtocolAccessScopeKeys, VERTO_PROTOCOL_BY_KEY, normalizeApprovedProtocolKey, identifyVertoProtocolCandidate, redactForLogs, sendNoStoreJson } = getDeps();
@@ -293,7 +313,7 @@ export function createClinicProtocolImportsReadHandler(getDeps: () => { applyNoS
       try {
         let query = supabase
           .from('protocol_import_requests')
-          .select(PROTOCOL_IMPORT_REQUEST_SELECT)
+          .select(PROTOCOL_IMPORT_CLINIC_LIST_SELECT)
           .gte('created_at', VERTO_PROTOCOL_PANEL_RESET_AT)
           .order('created_at', { ascending: false })
           .limit(50);
@@ -308,7 +328,6 @@ export function createClinicProtocolImportsReadHandler(getDeps: () => { applyNoS
         if (!error && Array.isArray(data)) {
           if (diagnostics) diagnostics.tableRowsReturned = data.length;
           requests = data.map((row: any) => {
-            const scanReport = parseStoredJsonObject(row.scan_report);
             return {
               id: sanitizeString(row.id, 120),
               protocolName: sanitizeString(row.protocol_name, 180),
@@ -317,11 +336,11 @@ export function createClinicProtocolImportsReadHandler(getDeps: () => { applyNoS
               canonicalKey: sanitizeString(row.approved_canonical_key || row.suggested_canonical_key, 180),
               canonicalName: sanitizeString(row.approved_canonical_name || row.suggested_canonical_name, 180),
               confidence: Number(row.suggested_confidence || 0),
-              applicableAgeGroup: sanitizeString(scanReport?.evidence?.applicableAgeGroup, 40) || 'all',
-              ageMin: asSafeNumber(scanReport?.evidence?.ageMin, 0, 120),
-              ageMax: scanReport?.evidence?.ageMax === null || scanReport?.evidence?.ageMax === undefined
+              applicableAgeGroup: sanitizeString(row.applicable_age_group, 40) || 'all',
+              ageMin: asSafeNumber(row.age_min, 0, 120),
+              ageMax: row.age_max === null || row.age_max === undefined
                 ? null
-                : asSafeNumber(scanReport?.evidence?.ageMax, 0, 120),
+                : asSafeNumber(row.age_max, 0, 120),
               createdAt: sanitizeString(row.created_at, 80),
               reviewedAt: sanitizeString(row.reviewed_at, 80) || null
             };
