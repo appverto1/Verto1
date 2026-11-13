@@ -21,7 +21,7 @@ assert.match(provision, /createUser\(\{/);
 assert.match(provision, /normalized\.includes\("already"\)/);
 assert.match(provision, /normalized === "database error creating new user"/);
 assert.match(provision, /sanitizeEmail\(authUser\.email\) !== email/);
-assert.match(provision, /authUser\?\.user_metadata\?\.sales_activation_offer_id/);
+assert.match(provision, /authUser\?\.app_metadata\?\.sales_activation_offer_id/);
 assert.match(provision, /authUser = await findAuthUserByEmail\(email\)/);
 assert.match(provision, /if \(!authUser\?\.id \|\| sanitizeEmail\(authUser\.email\) !== email\) throw createError;/);
 assert.match(provision, /if \(isAmbiguousAuthCreateError[\s\S]*sales_activation_offer_id[\s\S]*SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED/);
