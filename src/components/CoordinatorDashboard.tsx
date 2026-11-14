@@ -13943,44 +13943,6 @@ export function CoordinatorDashboard({
                   </div>
 
                   <div className="space-y-8">
-                    {!isReceptionist && isCashFlowSection && (
-                      <div data-financial-chart="cash-flow-monthly" className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
-                        <h4 className="mb-6 font-semibold text-slate-900">
-                          Composição do caixa no mês selecionado
-                        </h4>
-                        <div className="h-64 min-h-[300px]">
-                <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
-                            <BarChart data={financialCashFlowRows}>
-                              <CartesianGrid
-                                strokeDasharray="3 3"
-                                vertical={false}
-                                stroke={financialChartGridColor}
-                              />
-                              <XAxis
-                                dataKey="month"
-                                axisLine={false}
-                                tickLine={false}
-                                tick={{ fill: financialChartAxisColor, fontSize: 12 }}
-                              />
-                              <YAxis
-                                axisLine={false}
-                                tickLine={false}
-                                tick={{ fill: financialChartAxisColor, fontSize: 12 }}
-                              />
-                              <Tooltip
-                                content={renderFinancialTooltip}
-                                cursor={{ fill: financialChartCursorColor }}
-                              />
-                              <Bar name="Entradas" dataKey="Entradas" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                              <Bar name="Repasses" dataKey="Repasses" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-                              <Bar name="Despesas" dataKey="Despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
-                              <Bar name="Saldo líquido" dataKey="Saldo líquido" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
-                            </BarChart>
-                          </SafeResponsiveContainer>
-                        </div>
-                      </div>
-                    )}
-
                     <div className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                       <h4 className="mb-6 font-semibold text-slate-900">
                         Próximos vencimentos
