@@ -2280,6 +2280,15 @@ export default function App() {
               lead: errData?.lead || null,
             };
           }
+          if (errData?.error === 'INVALID_CREDENTIALS') {
+            // A Supabase identity is not an authorized Verto session for this
+            // entry portal. Clear the temporary browser identity after denial.
+            const supabase = await getSupabase();
+            await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+            setUser(null);
+            setProfilePicture(null);
+            setShowWorkspacePicker(false);
+          }
           return {
             success: false,
             code: errData?.error,
