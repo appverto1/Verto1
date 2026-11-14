@@ -30,9 +30,13 @@ test('amounts come from unique private receivables and exclude insurer/void rows
     {id:'c3',type:'convenio',status:'forecast',amount:1200,balance_amount:1200},
     {id:'x4',type:'particular',status:'cancelled',amount:80},
     {id:'e5',type:'particular',status:'paid',amount:30,paid_amount:30,refunded_amount:0,balance_amount:0},
+    {id:'a6',type:null,source:'MONTHLY_SESSION_AGGREGATE',payer_id:null,
+      status:'pending',amount:150,paid_amount:0,balance_amount:150},
+    {id:'i7',type:null,source:'MONTHLY_SESSION_AGGREGATE',payer_id:'payout-insurer',
+      status:'pending',amount:2000,paid_amount:0,balance_amount:2000},
   ];
   assert.deepEqual(summarizePortalMonthCharges(charges),{
-    hasCharges:true,chargeCount:3,needsReview:false,totalCents:55000,paidCents:5000,openCents:50000
+    hasCharges:true,chargeCount:4,needsReview:false,totalCents:70000,paidCents:5000,openCents:65000
   });
 });
 
@@ -53,6 +57,7 @@ test('portal finance read is coupled to server-authorized patient/clinic and its
   assert.match(source,/sanitizeString\(patient\?\.clinic_id,120\)===clinicId/);
   assert.match(source,/hasOrganizationModule\(moduleAccess.mode,moduleAccess.modules,'financial_management'\)/);
   assert.match(source,/\.eq\('patient_id',patientId\)\.eq\('clinic_id',clinicId\)/);
-  assert.match(source,/\.in\('type',\['particular','private'\]\)/);
+  assert.match(source,/source,payer_id,is_courtesy,monthly_adjustment_required/);
+  assert.doesNotMatch(source,/\.in\('type',\[/,'monthly private sources may have null type');
   assert.doesNotMatch(source,/\.from\('patient_financial_plans'\)/,'no speculative plan-rate multiplication in portal');
 });
