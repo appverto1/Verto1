@@ -261,11 +261,10 @@ export function createPortalAppointmentsListHandler(getDeps: () => any) {
             const [year,monthNumber]=month.split('-').map(Number);
             const nextMonth=new Date(Date.UTC(year,monthNumber,1)).toISOString().slice(0,10);
             const start=month+'-01';
-            const select='id,amount,paid_amount,refunded_amount,balance_amount,status,financial_status,type,is_courtesy,monthly_adjustment_required';
+            const select='id,amount,paid_amount,refunded_amount,balance_amount,status,financial_status,type,source,payer_id,is_courtesy,monthly_adjustment_required';
             try{
               const base=()=>supabase.from('payments').select(select)
-                .eq('patient_id',patientId).eq('clinic_id',clinicId)
-                .in('type',['particular','private']);
+                .eq('patient_id',patientId).eq('clinic_id',clinicId);
               const [canonical,legacy]=await Promise.all([
                 base().gte('competence_month',start).lt('competence_month',nextMonth).limit(200),
                 base().is('competence_month',null).gte('due_date',start).lt('due_date',nextMonth).limit(200),
