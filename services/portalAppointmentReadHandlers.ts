@@ -5,6 +5,8 @@
 // TODO: replace the legacy identifier with an explicit import when the
 // mutation route is extracted from server.ts.
 import '../src/services/portalRescheduleAvailability';
+import {hasOrganizationModule} from '../src/constants/organizationModules';
+import {summarizePortalMonthSessions,summarizePortalMonthCharges} from './patientPortalMonthlySummary';
 
 // Extracted verbatim from server.ts; route middleware stays in the entrypoint.
 
@@ -226,9 +228,7 @@ export function createPortalAppointmentsListHandler(getDeps: () => any) {
           return row?.clinic_id || row?.clinicId || source?.clinic_id || source?.clinicId;
         })
       );
-      return res.json({
-        success: true,
-        data: await Promise.all(visibleRows.map((row) => {
+      const serializedAppointments=await Promise.all(visibleRows.map((row) => {
           const source = parseAppointmentSourcePayloadForFamilyView(row?.source_payload || row?.sourcePayload);
           const patientId = sanitizeString(row?.patient_id || row?.patientId || source?.patient_id || source?.patientId, 120);
           const clinicId = sanitizeString(row?.clinic_id || row?.clinicId || source?.clinic_id || source?.clinicId, 120);
@@ -237,8 +237,53 @@ export function createPortalAppointmentsListHandler(getDeps: () => any) {
             clinicBranding: clinicBrandingById.get(clinicId) || null,
             allowPatientReschedule: policyByClinicId.get(clinicId) !== false
           });
-        }))
-      });
+        }));
+
+      let monthlySummary: any = null;
+      if(req.query?.includeMonthlySummary === '1'){
+        const month=String(req.query?.month||'');
+        if(!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)){
+          return res.status(400).json({success:false,error:'INVALID_MONTH'});
+        }
+        // Identity and clinic come from the server-resolved access context, never
+        // from caller-supplied IDs. The patient row must agree with that clinic.
+        const patientId=sanitizeString(req.portalContext?.resolvedPatientId,120);
+        const clinicId=sanitizeString(req.portalContext?.clinicId,120);
+        const patient=portalPatientContextsById.get(patientId);
+        if(isUuid(patientId)&&isUuid(clinicId)&&authorizedPatientIdSet.has(patientId)
+          &&sanitizeString(patient?.clinic_id,120)===clinicId){
+          const usage=summarizePortalMonthSessions(serializedAppointments,patientId,clinicId,month);
+          const moduleAccess=req.portalModuleAccess;
+          const canViewFinance=moduleAccess?.modules instanceof Set
+            &&hasOrganizationModule(moduleAccess.mode,moduleAccess.modules,'financial_management');
+          let billing: any = {available:false};
+          if(canViewFinance){
+            const [year,monthNumber]=month.split('-').map(Number);
+            const nextMonth=new Date(Date.UTC(year,monthNumber,1)).toISOString().slice(0,10);
+            const start=month+'-01';
+            const select='id,amount,paid_amount,refunded_amount,balance_amount,status,financial_status,type,source,payer_id,is_courtesy,monthly_adjustment_required';
+            try{
+              const base=()=>supabase.from('payments').select(select)
+                .eq('patient_id',patientId).eq('clinic_id',clinicId);
+              const [canonical,legacy]=await Promise.all([
+                base().gte('competence_month',start).lt('competence_month',nextMonth).limit(200),
+                base().is('competence_month',null).gte('due_date',start).lt('due_date',nextMonth).limit(200),
+              ]);
+              if(canonical.error||legacy.error)throw canonical.error||legacy.error;
+              billing={available:true,...summarizePortalMonthCharges([
+                ...(canonical.data||[]),...(legacy.data||[])
+              ],200)};
+            }catch{
+              // Financial schema can be unavailable independently. No guessed
+              // amount is returned and appointment history remains accessible.
+              billing={available:false};
+            }
+          }
+          monthlySummary={month,patientId,...usage,
+            sessionsMayBeIncomplete:serializedAppointments.length>=limit,billing};
+        }
+      }
+      return res.json({success:true,data:serializedAppointments,monthlySummary});
     } catch (error: any) {
       console.warn('[PortalAppointments] list failed:', error?.message || String(error));
       return res.status(500).json(portalSafeError(500));

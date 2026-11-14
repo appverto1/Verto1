@@ -138,6 +138,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAppointments, setPortalAppointments] = useState<any[]>([]);
   const [portalAppointmentsLoaded, setPortalAppointmentsLoaded] = useState(false);
   const [portalAppointmentsRangeKey, setPortalAppointmentsRangeKey] = useState('');
+  const [portalMonthlySummary, setPortalMonthlySummary] = useState<any>(null);
   const [portalCalendarMonth, setPortalCalendarMonth] = useState(() => new Date());
   const [selectedPortalCalendarDateKey, setSelectedPortalCalendarDateKey] = useState('');
   const [portalAppointmentsState, setPortalAppointmentsState] = useState({ loading: false, error: '', message: '' });
@@ -578,6 +579,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (!portalPatientId) {
       console.warn('[PatientPortal] skipped appointment fetch: missing resolvedPatientId');
       setPortalAppointments([]);
+      setPortalMonthlySummary(null);
       setPortalAppointmentsLoaded(true);
       setPortalAppointmentsRangeKey(getPortalAppointmentsRangeKey(range));
       setPortalAppointmentsState({ loading: false, error: 'Não encontramos um paciente vinculado a este acesso. Entre em contato com a clínica.', message: '' });
@@ -586,12 +588,18 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const requestId = ++portalAppointmentsRequestRef.current;
     const rangeKey = getPortalAppointmentsRangeKey(range);
     setPortalAppointmentsState((prev) => ({ ...prev, loading: true, error: '' }));
-    const result = await dataService.getPortalAppointments({ from: range.from, to: range.to, limit: range.limit });
+    const isCalendarMonth=portalSection === 'appointments' &&
+      getPortalAppointmentsRangeKey(range)===getPortalAppointmentsRangeKey(getPortalCalendarMonthRange(portalCalendarMonth));
+    const month=isCalendarMonth?`${portalCalendarMonth.getFullYear()}-${String(portalCalendarMonth.getMonth()+1).padStart(2,'0')}`:undefined;
+    const result = await dataService.getPortalAppointments({ from: range.from, to: range.to,
+      limit: range.limit,month,includeMonthlySummary:isCalendarMonth });
     if (requestId !== portalAppointmentsRequestRef.current) return;
     portalAppointmentsLastLoadedAtRef.current = Date.now();
     if (result?.success) {
       const nextAppointments = Array.isArray(result.data) ? result.data : [];
       setPortalAppointments(nextAppointments);
+      setPortalMonthlySummary(result.monthlySummary?.patientId === portalPatientId &&
+        result.monthlySummary?.month === month ? result.monthlySummary : null);
       setSelectedPortalAppointment((current: any) => {
         if (!current?.id) return current;
         const refreshed = nextAppointments.find((appointment: any) => String(appointment?.id) === String(current.id));
@@ -603,6 +611,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       return;
     }
     setPortalAppointmentsLoaded(true);
+    setPortalMonthlySummary(null);
     setPortalAppointmentsRangeKey(rangeKey);
     setPortalAppointmentsState({ loading: false, error: result?.error || 'Não foi possível carregar suas sessões agora.', message: '' });
   };
@@ -610,6 +619,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   useEffect(() => {
     portalAppointmentsRequestRef.current += 1;
     setPortalAppointments([]);
+    setPortalMonthlySummary(null);
     setPortalAppointmentsLoaded(false);
     setPortalAppointmentsRangeKey('');
     setPortalAppointmentsState({ loading: false, error: '', message: '' });
@@ -3571,6 +3581,59 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <ChevronRight size={18} />
         </button>
       </div>
+      {portalMonthlySummary?.month === `${portalCalendarMonth.getFullYear()}-${String(portalCalendarMonth.getMonth()+1).padStart(2,'0')}` && (
+        <section data-patient-monthly-session-summary className="mb-5 rounded-2xl border border-purple-100 bg-purple-50/60 p-4"
+          aria-label="Resumo mensal das sessões e cobrança">
+          <h3 className="text-sm font-bold text-slate-900">Resumo do mês</h3>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <div className="rounded-xl bg-white p-3">
+              <p className="text-[11px] text-slate-500">Sessões realizadas</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{portalMonthlySummary.completedSessions}</p>
+            </div>
+            <div className="rounded-xl bg-white p-3">
+              <p className="text-[11px] text-slate-500">Tempo efetivamente registrado</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{formatPortalDuration(portalMonthlySummary.completedMinutes)}</p>
+            </div>
+            <div className="rounded-xl bg-white p-3">
+              <p className="text-[11px] text-slate-500">Sessões futuras agendadas</p>
+              <p className="mt-1 text-lg font-bold text-slate-900">{portalMonthlySummary.upcomingSessions}</p>
+              <p className="text-[11px] text-slate-500">{formatPortalDuration(portalMonthlySummary.upcomingMinutes)} previstos</p>
+            </div>
+          </div>
+          {portalMonthlySummary.withoutActualMinutes > 0 && (
+            <p className="mt-2 text-xs text-amber-800">Há {portalMonthlySummary.withoutActualMinutes} sessão(ões) realizada(s) sem duração efetiva registrada; o tempo total não inclui essas sessões.</p>
+          )}
+          {portalMonthlySummary.sessionsMayBeIncomplete && (
+            <p className="mt-2 text-xs text-amber-800">O limite de sessões deste período foi alcançado. Solicite o relatório completo à clínica.</p>
+          )}
+          {portalHasModule('financial_management') && (
+            <div className="mt-3 rounded-xl border border-purple-100 bg-white p-3">
+              <p className="text-xs font-bold text-slate-700">Previsão de cobrança particular registrada</p>
+              {portalMonthlySummary.billing?.available && portalMonthlySummary.billing?.hasCharges && !portalMonthlySummary.billing?.needsReview
+                ? <div className="mt-2 flex flex-wrap items-end justify-between gap-3">
+                    <div>
+                      <p className="text-xl font-bold text-slate-900">{(portalMonthlySummary.billing.totalCents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</p>
+                      <p className="text-xs text-slate-500">{portalMonthlySummary.billing.chargeCount} cobrança(s) na competência</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-slate-500">Saldo em aberto</p>
+                      <p className="text-sm font-semibold text-slate-800">{(portalMonthlySummary.billing.openCents/100).toLocaleString('pt-BR',{style:'currency',currency:'BRL'})}</p>
+                    </div>
+                  </div>
+                : <p className="mt-2 text-sm text-slate-600">
+                    {portalMonthlySummary.billing?.needsReview
+                      ? 'Valores em revisão pela clínica. Consulte o financeiro antes de efetuar pagamentos.'
+                      : portalMonthlySummary.billing?.available
+                        ? 'Ainda não há cobrança particular consolidada para este mês.'
+                        : 'Previsão financeira indisponível no momento.'}
+                  </p>}
+              <p className="mt-2 text-[11px] text-slate-500">
+                Valores extraídos de cobranças registradas pela clínica, não das horas estimadas. Convênios não são apresentados como dívida da família. Remarcações, ajustes e pagamentos podem alterar a previsão.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
       {portalAppointmentsState.message && (
         <div className="mb-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">
           {portalAppointmentsState.message}

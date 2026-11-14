@@ -3260,11 +3260,13 @@ export const dataService = {
     }
   },
 
-  async getPortalAppointments(options: { from?: string; to?: string; limit?: number } = {}) {
+  async getPortalAppointments(options: { from?: string; to?: string; limit?: number; month?: string; includeMonthlySummary?: boolean } = {}) {
     const endpoint = endpointWithQuery('/api/portal/appointments', {
       from: options.from,
       to: options.to,
-      limit: normalizeListLimit(options.limit, 40, 100)
+      limit: normalizeListLimit(options.limit, 40, 100),
+      month: options.includeMonthlySummary ? options.month : undefined,
+      includeMonthlySummary: options.includeMonthlySummary ? '1' : undefined
     });
     try {
       const response = await fetchClinical(endpoint, {
