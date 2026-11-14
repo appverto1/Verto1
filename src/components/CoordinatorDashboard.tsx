@@ -10244,14 +10244,16 @@ export function CoordinatorDashboard({
     financialDashboard.realized,
   ]);
 
-  const financialCashFlowRows = useMemo(() =>
-    financialDashboard.revenueRows.map((row: any) => ({
-      name: row.month,
-      "Receita realizada": row.realized,
-      "Resultado estimado": row.profit,
-      monthFull: row.monthFull,
-    })),
-  [financialDashboard.revenueRows]);
+  // A leitura de despesas operacionais é da competência selecionada; não
+  // preencher meses anteriores com zeros como se fosse histórico de caixa.
+  const financialCashFlowRows = useMemo(() => [{
+    month: formatFinancialMonthLabel(financialMonth, "short"),
+    "Entradas": financialDashboard.cashIn,
+    "Repasses": -financialDashboard.professionalPaid,
+    "Despesas": -financialDashboard.cashOperationalExpenses,
+    "Saldo líquido": financialDashboard.cashFlow,
+  }], [financialMonth, financialDashboard.cashIn, financialDashboard.professionalPaid,
+    financialDashboard.cashOperationalExpenses, financialDashboard.cashFlow]);
 
   const financialProjectionFormingRows = useMemo(() => {
     const rows: any[] = [];
@@ -12832,6 +12834,31 @@ export function CoordinatorDashboard({
                       ))}
                     </div>
 
+                    <div data-financial-cashflow-summary className="mt-5 rounded-3xl border border-violet-100 bg-violet-50/50 p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <h4 className="font-semibold text-slate-900">Fluxo de caixa · {formatFinancialMonthLabel(financialMonth, "long")}</h4>
+                          <p className="mt-1 text-xs text-slate-600">Somente movimentações registradas como pagas. Previsões e pendências não são entradas nem saídas de caixa.</p>
+                        </div>
+                        <button type="button" onClick={() => navigateToTab("financial", financialIntent("Fluxo de caixa"))}
+                          className="rounded-xl bg-white px-3 py-2 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-100">
+                          Ver fluxo de caixa
+                        </button>
+                      </div>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        {[
+                          {label:"Entradas recebidas",amount:financialDashboard.cashIn},
+                          {label:"Saídas pagas",amount:financialDashboard.cashOut},
+                          {label:"Saldo de caixa",amount:financialDashboard.cashFlow},
+                        ].map((item) => (
+                          <div key={item.label} className="rounded-2xl bg-white p-3">
+                            <p className="text-xs text-slate-500">{item.label}</p>
+                            <p className="mt-1 text-lg font-semibold text-slate-900">{formatCurrency(item.amount)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
                     <div className="mt-6 rounded-3xl bg-slate-50 px-5 py-4 text-xs text-slate-500">
                       <p>
                         Projetado: soma dos planos ativos. Realizado: pagamentos confirmados. A receber: cobranças em aberto. Repasses: valores previstos ou pagos a profissionais. Lucro estimado: receita realizada menos repasses pagos e despesas operacionais realizadas da competência.
@@ -13264,7 +13291,7 @@ export function CoordinatorDashboard({
                     </div>
                     <div data-financial-chart="cash-flow-monthly" className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                       <h4 className="mb-6 font-semibold text-slate-900">
-                        Fluxo de caixa mensal
+                        Composição do caixa no mês selecionado
                       </h4>
                       <div className="h-64 min-h-[300px]">
                         <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
@@ -13273,8 +13300,10 @@ export function CoordinatorDashboard({
                             <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} />
                             <YAxis axisLine={false} tickLine={false} tick={{ fill: financialChartAxisColor, fontSize: 12 }} />
                             <Tooltip content={renderFinancialTooltip} cursor={{ fill: financialChartCursorColor }} />
-                            <Bar name="Receita realizada" dataKey="Receita realizada" fill="#22c55e" radius={[4, 4, 0, 0]} />
-                            <Bar name="Resultado estimado" dataKey="Resultado estimado" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                            <Bar name="Entradas" dataKey="Entradas" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                            <Bar name="Repasses" dataKey="Repasses" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                            <Bar name="Despesas" dataKey="Despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                            <Bar name="Saldo líquido" dataKey="Saldo líquido" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
                           </BarChart>
                         </SafeResponsiveContainer>
                       </div>
@@ -13917,7 +13946,7 @@ export function CoordinatorDashboard({
                     {!isReceptionist && isCashFlowSection && (
                       <div data-financial-chart="cash-flow-monthly" className="rounded-[32px] border border-slate-100 bg-white p-6 shadow-sm">
                         <h4 className="mb-6 font-semibold text-slate-900">
-                          Fluxo de caixa mensal
+                          Composição do caixa no mês selecionado
                         </h4>
                         <div className="h-64 min-h-[300px]">
                 <SafeResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={300}>
@@ -13942,18 +13971,10 @@ export function CoordinatorDashboard({
                                 content={renderFinancialTooltip}
                                 cursor={{ fill: financialChartCursorColor }}
                               />
-                              <Bar
-                                name="Receita realizada"
-                                dataKey="Receita realizada"
-                                fill="#7a32fc"
-                                radius={[4, 4, 0, 0]}
-                              />
-                              <Bar
-                                name="Resultado estimado"
-                                dataKey="Resultado estimado"
-                                fill="#6AD2FF"
-                                radius={[4, 4, 0, 0]}
-                              />
+                              <Bar name="Entradas" dataKey="Entradas" fill="#22c55e" radius={[4, 4, 0, 0]} />
+                              <Bar name="Repasses" dataKey="Repasses" fill="#f59e0b" radius={[4, 4, 0, 0]} />
+                              <Bar name="Despesas" dataKey="Despesas" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                              <Bar name="Saldo líquido" dataKey="Saldo líquido" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
                             </BarChart>
                           </SafeResponsiveContainer>
                         </div>
