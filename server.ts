@@ -55,6 +55,7 @@ import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPay
 import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';
 import { createSalesAssistedStripeEventHandlers } from './services/salesAssistedStripeEventHandlers';
 import { registerStripeCanonicalWebhookRoute } from './services/stripeCanonicalWebhookRoute';
+import { INVALID_PORTAL_CREDENTIALS_MESSAGE, matchesClinicalLoginPortal, persistedClinicalLoginPortal, requestedClinicalLoginPortal } from './services/authLoginPortalPolicy';
 import express from 'express';
 import { createPortalAppointmentsListHandler, createPortalAppointmentDetailHandler, createPortalRescheduleSlotsHandler } from './services/portalAppointmentReadHandlers';
 import { registerTissPayerProfilesListRoute } from './services/tissPayerProfilesListRoute';
@@ -21809,6 +21810,43 @@ async function startServer() {
     type: 'application/x-www-form-urlencoded'
   }));
   app.use(cookieParser());
+
+  // Partner login is isolated from clinical roles, including direct API calls
+  // and Google OAuth. This guard is before any partnership session handler.
+  app.use('/api/partnerships/auth/session', async (req: any, res: any, next: any) => {
+    if (req.method !== 'POST') return next();
+    const rejectWrongPortal = () => res.status(401).json({
+      success: false,
+      error: 'INVALID_CREDENTIALS',
+      message: INVALID_PORTAL_CREDENTIALS_MESSAGE,
+    });
+    try {
+      const accessToken = sanitizeString(req.body?.accessToken, 8000);
+      if (!accessToken || !tokenMatchesCurrentProject(accessToken).ok) return rejectWrongPortal();
+      const { user, error } = await getUserFromAccessToken(accessToken);
+      if (error || !user) return rejectWrongPortal();
+      if (!supabase) return res.status(503).json({ success: false, error: 'AUTH_UNAVAILABLE' });
+      const profileResult = await fetchProfileWithSchemaFallback({
+        supabase, userId: user.id, logger: console,
+      });
+      if (profileResult.error) throw profileResult.error;
+      let clinicalProfile = profileResult.data as any;
+      if (!clinicalProfile && user.email) {
+        const byEmailResult = await fetchProfileByEmailWithSchemaFallback({
+          supabase, email: sanitizeEmail(user.email), logger: console,
+        });
+        if (byEmailResult.error) throw byEmailResult.error;
+        clinicalProfile = byEmailResult.data;
+      }
+      if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role)) {
+        return rejectWrongPortal();
+      }
+      return next();
+    } catch (error: any) {
+      console.error('[Auth] Partner portal role check failed:', sanitizeString(error?.message, 160));
+      return res.status(503).json({ success: false, error: 'AUTH_UNAVAILABLE' });
+    }
+  });
   app.use((req: any, res: any, next: any) => {
     const originalJson = res.json.bind(res);
     res.json = (body: any) => {
@@ -26101,6 +26139,47 @@ async function startServer() {
               profile = reconciledProfile;
             }
           }
+        }
+      }
+
+      // A valid credential is not sufficient for a different public login portal.
+      // Both the role and account identity come from verified Supabase/user data;
+      // the browser's intendedRole is a request, never an authorization grant.
+      // Explicit, email-verified clinic invitation activation remains an isolated
+      // onboarding path, not a generic public-login role switch.
+      const verifiedProfessionalInvitationActivation =
+        activationFlow &&
+        requestedClinicInvitation?.status === 'pending' &&
+        ensureClinicRole(requestedClinicInvitation?.role) &&
+        requestedClinicalLoginPortal(intendedRole) === 'professional';
+      if (profile && !verifiedProfessionalInvitationActivation &&
+          !matchesClinicalLoginPortal(intendedRole, profile.role)) {
+        return res.status(401).json({
+          success: false,
+          error: 'INVALID_CREDENTIALS',
+          message: INVALID_PORTAL_CREDENTIALS_MESSAGE,
+        });
+      }
+
+      // A partner-only identity must not silently become a patient or clinic
+      // account when it has no users profile. This lookup runs only for the
+      // exceptional profile-less login, not for normal authenticated users.
+      if (!profile && safeAuthEmail && !verifiedProfessionalInvitationActivation) {
+        const { data: externalPartner, error: externalPartnerLookupError } = await supabase
+          .from('verto_partner_accounts')
+          .select('id')
+          .eq('partner_kind', 'external')
+          .eq('status', 'approved')
+          .eq('contact_email', safeAuthEmail)
+          .limit(1)
+          .maybeSingle();
+        if (externalPartnerLookupError) throw externalPartnerLookupError;
+        if (externalPartner) {
+          return res.status(401).json({
+            success: false,
+            error: 'INVALID_CREDENTIALS',
+            message: INVALID_PORTAL_CREDENTIALS_MESSAGE,
+          });
         }
       }
 

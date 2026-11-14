@@ -39,13 +39,18 @@ export function ExternalPartnershipPortal() {
     });
     const result = await readJson(response);
     if (!response.ok || !result?.success) {
-      throw new Error(result?.error === 'CLINICAL_SESSION_ACTIVE'
-        ? 'Há um portal clínico aberto nesta sessão. Saia dele antes de entrar como parceiro externo.'
-        : result?.error === 'PARTNER_APPROVAL_PENDING'
-          ? 'Sua inscrição está em análise. O acesso será liberado após aprovação da Verto.'
-          : result?.error === 'PARTNER_NOT_REGISTERED'
-            ? 'Este e-mail não possui uma parceria aprovada. Solicite sua inscrição.'
-            : 'Acesso não autorizado. Entre com a conta do mesmo e-mail aprovado pela Verto.');
+      if (['CLINICAL_SESSION_ACTIVE', 'PARTNER_NOT_REGISTERED', 'INVALID_CREDENTIALS'].includes(result?.error)) {
+        // Covers the Google/OAuth return as well as the password form.
+        try {
+          const supabase = await getSupabase();
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch {
+          // The backend still rejects access independently.
+        }
+      }
+      throw new Error(result?.error === 'PARTNER_APPROVAL_PENDING'
+        ? 'Sua inscrição está em análise. O acesso será liberado após aprovação da Verto.'
+        : 'E-mail ou senha inválidos.');
     }
     if (!(await checkPortal())) throw new Error('Não foi possível confirmar a sessão do parceiro.');
   };
@@ -140,6 +145,14 @@ export function ExternalPartnershipPortal() {
       await exchangeSession(result.data.session.access_token);
       setPassword('');
     } catch (err: any) {
+      // A verified Supabase identity is not an approved partner session.
+      // Do not retain it after a rejected portal-specific login.
+      try {
+        const supabase = await getSupabase();
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch {
+        // Best-effort local cleanup; no partner session is issued by this UI.
+      }
       setError(err?.message || 'Não foi possível entrar com sua senha.');
     } finally { setBusy(false); }
   };

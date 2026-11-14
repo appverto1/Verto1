@@ -57,6 +57,9 @@ jobs:
           npm run test:auth-login-recovery-fallback
           npm run test:owner-mfa
 
+      - name: Portal role isolation regression tests
+        run: node --import tsx tests/authLoginPortalPolicy.test.ts
+
       - name: Typecheck ratchet regression tests
         run: node tests/typecheckRatchet.regression.test.mjs
 

@@ -197,11 +197,12 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
       const isInvalidCredentials =
         rawMessage.includes('invalid login credentials') ||
         rawMessage.includes('credenciais inválidas') ||
+        rawMessage.includes('e-mail ou senha inválidos') ||
         rawMessage.includes('email or password') ||
         Number(err?.status || 0) === 400;
 
       if (isInvalidCredentials) {
-        setLoginError('E-mail ou senha incorretos. Tente novamente.');
+        setLoginError('E-mail ou senha inválidos.');
       } else {
         console.error('Login error:', err);
         setLoginError(`Erro no login: ${err?.message || 'Erro de conexão. Tente novamente.'}`);
