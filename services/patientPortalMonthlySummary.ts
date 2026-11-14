@@ -55,11 +55,19 @@ export function summarizePortalMonthCharges(charges:any[],rowLimit=200){
     const id=String(charge?.id||'');
     if(!id||unique.has(id))continue;
     unique.add(id);
-    // A convenios' receivable is not an amount payable by the family.
-    if(!['particular','private'].includes(String(charge?.type||'').toLowerCase()))continue;
+    // Monthly-session receivables omit legacy payments.type. INSURANCE plans
+    // must carry payer_id in the canonical engine; private groups have no payer.
+    const kind=String(charge?.type||'').trim().toLowerCase();
+    const source=String(charge?.source||'').trim().toUpperCase();
+    const isPrivate=['particular','private'].includes(kind)
+      ||(source==='MONTHLY_SESSION_AGGREGATE'&&!charge?.payer_id)
+      ||source.startsWith('PRIVATE_APPOINTMENT_');
+    if(!isPrivate)continue;
     const status=String(charge?.financial_status||charge?.status||'').toLowerCase();
-    if(['canceled','cancelled','courtesy','refunded'].includes(status)||charge?.is_courtesy===true)continue;
-    if(!['forecast','pending','partial','overdue','delinquent','paid'].includes(status))continue;
+    if(['canceled','cancelled','courtesy','refunded','voided','exempt'].includes(status)
+      ||charge?.is_courtesy===true)continue;
+    if(!['forecast','pending','partial','overdue','delinquent','paid',
+      'no_show_charge','late_cancellation_charge'].includes(status))continue;
     const amount=toCents(charge?.amount);
     if(amount===null){needsReview=true;continue;}
     chargeCount++;
