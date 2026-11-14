@@ -9197,10 +9197,22 @@ function saveExpressSession(req: any): Promise<void> {
 }
 
 async function fetchMfaSecurityProfile(userId: string) {
-  if (!supabase || !isUuid(userId)) {
+  if (!supabase || !isUuid(userId) || !supabaseUrl || !supabaseServiceKey) {
     return { data: null, error: new Error('MFA_SECURITY_PROFILE_UNAVAILABLE') };
   }
-  return await supabase
+  // Keep this privileged lookup isolated from the shared Auth client state.
+  // Never fall back to an unverified role or to MFA values from user metadata.
+  const securityReadClient = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    },
+    global: {
+      headers: { 'x-verto-deployment-env': vertoDeploymentEnv }
+    }
+  });
+  return await securityReadClient
     .from('users')
     .select('id,role,two_factor_enabled,two_factor_secret')
     .eq('id', userId)

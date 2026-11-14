@@ -52,6 +52,11 @@ jobs:
       - name: Install dependencies deterministically
         run: npm ci
 
+      - name: Password recovery and owner MFA regression tests
+        run: |
+          npm run test:auth-login-recovery-fallback
+          npm run test:owner-mfa
+
       - name: Typecheck ratchet regression tests
         run: node tests/typecheckRatchet.regression.test.mjs
 

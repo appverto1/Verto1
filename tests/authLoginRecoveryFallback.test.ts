@@ -141,6 +141,24 @@ assert.match(
   'o desafio deve ser consumido por compare-and-set antes da alteração de senha',
 );
 assert.match(recoveryVerifyRoute, /RECOVERY_TEMPORARILY_UNAVAILABLE/);
+const mfaProfileStart = server.indexOf('async function fetchMfaSecurityProfile(');
+const mfaProfileEnd = server.indexOf('async function createAuthMfaChallenge(', mfaProfileStart);
+assert.ok(mfaProfileStart >= 0 && mfaProfileEnd > mfaProfileStart);
+const mfaSecurityLookup = server.slice(mfaProfileStart, mfaProfileEnd);
+assert.match(mfaSecurityLookup, /createClient\(supabaseUrl, supabaseServiceKey/);
+assert.match(mfaSecurityLookup, /persistSession: false/);
+assert.match(mfaSecurityLookup, /autoRefreshToken: false/);
+assert.match(mfaSecurityLookup, /detectSessionInUrl: false/);
+assert.match(mfaSecurityLookup, /\.select\('id,role,two_factor_enabled,two_factor_secret'\)/);
+assert.doesNotMatch(mfaSecurityLookup, /fetchProfileWithSchemaFallback|user_metadata|app_metadata/);
+assert.match(recoveryVerifyRoute, /if \(securityProfileResult\.error \|\| !securityProfileResult\.data\)/);
+assert.match(recoveryVerifyRoute, /OWNER_MFA_CONFIGURATION_REQUIRED/);
+assert.match(recoveryVerifyRoute, /MFA_REQUIRED/);
+assert.match(recoveryVerifyRoute, /MFA_INVALID/);
+assert.ok(recoveryVerifyRoute.indexOf('const securityProfileResult = await fetchMfaSecurityProfile') <
+  recoveryVerifyRoute.indexOf('const challengeConsumed = await consumeOtpChallenge'),
+  'the MFA security check must complete before consuming the recovery link');
+
 assert.match(server, /requiresPersistentRecoveryStorage/);
 assert.match(activationAccess, /isRecoveryRoute && recoveryToken/);
 assert.match(activationAccess, /\? \{ recoveryToken \}/);
