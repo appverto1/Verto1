@@ -39,6 +39,15 @@ export function ExternalPartnershipPortal() {
     });
     const result = await readJson(response);
     if (!response.ok || !result?.success) {
+      if (['CLINICAL_SESSION_ACTIVE', 'PARTNER_NOT_REGISTERED', 'INVALID_CREDENTIALS'].includes(result?.error)) {
+        // Covers the Google/OAuth return as well as the password form.
+        try {
+          const supabase = await getSupabase();
+          await supabase.auth.signOut({ scope: 'local' });
+        } catch {
+          // The backend still rejects access independently.
+        }
+      }
       throw new Error(result?.error === 'PARTNER_APPROVAL_PENDING'
         ? 'Sua inscrição está em análise. O acesso será liberado após aprovação da Verto.'
         : 'E-mail ou senha inválidos.');
