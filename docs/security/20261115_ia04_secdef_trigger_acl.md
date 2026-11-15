@@ -30,7 +30,7 @@ Fontes técnicas: [PostgreSQL CREATE TRIGGER](https://www.postgresql.org/docs/cu
 
 - `tests/ia04SecdefTriggerAcl.regression.test.mjs`: lista exata, guards e proibição de mudanças de dados/esquema além da ACL.
 - Gate CI `staging-ci.yml`: cria role e tabela temporárias **dentro de transação descartada** no PostgreSQL de CI; confirma que a role sem `EXECUTE` direto na função ainda dispara um gatilho previamente criado.
-- Pós-migração Staging: verificar 34/34 com execução negada para `anon`/`authenticated`, concedida a `service_role`, mesmo número de vínculos `pg_trigger`, mesma política RLS e redução de 44 para **10** avisos `anon_security_definer_function_executable` (se não houve alteração concorrente).
+- **Pós-migração Staging comprovado por SQL:** 34/34 gatilhos alvo sem `EXECUTE` para `anon` e `authenticated`, 34/34 com `EXECUTE` para `service_role`, **39** vínculos `pg_trigger` preservados. Supabase Security Advisor: avisos `anon_security_definer_function_executable` **44 → 10**; `authenticated_security_definer_function_executable` **82 → 48**. O SQL não modifica políticas RLS ou registros. Migração aplicada no histórico real como `20261115043156`.
 
 ## Limites e próximos passos
 
