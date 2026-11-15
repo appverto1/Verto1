@@ -38,6 +38,7 @@ import { AnamnesisModal } from "./Anamnesis";
 import { DayDetailsModal, CalendarWidget } from "./Calendar";
 import { ProtocolManagementSystem } from "./Protocols";
 import { PatientRegistry } from "./PatientRegistry";
+import { getPatientWhatsAppUrl } from "../utils/patientWhatsapp";
 import { resolvePatientPortalKind } from "../utils/patientProfileType";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
@@ -1943,10 +1944,12 @@ export const TherapistDashboard = ({
                                 compact
                               />
                               <a
-                                href={`https://wa.me/${(patientData?.phone || "").replace(/\D/g, "")}`}
+                                href={getPatientWhatsAppUrl(patientData?.phone) ?? undefined}
+                                aria-disabled={!getPatientWhatsAppUrl(patientData?.phone)}
+                                title={getPatientWhatsAppUrl(patientData?.phone) ? "Abrir WhatsApp" : "Cadastre um telefone válido com DDD"}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm"
+                                className="p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <MessageCircle size={14} />
@@ -2042,10 +2045,12 @@ export const TherapistDashboard = ({
                               </div>
                               <div className="flex items-center gap-2">
                                 <a
-                                  href={`https://wa.me/${(allPatients.find((p: any) => p.id === item.patientId)?.phone || "").replace(/\D/g, "")}`}
+                                  href={getPatientWhatsAppUrl(allPatients.find((p: any) => p.id === item.patientId)?.phone) ?? undefined}
+                                  aria-disabled={!getPatientWhatsAppUrl(allPatients.find((p: any) => p.id === item.patientId)?.phone)}
+                                  title={getPatientWhatsAppUrl(allPatients.find((p: any) => p.id === item.patientId)?.phone) ? "Abrir WhatsApp" : "Cadastre um telefone válido com DDD"}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="p-2 text-green-500 hover:bg-green-50 rounded-xl transition-all"
+                                  className="p-2 text-green-500 hover:bg-green-50 rounded-xl transition-all aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
                                   onClick={(e) => e.stopPropagation()}
                                 >
                                   <MessageCircle size={18} />
