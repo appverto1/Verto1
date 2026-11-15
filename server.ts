@@ -73686,7 +73686,7 @@ async function startServer() {
         color: allowedColors.has(colorRaw) ? colorRaw : 'slate',
         icon: allowedIcons.has(iconRaw) ? iconRaw : (method === 'duration' ? 'duration' : 'plus')
       });
-      if (rows.length >= 6) break;
+      if (rows.length >= 200) break;
     }
     return rows;
   };
@@ -73738,7 +73738,7 @@ async function startServer() {
 
   app.put('/api/aba/session-quick-collection/preferences', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Preferências da coleta rápida ABA')) return;
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Preferências da coleta rápida ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       if (!isUuid(clinicId) || !isUuid(actorId)) {
