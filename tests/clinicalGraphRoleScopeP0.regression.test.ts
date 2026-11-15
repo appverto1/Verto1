@@ -58,13 +58,21 @@ assert.deepEqual(
   ['pts', 'fono', 'to'],
 );
 assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'director' }).map((plan) => plan.id),
+  ['pts', 'fono', 'to'],
+);
+assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'patient' }),
+  [],
+);
+assert.deepEqual(
   filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'receptionist' }),
   [],
 );
 
 const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
-assert.match(dashboard, /const scopeId = resolveClinicalGraphScopeId\\(\\s*requestedScopeId,\\s*Boolean\\(activePts\\),\\s*specialtyPlans\\.map/);
-assert.match(dashboard, /\\{activePts && <option value="pts">Visão do PTS<\\/option>\\}/);
+assert.match(dashboard, /const scopeId = resolveClinicalGraphScopeId\(\s*requestedScopeId,\s*Boolean\(activePts\),\s*specialtyPlans\.map/);
+assert.match(dashboard, /\{activePts && <option value="pts">Visão do PTS<\/option>\}/);
 
 const server = readPatientPlanServerSource();
 assert.match(server, /req\.patientActorSpecialty\s*=\s*normalizeClinicalSpecialty\(evidence\.activeProfessionalProfile\?\.specialty\)/);
