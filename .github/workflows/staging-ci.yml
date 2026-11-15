@@ -60,6 +60,13 @@ jobs:
       - name: Patient WhatsApp DDD and link regression tests
         run: node --import tsx tests/patientWhatsapp.test.ts
 
+      - name: Patient card pending-only regressions
+        run: |
+          node --import tsx tests/patientCardPendingState.test.ts
+          node tests/patientCardPendingOnly.regression.test.mjs
+          node tests/anamnesisProfessionalCapability.regression.test.mjs
+          node tests/anamnesisSavePersistenceConfirmation.regression.test.mjs
+
       - name: Password recovery and owner MFA regression tests
         run: |
           npm run test:auth-login-recovery-fallback

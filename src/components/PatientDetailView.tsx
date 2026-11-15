@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, MessageCircle, FileText, SlidersHorizontal, 
 import { createPortal } from 'react-dom';
 import { TutorialOverlay } from './Tutorial';
 import { AnamnesisModal } from './Anamnesis';
+import { hasCompletedPatientAnamnesis } from '../utils/patientCardPendingState';
 import { ComparisonBarChart } from './Charts';
 import { HistoryCard } from './History';
 import { familyDiaryReadMarkerKey, familyDiaryNewCount, markFamilyDiarySeen, readFamilyDiarySeenAt } from '../utils/familyDiaryUnread';
@@ -502,8 +503,15 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [noteDateFilter, setNoteDateFilter] = useState("");
   const [newNoteSubject, setNewNoteSubject] = useState("");
   const [showNoteFilters, setShowNoteFilters] = useState(false);
-  const [showAnamnesis, setShowAnamnesis] = useState(false); 
-  const [anamnesisFlow, setAnamnesisFlow] = useState<any>(null);
+  const [showAnamnesis, setShowAnamnesis] = useState(false);
+  const [showAnamnesisReadOnly, setShowAnamnesisReadOnly] = useState(false); 
+  const [anamnesisFlowSnapshot, setAnamnesisFlowSnapshot] = useState<{ patientId: string; flow: any } | null>(null);
+  const activeAnamnesisPatientIdRef = React.useRef(String(patient?.id || ''));
+  const anamnesisFlowRequestSeqRef = React.useRef(0);
+  activeAnamnesisPatientIdRef.current = String(patient?.id || '');
+  const anamnesisFlow = anamnesisFlowSnapshot?.patientId === String(patient?.id || '')
+    ? anamnesisFlowSnapshot.flow
+    : null;
   const [anamnesisFlowMessage, setAnamnesisFlowMessage] = useState("");
   const [isSendingAnamnesisRequest, setIsSendingAnamnesisRequest] = useState(false);
   const [showAnamnesisSendModal, setShowAnamnesisSendModal] = useState(false);
@@ -849,6 +857,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
 
   useEffect(() => {
     if (openAnamnesisOnLoad && canEditAnamnesis) {
+      setShowAnamnesisReadOnly(false);
       setShowAnamnesis(true);
       onAnamnesisOpenConsumed?.();
     }
@@ -887,10 +896,14 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const loadAnamnesisFlow = async () => {
     if (!patient?.id || !canViewAnamnesis) return null;
     try {
-      const result = await dataService.getPatientAnamnesisFlow(String(patient.id));
+      const requestPatientId = String(patient.id);
+      const requestSeq = ++anamnesisFlowRequestSeqRef.current;
+      const result = await dataService.getPatientAnamnesisFlow(requestPatientId);
+      if (activeAnamnesisPatientIdRef.current !== requestPatientId
+        || anamnesisFlowRequestSeqRef.current !== requestSeq) return null;
       if (result?.success) {
         const nextFlow = result.data || null;
-        setAnamnesisFlow(nextFlow);
+        setAnamnesisFlowSnapshot({ patientId: requestPatientId, flow: nextFlow });
         return nextFlow;
       }
     } catch (error) {
@@ -900,6 +913,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   useEffect(() => {
+    setAnamnesisFlowMessage('');
     void loadAnamnesisFlow();
   }, [patient?.id, canViewAnamnesis]);
 
@@ -914,6 +928,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     return 'Anamnese pendente';
   };
   const hasSubmittedAnamnesisFlow = ['SUBMITTED', 'REVIEWED'].includes(String(anamnesisFlow?.response?.status || '').toUpperCase());
+  const hasCompletedAnamnesis = hasCompletedPatientAnamnesis(patient, anamnesisFlow);
 
   const formatAnamnesisTemplateAge = (months: any) => {
     const value = Number(months);
@@ -10673,10 +10688,21 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
       <AnamnesisModal
         isOpen={showAnamnesis}
         onClose={() => setShowAnamnesis(false)}
-        initialData={anamnesisInitialData}
+        initialData={showAnamnesisReadOnly && hasSubmittedAnamnesisFlow
+          ? { ...anamnesisInitialData, ...buildSubmittedAnamnesisDocumentData() }
+          : anamnesisInitialData}
         onSave={handleUpdateAnamnesis}
         mode="edit"
-        template={anamnesisTemplate}
+        template={hasCompletedAnamnesis && hasSubmittedAnamnesisFlow && anamnesisFlow?.template
+          ? anamnesisFlow.template
+          : anamnesisTemplate}
+        readOnly={showAnamnesisReadOnly}
+        onEdit={showAnamnesisReadOnly && canEditAnamnesis ? () => setShowAnamnesisReadOnly(false) : undefined}
+        onReview={showAnamnesisReadOnly && canEditAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED'
+          ? () => void handleReviewAnamnesisFlow()
+          : undefined}
+        isReviewing={isReviewingAnamnesis}
+        reviewFeedback={showAnamnesisReadOnly ? anamnesisFlowMessage : ''}
       /> 
 
       {showAnamnesisSendModal && typeof document !== 'undefined' && createPortal(
@@ -10918,7 +10944,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   </h1>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <span className={`text-xs ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>Paciente</span>
-                    {canViewAnamnesis && (
+                    {canViewAnamnesis && !hasCompletedAnamnesis && (
                       <span
                         className={`rounded-full px-2 py-0.5 text-[9px] font-medium uppercase tracking-wide ${
                           getAnamnesisStatusLabel().includes('revisada')
@@ -10931,7 +10957,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                         {getAnamnesisStatusLabel()}
                       </span>
                     )}
-                    {canViewAnamnesis && anamnesisFlowMessage && (
+                    {canViewAnamnesis && !hasCompletedAnamnesis && anamnesisFlowMessage && (
                       <span className={`text-[11px] font-medium ${isPanelDark ? 'text-slate-300' : 'text-slate-500'}`}>
                         {anamnesisFlowMessage}
                       </span>
@@ -10988,10 +11014,25 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 <MessageCircle size={15} /> WhatsApp
               </a>
 
-              {canEditAnamnesis && (
+              {canViewAnamnesis && hasCompletedAnamnesis && (
                 <button
                   id="anamnesis-btn"
-                  onClick={() => setShowAnamnesis(true)}
+                  type="button"
+                  onClick={() => { setShowAnamnesisReadOnly(true); setShowAnamnesis(true); }}
+                  className={`flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none ${
+                    isPanelDark
+                      ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                      : 'border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-200'
+                  }`}
+                >
+                  <Eye size={15} /> Ver anamnese
+                </button>
+              )}
+
+              {canEditAnamnesis && !hasCompletedAnamnesis && (
+                <button
+                  id="anamnesis-btn"
+                  onClick={() => { setShowAnamnesisReadOnly(false); setShowAnamnesis(true); }}
                   className={`flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-center text-[11px] font-medium leading-tight transition-colors sm:flex-none ${
                     isPanelDark
                       ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
@@ -11002,7 +11043,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 </button>
               )}
 
-              {canEditAnamnesis && (
+              {canEditAnamnesis && !hasCompletedAnamnesis && (
                 <button
                   onClick={() => void handleSendAnamnesisRequest()}
                   disabled={isSendingAnamnesisRequest}
@@ -11013,25 +11054,6 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                   }`}
                 >
                   <Share2 size={15} /> {isSendingAnamnesisRequest ? 'Enviando...' : 'Enviar anamnese'}
-                </button>
-              )}
-
-              {canViewAnamnesis && hasSubmittedAnamnesisFlow && (
-                <button
-                  onClick={openSubmittedAnamnesisForFiles}
-                  className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-center text-[11px] font-medium leading-tight text-indigo-700 transition-colors hover:bg-indigo-100 sm:flex-none"
-                >
-                  <Eye size={15} /> Ver ficha enviada
-                </button>
-              )}
-
-              {canEditAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED' && (
-                <button
-                  onClick={() => void handleReviewAnamnesisFlow()}
-                  disabled={isReviewingAnamnesis}
-                  className="flex min-h-9 min-w-0 items-center justify-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-center text-[11px] font-medium leading-tight text-emerald-700 transition-colors hover:bg-emerald-100 disabled:opacity-60 sm:flex-none"
-                >
-                  <CheckCircle2 size={15} /> {isReviewingAnamnesis ? 'Revisando...' : 'Marcar revisada'}
                 </button>
               )}
 
@@ -11101,6 +11123,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 canManage={canManageCaseTeam && (isUnitCaseTeamManager || caseTeamManagementAllowed)}
                 dark={isPanelDark}
                 refreshKey={caseTeamRefreshKey}
+                assignedPrimaryProfessionalId={isSavingPrimaryProfessional ? resolvePatientProfessionalId(patient) : selectedTherapistId}
                 onLinksChanged={handleCaseTeamLinksChanged}
                 onManagementAuthorityChanged={setCaseTeamManagementAllowed}
               />
