@@ -57,6 +57,9 @@ jobs:
           node tests/patientFileStorageQuota.test.mjs
           node tests/patientFileFreeTier.test.mjs
 
+      - name: Patient WhatsApp DDD and link regression tests
+        run: node --import tsx tests/patientWhatsapp.test.ts
+
       - name: Password recovery and owner MFA regression tests
         run: |
           npm run test:auth-login-recovery-fallback

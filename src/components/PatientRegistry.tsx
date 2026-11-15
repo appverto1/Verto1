@@ -4,6 +4,7 @@ import { PatientInternalChatPreview } from './PatientInternalChatPreview';
 import { SecureImage } from './SecureMedia';
 import { patientMatchesNameFilter, sortPatientsAlphabetically } from '../utils/patientList';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
+import { PatientWhatsAppLink } from "./PatientWhatsAppLink";
 
 const getPatientPhotoSource = (patient: any) =>
   String(
@@ -137,15 +138,13 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
                   </div> 
                   <div className="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
                     <div className="flex flex-wrap items-center gap-2">
-                      <a 
-                        href={`https://wa.me/${p.phone.replace(/\D/g, '')}`} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
+                      <PatientWhatsAppLink
+                        phone={p.phone}
                         className="p-2 bg-green-50 text-green-600 rounded-xl hover:bg-green-100 transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-tight"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <MessageCircle size={16} /> WhatsApp
-                      </a>
+                      </PatientWhatsAppLink>
                       <PatientInternalChatPreview patientName={p.name} compact />
                       {userRole === 'receptionist' && (
                         <button 

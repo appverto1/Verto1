@@ -38,6 +38,7 @@ import { AnamnesisModal } from "./Anamnesis";
 import { DayDetailsModal, CalendarWidget } from "./Calendar";
 import { ProtocolManagementSystem } from "./Protocols";
 import { PatientRegistry } from "./PatientRegistry";
+import { PatientWhatsAppLink } from "./PatientWhatsAppLink";
 import { PatientDetailView } from "./PatientDetailView";
 import { PatientInternalChatPreview } from "./PatientInternalChatPreview";
 import { TeamManagement } from "./TeamManagement";
@@ -2046,15 +2047,13 @@ export const ReceptionistDashboard = ({
                                 patientName={patientItem.name}
                                 compact
                               />
-                              <a
-                                href={`https://wa.me/${(patientData?.phone || "").replace(/\D/g, "")}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
+                              <PatientWhatsAppLink
+                                phone={patientData?.phone}
                                 className="p-1.5 bg-green-50 text-green-500 rounded-xl hover:bg-green-500 hover:text-white transition-all shadow-sm"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <MessageCircle size={14} />
-                              </a>
+                              </PatientWhatsAppLink>
                             </div>
                           </div>
                         </div>
@@ -2145,15 +2144,13 @@ export const ReceptionistDashboard = ({
                                 </div>
                               </div>
                               <div className="flex items-center gap-2">
-                                <a
-                                  href={`https://wa.me/${(allPatients.find((p: any) => p.id === item.patientId)?.phone || "").replace(/\D/g, "")}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                                <PatientWhatsAppLink
+                                  phone={allPatients.find((p: any) => p.id === item.patientId)?.phone}
                                   className="p-2 text-green-500 hover:bg-green-50 rounded-xl transition-all"
                                   onClick={(e) => e.stopPropagation()}
                                 >
                                   <MessageCircle size={18} />
-                                </a>
+                                </PatientWhatsAppLink>
                                 <div className="p-2 text-gray-300 hover:text-[#7a32fc] hover:bg-blue-50 rounded-xl transition-all">
                                   <ChevronRight size={18} />
                                 </div>
