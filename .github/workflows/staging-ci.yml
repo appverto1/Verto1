@@ -60,6 +60,12 @@ jobs:
       - name: Patient WhatsApp DDD and link regression tests
         run: node --import tsx tests/patientWhatsapp.test.ts
 
+      - name: ABA behavior catalog CRUD and touch gesture regressions
+        run: |
+          node --import tsx tests/abaBehaviorCatalog.test.ts
+          node tests/abaBehaviorCatalogCrudAndGesture.regression.test.mjs
+          node tests/abaSessionQuickCollectionPersistence.regression.test.mjs
+
       - name: Patient card pending-only regressions
         run: |
           node --import tsx tests/patientCardPendingState.test.ts
