@@ -4947,6 +4947,10 @@ export const SessionMode = ({
   };
 
   const handleSelectedBehaviorAction = () => {
+    if (!sessionBehaviorPresets.some((behavior: any) => behavior.id === selectedBehavior.id)) {
+      showClinicalToast({ variant: 'info', title: 'Nenhum comportamento ativo', subtitle: 'Reative ou cadastre um comportamento antes de registrar.' }, 'none');
+      return;
+    }
     if (!ensureSessionCanRecord()) return;
     const effectiveMeasurementType = resolveBehaviorMeasurementForAction(selectedBehavior, behaviorMeasurementType);
     if (effectiveMeasurementType !== behaviorMeasurementType) setBehaviorMeasurementType(effectiveMeasurementType);
@@ -9346,7 +9350,7 @@ export const SessionMode = ({
             <span className="min-w-0 max-w-[52%] truncate text-right">
               {openDurations.length === 1
                 ? `⏱ ${compactBehaviorLabel(openDurations[0].behaviorName)} · ${formatElapsed(openDurations[0].startedAt, nowMs)}`
-                : 'Toque em Mais'}
+                : 'Abra Config.'}
             </span>
           </div>
         )}
