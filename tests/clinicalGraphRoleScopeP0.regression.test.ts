@@ -1,6 +1,7 @@
 import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { roleHasDefaultCapability } from '../src/constants/authorizationModel';
 import {
   clinicalGraphLegacySnapshotVisibleToActor,
   filterClinicalGraphPlanScopesForActor,
@@ -38,6 +39,8 @@ assert.equal(resolveClinicalGraphScopeId('pts', true, ['fono']), 'pts');
 assert.equal(resolveClinicalGraphScopeId('to', true, ['fono', 'to']), 'to');
 assert.equal(resolveClinicalGraphScopeId('stale-plan', false, ['fono', 'to']), 'fono');
 assert.equal(resolveClinicalGraphScopeId('pts', false, []), '');
+assert.equal(roleHasDefaultCapability('therapist', 'aba.analytics.view'), true);
+assert.equal(roleHasDefaultCapability('receptionist', 'aba.analytics.view'), false);
 
 assert.equal(
   clinicalGraphLegacySnapshotVisibleToActor('Fonoaudiólogo', { actorRole: 'therapist', actorSpecialty: 'Fonoaudiologia' }),
@@ -75,6 +78,8 @@ assert.match(dashboard, /const scopeId = resolveClinicalGraphScopeId\(\s*request
 assert.match(dashboard, /\{activePts && <option value="pts">Visão do PTS<\/option>\}/);
 
 const server = readPatientPlanServerSource();
+const route = "app.get('/api/patients/:patientId/clinical-outcomes-dashboard', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'), checkPatientAccess";
+assert.ok(server.includes(route), 'specialist graph read must use a scoped capability alternative and preserve checkPatientAccess');
 assert.match(server, /req\.patientActorSpecialty\s*=\s*normalizeClinicalSpecialty\(evidence\.activeProfessionalProfile\?\.specialty\)/);
 assert.match(server, /const graphVisiblePlanScopes = filterClinicalGraphPlanScopesForActor\(rebacVisiblePlans, graphActorScope\)/);
 assert.match(server, /filterTherapeuticPlanProgramsForActor\(programResult\.data \|\| \[\], graphVisiblePlanScopes, accessContext\)/);
