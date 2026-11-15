@@ -1251,6 +1251,8 @@ export const SessionMode = ({
   const [behaviorCatalogLoading, setBehaviorCatalogLoading] = useState(false);
   const [behaviorCatalogError, setBehaviorCatalogError] = useState('');
   const [behaviorCatalogManagerOpen, setBehaviorCatalogManagerOpen] = useState(false);
+  const activeBehaviorCatalogPatientRef = useRef(String(patientId || ''));
+  activeBehaviorCatalogPatientRef.current = String(patientId || '');
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [selectedSeverity, setSelectedSeverity] = useState(2);
   const [rateWindow, setRateWindow, rateWindowRef] = useLiveSessionState<any>(null);
@@ -1577,7 +1579,7 @@ export const SessionMode = ({
   const reloadBehaviorCatalog = async (requestedPatientId = String(patientId || '')) => {
     if (!requestedPatientId) return false;
     const result = await dataService.getAbaPatientBehaviorCatalog(requestedPatientId);
-    if (String(patientId || '') !== requestedPatientId) return false;
+    if (activeBehaviorCatalogPatientRef.current !== requestedPatientId) return false;
     if (result?.success !== true || !Array.isArray(result.data)) {
       setBehaviorCatalogError(result?.error || 'Não foi possível carregar os comportamentos.');
       return false;
@@ -6026,18 +6028,21 @@ export const SessionMode = ({
       showClinicalToast({ variant: 'error', title: 'Catálogo indisponível', subtitle: 'Recarregue o catálogo antes de alterar a severidade.' }, 'error');
       return;
     }
+    const scopedPatientId = String(patientId);
     pinnedSeveritySavingRef.current = true;
     setSeverityPreferenceSavingId(id);
     try {
       const result = await dataService.updateAbaPatientBehavior(
-        String(patientId), String(behavior.catalogId || (behavior.presetKey ? `default:${behavior.presetKey}` : id)),
+        scopedPatientId, String(behavior.catalogId || (behavior.presetKey ? `default:${behavior.presetKey}` : id)),
         { defaultSeverity: degree }
       );
+      if (activeBehaviorCatalogPatientRef.current !== scopedPatientId) return;
       if (result?.success !== true) {
         showClinicalToast({ variant: 'error', title: 'Severidade não salva', subtitle: result?.error || 'Não foi possível atualizar a preferência.' }, 'error');
         return;
       }
-      await reloadBehaviorCatalog();
+      await reloadBehaviorCatalog(scopedPatientId);
+      if (activeBehaviorCatalogPatientRef.current !== scopedPatientId) return;
       setSelectedSeverity(degree);
       registerPinnedBehavior(id, degree);
     } finally {
