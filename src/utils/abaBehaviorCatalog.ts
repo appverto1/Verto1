@@ -48,7 +48,7 @@ export type AbaCatalogBehavior = {
   presetKey: string | null;
 };
 
-export const mergeAbaBehaviorCatalog = (patientId: string, stored: any[]): AbaCatalogBehavior[] => {
+export const mergeAbaBehaviorCatalog = (patientId: string, stored: any[], includeArchived = false): AbaCatalogBehavior[] => {
   const rows = Array.isArray(stored) ? stored : [];
   const byPreset = new Map<string, any>();
   const custom: any[] = [];
@@ -90,6 +90,6 @@ export const mergeAbaBehaviorCatalog = (patientId: string, stored: any[]): AbaCa
         };
   });
   return [...presets, ...custom.map((row) => fromRow(row))]
-    .filter((item) => item.status === 'active')
+    .filter((item) => includeArchived || item.status === 'active')
     .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
 };
