@@ -3,7 +3,7 @@ import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 
 const src=readFileSync('server.ts','utf8');
-const start=src.indexOf("      // Legacy compatibility is restricted to a coordinator profile");
+const start=src.indexOf("      if (\n        profile &&\n        activationFlow &&\n        normalizeRequestedRole(intendedRole) === 'director'");
 const end=src.indexOf("      // Retry an interrupted paid modular activation on a later login",start);
 const login=src.slice(start,end);
 
