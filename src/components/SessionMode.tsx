@@ -1665,7 +1665,7 @@ export const SessionMode = ({
     crisisMode ? baselineQuickBehaviorShortcuts : quickBehaviorShortcuts,
     { crisisMode, limit: 3 }
   ), [baselineQuickBehaviorShortcuts, crisisMode, quickBehaviorShortcuts]);
-  const personalizedDockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode: false, limit: 3 }), [quickBehaviorShortcuts]);
+  const personalizedDockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode: false, limit: 200 }), [quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
   const dockLocationOptions = useMemo(() => mergeDockLocationOptions(customDockLocations), [customDockLocations]);
   const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
@@ -1822,7 +1822,7 @@ export const SessionMode = ({
     if (sessionQuickPreferencesSaving) return false;
     setSessionQuickPreferencesSaving(true);
     try {
-      const normalized = nextShortcuts.slice(0, 3).map((shortcut: any, index: number) => ({
+      const normalized = nextShortcuts.slice(0, 200).map((shortcut: any, index: number) => ({
         ...shortcut,
         priority: index + 1,
         visibleInDock: true
@@ -1841,6 +1841,42 @@ export const SessionMode = ({
     }
   };
 
+  const createCatalogBehavior = async (draft: AbaBehaviorDraft): Promise<boolean> => {
+    const result = await dataService.createAbaPatientBehavior(String(patientId), draft);
+    if (result?.success !== true) {
+      showClinicalToast({ variant: 'error', title: 'Comportamento não salvo', subtitle: result?.error || 'Verifique os dados.' }, 'error');
+      return false;
+    }
+    if (!(await reloadBehaviorCatalog())) {
+      showClinicalToast({ variant: 'info', title: 'Comportamento salvo', subtitle: 'Recarregue o catálogo para atualizar a lista.' }, 'none');
+    }
+    return true;
+  };
+
+  const updateCatalogBehavior = async (id: string, draft: Partial<AbaBehaviorDraft>): Promise<boolean> => {
+    const result = await dataService.updateAbaPatientBehavior(String(patientId), id, draft);
+    if (result?.success !== true) {
+      showClinicalToast({ variant: 'error', title: 'Comportamento não atualizado', subtitle: result?.error || 'Tente novamente.' }, 'error');
+      return false;
+    }
+    if (!(await reloadBehaviorCatalog())) {
+      showClinicalToast({ variant: 'info', title: 'Alteração salva', subtitle: 'Recarregue o catálogo para atualizar a lista.' }, 'none');
+    }
+    return true;
+  };
+
+  const archiveCatalogBehavior = async (id: string): Promise<boolean> => {
+    const result = await dataService.archiveAbaPatientBehavior(String(patientId), id);
+    if (result?.success !== true) {
+      showClinicalToast({ variant: 'error', title: 'Comportamento não arquivado', subtitle: result?.error || 'Tente novamente.' }, 'error');
+      return false;
+    }
+    if (!(await reloadBehaviorCatalog())) {
+      showClinicalToast({ variant: 'info', title: 'Comportamento arquivado', subtitle: 'Recarregue o catálogo para atualizar a lista.' }, 'none');
+    }
+    return true;
+  };
+
   const toggleSelectedBehaviorQuickShortcut = async () => {
     const behavior = selectedBehavior;
     if (!behavior?.id) return;
@@ -1848,10 +1884,6 @@ export const SessionMode = ({
     const existing = current.find((shortcut: any) => shortcut.behaviorId === behavior.id);
     if (existing) {
       await savePersonalizedQuickBehaviorShortcuts(current.filter((shortcut: any) => shortcut.behaviorId !== behavior.id));
-      return;
-    }
-    if (current.length >= 3) {
-      showClinicalToast({ variant: 'info', title: 'Você já tem 3 acessos rápidos.', subtitle: 'Remova ou reordene um deles antes de fixar outro.' }, 'none');
       return;
     }
     const method = resolveBehaviorMeasurementForAction(behavior, behaviorMeasurementType || behavior.defaultMeasurement || 'frequency');
@@ -9684,10 +9716,10 @@ export const SessionMode = ({
               <div className="rounded-xl border border-slate-100 bg-white/75 p-2.5" data-aba-personalized-quick-shortcuts>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] font-semibold text-slate-600">Seus acessos rápidos</span>
-                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length}/3</span>
+                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length} fixados</span>
                 </div>
                 {personalizedDockShortcuts.length === 0 ? (
-                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe até 3 comportamentos para aparecerem na barra inferior.</p>
+                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe os comportamentos que deseja priorizar na barra horizontal.</p>
                 ) : (
                   <div className="mt-2 space-y-2">
                     {personalizedDockShortcuts.map((shortcut: any, index: number) => {
