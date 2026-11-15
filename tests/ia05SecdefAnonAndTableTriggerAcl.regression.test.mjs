@@ -106,3 +106,140 @@ test('IA-05 PostgreSQL: revoking TRIGGER blocks privilege while existing trigger
     finally { await client.end(); }
   }
 });
+
+const policySql=readFileSync(join(process.cwd(),'supabase/migrations/20261115223227_ia05_scope_public_policies_to_authenticated.sql'),'utf8');
+const reviewedPolicies=[
+  {
+    "table": "aba_session_summaries",
+    "policy": "aba_session_summaries_patient_scope_rw",
+    "digest": "93582460a01507cfd5a6dd34272fa46e"
+  },
+  {
+    "table": "clinic_protocol_grants",
+    "policy": "clinic_protocol_grants_platform_admin_all",
+    "digest": "105dd33abf541e30d503a5a810c5eea7"
+  },
+  {
+    "table": "operational_closure_exports",
+    "policy": "operational_closure_exports_admin_rw",
+    "digest": "c0b4f388e1db7f22b9bfa043d4ca928d"
+  },
+  {
+    "table": "patient_access_grants",
+    "policy": "patient_access_grants_clinic_rw",
+    "digest": "c0b4f388e1db7f22b9bfa043d4ca928d"
+  },
+  {
+    "table": "patient_anamnesis_requests",
+    "policy": "patient_anamnesis_requests_clinic_rw",
+    "digest": "58a7b687a9c52140d521fed4d5d17036"
+  },
+  {
+    "table": "patient_anamnesis_responses",
+    "policy": "patient_anamnesis_responses_clinic_rw",
+    "digest": "58a7b687a9c52140d521fed4d5d17036"
+  },
+  {
+    "table": "patient_history_imports",
+    "policy": "patient_history_imports_clinic_rw",
+    "digest": "c0b4f388e1db7f22b9bfa043d4ca928d"
+  },
+  {
+    "table": "patient_longitudinal_timeline_items",
+    "policy": "patient_longitudinal_timeline_items_clinic_rw",
+    "digest": "58a7b687a9c52140d521fed4d5d17036"
+  },
+  {
+    "table": "patient_portability_requests",
+    "policy": "patient_portability_requests_clinic_admin_rw",
+    "digest": "9aa915e921e1f27c92792d416aef805f"
+  },
+  {
+    "table": "patient_portability_snapshots",
+    "policy": "patient_portability_snapshots_clinic_rw",
+    "digest": "fe29e0e5ab61c42e7cb19c25239e641c"
+  },
+  {
+    "table": "patient_relationship_confirmations",
+    "policy": "patient_relationship_confirmations_clinic_rw",
+    "digest": "9aa915e921e1f27c92792d416aef805f"
+  },
+  {
+    "table": "patient_shared_history_snapshots",
+    "policy": "patient_shared_history_snapshots_clinic_read",
+    "digest": "01f0c03269c9dba3865621ce1975ac24"
+  },
+  {
+    "table": "protocol_import_requests",
+    "policy": "protocol_import_requests_owner_all",
+    "digest": "105dd33abf541e30d503a5a810c5eea7"
+  },
+  {
+    "table": "record_read_audit",
+    "policy": "record_read_audit_select_internal",
+    "digest": "a82e6d1036391f6290f1435b87b29e45"
+  },
+  {
+    "table": "verto_canonical_protocols",
+    "policy": "verto_canonical_protocols_owner_all",
+    "digest": "105dd33abf541e30d503a5a810c5eea7"
+  }
+];
+
+test('IA-05 final phase narrows exactly 15 RLS public roles without rewriting expressions',()=>{
+  assert.equal(reviewedPolicies.length,15);
+  assert.equal(new Set(reviewedPolicies.map(p=>p.table+':'+p.policy)).size,15);
+  for(const p of reviewedPolicies) {
+    assert.match(policySql,new RegExp("'"+p.table+"'"));
+    assert.match(policySql,new RegExp("'"+p.policy+"'"));
+    assert.match(policySql,new RegExp("'"+p.digest+"'"));
+  }
+  assert.match(policySql,/IA05_PUBLIC_POLICY_BASELINE_DRIFT/);
+  assert.match(policySql,/IA05_POLICY_EXPRESSION_OR_OWNER_DRIFT/);
+  assert.match(policySql,/md5\(coalesce\(pol\.qual,''\)\|\|'\|'\|\|coalesce\(pol\.with_check,''\)\)/);
+  assert.match(policySql,/ALTER POLICY %I ON public\.%I TO authenticated/);
+  assert.match(policySql,/REVOKE EXECUTE ON FUNCTION public\.%I\(%s\) FROM PUBLIC, anon/);
+  assert.doesNotMatch(policySql,/\b(?:DROP|CREATE)\s+POLICY\b/i);
+  assert.doesNotMatch(policySql,/\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\s+(?:INTO\s+|FROM\s+)?public\./i);
+});
+
+test('IA-05 PG: scoping public policy to authenticated keeps anon SELECT deny-only', {
+  skip:process.env.VERTO_IA05_POSTGRES_TEST!=='1',
+},async()=>{
+  const client=new pg.Client();
+  await client.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('CREATE ROLE ia05_ci_public NOLOGIN');
+    await client.query('CREATE ROLE ia05_ci_authenticated NOLOGIN');
+    await client.query('CREATE TABLE public.ia05_rls_probe(value integer NOT NULL)');
+    await client.query('INSERT INTO public.ia05_rls_probe VALUES (1)');
+    await client.query(`
+      CREATE FUNCTION public.ia05_rls_eligible() RETURNS boolean
+      LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,public
+      AS $$ SELECT current_setting('ia05.actor',true)='valid'; $$;
+    `);
+    await client.query('GRANT SELECT ON public.ia05_rls_probe TO ia05_ci_public,ia05_ci_authenticated');
+    await client.query('GRANT EXECUTE ON FUNCTION public.ia05_rls_eligible() TO ia05_ci_public,ia05_ci_authenticated');
+    await client.query('ALTER TABLE public.ia05_rls_probe ENABLE ROW LEVEL SECURITY');
+    await client.query(`CREATE POLICY ia05_scope_probe ON public.ia05_rls_probe
+      TO PUBLIC USING(public.ia05_rls_eligible());`);
+    await client.query('SET LOCAL ROLE ia05_ci_public');
+    const before=await client.query('SELECT count(*)::int AS n FROM public.ia05_rls_probe');
+    assert.equal(before.rows[0].n,0);
+    await client.query('RESET ROLE');
+    await client.query('ALTER POLICY ia05_scope_probe ON public.ia05_rls_probe TO ia05_ci_authenticated');
+    await client.query('REVOKE EXECUTE ON FUNCTION public.ia05_rls_eligible() FROM PUBLIC,ia05_ci_public');
+    await client.query('SET LOCAL ROLE ia05_ci_public');
+    const after=await client.query('SELECT count(*)::int AS n FROM public.ia05_rls_probe');
+    assert.equal(after.rows[0].n,0);
+    await client.query('RESET ROLE');
+    await client.query("SET LOCAL ia05.actor='valid'");
+    await client.query('SET LOCAL ROLE ia05_ci_authenticated');
+    const permitted=await client.query('SELECT count(*)::int AS n FROM public.ia05_rls_probe');
+    assert.equal(permitted.rows[0].n,1);
+    await client.query('RESET ROLE');
+  } finally {
+    try{await client.query('ROLLBACK')}finally{await client.end()}
+  }
+});
