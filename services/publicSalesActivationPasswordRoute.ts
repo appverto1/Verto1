@@ -5,6 +5,8 @@ import type { Express, RequestHandler } from 'express';
 // injected by the server; the browser cannot select any of them.
 export interface PublicSalesActivationPasswordRouteDeps {
   supabase: any;
+  getStripe: () => any;
+  stripeSubscriptionToEntitlementStatus: (status: string) => string;
   publicSalesActivationLimiter: RequestHandler;
   validateStrongPassword: (value: unknown) => string | null;
   loadPublicSalesActivation: (rawToken: unknown) => Promise<any>;
@@ -24,7 +26,8 @@ export function registerPublicSalesActivationPasswordRoute(
   app: Express, deps: PublicSalesActivationPasswordRouteDeps,
 ): void {
   const {
-    supabase, publicSalesActivationLimiter, validateStrongPassword,
+    supabase, getStripe, stripeSubscriptionToEntitlementStatus,
+    publicSalesActivationLimiter, validateStrongPassword,
     loadPublicSalesActivation, findAuthUserByEmail,
     fetchProfileWithSchemaFallback, insertUserProfileWithSchemaFallback,
     extractMissingColumnName, cleanObject, ensureClinicAndMembershipForCoordinator,
@@ -64,6 +67,21 @@ export function registerPublicSalesActivationPasswordRoute(
               ? "Este link de ativação expirou. Solicite um novo link à equipe da Verto."
               : "Este link de ativação não está disponível.",
           });
+        }
+
+        // loadPublicSalesActivation already scoped the offer to this token,
+        // paid status, lead, checkout and contractual email. Verify the Stripe
+        // subscription before touching GoTrue, profile or clinic/membership.
+        let verifiedSubscription: any = null;
+        if (sanitizeString(loaded.offer?.offer_type, 30) === "modular") {
+          const subscriptionId = sanitizeString(loaded.offer?.stripe_subscription_id, 200);
+          if (!subscriptionId) throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
+          const candidate = await getStripe().subscriptions.retrieve(subscriptionId);
+          if (sanitizeString(candidate?.status, 40) !== "active"
+            || stripeSubscriptionToEntitlementStatus(candidate.status) !== "active") {
+            throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
+          }
+          verifiedSubscription = candidate;
         }
 
         let authUser = await findAuthUserByEmail(loaded.email);
@@ -129,6 +147,7 @@ export function registerPublicSalesActivationPasswordRoute(
               email: loaded.email,
               password,
               email_confirm: true,
+              app_metadata: { sales_activation_offer_id: loaded.offerId },
               user_metadata: {
                 full_name:
                   sanitizeString(loaded.lead.name, 180) ||
@@ -257,6 +276,7 @@ export function registerPublicSalesActivationPasswordRoute(
           offerId: loaded.offerId,
           leadId: loaded.leadId,
           checkoutSessionId: loaded.checkoutSessionId,
+          verifiedSubscription,
         });
 
         const { error: ownerMetadataError } = await supabase.auth.admin.updateUserById(

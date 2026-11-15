@@ -23358,7 +23358,7 @@ async function startServer() {
     const [offerResult, leadResult] = await Promise.all([
       supabase
         .from("sales_offers")
-        .select("id,lead_id,status,stripe_checkout_session_id,offer_type,contract_email")
+        .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,contract_email")
         .eq("id", offerId)
         .eq("lead_id", leadId)
         .eq("status", "paid")
@@ -23458,6 +23458,9 @@ async function startServer() {
 
   registerPublicSalesActivationPasswordRoute(app, {
     supabase,
+    getStripe,
+    // Declared later in startServer; evaluated only on the actual POST.
+    stripeSubscriptionToEntitlementStatus: (status) => stripeSubscriptionToEntitlementStatus(status),
     publicSalesActivationLimiter,
     validateStrongPassword,
     loadPublicSalesActivation,
