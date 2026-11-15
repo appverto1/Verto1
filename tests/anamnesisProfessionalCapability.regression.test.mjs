@@ -40,19 +40,23 @@ assert.match(
 );
 assert.match(
   detail,
-  /\{canEditAnamnesis && \([\s\S]{0,500}id="anamnesis-btn"/,
-  'editor da anamnese deve exigir edit',
+  /\{canEditAnamnesis && !hasCompletedAnamnesis && \([\s\S]{0,500}id="anamnesis-btn"/,
+  'editor da anamnese pendente deve exigir edit',
 );
 assert.match(
   detail,
-  /\{canEditAnamnesis && \([\s\S]{0,500}handleSendAnamnesisRequest/,
-  'envio de anamnese deve exigir edit',
+  /\{canEditAnamnesis && !hasCompletedAnamnesis && \([\s\S]{0,500}handleSendAnamnesisRequest/,
+  'envio de anamnese pendente deve exigir edit',
 );
 assert.match(
   detail,
-  /\{canViewAnamnesis && hasSubmittedAnamnesisFlow/,
-  'visualização de ficha enviada deve continuar disponível com view',
+  /\{canViewAnamnesis && hasCompletedAnamnesis && \([\s\S]{0,600}Ver anamnese/,
+  'visualização de ficha concluída deve exigir view',
 );
+assert.match(detail, /readOnly=\{showAnamnesisReadOnly\}/, 'visualização não deve permitir edição implicitamente');
+assert.match(detail, /onEdit=\{showAnamnesisReadOnly && canEditAnamnesis/, 'editar ficha deve exigir edit');
+assert.match(detail, /onReview=\{showAnamnesisReadOnly && canEditAnamnesis/, 'revisar ficha deve exigir edit');
+
 
 for (const route of [
   "app.post('/api/patients/:patientId/anamnesis/send'",
