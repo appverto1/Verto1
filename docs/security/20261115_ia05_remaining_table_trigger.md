@@ -20,3 +20,7 @@ Data: 2026-11-15. Escopo exclusivo Staging. Parte complementar do PR #756.
 CI com `tests/ia05RemainingTableTriggerGrants.regression.test.mjs` e PostgreSQL efêmero valida privilégios de novas tabelas; validação SQL após aplicação deve mostrar 0 concessões de TRIGGER para anon/authenticated nas 374 tabelas de public e preservar os vínculos de trigger.
 **Ainda pendente:** default ACL de tabelas criadas por supabase_admin; exige execução por papel apropriado (não elevar postgres, não usar bypass improvisado). Outras classes de objetos e SECURITY DEFINER para authenticated devem ser auditados por risco específico.
 Smoke autenticado manual e promoção à produção permanecem adiados por decisão do usuário.
+## Única view financeira com TRIGGER público
+O inventário de relações não-tabela identificou a view `public.patient_financial_appointment_summaries`, owner postgres, 0 vínculos de trigger, com ACL TRIGGER para anon/authenticated.
+Migração `supabase/migrations/20261115224340_ia05_financial_summary_view_trigger_acl.sql` aplicada exclusivamente em Staging, revogando só TRIGGER dessas roles, preservando service_role e a view.
+Com isso, **0 tabelas comuns, particionadas ou views em public mantêm TRIGGER para anon/authenticated**. A regra para supabase_admin em tabelas futuras segue como residual.

@@ -39,3 +39,15 @@ test('IA-05 PostgreSQL: default grants stop giving TRIGGER to future tables', {
     try{await client.query('ROLLBACK')}finally{await client.end()}
   }
 });
+
+const financialViewSql=readFileSync(join(process.cwd(),'supabase/migrations/20261115224340_ia05_financial_summary_view_trigger_acl.sql'),'utf8');
+
+test('IA-05 financial view removes only public TRIGGER, retaining service_role',()=>{
+  assert.match(financialViewSql,/patient_financial_appointment_summaries/);
+  assert.match(financialViewSql,/c\.relkind='v'/);
+  assert.match(financialViewSql,/REVOKE TRIGGER ON TABLE public\.patient_financial_appointment_summaries FROM PUBLIC, anon, authenticated/);
+  assert.match(financialViewSql,/has_table_privilege\('service_role',v_oid,'TRIGGER'\)/);
+  const executable=financialViewSql.replace(/--[^\n]*/g,'');
+  assert.doesNotMatch(executable,/\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\s+/i);
+  assert.doesNotMatch(executable,/\b(?:CREATE|ALTER|DROP)\s+(?:VIEW|POLICY|TRIGGER|FUNCTION)\b/i);
+});
