@@ -92,6 +92,7 @@ export const PatientProfessionalLinksPanel = ({
   canManage,
   dark = false,
   refreshKey = 0,
+  assignedPrimaryProfessionalId = '',
   onLinksChanged,
   onManagementAuthorityChanged,
 }: {
@@ -100,6 +101,7 @@ export const PatientProfessionalLinksPanel = ({
   canManage: boolean;
   dark?: boolean;
   refreshKey?: string | number;
+  assignedPrimaryProfessionalId?: string;
   onLinksChanged?: (links: ProfessionalLink[]) => void;
   onManagementAuthorityChanged?: (canManage: boolean) => void;
 }) => {
@@ -295,6 +297,7 @@ export const PatientProfessionalLinksPanel = ({
   };
 
   const integrityIssueCount = active.filter((link) => Boolean(link.integrityStatus)).length;
+  const hasAssignedPrimaryProfessional = Boolean(String(assignedPrimaryProfessionalId || '').trim());
   const compactMembers = active.slice(0, 4);
   const hiddenActiveCount = Math.max(0, active.length - compactMembers.length);
   const professionalRecordForLink = (link: ProfessionalLink) =>
@@ -351,9 +354,11 @@ export const PatientProfessionalLinksPanel = ({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <p className="text-sm font-semibold">Equipe do caso</p>
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${dark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                {loading ? 'Carregando…' : `${active.length} ${active.length === 1 ? 'vínculo' : 'vínculos'}`}
-              </span>
+              {(loading || active.length > 0 || !hasAssignedPrimaryProfessional) && (
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${dark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
+                  {loading ? 'Carregando…' : `${active.length} ${active.length === 1 ? 'vínculo' : 'vínculos'}`}
+                </span>
+              )}
               {!loading && integrityIssueCount > 0 ? (
                 <button
                   type="button"
@@ -399,9 +404,9 @@ export const PatientProfessionalLinksPanel = ({
                   {active.slice(0, 3).map(displayNameForLink).join(', ')}{active.length > 3 ? ` +${active.length - 3}` : ''}
                 </p>
               </div>
-            ) : (
+            ) : !hasAssignedPrimaryProfessional ? (
               <p className={`mt-1 text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>Nenhum vínculo ativo.</p>
-            )}
+            ) : null}
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
