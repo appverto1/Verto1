@@ -75,6 +75,16 @@ jobs:
           PGDATABASE: verto_group_regression
         run: node tests/ia05SecdefAnonAndTableTriggerAcl.regression.test.mjs
 
+      - name: IA-05 remaining table TRIGGER grants and default ACL regression
+        env:
+          VERTO_IA05_POSTGRES_TEST: "1"
+          PGHOST: "127.0.0.1"
+          PGPORT: "5432"
+          PGUSER: postgres
+          PGPASSWORD: group_session_ci_only
+          PGDATABASE: verto_group_regression
+        run: node tests/ia05RemainingTableTriggerGrants.regression.test.mjs
+
       - name: Patient Drive free tier regression tests
         run: |
           node tests/patientFileStorageQuota.test.mjs
