@@ -13,9 +13,9 @@ export type ClinicalGraphActorScope = {
  *
  * The caller must first apply canonical patient/plan authorization. This helper
  * only narrows what an ordinary professional can see inside that already
- * authorized patient: specialty plans must match the actor's canonical clinic
- * specialty. Managers keep clinic-wide plan visibility, while supervisors keep
- * the case-scoped visibility proven by supervision ReBAC.
+ * authorized patient: only plans of the actor's canonical specialty are visible.
+ * The interdisciplinary PTS is reserved for managers and case-authorized
+ * supervisors after the existing patient/case ReBAC checks.
  */
 export function filterClinicalGraphPlanScopesForActor<T extends { mode?: unknown; specialty?: unknown }>(
   plans: readonly T[],
@@ -29,7 +29,6 @@ export function filterClinicalGraphPlanScopesForActor<T extends { mode?: unknown
   const actorSpecialty = readClinicalSpecialty(scope.actorSpecialty);
   return plans.filter((plan) => {
     const mode = clean(plan?.mode).toLowerCase();
-    if (mode === 'interdisciplinary') return true;
     if (mode !== 'specialty') return false;
     return Boolean(actorSpecialty && clinicalSpecialtiesMatch(plan?.specialty, actorSpecialty));
   });
@@ -46,4 +45,15 @@ export function clinicalGraphLegacySnapshotVisibleToActor(
 
   const actorSpecialty = readClinicalSpecialty(scope.actorSpecialty);
   return Boolean(actorSpecialty && clinicalSpecialtiesMatch(snapshotSpecialty, actorSpecialty));
+}
+
+/** Pick an initial chart only from the plan scopes authorized by the server. */
+export function resolveClinicalGraphScopeId(
+  requestedScopeId: string,
+  hasAuthorizedPts: boolean,
+  authorizedSpecialtyPlanIds: readonly string[],
+): string {
+  const fallback = hasAuthorizedPts ? 'pts' : (authorizedSpecialtyPlanIds[0] || '');
+  if (requestedScopeId === 'pts') return hasAuthorizedPts ? 'pts' : fallback;
+  return authorizedSpecialtyPlanIds.includes(requestedScopeId) ? requestedScopeId : fallback;
 }
