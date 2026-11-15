@@ -5155,7 +5155,7 @@ export const SessionMode = ({
     });
   };
 
-  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number, severityOverride = selectedSeverity) => {
+  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number, severityOverride = selectedSeverity, intervalSecondsOverride = intervalSeconds) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
       setSessionWarning(intervalRun.behaviorId === behaviorOverride.id
@@ -5163,9 +5163,10 @@ export const SessionMode = ({
         : 'Finalize ou conclua a coleta por intervalo em andamento antes de iniciar outra.');
       return;
     }
+    const effectiveIntervalSeconds = Math.max(5, Math.min(3600, Number(intervalSecondsOverride) || 30));
     const startedAt = new Date().toISOString();
     const localRunId = crypto.randomUUID();
-    const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
+    const intervalEndsAt = new Date(new Date(startedAt).getTime() + effectiveIntervalSeconds * 1000).toISOString();
     const plannedIntervalCount = Math.max(1, Math.floor(Number(quantityOverride ?? intervalTotalIntervals) || 1));
     let behaviorDecision: AbaV3BehaviorDecision | null = null;
     try {
@@ -5178,7 +5179,7 @@ export const SessionMode = ({
           behaviorId: behaviorOverride.id,
           clientRunEventId: localRunId,
           measurementMethod: String(measurementOverride || '').toUpperCase(),
-          intervalSeconds,
+          intervalSeconds: effectiveIntervalSeconds,
           plannedIntervals: plannedIntervalCount,
           startedAt,
           metadata: { source: 'session_mode_v3', targetId: behaviorDecision.targetId || null }
@@ -5201,7 +5202,7 @@ export const SessionMode = ({
         startedAt,
         intervalStartedAt: startedAt,
         intervalEndsAt,
-        intervalSeconds,
+        intervalSeconds: effectiveIntervalSeconds,
         intervalIndex: 1,
         totalIntervals: plannedIntervalCount,
         plannedIntervals: plannedIntervalCount,
@@ -5980,6 +5981,68 @@ export const SessionMode = ({
     }
     if (isIntervalMeasurementType(method)) {
       void startIntervalRun(behavior, method, undefined, severityOverride);
+    }
+  };
+
+  const pinnedSeveritySavingRef = useRef(false);
+  const pinnedBehaviorItems = useMemo(() => {
+    const first = personalizedDockShortcuts.map((shortcut: any) => String(shortcut.behaviorId));
+    const keys = [...first, ...sessionBehaviorPresets.map((behavior: any) => String(behavior.id))];
+    const seen = new Set<string>();
+    return keys.map((id) => {
+      if (seen.has(id)) return null;
+      seen.add(id);
+      const behavior = sessionBehaviorPresets.find((item: any) => String(item.id) === id);
+      if (!behavior) return null;
+      const open = openDurations.find((event) => event.behaviorName === behavior.name);
+      const method = getBehaviorDefaultMeasurement(behavior);
+      return {
+        id: String(behavior.id), name: behavior.name, method,
+        severity: Math.max(1, Math.min(5, Number(behavior.defaultSeverity || 2))),
+        color: 'slate', active: Boolean(open),
+        elapsed: open ? formatElapsed(open.startedAt, nowMs) : '',
+        disabled: Boolean(severityPreferenceSavingId) || Boolean(
+          actionLocks[open ? `duration:end:${open.id}` : method === 'duration'
+            ? `duration:start:${behavior.id}` : `frequency:${behavior.id}:${behavior.name}`]
+        ),
+      };
+    }).filter(Boolean) as Array<{
+      id: string; name: string; method: string; severity: number;
+      color: string; active: boolean; elapsed: string; disabled: boolean;
+    }>;
+  }, [sessionBehaviorPresets, personalizedDockShortcuts, openDurations, nowMs, actionLocks, severityPreferenceSavingId]);
+
+  const registerPinnedBehavior = (id: string, severity: number) => {
+    const behavior = sessionBehaviorPresets.find((row: any) => String(row.id) === id);
+    if (!behavior) return;
+    executeBehaviorShortcut({ behaviorId: behavior.id, method: getBehaviorDefaultMeasurement(behavior) }, severity);
+  };
+
+  const selectPinnedBehaviorSeverity = async (id: string, degree: number) => {
+    if (pinnedSeveritySavingRef.current || !Number.isInteger(degree) || degree < 1 || degree > 5) return;
+    const behavior = sessionBehaviorPresets.find((row: any) => String(row.id) === id);
+    if (!behavior) return;
+    if (behaviorCatalogItems === null) {
+      showClinicalToast({ variant: 'error', title: 'Catálogo indisponível', subtitle: 'Recarregue o catálogo antes de alterar a severidade.' }, 'error');
+      return;
+    }
+    pinnedSeveritySavingRef.current = true;
+    setSeverityPreferenceSavingId(id);
+    try {
+      const result = await dataService.updateAbaPatientBehavior(
+        String(patientId), String(behavior.catalogId || (behavior.presetKey ? `default:${behavior.presetKey}` : id)),
+        { defaultSeverity: degree }
+      );
+      if (result?.success !== true) {
+        showClinicalToast({ variant: 'error', title: 'Severidade não salva', subtitle: result?.error || 'Não foi possível atualizar a preferência.' }, 'error');
+        return;
+      }
+      await reloadBehaviorCatalog();
+      setSelectedSeverity(degree);
+      registerPinnedBehavior(id, degree);
+    } finally {
+      pinnedSeveritySavingRef.current = false;
+      setSeverityPreferenceSavingId('');
     }
   };
 
