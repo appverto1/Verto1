@@ -32,6 +32,10 @@ interface AnamnesisModalProps {
   loadLatestTemplate?: boolean;
   templateManagerLabel?: string;
   maxSavedTemplates?: number;
+  readOnly?: boolean;
+  onEdit?: () => void;
+  onReview?: () => void;
+  isReviewing?: boolean;
 }
 
 interface QuestionDraft {
@@ -259,7 +263,11 @@ export const AnamnesisModal = ({
   canEditTemplate = false,
   loadLatestTemplate = true,
   templateManagerLabel = 'Ficha personalizada',
-  maxSavedTemplates = 5
+  maxSavedTemplates = 5,
+  readOnly = false,
+  onEdit,
+  onReview,
+  isReviewing = false
 }: AnamnesisModalProps) => {
   const [profileType, setProfileType] = useState<AnamnesisProfileType>('adult');
   const isTemplateManager = initialData?.manageTemplate === true;
@@ -1307,6 +1315,7 @@ export const AnamnesisModal = ({
             </div>
           ) : (
             <div className="space-y-4">
+              <fieldset disabled={readOnly} className="min-w-0 space-y-4">
               {profileTemplate.sections
                 .filter((section) => section.active)
                 .sort((a, b) => a.order - b.order)
@@ -1382,13 +1391,29 @@ export const AnamnesisModal = ({
                 </div>
               )}
 
-              <button
-                onClick={handleSubmitForm}
-                className="w-full rounded-xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#7a32fc]/30 hover:opacity-90"
-              >
-                <Check size={16} className="inline mr-2" />
-                {mode === 'create' ? 'Salvar prontuário' : 'Salvar alterações'}
-              </button>
+              </fieldset>
+              {readOnly ? (
+                <div className="flex flex-wrap justify-end gap-2">
+                  {onEdit && (
+                    <button type="button" onClick={onEdit} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50">
+                      <Pencil size={15} className="mr-1.5 inline" /> Editar anamnese
+                    </button>
+                  )}
+                  {onReview && (
+                    <button type="button" onClick={onReview} disabled={isReviewing} className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-medium text-emerald-800 disabled:opacity-60">
+                      <Check size={15} className="mr-1.5 inline" /> {isReviewing ? 'Revisando...' : 'Marcar revisada'}
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={handleSubmitForm}
+                  className="w-full rounded-xl bg-[#7a32fc] px-4 py-3 text-sm font-bold text-white shadow-lg shadow-[#7a32fc]/30 hover:opacity-90"
+                >
+                  <Check size={16} className="inline mr-2" />
+                  {mode === 'create' ? 'Salvar prontuário' : 'Salvar alterações'}
+                </button>
+              )}
             </div>
           )}
         </div>
