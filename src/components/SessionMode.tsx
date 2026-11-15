@@ -1830,7 +1830,7 @@ export const SessionMode = ({
         visibleInDock: true
       }));
       const result = await dataService.saveAbaQuickBehaviorShortcuts(normalized);
-      if (result?.success === false) {
+      if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
         showClinicalToast({ variant: 'error', title: 'Não foi possível salvar os atalhos.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
         return false;
       }
@@ -1845,7 +1845,7 @@ export const SessionMode = ({
 
   const createCatalogBehavior = async (draft: AbaBehaviorDraft): Promise<boolean> => {
     const result = await dataService.createAbaPatientBehavior(String(patientId), draft);
-    if (result?.success !== true) {
+    if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
       showClinicalToast({ variant: 'error', title: 'Comportamento não salvo', subtitle: result?.error || 'Verifique os dados.' }, 'error');
       return false;
     }
@@ -1857,7 +1857,7 @@ export const SessionMode = ({
 
   const updateCatalogBehavior = async (id: string, draft: Partial<AbaBehaviorDraft>): Promise<boolean> => {
     const result = await dataService.updateAbaPatientBehavior(String(patientId), id, draft);
-    if (result?.success !== true) {
+    if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
       showClinicalToast({ variant: 'error', title: 'Comportamento não atualizado', subtitle: result?.error || 'Tente novamente.' }, 'error');
       return false;
     }
@@ -1869,7 +1869,7 @@ export const SessionMode = ({
 
   const archiveCatalogBehavior = async (id: string): Promise<boolean> => {
     const result = await dataService.archiveAbaPatientBehavior(String(patientId), id);
-    if (result?.success !== true) {
+    if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
       showClinicalToast({ variant: 'error', title: 'Comportamento não arquivado', subtitle: result?.error || 'Tente novamente.' }, 'error');
       return false;
     }
@@ -6037,7 +6037,7 @@ export const SessionMode = ({
         { defaultSeverity: degree }
       );
       if (activeBehaviorCatalogPatientRef.current !== scopedPatientId) return;
-      if (result?.success !== true) {
+      if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
         showClinicalToast({ variant: 'error', title: 'Severidade não salva', subtitle: result?.error || 'Não foi possível atualizar a preferência.' }, 'error');
         return;
       }
