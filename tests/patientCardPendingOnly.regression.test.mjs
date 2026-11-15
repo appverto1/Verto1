@@ -17,7 +17,7 @@ assert.match(card, /readOnly=\{showAnamnesisReadOnly\}/, 'viewer must be read-on
 assert.match(card, /onEdit=\{showAnamnesisReadOnly && canEditAnamnesis/, 'editor can be reached only when authorized');
 assert.match(card, /onReview=\{showAnamnesisReadOnly && canEditAnamnesis/, 'review remains available to authorized staff inside viewer');
 assert.match(anamnesisModal, /<fieldset disabled=\{readOnly\}/, 'view-only mode must disable question inputs');
-assert.match(anamnesisModal, /!readOnly \? \(/, 'read-only viewer must not show a save button');
+assert.match(anamnesisModal, /\{readOnly \? \([\s\S]*?\) : \([\s\S]*?onClick=\{handleSubmitForm\}/, 'read-only viewer must not show a save button');
 assert.match(anamnesisModal, /onClick=\{handleSubmitForm\}/, 'editor must retain the explicit Save action');
 
 assert.match(card, /assignedPrimaryProfessionalId=\{isSavingPrimaryProfessional \? resolvePatientProfessionalId\(patient\) : selectedTherapistId\}/, 'only the persisted primary professional resolves a card notice');
