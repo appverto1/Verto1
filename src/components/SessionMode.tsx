@@ -9369,17 +9369,24 @@ export const SessionMode = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_minmax(52px,60px)] gap-1.5">
-            {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
+          <div className="flex min-w-0 items-center gap-2" data-aba-all-behaviors-horizontal>
+            <div className="min-w-0 flex-1">
+              <AbaPinnedBehaviorStrip
+                items={pinnedBehaviorItems}
+                onRegister={registerPinnedBehavior}
+                onSelectSeverity={(id, degree) => { void selectPinnedBehaviorSeverity(id, degree); }}
+              />
+            </div>
             <button
               type="button"
               onClick={() => {
                 if (crisisMode) openAbcModal();
                 else setClinicalDockSheetOpen(true);
               }}
-              className={`min-h-[44px] min-w-0 overflow-hidden rounded-[16px] border px-2 text-[11px] font-medium shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
+              className={`min-h-[48px] shrink-0 rounded-[16px] border px-2 text-[11px] font-medium shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
+              aria-label={crisisMode ? 'Abrir ABC' : 'Configurar coleta rápida'}
             >
-              <span className="block truncate">{crisisMode ? 'ABC' : 'Mais'}</span>
+              {crisisMode ? 'ABC' : 'Config.'}
             </button>
           </div>
         )}
@@ -9587,6 +9594,12 @@ export const SessionMode = ({
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-behavior-chips>
               <div className="flex items-center justify-between gap-2">
                 <span>Comportamento</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setBehaviorCatalogManagerOpen(true)}
+                    aria-label="Gerenciar comportamentos do paciente"
+                    className="inline-flex min-h-8 items-center rounded-full border border-violet-200 bg-violet-50 px-3 text-[11px] font-semibold text-violet-700">
+                    Gerenciar
+                  </button>
                 <button
                   type="button"
                   onClick={toggleSelectedBehaviorQuickShortcut}
@@ -9595,29 +9608,22 @@ export const SessionMode = ({
                 >
                   {personalizedDockShortcuts.some((shortcut: any) => shortcut.behaviorId === selectedBehavior.id) ? 'Desafixar' : '+ Fixar'}
                 </button>
+                </div>
               </div>
-              <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
-                {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
+              <div className="mt-1 flex min-w-0 snap-x gap-2 overflow-x-auto overscroll-x-contain pb-1" data-aba-behavior-management-scroll>
+                {sessionBehaviorPresets.map((behavior) => (
                   <button
                     key={behavior.id}
                     type="button"
                     onClick={() => selectBehavior(behavior)}
                     aria-pressed={selectedBehaviorId === behavior.id}
                     title={behavior.name}
-                    className={`${dockChipClass(selectedBehaviorId === behavior.id)} max-w-[10.5rem]`}
+                    className={`${dockChipClass(selectedBehaviorId === behavior.id)} max-w-[10.5rem] shrink-0 snap-start`}
                   >
                     <span className="min-w-0 truncate">{behavior.name}</span>
                   </button>
                 ))}
-                {extraDockBehaviorOptions.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setDockMoreBehaviorsOpen((open) => !open)}
-                    className={`${dockChipClass(false)} max-w-[10.5rem] text-[#7a32fc]`}
-                  >
-                    <span className="min-w-0 truncate">{dockMoreBehaviorsOpen ? 'Mostrar menos' : '+ Mais'}</span>
-                  </button>
-                )}
+
               </div>
             </div>
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-method-chips>
@@ -12283,6 +12289,17 @@ export const SessionMode = ({
       )}
       {clinicalDock}
       {clinicalDockSheet}
+      <AbaBehaviorCatalogManager
+        open={behaviorCatalogManagerOpen}
+        items={behaviorCatalogItems || []}
+        loading={behaviorCatalogLoading}
+        error={behaviorCatalogError}
+        onClose={() => setBehaviorCatalogManagerOpen(false)}
+        onReload={() => { void reloadBehaviorCatalog(); }}
+        onCreate={createCatalogBehavior}
+        onUpdate={updateCatalogBehavior}
+        onArchive={archiveCatalogBehavior}
+      />
       {actionToastPortal}
     </div>
   );
