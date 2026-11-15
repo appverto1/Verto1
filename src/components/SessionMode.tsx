@@ -10084,6 +10084,14 @@ export const SessionMode = ({
           </div>
         )}
       </div>
+      {openDurationsPanel && (
+        <div
+          className="relative z-40 max-h-[32dvh] shrink-0 overflow-y-auto border-b border-purple-100 bg-[#F4F7FE] px-3 py-2 sm:px-4 lg:px-6"
+          data-aba-active-duration-pinned-header
+        >
+          {openDurationsPanel}
+        </div>
+      )}
 
       <div ref={sessionScrollRef} className={`flex-1 min-h-0 overflow-y-auto overflow-x-hidden lg:overflow-hidden grid grid-cols-1 ${sessionHistoryOpen ? 'xl:grid-cols-[minmax(0,1fr)_360px]' : 'xl:grid-cols-1'}`}>
         <div className="p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-6 lg:overflow-y-auto no-scrollbar" style={scrollBottomPaddingStyle}>
@@ -10102,8 +10110,6 @@ export const SessionMode = ({
               {renderSyncBadge(normalizeSyncStatus(latestTrialRecord.syncStatus))}
             </div>
           )}
-
-          {!intervalRun && openDurationsPanel}
 
           {intervalRun && (
             <div
@@ -10318,8 +10324,6 @@ export const SessionMode = ({
               </div>
             </div>
           )}
-
-          {intervalRun && openDurationsPanel}
 
           {intervalSummary && (
             <div className="rounded-[28px] border border-emerald-100 bg-emerald-50 p-5 shadow-xl shadow-emerald-900/5">
