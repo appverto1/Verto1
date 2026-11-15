@@ -84,7 +84,21 @@ export function registerPublicSalesActivationPasswordRoute(
           verifiedSubscription = candidate;
         }
 
+        // A paid activation may resume its own account, never silently
+        // reassign another Auth identity, offer or clinic.
+        const authIdentityMatchesPaidOffer = (candidate: any): boolean => {
+          const marker = sanitizeString(candidate?.app_metadata?.sales_activation_offer_id, 120);
+          return sanitizeEmail(candidate?.email) === loaded.email
+            && (!marker || marker === loaded.offerId);
+        };
         let authUser = await findAuthUserByEmail(loaded.email);
+        if (authUser?.id && !authIdentityMatchesPaidOffer(authUser)) {
+          return res.status(409).json({
+            success: false,
+            error: "ACCOUNT_REVIEW_REQUIRED",
+            message: "Esta conta precisa ser conferida antes de concluir a ativação.",
+          });
+        }
         if (authUser?.id) {
           const existingProfileResult = await fetchProfileWithSchemaFallback({
             supabase,
@@ -131,6 +145,10 @@ export function registerPublicSalesActivationPasswordRoute(
             await supabase.auth.admin.updateUserById(authUser.id, {
               password,
               email_confirm: true,
+              app_metadata: {
+                ...(authUser.app_metadata || {}),
+                sales_activation_offer_id: loaded.offerId,
+              },
               user_metadata: {
                 ...(authUser.user_metadata || {}),
                 full_name:
@@ -163,10 +181,17 @@ export function registerPublicSalesActivationPasswordRoute(
             if (normalizedError.includes("already")) {
               authUser = await findAuthUserByEmail(loaded.email);
               if (!authUser?.id) throw createError;
+              if (!authIdentityMatchesPaidOffer(authUser)) {
+                throw new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+              }
               const { error: retryUpdateError } =
                 await supabase.auth.admin.updateUserById(authUser.id, {
                   password,
                   email_confirm: true,
+                  app_metadata: {
+                    ...(authUser.app_metadata || {}),
+                    sales_activation_offer_id: loaded.offerId,
+                  },
                 });
               if (retryUpdateError) throw retryUpdateError;
             } else {

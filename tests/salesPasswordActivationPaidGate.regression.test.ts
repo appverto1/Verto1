@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { registerPublicSalesActivationPasswordRoute } from '../services/publicSalesActivationPasswordRoute.ts';
 
 const offerId = '11111111-1111-4111-8111-111111111111';
-function makeHarness({status='incomplete',offerType='modular',stripeSubscriptionId='sub_test_initial_paid',lookupError=false}={}) {
+function makeHarness({status='incomplete',offerType='modular',stripeSubscriptionId='sub_test_initial_paid',lookupError=false,existingAuth=null}={}) {
   let authLookups=0, stripeReads=0, userWrites=0, finalizeCalls=0;
   const handlers=[];
   const app={post:(path,limiter,handler)=>{assert.equal(path,'/api/public/sales-activations/:token/password'); handlers.push(handler);}};
@@ -15,7 +15,7 @@ function makeHarness({status='incomplete',offerType='modular',stripeSubscription
     publicSalesActivationLimiter: (_req,_res,next)=>next?.(),
     validateStrongPassword: value=>value==='CorrectHorseBattery1!'?value:null,
     loadPublicSalesActivation:async()=>({offer:{offer_type:offerType,stripe_subscription_id:stripeSubscriptionId},offerId,leadId:'22222222-2222-4222-8222-222222222222',checkoutSessionId:'cs_test_paid',email:'test@example.invalid'}),
-    findAuthUserByEmail:async()=>{authLookups++;if(lookupError)throw Error('AUTH_LOOKUP_REACHED');return null;},
+    findAuthUserByEmail:async()=>{authLookups++;if(lookupError)throw Error('AUTH_LOOKUP_REACHED');return existingAuth;},
     finalizeSalesActivationForUser:async()=>{finalizeCalls++;throw Error('UNEXPECTED_FINALIZATION');},
     maskEmail:v=>'[masked]',sanitizeEmail:v=>String(v).toLowerCase(),sanitizeString:(v,n=240)=>String(v??'').slice(0,n),
   };
@@ -63,4 +63,24 @@ test('server scope for password activation is paid offer, contract email and sub
  const src=readFileSync('services/publicSalesActivationPasswordRoute.ts','utf8');
  assert.match(src,/verifiedSubscription,/);
  assert.match(src,/app_metadata: \{ sales_activation_offer_id: loaded.offerId \}/);
+});
+
+test('an already-existing Auth identity marked for another paid offer cannot be reused for Director password',async()=>{
+  const h=makeHarness({status:'active',existingAuth:{
+    id:'33333333-3333-4333-8333-333333333333',email:'test@example.invalid',
+    app_metadata:{sales_activation_offer_id:'44444444-4444-4444-8444-444444444444'},
+  }});
+  const result=await h.invoke();
+  assert.equal(result.status,409);
+  assert.equal(result.payload.error,'ACCOUNT_REVIEW_REQUIRED');
+  assert.deepEqual(h.counts(),{authLookups:1,stripeReads:1,userWrites:0,finalizeCalls:0});
+});
+test('auth lookup returning another email never lets the activation token reset its password',async()=>{
+  const h=makeHarness({status:'active',existingAuth:{
+    id:'33333333-3333-4333-8333-333333333333',email:'other@example.invalid',
+    app_metadata:{sales_activation_offer_id:offerId},
+  }});
+  const result=await h.invoke();
+  assert.equal(result.status,409);
+  assert.deepEqual(h.counts(),{authLookups:1,stripeReads:1,userWrites:0,finalizeCalls:0});
 });
