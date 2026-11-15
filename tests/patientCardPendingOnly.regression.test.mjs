@@ -20,7 +20,7 @@ assert.match(anamnesisModal, /<fieldset disabled=\{readOnly\}/, 'view-only mode 
 assert.match(anamnesisModal, /!readOnly \? \(/, 'read-only viewer must not show a save button');
 assert.match(anamnesisModal, /onClick=\{handleSubmitForm\}/, 'editor must retain the explicit Save action');
 
-assert.match(card, /assignedPrimaryProfessionalId=\{selectedTherapistId\}/, 'card uses existing assigned primary professional');
+assert.match(card, /assignedPrimaryProfessionalId=\{isSavingPrimaryProfessional \? resolvePatientProfessionalId\(patient\) : selectedTherapistId\}/, 'only the persisted primary professional resolves a card notice');
 assert.match(teamPanel, /!hasAssignedPrimaryProfessional \? \([\s\S]*?Nenhum vínculo ativo\./, 'resolved missing-professional notice must disappear');
 assert.match(teamPanel, /integrityIssueCount > 0/, 'real team-integrity problems must remain visible');
 assert.match(teamPanel, /\{error \? <p role="alert"/, 'real link errors must remain visible');
