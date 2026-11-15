@@ -27,6 +27,7 @@ assert.ok(migration.includes('grant execute on function public.get_patient_file_
 assert.ok(patientDetail.includes('PATIENT_FILE_MAX_SIZE_BYTES = 10 * 1024 * 1024'), 'UI must block files above 10 MiB before transport');
 assert.ok(patientDetail.includes('PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024'), 'UI must know the 1 GiB patient limit');
 assert.ok(patientDetail.includes('disabled={isUploadingFile || patientFileStorageIsFull}'), 'file picker must lock when the patient quota is full');
-assert.ok(patientDetail.includes('de 1 GB usados'), 'UI must surface patient storage usage');
+assert.ok(patientDetail.includes('de {formatPatientFileStorageBytes(patientFileStorageUsage.limitBytes)} usados'), 'UI must show the authorized quota, not the absolute ceiling');
+assert.ok(patientDetail.includes('100 MB gratuitos incluídos'), 'UI must explain the free storage allowance');
 
 console.log('patientFileStorageQuota.test.mjs: PASS');

@@ -146,6 +146,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalNotificationsLoaded, setPortalNotificationsLoaded] = useState(false);
   const [portalPatientFiles, setPortalPatientFiles] = useState<any[]>([]);
   const [portalPatientFilesLoaded, setPortalPatientFilesLoaded] = useState(false);
+  const [portalPatientFileQuota, setPortalPatientFileQuota] = useState({ usedBytes: 0, limitBytes: 100 * 1024 * 1024 });
   const [portalFileState, setPortalFileState] = useState({ uploading: false, error: '', message: '' });
   const [selectedPortalAppointment, setSelectedPortalAppointment] = useState<any | null>(null);
   const [portalAppointmentDetail, setPortalAppointmentDetail] = useState<any | null>(null);
@@ -3220,6 +3221,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     if (requestId !== portalFilesRequestRef.current) return;
     if (result?.success) {
       setPortalPatientFiles(Array.isArray(result.data) ? result.data : []);
+      if (result.storageUsage) {
+        const reported = result.storageUsage;
+        setPortalPatientFileQuota({
+          usedBytes: Math.max(0, Number(reported.usedBytes ?? reported.used_bytes ?? 0) || 0),
+          limitBytes: Math.max(100 * 1024 * 1024, Math.min(1024 * 1024 * 1024, Number(reported.limitBytes ?? reported.limit_bytes ?? 100 * 1024 * 1024) || 100 * 1024 * 1024))
+        });
+      }
       setPortalFileState((current) => ({ ...current, error: '' }));
     } else {
       setPortalFileState((current) => ({ ...current, error: result?.error || 'Não foi possível carregar os documentos.' }));
@@ -3231,6 +3239,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     portalFilesRequestRef.current += 1;
     setPortalPatientFiles([]);
     setPortalPatientFilesLoaded(false);
+    setPortalPatientFileQuota({ usedBytes: 0, limitBytes: 100 * 1024 * 1024 });
     setPortalFileState({ uploading: false, error: '', message: '' });
   }, [portalPatientId, user?.email]);
 
@@ -3244,8 +3253,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file || portalFileState.uploading || isReadOnlyMode) return;
-    if (file.size > 10 * 1024 * 1024) {
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
       setPortalFileState({ uploading: false, error: 'O arquivo deve ter no máximo 10 MB.', message: '' });
+      return;
+    }
+    const imageWillBeCompressed = String(file.type || '').toLowerCase().startsWith('image/');
+    if (!imageWillBeCompressed && portalPatientFileQuota.usedBytes + file.size > portalPatientFileQuota.limitBytes) {
+      setPortalFileState({ uploading: false, error: 'O documento ultrapassaria o espaço disponível do Drive.', message: '' });
       return;
     }
     setPortalFileState({ uploading: true, error: '', message: '' });
@@ -3319,6 +3333,8 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     </div>
   );
 
+  const portalPatientFileQuotaFull = portalPatientFileQuota.usedBytes >= portalPatientFileQuota.limitBytes;
+
   const portalDocumentsPanel = (
     <div className="mb-6 rounded-[28px] border border-purple-100 bg-white p-4 shadow-sm sm:p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -3327,14 +3343,19 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <h2 className="text-lg font-black text-slate-900">Compartilhados com a família</h2>
         </div>
         {!isReadOnlyMode && portalPatientId && (
-          <label className="cursor-pointer rounded-xl bg-[#7a32fc] px-4 py-2 text-xs font-black text-white">
-            {portalFileState.uploading ? 'Enviando...' : 'Enviar arquivo'}
-            {!portalFileState.uploading && (
+          <label className={`rounded-xl px-4 py-2 text-xs font-black text-white ${portalPatientFileQuotaFull ? 'cursor-not-allowed bg-slate-400' : 'cursor-pointer bg-[#7a32fc]'}`}>
+            {portalFileState.uploading ? 'Enviando...' : portalPatientFileQuotaFull ? 'Espaço esgotado' : 'Enviar arquivo'}
+            {!portalFileState.uploading && !portalPatientFileQuotaFull && (
               <input type="file" accept="image/*,application/pdf" className="hidden" onChange={uploadPortalPatientFile} />
             )}
           </label>
         )}
       </div>
+      {portalPatientFilesLoaded && (
+        <p className="mb-3 text-xs font-semibold text-slate-500">
+          Armazenamento: {(portalPatientFileQuota.usedBytes / (1024 * 1024)).toFixed(1)} MB de {portalPatientFileQuota.limitBytes === 1024 * 1024 * 1024 ? '1 GB' : `${Math.round(portalPatientFileQuota.limitBytes / (1024 * 1024))} MB`} usados · 100 MB gratuitos incluídos (máximo de 1 GB)
+        </p>
+      )}
       {portalFileState.error && <p className="mb-3 rounded-xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{portalFileState.error}</p>}
       {portalFileState.message && <p className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{portalFileState.message}</p>}
       {!portalPatientFilesLoaded ? (
