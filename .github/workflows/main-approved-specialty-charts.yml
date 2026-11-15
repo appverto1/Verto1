@@ -1,0 +1,35 @@
+name: Main approved specialty charts regression
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server.ts'
+      - 'src/components/ClinicalOutcomesDashboard.tsx'
+      - 'src/utils/clinicalGraphScope.ts'
+      - 'tests/clinicalGraphRoleScopeP0.regression.test.ts'
+      - '.github/workflows/main-approved-specialty-charts.yml'
+permissions:
+  contents: read
+concurrency:
+  group: main-specialty-charts-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  specialty-chart-gate:
+    name: authorized-specialty-chart-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Roles, clinical specialty, PTS isolation and middleware
+        run: node --import tsx tests/clinicalGraphRoleScopeP0.regression.test.ts
+      - name: TypeScript baseline ratchet
+        run: node tests/typecheckRatchet.regression.test.mjs
+      - name: Runtime imports
+        run: npm run check:docker-runtime-imports
+      - name: Production UI build
+        run: npm run build
