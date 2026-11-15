@@ -4,7 +4,7 @@ import { PatientInternalChatPreview } from './PatientInternalChatPreview';
 import { SecureImage } from './SecureMedia';
 import { patientMatchesNameFilter, sortPatientsAlphabetically } from '../utils/patientList';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
-import { getPatientWhatsAppUrl } from '../utils/patientWhatsapp';
+import { PatientWhatsAppLink } from "./PatientWhatsAppLink";
 
 const getPatientPhotoSource = (patient: any) =>
   String(
@@ -138,17 +138,13 @@ export const PatientRegistry = ({ patients, clinicalRecords, onBack, onSelectPat
                   </div> 
                   <div className="mt-4 pt-3 border-t border-gray-50 flex justify-between items-center">
                     <div className="flex flex-wrap items-center gap-2">
-                      <a 
-                        href={getPatientWhatsAppUrl(p.phone) ?? undefined}
-                        aria-disabled={!getPatientWhatsAppUrl(p.phone)}
-                        title={getPatientWhatsAppUrl(p.phone) ? "Abrir WhatsApp" : "Cadastre um telefone válido com DDD"}
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        className="p-2 bg-green-50 text-green-600 rounded-xl hover:bg-green-100 transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-tight aria-disabled:opacity-40 aria-disabled:cursor-not-allowed"
+                      <PatientWhatsAppLink
+                        phone={p.phone}
+                        className="p-2 bg-green-50 text-green-600 rounded-xl hover:bg-green-100 transition-all flex items-center gap-2 text-[10px] font-bold uppercase tracking-tight"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <MessageCircle size={16} /> WhatsApp
-                      </a>
+                      </PatientWhatsAppLink>
                       <PatientInternalChatPreview patientName={p.name} compact />
                       {userRole === 'receptionist' && (
                         <button 
