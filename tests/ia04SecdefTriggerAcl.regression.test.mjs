@@ -5,7 +5,7 @@ import test from 'node:test';
 import pg from 'pg';
 
 const migration = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20261115042000_ia04_secdef_trigger_execute_lockdown.sql'),
+  join(process.cwd(), 'supabase/migrations/20261115043156_ia04_secdef_trigger_execute_lockdown.sql'),
   'utf8',
 );
 
