@@ -8,7 +8,7 @@ const dataService = read('src/services/dataService.ts');
 const session = read('src/components/SessionMode.tsx');
 const catalogManager = read('src/components/AbaBehaviorCatalogManager.tsx');
 const pinned = read('src/components/AbaPinnedBehaviorStrip.tsx');
-const migration = read('supabase/migrations/20261115030000_aba_behavior_catalog_active_name_uniqueness.sql');
+const migration = read('supabase/migrations/20261115030451_aba_behavior_catalog_active_name_uniqueness.sql');
 
 for (const action of ['get', 'post', 'patch', 'delete']) {
   assert.match(routes, new RegExp('app\\.' + action + '\\(\\x27/api/aba/patients/:patientId/behavior-catalog'), action + ' behavior API missing');
