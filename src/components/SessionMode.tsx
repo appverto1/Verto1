@@ -34,6 +34,9 @@ import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../serv
 import { AUTOMATIC_SESSION_CLOSURE_KEYS, partitionSessionQueueForClosure, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
 import { AbaActiveDurationsPanel, AbaQuickAbcPanel } from './AbaSessionBehaviorPanels';
+import { AbaBehaviorCatalogManager, type AbaBehaviorDraft } from './AbaBehaviorCatalogManager';
+import { AbaPinnedBehaviorStrip } from './AbaPinnedBehaviorStrip';
+import { ABA_CATALOG_PRESETS, abaCatalogNameKey, type AbaCatalogBehavior } from '../utils/abaBehaviorCatalog';
 import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
   normalizeAbaPromptTypeConfig,
@@ -347,14 +350,24 @@ const behaviorMeasurementOptions = [
   { key: 'abc', label: 'ABC' }
 ];
 
-const behaviorPresets = [
-  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
-  { id: 'aggression', name: 'Agressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
-  { id: 'self_injury', name: 'Autoagressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
-  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
-  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
-];
+// Defaults are examples; clinical definition and method can be changed per patient.
+const behaviorPresetTones: Record<string, string> = {
+  crying: 'bg-sky-50 text-sky-700 border-sky-100',
+  screaming: 'bg-orange-50 text-orange-700 border-orange-100',
+  escape: 'bg-amber-50 text-amber-700 border-amber-100',
+  aggression: 'bg-red-50 text-red-700 border-red-100',
+  self_injury: 'bg-rose-50 text-rose-700 border-rose-100',
+  refusal: 'bg-violet-50 text-violet-700 border-violet-100',
+  stereotypy: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+};
+const behaviorPresets = ABA_CATALOG_PRESETS.map((preset) => ({
+  id: preset.key, name: preset.name, defaultMeasurement: preset.defaultMeasurement,
+  allowedMeasurements: Array.from(new Set([preset.defaultMeasurement, 'partial_interval'])),
+  abcRequirement: 'OPTIONAL' as AbcRequirement,
+  tone: behaviorPresetTones[preset.key] || 'bg-slate-50 text-slate-700 border-slate-100',
+  intervalSeconds: preset.intervalSeconds,
+  defaultSeverity: preset.defaultSeverity,
+}));
 
 const abaV3PlanTargetId = (goal: any) => String(
   goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || ''
@@ -1234,6 +1247,10 @@ export const SessionMode = ({
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
   const [canonicalBehaviorPresets, setCanonicalBehaviorPresets] = useState<any[]>([]);
+  const [behaviorCatalogItems, setBehaviorCatalogItems] = useState<AbaCatalogBehavior[] | null>(null);
+  const [behaviorCatalogLoading, setBehaviorCatalogLoading] = useState(false);
+  const [behaviorCatalogError, setBehaviorCatalogError] = useState('');
+  const [behaviorCatalogManagerOpen, setBehaviorCatalogManagerOpen] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [selectedSeverity, setSelectedSeverity] = useState(2);
   const [rateWindow, setRateWindow, rateWindowRef] = useLiveSessionState<any>(null);
@@ -1314,6 +1331,7 @@ export const SessionMode = ({
   const [persistedQuickBehaviorShortcuts, setPersistedQuickBehaviorShortcuts] = useState<any[] | null>(null);
   const [sessionQuickPreferencesLoading, setSessionQuickPreferencesLoading] = useState(false);
   const [sessionQuickPreferencesSaving, setSessionQuickPreferencesSaving] = useState(false);
+  const [severityPreferenceSavingId, setSeverityPreferenceSavingId] = useState('');
   const [newDockLocationName, setNewDockLocationName] = useState('');
   const [editingDockLocationName, setEditingDockLocationName] = useState('');
   const [editingDockLocationValue, setEditingDockLocationValue] = useState('');
@@ -1521,8 +1539,79 @@ export const SessionMode = ({
         if (legacyIndex >= 0) merged[legacyIndex] = canonical as any;
         else merged.push(canonical as any);
       });
+    if (behaviorCatalogItems !== null) {
+      for (const item of behaviorCatalogItems) {
+        const existing = merged.findIndex((entry: any) => (
+          abaCatalogNameKey(entry.name) === abaCatalogNameKey(item.name) ||
+          String(entry.catalogId || '') === item.id ||
+          (item.presetKey && entry.id === item.presetKey)
+        ));
+        if (item.status === 'archived') {
+          if (existing >= 0) merged.splice(existing, 1);
+          continue;
+        }
+        const previous = existing >= 0 ? merged[existing] : null;
+        // Keep the established key for standard presets and canonical V3 identity
+        // for a session plan. The CRUD ID remains separate from event identity.
+        const sessionId = previous?.canonicalV3Definition
+          ? previous.id : (item.presetKey || item.id);
+        const updated = {
+          ...previous,
+          id: sessionId,
+          catalogId: item.id,
+          name: item.name,
+          defaultMeasurement: item.defaultMeasurement,
+          allowedMeasurements: item.allowedMeasurements,
+          abcRequirement: previous?.abcRequirement || ('OPTIONAL' as AbcRequirement),
+          tone: previous?.tone || 'bg-slate-50 text-slate-700 border-slate-100',
+          intervalSeconds: item.intervalSeconds,
+          defaultSeverity: item.defaultSeverity,
+          presetKey: item.presetKey,
+        };
+        if (existing >= 0) merged[existing] = updated as any;
+        else merged.push(updated as any);
+      }
+    }
     return merged;
-  }, [abaV3UiEnabled, abaV3BehaviorIdSet, canonicalBehaviorPresets]);
+  }, [abaV3UiEnabled, abaV3BehaviorIdSet, canonicalBehaviorPresets, behaviorCatalogItems]);
+
+  const reloadBehaviorCatalog = async (requestedPatientId = String(patientId || '')) => {
+    if (!requestedPatientId) return false;
+    const result = await dataService.getAbaPatientBehaviorCatalog(requestedPatientId);
+    if (String(patientId || '') !== requestedPatientId) return false;
+    if (result?.success !== true || !Array.isArray(result.data)) {
+      setBehaviorCatalogError(result?.error || 'Não foi possível carregar os comportamentos.');
+      return false;
+    }
+    setBehaviorCatalogItems(result.data);
+    setBehaviorCatalogError('');
+    return true;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const requestedPatientId = String(patientId || '');
+    setBehaviorCatalogItems(null);
+    setBehaviorCatalogError('');
+    setBehaviorCatalogManagerOpen(false);
+    if (!requestedPatientId) return () => { cancelled = true; };
+    setBehaviorCatalogLoading(true);
+    dataService.getAbaPatientBehaviorCatalog(requestedPatientId)
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success && Array.isArray(result.data)) {
+          setBehaviorCatalogItems(result.data);
+          setBehaviorCatalogError('');
+        } else {
+          setBehaviorCatalogError(result?.error || 'Falha ao carregar o catálogo de comportamentos.');
+        }
+      }).catch(() => {
+        if (!cancelled) setBehaviorCatalogError('Falha ao carregar o catálogo de comportamentos.');
+      }).finally(() => {
+        if (!cancelled) setBehaviorCatalogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [patientId]);
 
   useEffect(() => {
     if (!abaV3UiEnabled || !patientId || abaV3BehaviorIdSet.size === 0) {
