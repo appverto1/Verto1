@@ -71,7 +71,7 @@ export const mergeAbaBehaviorCatalog = (patientId: string, stored: any[], includ
       allowedMeasurements: Array.from(new Set<AbaCatalogMethod>([method, 'partial_interval'])),
       intervalSeconds: Math.min(3600, Math.max(5, Number(row.interval_seconds || preset?.intervalSeconds || 30))),
       defaultSeverity: Math.min(5, Math.max(1, Number(row.default_severity || preset?.defaultSeverity || 2))),
-      status: row.status === 'archived' || row.is_active === false ? 'archived' : 'active',
+      status: row.status !== 'active' || row.is_active === false ? 'archived' : 'active',
       isPreset: Boolean(preset),
       presetKey: preset?.key || null,
     };
