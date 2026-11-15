@@ -10682,7 +10682,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
           : anamnesisInitialData}
         onSave={handleUpdateAnamnesis}
         mode="edit"
-        template={anamnesisTemplate}
+        template={hasCompletedAnamnesis && hasSubmittedAnamnesisFlow && anamnesisFlow?.template
+          ? anamnesisFlow.template
+          : anamnesisTemplate}
         readOnly={showAnamnesisReadOnly}
         onEdit={showAnamnesisReadOnly && canEditAnamnesis ? () => setShowAnamnesisReadOnly(false) : undefined}
         onReview={showAnamnesisReadOnly && canEditAnamnesis && String(anamnesisFlow?.response?.status || '').toUpperCase() === 'SUBMITTED'
