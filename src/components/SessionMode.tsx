@@ -1517,9 +1517,8 @@ export const SessionMode = ({
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
   const sessionBehaviorPresets = useMemo(() => {
-    if (!abaV3UiEnabled || abaV3BehaviorIdSet.size === 0 || canonicalBehaviorPresets.length === 0) return behaviorPresets;
-    const merged = [...behaviorPresets];
-    canonicalBehaviorPresets
+    const merged: any[] = [...behaviorPresets];
+    if (abaV3UiEnabled && abaV3BehaviorIdSet.size > 0 && canonicalBehaviorPresets.length > 0) canonicalBehaviorPresets
       .filter((behavior) => abaV3BehaviorIdSet.has(String(behavior.id || '').trim()))
       .forEach((behavior, index) => {
         const behaviorName = String(behavior.name || '').trim();
