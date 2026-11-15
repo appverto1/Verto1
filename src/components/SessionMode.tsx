@@ -5980,7 +5980,7 @@ export const SessionMode = ({
       return;
     }
     if (isIntervalMeasurementType(method)) {
-      void startIntervalRun(behavior, method, undefined, severityOverride);
+      void startIntervalRun(behavior, method, undefined, severityOverride, Number(behavior.intervalSeconds) || intervalSeconds);
     }
   };
 
