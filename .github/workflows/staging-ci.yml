@@ -52,6 +52,11 @@ jobs:
       - name: Install dependencies deterministically
         run: npm ci
 
+      - name: Patient Drive free tier regression tests
+        run: |
+          node tests/patientFileStorageQuota.test.mjs
+          node tests/patientFileFreeTier.test.mjs
+
       - name: Password recovery and owner MFA regression tests
         run: |
           npm run test:auth-login-recovery-fallback
