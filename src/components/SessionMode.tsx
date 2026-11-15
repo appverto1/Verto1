@@ -4679,7 +4679,7 @@ export const SessionMode = ({
     }, 'none');
   };
 
-  const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
+  const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1, severityOverride = selectedSeverity) => {
     if (!ensureSessionCanRecord()) return;
     const behavior = sessionBehaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
     if (!behaviorAllowsMeasurement(behavior, 'frequency')) {
@@ -4703,7 +4703,7 @@ export const SessionMode = ({
       behaviorName,
       countDelta,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     }));
     void saveBehaviorEvent(payload, {
       id: String(payload.id),
@@ -4713,14 +4713,14 @@ export const SessionMode = ({
         measurementType: 'frequency',
         countDelta,
         location: selectedLocation,
-        severity: selectedSeverity
+        severity: severityOverride
       }),
       timestamp: payload.timestamp,
       measurementType: 'frequency',
       countDelta,
       contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     });
   };
 
@@ -4732,7 +4732,7 @@ export const SessionMode = ({
     void handleTrialClick(goal, 0.5, 'prompted', promptKey);
   };
 
-  const startDuration = async (behaviorName = selectedBehavior.name) => {
+  const startDuration = async (behaviorName = selectedBehavior.name, severityOverride = selectedSeverity) => {
     if (!ensureSessionCanRecord()) return;
     if (openDurations.some((event) => event.behaviorName === behaviorName)) {
       showClinicalToast({
@@ -4763,7 +4763,7 @@ export const SessionMode = ({
       v3EpisodeEventId: behaviorDecision?.measurementModelVersion === 'V3' ? id : null,
       startedAt,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     };
     setOpenDurations((prev) => [openEvent, ...prev]);
     triggerMicroFeedback(`behavior:${behavior.id}`, 'pulse');
@@ -4771,7 +4771,7 @@ export const SessionMode = ({
       action: 'duration_start',
       behaviorName,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     }));
     const payload = buildBehaviorPayload(behaviorName, 'duration', {
       id,
@@ -4785,7 +4785,7 @@ export const SessionMode = ({
       durationSeconds: null,
       status: 'IN_PROGRESS',
       location: selectedLocation,
-      severity: selectedSeverity,
+      severity: severityOverride,
       timestamp: startedAt,
       raw_payload: { durationLifecycleStatus: 'open', durationOnly: true }
     });
@@ -4797,7 +4797,7 @@ export const SessionMode = ({
         measurementType: 'duration',
         durationSeconds: null,
         location: selectedLocation,
-        severity: selectedSeverity,
+        severity: severityOverride,
         status: 'IN_PROGRESS'
       }),
       timestamp: startedAt,
@@ -4807,7 +4807,7 @@ export const SessionMode = ({
       durationSeconds: null,
       contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     });
   };
 
@@ -5123,7 +5123,7 @@ export const SessionMode = ({
     });
   };
 
-  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number) => {
+  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number, severityOverride = selectedSeverity) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
       setSessionWarning(intervalRun.behaviorId === behaviorOverride.id
@@ -5165,7 +5165,7 @@ export const SessionMode = ({
         measurementModelVersion: behaviorDecision?.measurementModelVersion === 'V3' ? 'V3' : 'LEGACY_V2',
         v3IntervalRunId,
         location: selectedLocation,
-        severity: selectedSeverity,
+        severity: severityOverride,
         startedAt,
         intervalStartedAt: startedAt,
         intervalEndsAt,
@@ -5929,7 +5929,7 @@ export const SessionMode = ({
     openDurations.find((event) => event.behaviorName === behaviorName)
   );
 
-  const executeBehaviorShortcut = (shortcut: any) => {
+  const executeBehaviorShortcut = (shortcut: any, severityOverride = selectedSeverity) => {
     const behavior = resolveShortcutBehavior(shortcut);
     const method = resolveBehaviorMeasurementForAction(behavior, shortcut?.method || behavior.defaultMeasurement || 'frequency');
     if (shortcut?.behaviorId === 'abc' || method === 'abc') {
@@ -5937,17 +5937,17 @@ export const SessionMode = ({
       return;
     }
     if (method === 'frequency' || method === 'rate') {
-      registerFrequency(behavior.name, 1);
+      registerFrequency(behavior.name, 1, severityOverride);
       return;
     }
     if (method === 'duration') {
       const openEvent = findOpenDurationForBehavior(behavior.name);
       if (openEvent) endDuration(openEvent.id);
-      else void startDuration(behavior.name);
+      else void startDuration(behavior.name, severityOverride);
       return;
     }
     if (isIntervalMeasurementType(method)) {
-      void startIntervalRun(behavior, method);
+      void startIntervalRun(behavior, method, undefined, severityOverride);
     }
   };
 
