@@ -10,6 +10,7 @@ on:
       - 'tests/salesPaidDirectorConcurrentAuthCreate.regression.test.ts'
       - 'tests/salesSubscriptionActiveBeforeLeadConversion.regression.test.ts'
       - 'tests/salesPasswordActivationPaidGate.regression.test.ts'
+      - 'tests/salesGooglePaidActivationPreprofileGate.regression.test.mjs'
       - '.github/workflows/main-paid-director-security.yml'
 permissions:
   contents: read
@@ -35,6 +36,7 @@ jobs:
           node --import tsx --test tests/salesPaidDirectorConcurrentAuthCreate.regression.test.ts
           node --import tsx --test tests/salesSubscriptionActiveBeforeLeadConversion.regression.test.ts
           node --import tsx --test tests/salesPasswordActivationPaidGate.regression.test.ts
+          node --test tests/salesGooglePaidActivationPreprofileGate.regression.test.mjs
           node --test tests/salesPaidDirectorBackendExtraction.regression.test.mjs
           node tests/salesDirectorContractActivation20260831.regression.test.mjs
       - name: Reject new TypeScript diagnostics versus production main
