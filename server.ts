@@ -1,3 +1,4 @@
+import { registerAbaBehaviorCatalogRoutes } from './services/abaBehaviorCatalogRoutes';
 import { createAbaNextSessionPlanItemPatchHandler } from './services/abaNextSessionPlanItemMutationHandler';
 import { createAbaRecommendationsGenerateHandler, createAbaRecommendationAcceptHandler, createAbaRecommendationRejectHandler, createAbaRecommendationLinkTargetHandler, createAbaRecommendationEditHandler, createAbaRecommendationApplyToNextSessionHandler } from './services/abaRecommendationMutationHandlers';
 import { createAbaMaintenanceConfirmLinkHandler, createAbaMaintenanceAssignAppointmentHandler, createAbaMaintenanceRelinkTargetHandler, createAbaMaintenanceSkipLinkHandler } from './services/abaMaintenanceScheduleLinkHandlers';
@@ -71551,6 +71552,17 @@ async function startServer() {
     }
   );
 
+
+  // Per-patient behavior catalog is modularized and never writes on GET.
+  registerAbaBehaviorCatalogRoutes(app, {
+    supabase,
+    checkAuth,
+    checkPatientAccess,
+    requireClinicCapability,
+    currentClinicId,
+    isUuid,
+    requireAbaCollectionFeature,
+  });
 
   app.get(
     '/api/aba/v3/patients/:patientId/behavior-catalog',
