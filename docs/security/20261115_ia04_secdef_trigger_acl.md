@@ -15,7 +15,7 @@ As dez funções diretas **não** são incluídas nesta mudança: cinco são uti
 
 ## Mudança limitada e verificável
 
-Migração: `20261115042000_ia04_secdef_trigger_execute_lockdown.sql`.
+Migração: `20261115043156_ia04_secdef_trigger_execute_lockdown.sql`.
 
 - Lista explícita de 34 nomes, sem seleção dinâmica de funções desconhecidas.
 - Preflight valida baseline de 34 funções; unicidade, `SECURITY DEFINER`, retorno `trigger`, proprietário `postgres`, vínculo no `pg_trigger` e ausência de referências nominais em `pg_policies`.
