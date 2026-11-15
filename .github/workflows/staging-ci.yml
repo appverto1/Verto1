@@ -66,6 +66,11 @@ jobs:
           node tests/abaBehaviorCatalogCrudAndGesture.regression.test.mjs
           node tests/abaSessionQuickCollectionPersistence.regression.test.mjs
 
+      - name: ABA behavior catalog CRUD and pinned gesture regressions
+        run: |
+          node --import tsx tests/abaBehaviorCatalog.test.ts
+          node tests/abaBehaviorCatalogCrudAndGesture.regression.test.mjs
+
       - name: Patient card pending-only regressions
         run: |
           node --import tsx tests/patientCardPendingState.test.ts
