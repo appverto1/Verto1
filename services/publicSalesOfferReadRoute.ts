@@ -447,7 +447,7 @@ export const registerPublicSalesOfferReadRoute = (
               status: offer.status,
               acceptedAt: offer.accepted_at || null,
               commercialPhases: sanitizePublicCommercialPhases(
-                modularSnapshot.commercialPhases,
+                customerFacingCommercialPhases,
               ),
               capacityBlockPhases: sanitizePublicCapacityBlockPhases(
                 modularSnapshot.commercialPricing?.capacityBlockPhases,
