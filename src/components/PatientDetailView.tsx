@@ -11112,7 +11112,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                 canManage={canManageCaseTeam && (isUnitCaseTeamManager || caseTeamManagementAllowed)}
                 dark={isPanelDark}
                 refreshKey={caseTeamRefreshKey}
-                assignedPrimaryProfessionalId={selectedTherapistId}
+                assignedPrimaryProfessionalId={isSavingPrimaryProfessional ? resolvePatientProfessionalId(patient) : selectedTherapistId}
                 onLinksChanged={handleCaseTeamLinksChanged}
                 onManagementAuthorityChanged={setCaseTeamManagementAllowed}
               />
