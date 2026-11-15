@@ -505,7 +505,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const [showNoteFilters, setShowNoteFilters] = useState(false);
   const [showAnamnesis, setShowAnamnesis] = useState(false);
   const [showAnamnesisReadOnly, setShowAnamnesisReadOnly] = useState(false); 
-  const [anamnesisFlow, setAnamnesisFlow] = useState<any>(null);
+  const [anamnesisFlowSnapshot, setAnamnesisFlowSnapshot] = useState<{ patientId: string; flow: any } | null>(null);
+  const activeAnamnesisPatientIdRef = React.useRef(String(patient?.id || ''));
+  activeAnamnesisPatientIdRef.current = String(patient?.id || '');
+  const anamnesisFlow = anamnesisFlowSnapshot?.patientId === String(patient?.id || '')
+    ? anamnesisFlowSnapshot.flow
+    : null;
   const [anamnesisFlowMessage, setAnamnesisFlowMessage] = useState("");
   const [isSendingAnamnesisRequest, setIsSendingAnamnesisRequest] = useState(false);
   const [showAnamnesisSendModal, setShowAnamnesisSendModal] = useState(false);
@@ -890,10 +895,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const loadAnamnesisFlow = async () => {
     if (!patient?.id || !canViewAnamnesis) return null;
     try {
-      const result = await dataService.getPatientAnamnesisFlow(String(patient.id));
+      const requestPatientId = String(patient.id);
+      const result = await dataService.getPatientAnamnesisFlow(requestPatientId);
+      if (activeAnamnesisPatientIdRef.current !== requestPatientId) return null;
       if (result?.success) {
         const nextFlow = result.data || null;
-        setAnamnesisFlow(nextFlow);
+        setAnamnesisFlowSnapshot({ patientId: requestPatientId, flow: nextFlow });
         return nextFlow;
       }
     } catch (error) {
@@ -903,6 +910,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   };
 
   useEffect(() => {
+    setAnamnesisFlowMessage('');
     void loadAnamnesisFlow();
   }, [patient?.id, canViewAnamnesis]);
 
