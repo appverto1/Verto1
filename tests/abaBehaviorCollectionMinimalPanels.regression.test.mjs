@@ -21,8 +21,18 @@ assert.match(durationBinding, /<AbaActiveDurationsPanel/);
 assert.match(durationBinding, /events=\{openDurations\}/);
 assert.match(durationBinding, /onStop=\{endDuration\}/);
 assert.match(durationBinding, /onOpenAbc=\{openAbcModalForBehaviorName\}/);
-assert.match(session, /\{!intervalRun && openDurationsPanel\}/, 'normal collection uses compact duration view');
-assert.match(session, /\{intervalRun && openDurationsPanel\}/, 'interval collection uses compact duration view');
+const sessionContent = session.slice(session.indexOf('const sessionModeContent ='));
+const mainHeaderAt = sessionContent.indexOf('data-aba-session-compact-header');
+const durationHeaderAt = sessionContent.indexOf('data-aba-active-duration-pinned-header');
+const scrollContainerAt = sessionContent.indexOf('ref={sessionScrollRef}');
+assert.ok(mainHeaderAt >= 0 && mainHeaderAt < durationHeaderAt && durationHeaderAt < scrollContainerAt,
+  'active duration controls must stay below the session header and outside the scrolling collection area');
+const pinnedDurationArea = sessionContent.slice(mainHeaderAt, scrollContainerAt);
+assert.match(pinnedDurationArea, /shrink-0/, 'duration header must remain visible while the collection area scrolls');
+assert.match(pinnedDurationArea, /max-h-\\[32dvh\\].*overflow-y-auto/, 'multiple durations must not cover the entire viewport');
+assert.match(pinnedDurationArea, /\\{openDurationsPanel\\}/, 'the shared Stop and ABC controls remain mounted during collection');
+assert.doesNotMatch(sessionContent.slice(scrollContainerAt), /\\{(?:!intervalRun && |intervalRun && )?openDurationsPanel\\}/,
+  'duration controls must not be duplicated inside a scrolling pane');
 
 const abcStart = panels.indexOf('export const AbaQuickAbcPanel =');
 assert.ok(abcStart >= 0, 'ABC editor should live in its own component');
