@@ -123,6 +123,7 @@ type PatientHistoryPaginationState = {
 
 const PATIENT_HISTORY_PAGE_SIZE = 40;
 const PATIENT_FILE_MAX_SIZE_BYTES = 10 * 1024 * 1024;
+const PATIENT_FILE_FREE_TIER_BYTES = 100 * 1024 * 1024;
 const PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024;
 
 const REPORT_PERIOD_MONTHS: Record<string, number> = {
@@ -169,8 +170,11 @@ const formatPatientFileStorageBytes = (value: number) => {
 const resolvePatientFileStorageUsage = (value: any) => {
   const usedBytes = Math.max(0, Number(value?.usedBytes ?? value?.used_bytes ?? 0) || 0);
   const limitBytes = Math.max(
-    PATIENT_FILE_STORAGE_LIMIT_BYTES,
-    Number(value?.limitBytes ?? value?.limit_bytes ?? PATIENT_FILE_STORAGE_LIMIT_BYTES) || PATIENT_FILE_STORAGE_LIMIT_BYTES
+    PATIENT_FILE_FREE_TIER_BYTES,
+    Math.min(
+      PATIENT_FILE_STORAGE_LIMIT_BYTES,
+      Number(value?.limitBytes ?? value?.limit_bytes ?? PATIENT_FILE_FREE_TIER_BYTES) || PATIENT_FILE_FREE_TIER_BYTES
+    )
   );
   return {
     usedBytes,
@@ -6734,7 +6738,7 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
     const imageWillBeCompressed =
       String(file.type || '').toLowerCase().startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(String(file.name || ''));
     if (!imageWillBeCompressed && patientFileStorageUsage.usedBytes + fileSizeBytes > patientFileStorageUsage.limitBytes) {
-      alert('Este arquivo ultrapassaria o limite total de 1 GB do Drive deste paciente. Remova arquivos antes de continuar.');
+      alert(`Este arquivo ultrapassaria o espaço disponível (${formatPatientFileStorageBytes(patientFileStorageUsage.limitBytes)}) do Drive deste paciente. Remova arquivos antes de continuar.`);
       return;
     }
     setIsUploadingFile(true);
@@ -13296,8 +13300,9 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
                       </p>
                       <p className={`text-xs mt-1 uppercase font-medium ${isPanelDark ? 'text-slate-400' : 'text-gray-400'}`}>PDF, JPG, PNG, DOCX (Máx. 10MB)</p>
                       <p className={`text-xs mt-2 ${patientFileStorageIsFull ? (isPanelDark ? 'text-red-300' : 'text-red-600') : (isPanelDark ? 'text-slate-400' : 'text-gray-500')}`}>
-                        {formatPatientFileStorageBytes(patientFileStorageUsage.usedBytes)} de 1 GB usados
+                        {formatPatientFileStorageBytes(patientFileStorageUsage.usedBytes)} de {formatPatientFileStorageBytes(patientFileStorageUsage.limitBytes)} usados
                         {patientFileStorageIsFull ? ' · remova arquivos para liberar espaço' : ''}
+                        <span className="block mt-1">100 MB gratuitos incluídos · capacidade máxima de 1 GB</span>
                       </p>
                     </React.Fragment>
                   )}
