@@ -1,9 +1,11 @@
 import { readPatientPlanServerSource } from './helpers/patientPlanReadSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { roleHasDefaultCapability } from '../src/constants/authorizationModel';
 import {
   clinicalGraphLegacySnapshotVisibleToActor,
   filterClinicalGraphPlanScopesForActor,
+  resolveClinicalGraphScopeId,
 } from '../src/utils/clinicalGraphScope';
 
 const plans = [
@@ -14,9 +16,32 @@ const plans = [
 
 assert.deepEqual(
   filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'therapist', actorSpecialty: 'Fonoaudiologia' }).map((plan) => plan.id),
-  ['pts', 'fono'],
-  'ordinary therapist graph scope must keep shared PTS plus own specialty only',
+  ['fono'],
+  'ordinary therapist graph scope must exclude PTS and other specialties',
 );
+assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'therapist', actorSpecialty: 'Terapia Ocupacional' }).map((plan) => plan.id),
+  ['to'],
+  'a specialty professional only sees their own specialty graph',
+);
+assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'therapist', actorSpecialty: '' }),
+  [],
+  'missing verified specialty cannot authorize any graph',
+);
+assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'therapist', actorSpecialty: 'Fonoaudiologia', hasSupervisionAccess: true }).map((plan) => plan.id),
+  ['pts', 'fono', 'to'],
+  'case-authorized supervisor keeps PTS access even with the therapist base role',
+);
+assert.equal(resolveClinicalGraphScopeId('pts', false, ['fono']), 'fono');
+assert.equal(resolveClinicalGraphScopeId('pts', true, ['fono']), 'pts');
+assert.equal(resolveClinicalGraphScopeId('to', true, ['fono', 'to']), 'to');
+assert.equal(resolveClinicalGraphScopeId('stale-plan', false, ['fono', 'to']), 'fono');
+assert.equal(resolveClinicalGraphScopeId('pts', false, []), '');
+assert.equal(roleHasDefaultCapability('therapist', 'aba.analytics.view'), true);
+assert.equal(roleHasDefaultCapability('receptionist', 'aba.analytics.view'), false);
+
 assert.equal(
   clinicalGraphLegacySnapshotVisibleToActor('Fonoaudiólogo', { actorRole: 'therapist', actorSpecialty: 'Fonoaudiologia' }),
   true,
@@ -36,11 +61,25 @@ assert.deepEqual(
   ['pts', 'fono', 'to'],
 );
 assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'director' }).map((plan) => plan.id),
+  ['pts', 'fono', 'to'],
+);
+assert.deepEqual(
+  filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'patient' }),
+  [],
+);
+assert.deepEqual(
   filterClinicalGraphPlanScopesForActor(plans, { actorRole: 'receptionist' }),
   [],
 );
 
+const dashboard = fs.readFileSync('src/components/ClinicalOutcomesDashboard.tsx', 'utf8');
+assert.match(dashboard, /const scopeId = resolveClinicalGraphScopeId\(\s*requestedScopeId,\s*Boolean\(activePts\),\s*specialtyPlans\.map/);
+assert.match(dashboard, /\{activePts && <option value="pts">Visão do PTS<\/option>\}/);
+
 const server = readPatientPlanServerSource();
+const route = "app.get('/api/patients/:patientId/clinical-outcomes-dashboard', noStoreDynamicResponse, checkAuth, requireAnyClinicCapability('reports.clinical.indicators', 'aba.analytics.view'), checkPatientAccess";
+assert.ok(server.includes(route), 'specialist graph read must use a scoped capability alternative and preserve checkPatientAccess');
 assert.match(server, /req\.patientActorSpecialty\s*=\s*normalizeClinicalSpecialty\(evidence\.activeProfessionalProfile\?\.specialty\)/);
 assert.match(server, /const graphVisiblePlanScopes = filterClinicalGraphPlanScopesForActor\(rebacVisiblePlans, graphActorScope\)/);
 assert.match(server, /filterTherapeuticPlanProgramsForActor\(programResult\.data \|\| \[\], graphVisiblePlanScopes, accessContext\)/);
