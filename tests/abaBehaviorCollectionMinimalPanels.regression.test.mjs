@@ -29,9 +29,9 @@ assert.ok(mainHeaderAt >= 0 && mainHeaderAt < durationHeaderAt && durationHeader
   'active duration controls must stay below the session header and outside the scrolling collection area');
 const pinnedDurationArea = sessionContent.slice(mainHeaderAt, scrollContainerAt);
 assert.match(pinnedDurationArea, /shrink-0/, 'duration header must remain visible while the collection area scrolls');
-assert.match(pinnedDurationArea, /max-h-\\[32dvh\\].*overflow-y-auto/, 'multiple durations must not cover the entire viewport');
-assert.match(pinnedDurationArea, /\\{openDurationsPanel\\}/, 'the shared Stop and ABC controls remain mounted during collection');
-assert.doesNotMatch(sessionContent.slice(scrollContainerAt), /\\{(?:!intervalRun && |intervalRun && )?openDurationsPanel\\}/,
+assert.match(pinnedDurationArea, /max-h-\[32dvh\].*overflow-y-auto/, 'multiple durations must not cover the entire viewport');
+assert.match(pinnedDurationArea, /\{openDurationsPanel\}/, 'the shared Stop and ABC controls remain mounted during collection');
+assert.doesNotMatch(sessionContent.slice(scrollContainerAt), /\{(?:!intervalRun && |intervalRun && )?openDurationsPanel\}/,
   'duration controls must not be duplicated inside a scrolling pane');
 
 const abcStart = panels.indexOf('export const AbaQuickAbcPanel =');
