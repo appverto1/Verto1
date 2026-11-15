@@ -1,3 +1,4 @@
+import { registerAbaBehaviorCatalogRoutes } from './services/abaBehaviorCatalogRoutes';
 import { createAbaNextSessionPlanItemPatchHandler } from './services/abaNextSessionPlanItemMutationHandler';
 import { createAbaRecommendationsGenerateHandler, createAbaRecommendationAcceptHandler, createAbaRecommendationRejectHandler, createAbaRecommendationLinkTargetHandler, createAbaRecommendationEditHandler, createAbaRecommendationApplyToNextSessionHandler } from './services/abaRecommendationMutationHandlers';
 import { createAbaMaintenanceConfirmLinkHandler, createAbaMaintenanceAssignAppointmentHandler, createAbaMaintenanceRelinkTargetHandler, createAbaMaintenanceSkipLinkHandler } from './services/abaMaintenanceScheduleLinkHandlers';
@@ -71552,6 +71553,17 @@ async function startServer() {
   );
 
 
+  // Per-patient behavior catalog is modularized and never writes on GET.
+  registerAbaBehaviorCatalogRoutes(app, {
+    supabase,
+    checkAuth,
+    checkPatientAccess,
+    requireClinicCapability,
+    currentClinicId,
+    isUuid,
+    requireAbaCollectionFeature,
+  });
+
   app.get(
     '/api/aba/v3/patients/:patientId/behavior-catalog',
     requireAbaV3CollectionFeature,
@@ -73674,7 +73686,7 @@ async function startServer() {
         color: allowedColors.has(colorRaw) ? colorRaw : 'slate',
         icon: allowedIcons.has(iconRaw) ? iconRaw : (method === 'duration' ? 'duration' : 'plus')
       });
-      if (rows.length >= 6) break;
+      if (rows.length >= 200) break;
     }
     return rows;
   };
@@ -73726,7 +73738,7 @@ async function startServer() {
 
   app.put('/api/aba/session-quick-collection/preferences', requireAbaV2Feature, checkAuth, requireClinicCapability('aba.behavior.record'), async (req: any, res) => {
     try {
-      if (!enforcePayloadLimit(req, res, 24 * 1024, 'Preferências da coleta rápida ABA')) return;
+      if (!enforcePayloadLimit(req, res, 96 * 1024, 'Preferências da coleta rápida ABA')) return;
       const clinicId = sanitizeString(currentClinicId(req.session.user), 120);
       const actorId = sanitizeString(req.session.user?.id || req.session.user?.user_id, 120);
       if (!isUuid(clinicId) || !isUuid(actorId)) {

@@ -34,6 +34,9 @@ import { getRecordById, getSessionQueuedRecords, syncOfflineData } from '../serv
 import { AUTOMATIC_SESSION_CLOSURE_KEYS, partitionSessionQueueForClosure, therapeuticTimerCompletion, waitForSessionWrites } from '../utils/sessionAutoFinalization';
 import { AbaReinforcerSessionPanel } from './AbaReinforcerSessionPanel';
 import { AbaActiveDurationsPanel, AbaQuickAbcPanel } from './AbaSessionBehaviorPanels';
+import { AbaBehaviorCatalogManager, type AbaBehaviorDraft } from './AbaBehaviorCatalogManager';
+import { AbaPinnedBehaviorStrip } from './AbaPinnedBehaviorStrip';
+import { ABA_CATALOG_PRESETS, abaCatalogNameKey, type AbaCatalogBehavior } from '../utils/abaBehaviorCatalog';
 import { flushReinforcerDeliveries } from '../services/abaReinforcers';
 import {
   normalizeAbaPromptTypeConfig,
@@ -347,14 +350,24 @@ const behaviorMeasurementOptions = [
   { key: 'abc', label: 'ABC' }
 ];
 
-const behaviorPresets = [
-  { id: 'crying', name: 'Choro', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-sky-50 text-sky-700 border-sky-100' },
-  { id: 'escape', name: 'Fuga da atividade', defaultMeasurement: 'duration', allowedMeasurements: ['duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-amber-50 text-amber-700 border-amber-100' },
-  { id: 'aggression', name: 'Agressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-red-50 text-red-700 border-red-100' },
-  { id: 'self_injury', name: 'Autoagressão', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-rose-50 text-rose-700 border-rose-100' },
-  { id: 'refusal', name: 'Recusa', defaultMeasurement: 'frequency', allowedMeasurements: ['frequency'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-violet-50 text-violet-700 border-violet-100' },
-  { id: 'stereotypy', name: 'Estereotipia', defaultMeasurement: 'partial_interval', allowedMeasurements: ['partial_interval', 'whole_interval', 'momentary_time_sampling', 'duration'], abcRequirement: 'OPTIONAL' as AbcRequirement, tone: 'bg-emerald-50 text-emerald-700 border-emerald-100' }
-];
+// Defaults are examples; clinical definition and method can be changed per patient.
+const behaviorPresetTones: Record<string, string> = {
+  crying: 'bg-sky-50 text-sky-700 border-sky-100',
+  screaming: 'bg-orange-50 text-orange-700 border-orange-100',
+  escape: 'bg-amber-50 text-amber-700 border-amber-100',
+  aggression: 'bg-red-50 text-red-700 border-red-100',
+  self_injury: 'bg-rose-50 text-rose-700 border-rose-100',
+  refusal: 'bg-violet-50 text-violet-700 border-violet-100',
+  stereotypy: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+};
+const behaviorPresets = ABA_CATALOG_PRESETS.map((preset) => ({
+  id: preset.key, name: preset.name, defaultMeasurement: preset.defaultMeasurement,
+  allowedMeasurements: Array.from(new Set([preset.defaultMeasurement, 'partial_interval'])),
+  abcRequirement: 'OPTIONAL' as AbcRequirement,
+  tone: behaviorPresetTones[preset.key] || 'bg-slate-50 text-slate-700 border-slate-100',
+  intervalSeconds: preset.intervalSeconds,
+  defaultSeverity: preset.defaultSeverity,
+}));
 
 const abaV3PlanTargetId = (goal: any) => String(
   goal?.target_id || goal?.targetId || goal?.aba_target_id || goal?.abaTargetId || goal?.id || ''
@@ -1234,6 +1247,12 @@ export const SessionMode = ({
   const [selectedBehaviorId, setSelectedBehaviorId] = useState('crying');
   const [behaviorMeasurementType, setBehaviorMeasurementType] = useState(behaviorPresets[0].defaultMeasurement);
   const [canonicalBehaviorPresets, setCanonicalBehaviorPresets] = useState<any[]>([]);
+  const [behaviorCatalogItems, setBehaviorCatalogItems] = useState<AbaCatalogBehavior[] | null>(null);
+  const [behaviorCatalogLoading, setBehaviorCatalogLoading] = useState(false);
+  const [behaviorCatalogError, setBehaviorCatalogError] = useState('');
+  const [behaviorCatalogManagerOpen, setBehaviorCatalogManagerOpen] = useState(false);
+  const activeBehaviorCatalogPatientRef = useRef(String(patientId || ''));
+  activeBehaviorCatalogPatientRef.current = String(patientId || '');
   const [selectedLocation, setSelectedLocation] = useState(locationOptions[0]);
   const [selectedSeverity, setSelectedSeverity] = useState(2);
   const [rateWindow, setRateWindow, rateWindowRef] = useLiveSessionState<any>(null);
@@ -1314,6 +1333,7 @@ export const SessionMode = ({
   const [persistedQuickBehaviorShortcuts, setPersistedQuickBehaviorShortcuts] = useState<any[] | null>(null);
   const [sessionQuickPreferencesLoading, setSessionQuickPreferencesLoading] = useState(false);
   const [sessionQuickPreferencesSaving, setSessionQuickPreferencesSaving] = useState(false);
+  const [severityPreferenceSavingId, setSeverityPreferenceSavingId] = useState('');
   const [newDockLocationName, setNewDockLocationName] = useState('');
   const [editingDockLocationName, setEditingDockLocationName] = useState('');
   const [editingDockLocationValue, setEditingDockLocationValue] = useState('');
@@ -1499,9 +1519,8 @@ export const SessionMode = ({
   const intervalPausedControlsRef = useRef<HTMLDivElement | null>(null);
 
   const sessionBehaviorPresets = useMemo(() => {
-    if (!abaV3UiEnabled || abaV3BehaviorIdSet.size === 0 || canonicalBehaviorPresets.length === 0) return behaviorPresets;
-    const merged = [...behaviorPresets];
-    canonicalBehaviorPresets
+    const merged: any[] = [...behaviorPresets];
+    if (abaV3UiEnabled && abaV3BehaviorIdSet.size > 0 && canonicalBehaviorPresets.length > 0) canonicalBehaviorPresets
       .filter((behavior) => abaV3BehaviorIdSet.has(String(behavior.id || '').trim()))
       .forEach((behavior, index) => {
         const behaviorName = String(behavior.name || '').trim();
@@ -1521,8 +1540,79 @@ export const SessionMode = ({
         if (legacyIndex >= 0) merged[legacyIndex] = canonical as any;
         else merged.push(canonical as any);
       });
+    if (behaviorCatalogItems !== null) {
+      for (const item of behaviorCatalogItems) {
+        const existing = merged.findIndex((entry: any) => (
+          abaCatalogNameKey(entry.name) === abaCatalogNameKey(item.name) ||
+          String(entry.catalogId || '') === item.id ||
+          (item.presetKey && entry.id === item.presetKey)
+        ));
+        if (item.status === 'archived') {
+          if (existing >= 0) merged.splice(existing, 1);
+          continue;
+        }
+        const previous = existing >= 0 ? merged[existing] : null;
+        // Keep the established key for standard presets and canonical V3 identity
+        // for a session plan. The CRUD ID remains separate from event identity.
+        const sessionId = previous?.canonicalV3Definition
+          ? previous.id : (item.presetKey || item.id);
+        const updated = {
+          ...previous,
+          id: sessionId,
+          catalogId: item.id,
+          name: item.name,
+          defaultMeasurement: item.defaultMeasurement,
+          allowedMeasurements: item.allowedMeasurements,
+          abcRequirement: previous?.abcRequirement || ('OPTIONAL' as AbcRequirement),
+          tone: previous?.tone || 'bg-slate-50 text-slate-700 border-slate-100',
+          intervalSeconds: item.intervalSeconds,
+          defaultSeverity: item.defaultSeverity,
+          presetKey: item.presetKey,
+        };
+        if (existing >= 0) merged[existing] = updated as any;
+        else merged.push(updated as any);
+      }
+    }
     return merged;
-  }, [abaV3UiEnabled, abaV3BehaviorIdSet, canonicalBehaviorPresets]);
+  }, [abaV3UiEnabled, abaV3BehaviorIdSet, canonicalBehaviorPresets, behaviorCatalogItems]);
+
+  const reloadBehaviorCatalog = async (requestedPatientId = String(patientId || '')) => {
+    if (!requestedPatientId) return false;
+    const result = await dataService.getAbaPatientBehaviorCatalog(requestedPatientId);
+    if (activeBehaviorCatalogPatientRef.current !== requestedPatientId) return false;
+    if (result?.success !== true || !Array.isArray(result.data)) {
+      setBehaviorCatalogError(result?.error || 'Não foi possível carregar os comportamentos.');
+      return false;
+    }
+    setBehaviorCatalogItems(result.data);
+    setBehaviorCatalogError('');
+    return true;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    const requestedPatientId = String(patientId || '');
+    setBehaviorCatalogItems(null);
+    setBehaviorCatalogError('');
+    setBehaviorCatalogManagerOpen(false);
+    if (!requestedPatientId) return () => { cancelled = true; };
+    setBehaviorCatalogLoading(true);
+    dataService.getAbaPatientBehaviorCatalog(requestedPatientId)
+      .then((result: any) => {
+        if (cancelled) return;
+        if (result?.success && Array.isArray(result.data)) {
+          setBehaviorCatalogItems(result.data);
+          setBehaviorCatalogError('');
+        } else {
+          setBehaviorCatalogError(result?.error || 'Falha ao carregar o catálogo de comportamentos.');
+        }
+      }).catch(() => {
+        if (!cancelled) setBehaviorCatalogError('Falha ao carregar o catálogo de comportamentos.');
+      }).finally(() => {
+        if (!cancelled) setBehaviorCatalogLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [patientId]);
 
   useEffect(() => {
     if (!abaV3UiEnabled || !patientId || abaV3BehaviorIdSet.size === 0) {
@@ -1577,7 +1667,7 @@ export const SessionMode = ({
     crisisMode ? baselineQuickBehaviorShortcuts : quickBehaviorShortcuts,
     { crisisMode, limit: 3 }
   ), [baselineQuickBehaviorShortcuts, crisisMode, quickBehaviorShortcuts]);
-  const personalizedDockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode: false, limit: 3 }), [quickBehaviorShortcuts]);
+  const personalizedDockShortcuts = useMemo(() => getDockVisibleShortcuts(quickBehaviorShortcuts, { crisisMode: false, limit: 200 }), [quickBehaviorShortcuts]);
   const crisisShortcutIdSet = useMemo(() => new Set(getCrisisShortcutIds()), []);
   const dockLocationOptions = useMemo(() => mergeDockLocationOptions(customDockLocations), [customDockLocations]);
   const visibleDockLocationOptions = dockLocationsExpanded ? dockLocationOptions : dockLocationOptions.slice(0, 6);
@@ -1734,13 +1824,13 @@ export const SessionMode = ({
     if (sessionQuickPreferencesSaving) return false;
     setSessionQuickPreferencesSaving(true);
     try {
-      const normalized = nextShortcuts.slice(0, 3).map((shortcut: any, index: number) => ({
+      const normalized = nextShortcuts.slice(0, 200).map((shortcut: any, index: number) => ({
         ...shortcut,
         priority: index + 1,
         visibleInDock: true
       }));
       const result = await dataService.saveAbaQuickBehaviorShortcuts(normalized);
-      if (result?.success === false) {
+      if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
         showClinicalToast({ variant: 'error', title: 'Não foi possível salvar os atalhos.', subtitle: result?.message || result?.error || 'Tente novamente.' }, 'error');
         return false;
       }
@@ -1753,6 +1843,42 @@ export const SessionMode = ({
     }
   };
 
+  const createCatalogBehavior = async (draft: AbaBehaviorDraft): Promise<boolean> => {
+    const result = await dataService.createAbaPatientBehavior(String(patientId), draft);
+    if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
+      showClinicalToast({ variant: 'error', title: 'Comportamento não salvo', subtitle: result?.error || 'Verifique os dados.' }, 'error');
+      return false;
+    }
+    if (!(await reloadBehaviorCatalog())) {
+      showClinicalToast({ variant: 'info', title: 'Comportamento salvo', subtitle: 'Recarregue o catálogo para atualizar a lista.' }, 'none');
+    }
+    return true;
+  };
+
+  const updateCatalogBehavior = async (id: string, draft: Partial<AbaBehaviorDraft>): Promise<boolean> => {
+    const result = await dataService.updateAbaPatientBehavior(String(patientId), id, draft);
+    if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
+      showClinicalToast({ variant: 'error', title: 'Comportamento não atualizado', subtitle: result?.error || 'Tente novamente.' }, 'error');
+      return false;
+    }
+    if (!(await reloadBehaviorCatalog())) {
+      showClinicalToast({ variant: 'info', title: 'Alteração salva', subtitle: 'Recarregue o catálogo para atualizar a lista.' }, 'none');
+    }
+    return true;
+  };
+
+  const archiveCatalogBehavior = async (id: string): Promise<boolean> => {
+    const result = await dataService.archiveAbaPatientBehavior(String(patientId), id);
+    if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
+      showClinicalToast({ variant: 'error', title: 'Comportamento não arquivado', subtitle: result?.error || 'Tente novamente.' }, 'error');
+      return false;
+    }
+    if (!(await reloadBehaviorCatalog())) {
+      showClinicalToast({ variant: 'info', title: 'Comportamento arquivado', subtitle: 'Recarregue o catálogo para atualizar a lista.' }, 'none');
+    }
+    return true;
+  };
+
   const toggleSelectedBehaviorQuickShortcut = async () => {
     const behavior = selectedBehavior;
     if (!behavior?.id) return;
@@ -1760,10 +1886,6 @@ export const SessionMode = ({
     const existing = current.find((shortcut: any) => shortcut.behaviorId === behavior.id);
     if (existing) {
       await savePersonalizedQuickBehaviorShortcuts(current.filter((shortcut: any) => shortcut.behaviorId !== behavior.id));
-      return;
-    }
-    if (current.length >= 3) {
-      showClinicalToast({ variant: 'info', title: 'Você já tem 3 acessos rápidos.', subtitle: 'Remova ou reordene um deles antes de fixar outro.' }, 'none');
       return;
     }
     const method = resolveBehaviorMeasurementForAction(behavior, behaviorMeasurementType || behavior.defaultMeasurement || 'frequency');
@@ -4591,7 +4713,7 @@ export const SessionMode = ({
     }, 'none');
   };
 
-  const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1) => {
+  const registerFrequency = (behaviorName = selectedBehavior.name, countDelta = 1, severityOverride = selectedSeverity) => {
     if (!ensureSessionCanRecord()) return;
     const behavior = sessionBehaviorPresets.find((item) => item.name === behaviorName) || selectedBehavior;
     if (!behaviorAllowsMeasurement(behavior, 'frequency')) {
@@ -4615,7 +4737,7 @@ export const SessionMode = ({
       behaviorName,
       countDelta,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     }));
     void saveBehaviorEvent(payload, {
       id: String(payload.id),
@@ -4625,14 +4747,14 @@ export const SessionMode = ({
         measurementType: 'frequency',
         countDelta,
         location: selectedLocation,
-        severity: selectedSeverity
+        severity: severityOverride
       }),
       timestamp: payload.timestamp,
       measurementType: 'frequency',
       countDelta,
       contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     });
   };
 
@@ -4644,7 +4766,7 @@ export const SessionMode = ({
     void handleTrialClick(goal, 0.5, 'prompted', promptKey);
   };
 
-  const startDuration = async (behaviorName = selectedBehavior.name) => {
+  const startDuration = async (behaviorName = selectedBehavior.name, severityOverride = selectedSeverity) => {
     if (!ensureSessionCanRecord()) return;
     if (openDurations.some((event) => event.behaviorName === behaviorName)) {
       showClinicalToast({
@@ -4675,7 +4797,7 @@ export const SessionMode = ({
       v3EpisodeEventId: behaviorDecision?.measurementModelVersion === 'V3' ? id : null,
       startedAt,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     };
     setOpenDurations((prev) => [openEvent, ...prev]);
     triggerMicroFeedback(`behavior:${behavior.id}`, 'pulse');
@@ -4683,7 +4805,7 @@ export const SessionMode = ({
       action: 'duration_start',
       behaviorName,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     }));
     const payload = buildBehaviorPayload(behaviorName, 'duration', {
       id,
@@ -4697,7 +4819,7 @@ export const SessionMode = ({
       durationSeconds: null,
       status: 'IN_PROGRESS',
       location: selectedLocation,
-      severity: selectedSeverity,
+      severity: severityOverride,
       timestamp: startedAt,
       raw_payload: { durationLifecycleStatus: 'open', durationOnly: true }
     });
@@ -4709,7 +4831,7 @@ export const SessionMode = ({
         measurementType: 'duration',
         durationSeconds: null,
         location: selectedLocation,
-        severity: selectedSeverity,
+        severity: severityOverride,
         status: 'IN_PROGRESS'
       }),
       timestamp: startedAt,
@@ -4719,7 +4841,7 @@ export const SessionMode = ({
       durationSeconds: null,
       contextSnapshot: payload.contextSnapshot,
       location: selectedLocation,
-      severity: selectedSeverity
+      severity: severityOverride
     });
   };
 
@@ -4825,6 +4947,10 @@ export const SessionMode = ({
   };
 
   const handleSelectedBehaviorAction = () => {
+    if (!sessionBehaviorPresets.some((behavior: any) => behavior.id === selectedBehavior.id)) {
+      showClinicalToast({ variant: 'info', title: 'Nenhum comportamento ativo', subtitle: 'Reative ou cadastre um comportamento antes de registrar.' }, 'none');
+      return;
+    }
     if (!ensureSessionCanRecord()) return;
     const effectiveMeasurementType = resolveBehaviorMeasurementForAction(selectedBehavior, behaviorMeasurementType);
     if (effectiveMeasurementType !== behaviorMeasurementType) setBehaviorMeasurementType(effectiveMeasurementType);
@@ -5035,7 +5161,7 @@ export const SessionMode = ({
     });
   };
 
-  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number) => {
+  const startIntervalRun = async (behaviorOverride = selectedBehavior, measurementOverride = behaviorMeasurementType, quantityOverride?: number, severityOverride = selectedSeverity, intervalSecondsOverride = intervalSeconds) => {
     if (!ensureSessionCanRecord()) return;
     if (intervalRun) {
       setSessionWarning(intervalRun.behaviorId === behaviorOverride.id
@@ -5043,9 +5169,10 @@ export const SessionMode = ({
         : 'Finalize ou conclua a coleta por intervalo em andamento antes de iniciar outra.');
       return;
     }
+    const effectiveIntervalSeconds = Math.max(5, Math.min(3600, Number(intervalSecondsOverride) || 30));
     const startedAt = new Date().toISOString();
     const localRunId = crypto.randomUUID();
-    const intervalEndsAt = new Date(new Date(startedAt).getTime() + intervalSeconds * 1000).toISOString();
+    const intervalEndsAt = new Date(new Date(startedAt).getTime() + effectiveIntervalSeconds * 1000).toISOString();
     const plannedIntervalCount = Math.max(1, Math.floor(Number(quantityOverride ?? intervalTotalIntervals) || 1));
     let behaviorDecision: AbaV3BehaviorDecision | null = null;
     try {
@@ -5058,7 +5185,7 @@ export const SessionMode = ({
           behaviorId: behaviorOverride.id,
           clientRunEventId: localRunId,
           measurementMethod: String(measurementOverride || '').toUpperCase(),
-          intervalSeconds,
+          intervalSeconds: effectiveIntervalSeconds,
           plannedIntervals: plannedIntervalCount,
           startedAt,
           metadata: { source: 'session_mode_v3', targetId: behaviorDecision.targetId || null }
@@ -5077,11 +5204,11 @@ export const SessionMode = ({
         measurementModelVersion: behaviorDecision?.measurementModelVersion === 'V3' ? 'V3' : 'LEGACY_V2',
         v3IntervalRunId,
         location: selectedLocation,
-        severity: selectedSeverity,
+        severity: severityOverride,
         startedAt,
         intervalStartedAt: startedAt,
         intervalEndsAt,
-        intervalSeconds,
+        intervalSeconds: effectiveIntervalSeconds,
         intervalIndex: 1,
         totalIntervals: plannedIntervalCount,
         plannedIntervals: plannedIntervalCount,
@@ -5841,7 +5968,7 @@ export const SessionMode = ({
     openDurations.find((event) => event.behaviorName === behaviorName)
   );
 
-  const executeBehaviorShortcut = (shortcut: any) => {
+  const executeBehaviorShortcut = (shortcut: any, severityOverride = selectedSeverity) => {
     const behavior = resolveShortcutBehavior(shortcut);
     const method = resolveBehaviorMeasurementForAction(behavior, shortcut?.method || behavior.defaultMeasurement || 'frequency');
     if (shortcut?.behaviorId === 'abc' || method === 'abc') {
@@ -5849,17 +5976,82 @@ export const SessionMode = ({
       return;
     }
     if (method === 'frequency' || method === 'rate') {
-      registerFrequency(behavior.name, 1);
+      registerFrequency(behavior.name, 1, severityOverride);
       return;
     }
     if (method === 'duration') {
       const openEvent = findOpenDurationForBehavior(behavior.name);
       if (openEvent) endDuration(openEvent.id);
-      else void startDuration(behavior.name);
+      else void startDuration(behavior.name, severityOverride);
       return;
     }
     if (isIntervalMeasurementType(method)) {
-      void startIntervalRun(behavior, method);
+      void startIntervalRun(behavior, method, undefined, severityOverride, Number(behavior.intervalSeconds) || intervalSeconds);
+    }
+  };
+
+  const pinnedSeveritySavingRef = useRef(false);
+  const pinnedBehaviorItems = useMemo(() => {
+    const first = personalizedDockShortcuts.map((shortcut: any) => String(shortcut.behaviorId));
+    const keys = [...first, ...sessionBehaviorPresets.map((behavior: any) => String(behavior.id))];
+    const seen = new Set<string>();
+    return keys.map((id) => {
+      if (seen.has(id)) return null;
+      seen.add(id);
+      const behavior = sessionBehaviorPresets.find((item: any) => String(item.id) === id);
+      if (!behavior) return null;
+      const open = openDurations.find((event) => event.behaviorName === behavior.name);
+      const method = getBehaviorDefaultMeasurement(behavior);
+      return {
+        id: String(behavior.id), name: behavior.name, method,
+        severity: Math.max(1, Math.min(5, Number(behavior.defaultSeverity || 2))),
+        color: 'slate', active: Boolean(open),
+        elapsed: open ? formatElapsed(open.startedAt, nowMs) : '',
+        disabled: Boolean(severityPreferenceSavingId) || Boolean(
+          actionLocks[open ? `duration:end:${open.id}` : method === 'duration'
+            ? `duration:start:${behavior.id}` : `frequency:${behavior.id}:${behavior.name}`]
+        ),
+      };
+    }).filter(Boolean) as Array<{
+      id: string; name: string; method: string; severity: number;
+      color: string; active: boolean; elapsed: string; disabled: boolean;
+    }>;
+  }, [sessionBehaviorPresets, personalizedDockShortcuts, openDurations, nowMs, actionLocks, severityPreferenceSavingId]);
+
+  const registerPinnedBehavior = (id: string, severity: number) => {
+    const behavior = sessionBehaviorPresets.find((row: any) => String(row.id) === id);
+    if (!behavior) return;
+    executeBehaviorShortcut({ behaviorId: behavior.id, method: getBehaviorDefaultMeasurement(behavior) }, severity);
+  };
+
+  const selectPinnedBehaviorSeverity = async (id: string, degree: number) => {
+    if (pinnedSeveritySavingRef.current || !Number.isInteger(degree) || degree < 1 || degree > 5) return;
+    const behavior = sessionBehaviorPresets.find((row: any) => String(row.id) === id);
+    if (!behavior) return;
+    if (behaviorCatalogItems === null) {
+      showClinicalToast({ variant: 'error', title: 'Catálogo indisponível', subtitle: 'Recarregue o catálogo antes de alterar a severidade.' }, 'error');
+      return;
+    }
+    const scopedPatientId = String(patientId);
+    pinnedSeveritySavingRef.current = true;
+    setSeverityPreferenceSavingId(id);
+    try {
+      const result = await dataService.updateAbaPatientBehavior(
+        scopedPatientId, String(behavior.catalogId || (behavior.presetKey ? `default:${behavior.presetKey}` : id)),
+        { defaultSeverity: degree }
+      );
+      if (activeBehaviorCatalogPatientRef.current !== scopedPatientId) return;
+      if (result?.success !== true || result?.pending === true || result?.offline === true || result?.queued === true) {
+        showClinicalToast({ variant: 'error', title: 'Severidade não salva', subtitle: result?.error || 'Não foi possível atualizar a preferência.' }, 'error');
+        return;
+      }
+      await reloadBehaviorCatalog(scopedPatientId);
+      if (activeBehaviorCatalogPatientRef.current !== scopedPatientId) return;
+      setSelectedSeverity(degree);
+      registerPinnedBehavior(id, degree);
+    } finally {
+      pinnedSeveritySavingRef.current = false;
+      setSeverityPreferenceSavingId('');
     }
   };
 
@@ -9158,7 +9350,7 @@ export const SessionMode = ({
             <span className="min-w-0 max-w-[52%] truncate text-right">
               {openDurations.length === 1
                 ? `⏱ ${compactBehaviorLabel(openDurations[0].behaviorName)} · ${formatElapsed(openDurations[0].startedAt, nowMs)}`
-                : 'Toque em Mais'}
+                : 'Abra Config.'}
             </span>
           </div>
         )}
@@ -9186,17 +9378,24 @@ export const SessionMode = ({
             </button>
           </div>
         ) : (
-          <div className="grid grid-cols-[repeat(3,minmax(0,1fr))_minmax(52px,60px)] gap-1.5">
-            {dockShortcuts.map((shortcut) => renderDockShortcutButton(shortcut, crisisMode))}
+          <div className="flex min-w-0 items-center gap-2" data-aba-all-behaviors-horizontal>
+            <div className="min-w-0 flex-1">
+              <AbaPinnedBehaviorStrip
+                items={pinnedBehaviorItems}
+                onRegister={registerPinnedBehavior}
+                onSelectSeverity={(id, degree) => { void selectPinnedBehaviorSeverity(id, degree); }}
+              />
+            </div>
             <button
               type="button"
               onClick={() => {
                 if (crisisMode) openAbcModal();
                 else setClinicalDockSheetOpen(true);
               }}
-              className={`min-h-[44px] min-w-0 overflow-hidden rounded-[16px] border px-2 text-[11px] font-medium shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
+              className={`min-h-[48px] shrink-0 rounded-[16px] border px-2 text-[11px] font-medium shadow-sm transition-all active:scale-[0.98] ${crisisMode ? 'border-white/15 bg-white text-slate-950' : 'border-slate-100 bg-white text-slate-700'}`}
+              aria-label={crisisMode ? 'Abrir ABC' : 'Configurar coleta rápida'}
             >
-              <span className="block truncate">{crisisMode ? 'ABC' : 'Mais'}</span>
+              {crisisMode ? 'ABC' : 'Config.'}
             </button>
           </div>
         )}
@@ -9404,6 +9603,12 @@ export const SessionMode = ({
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-behavior-chips>
               <div className="flex items-center justify-between gap-2">
                 <span>Comportamento</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={() => setBehaviorCatalogManagerOpen(true)}
+                    aria-label="Gerenciar comportamentos do paciente"
+                    className="inline-flex min-h-8 items-center rounded-full border border-violet-200 bg-violet-50 px-3 text-[11px] font-semibold text-violet-700">
+                    Gerenciar
+                  </button>
                 <button
                   type="button"
                   onClick={toggleSelectedBehaviorQuickShortcut}
@@ -9412,29 +9617,22 @@ export const SessionMode = ({
                 >
                   {personalizedDockShortcuts.some((shortcut: any) => shortcut.behaviorId === selectedBehavior.id) ? 'Desafixar' : '+ Fixar'}
                 </button>
+                </div>
               </div>
-              <div className="mt-1 flex max-h-[92px] flex-wrap gap-2 overflow-y-auto pr-1">
-                {(dockMoreBehaviorsOpen ? [...visibleDockBehaviorOptions, ...extraDockBehaviorOptions] : visibleDockBehaviorOptions).map((behavior) => (
+              <div className="mt-1 flex min-w-0 snap-x gap-2 overflow-x-auto overscroll-x-contain pb-1" data-aba-behavior-management-scroll>
+                {sessionBehaviorPresets.map((behavior) => (
                   <button
                     key={behavior.id}
                     type="button"
                     onClick={() => selectBehavior(behavior)}
                     aria-pressed={selectedBehaviorId === behavior.id}
                     title={behavior.name}
-                    className={`${dockChipClass(selectedBehaviorId === behavior.id)} max-w-[10.5rem]`}
+                    className={`${dockChipClass(selectedBehaviorId === behavior.id)} max-w-[10.5rem] shrink-0 snap-start`}
                   >
                     <span className="min-w-0 truncate">{behavior.name}</span>
                   </button>
                 ))}
-                {extraDockBehaviorOptions.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setDockMoreBehaviorsOpen((open) => !open)}
-                    className={`${dockChipClass(false)} max-w-[10.5rem] text-[#7a32fc]`}
-                  >
-                    <span className="min-w-0 truncate">{dockMoreBehaviorsOpen ? 'Mostrar menos' : '+ Mais'}</span>
-                  </button>
-                )}
+
               </div>
             </div>
             <div className="text-[11px] font-medium text-slate-500" data-aba-dock-method-chips>
@@ -9596,10 +9794,10 @@ export const SessionMode = ({
               <div className="rounded-xl border border-slate-100 bg-white/75 p-2.5" data-aba-personalized-quick-shortcuts>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] font-semibold text-slate-600">Seus acessos rápidos</span>
-                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length}/3</span>
+                  <span className="text-[10px] text-slate-400">{personalizedDockShortcuts.length} fixados</span>
                 </div>
                 {personalizedDockShortcuts.length === 0 ? (
-                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe até 3 comportamentos para aparecerem na barra inferior.</p>
+                  <p className="mt-2 text-[11px] font-normal text-slate-400">Fixe os comportamentos que deseja priorizar na barra horizontal.</p>
                 ) : (
                   <div className="mt-2 space-y-2">
                     {personalizedDockShortcuts.map((shortcut: any, index: number) => {
@@ -12100,6 +12298,17 @@ export const SessionMode = ({
       )}
       {clinicalDock}
       {clinicalDockSheet}
+      <AbaBehaviorCatalogManager
+        open={behaviorCatalogManagerOpen}
+        items={behaviorCatalogItems || []}
+        loading={behaviorCatalogLoading}
+        error={behaviorCatalogError}
+        onClose={() => setBehaviorCatalogManagerOpen(false)}
+        onReload={() => { void reloadBehaviorCatalog(); }}
+        onCreate={createCatalogBehavior}
+        onUpdate={updateCatalogBehavior}
+        onArchive={archiveCatalogBehavior}
+      />
       {actionToastPortal}
     </div>
   );
