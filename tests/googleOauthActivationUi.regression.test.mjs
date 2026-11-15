@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 const activation = fs.readFileSync('src/components/ActivationAccess.tsx', 'utf8');
 const landing = fs.readFileSync('src/components/LandingPage.tsx', 'utf8');
 const salesActivation = fs.readFileSync('src/components/SalesActivationAccess.tsx', 'utf8');
+const salesGoogle = fs.readFileSync('src/services/salesActivationGoogleOAuth.ts', 'utf8');
 
 assert.ok(
   activation.includes('flex items-center justify-center gap-3'),
@@ -25,7 +26,7 @@ assert.ok(
 for (const [name, source] of [
   ['activation', activation],
   ['landing', landing],
-  ['sales activation', salesActivation],
+  ['sales activation Google service', salesGoogle],
 ]) {
   assert.match(source, /provider:\s*'google'/, `${name} must keep Google as the OAuth provider`);
   assert.ok(
@@ -33,6 +34,8 @@ for (const [name, source] of [
     `${name} must explicitly request the Google e-mail scope`,
   );
 }
+
+assert.match(salesActivation, /beginSalesActivationGoogleOAuth\(token, activation\.email, window\.location\.origin\)/);
 
 assert.match(
   activation,
