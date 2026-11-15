@@ -50,7 +50,7 @@ assert.match(
 );
 assert.match(
   detail,
-  /\{canViewAnamnesis && hasCompletedAnamnesis && \([\s\S]{0,600}Ver anamnese/,
+  /\{canViewAnamnesis && hasCompletedAnamnesis && \([\s\S]{0,1600}Ver anamnese/,
   'visualização de ficha concluída deve exigir view',
 );
 assert.match(detail, /readOnly=\{showAnamnesisReadOnly\}/, 'visualização não deve permitir edição implicitamente');
