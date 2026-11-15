@@ -36,6 +36,7 @@ interface AnamnesisModalProps {
   onEdit?: () => void;
   onReview?: () => void;
   isReviewing?: boolean;
+  reviewFeedback?: string;
 }
 
 interface QuestionDraft {
@@ -267,7 +268,8 @@ export const AnamnesisModal = ({
   readOnly = false,
   onEdit,
   onReview,
-  isReviewing = false
+  isReviewing = false,
+  reviewFeedback = ''
 }: AnamnesisModalProps) => {
   const [profileType, setProfileType] = useState<AnamnesisProfileType>('adult');
   const isTemplateManager = initialData?.manageTemplate === true;
@@ -1404,6 +1406,7 @@ export const AnamnesisModal = ({
                       <Check size={15} className="mr-1.5 inline" /> {isReviewing ? 'Revisando...' : 'Marcar revisada'}
                     </button>
                   )}
+                  {reviewFeedback && <p role="status" className="w-full text-xs text-slate-600">{reviewFeedback}</p>}
                 </div>
               ) : (
                 <button
