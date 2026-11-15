@@ -47,6 +47,7 @@ import {
 import { hydratePtsClinicalPayloadFromPlan } from '../utils/ptsClinicalWorkspace';
 import { buildClinicalOutcomePlanScopeIndex, clinicalOutcomeSeriesBelongsToPlanScope, unscopedBehaviorSeriesBelongsToSpecialty } from '../utils/clinicalOutcomePlanScope';
 import { selectPtsMultidisciplinarySeries } from '../utils/ptsMultidisciplinarySeries';
+import { resolveClinicalGraphScopeId } from '../utils/clinicalGraphScope';
 import { ClinicalPlanAnalyticsShell, type AnalyticsAxis, type ClinicalPlanShareDescriptor } from './ClinicalPlanAnalyticsShell';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 
@@ -540,7 +541,7 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
   const [customDateFrom, setCustomDateFrom] = useState(() => shiftDateKey(today, -89));
   const [customDateTo, setCustomDateTo] = useState(today);
   const [comparePrevious, setComparePrevious] = useState(false);
-  const [scopeId, setScopeId] = useState('pts');
+  const [requestedScopeId, setScopeId] = useState('pts');
   const [contextFilter, setContextFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -626,11 +627,13 @@ export function ClinicalOutcomesDashboard({ patientId, organizationId = null, is
   })), [specialtyPlans]);
   const activePts = ptsPlans.find((plan) => ['active', 'draft', 'paused'].includes(clean(plan.status))) || ptsPlans[0] || null;
 
-  useEffect(() => {
-    if (scopeId === 'pts' && activePts) return;
-    if (scopeId !== 'pts' && specialtyPlans.some((plan) => String(plan.id) === scopeId)) return;
-    setScopeId(activePts ? 'pts' : specialtyPlans[0] ? String(specialtyPlans[0].id) : 'pts');
-  }, [activePts, scopeId, specialtyPlans]);
+  // Select only scopes already returned by the authorized patient graph API.
+  // Specialists never render the PTS by default when it is outside their scope.
+  const scopeId = resolveClinicalGraphScopeId(
+    requestedScopeId,
+    Boolean(activePts),
+    specialtyPlans.map((plan) => String(plan.id)),
+  );
 
   const contexts = useMemo(() => Array.from(new Set((data.observations || []).map((row) => clean(row.context)).filter(Boolean))).sort(), [data.observations]);
   const sources = useMemo(() => Array.from(new Set((data.observations || []).map((row) => clean(row.source)).filter(Boolean))).sort(), [data.observations]);
