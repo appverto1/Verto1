@@ -11,7 +11,7 @@ const otherClinicId = '44444444-4444-4444-8444-444444444444';
 const originalError = new Error('Database error creating new user');
 const validAuth = { id: userId, email, app_metadata: { sales_activation_offer_id: offerId }, user_metadata: {} };
 
-function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memberships = [], authCreateError = originalError, paidOfferVisible = true, subscriptionStatus = 'active', legacyOffer = false } = {}) {
+function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memberships = [], authCreateError = originalError, paidOfferVisible = true, subscriptionStatus = 'active', legacyOffer = false, contractEmail = email } = {}) {
   let lookups = 0;
   let createAttempts = 0;
   let mutations = 0;
@@ -45,7 +45,7 @@ function buildHarness({ foundAfterError = validAuth, profile = 'unreached', memb
           const query = {
             eq: (column, value) => { assert.equal(value, scope[column], 'checkout scope: ' + column); return query; },
             maybeSingle: async () => ({ data: paidOfferVisible
-              ? { offer_type: legacyOffer ? 'legacy' : 'modular', stripe_subscription_id: 'sub_test_verified_paid' }
+              ? { offer_type: legacyOffer ? 'legacy' : 'modular', stripe_subscription_id: 'sub_test_verified_paid', contract_email: contractEmail }
               : null, error: null }),
           };
           return { select: () => query };
@@ -135,4 +135,11 @@ test('trialing or past_due cannot initiate a new paid Director account', async (
     await assert.rejects(h.run(), /SALES_SUBSCRIPTION_NOT_ACTIVE/);
     assert.deepEqual(h.metrics(), { lookups: 0, createAttempts: 0, mutations: 0, profileReads: 0 });
   }
+});
+
+test('a Stripe-active subscription from another contractual email never creates Auth or clinic', async () => {
+  const h = buildHarness({ contractEmail: 'other@example.invalid' });
+  await assert.rejects(h.run(), /SALES_DIRECTOR_CONTRACT_EMAIL_MISMATCH/);
+  assert.deepEqual(h.metrics(), { lookups: 0, createAttempts: 0, mutations: 0, profileReads: 0 });
+  assert.equal(h.stripeReads(), 0);
 });

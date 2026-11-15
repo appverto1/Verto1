@@ -24,7 +24,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
     // profiles or clinic membership, rather than creating an early Director.
     const { data: paidOffer, error: paidOfferError } = await supabase
       .from("sales_offers")
-      .select("offer_type,stripe_subscription_id")
+      .select("offer_type,stripe_subscription_id,contract_email")
       .eq("id", offerId)
       .eq("lead_id", leadId)
       .eq("stripe_checkout_session_id", checkoutSessionId)
@@ -34,6 +34,9 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
     if (!paidOffer) throw new Error("SALES_DIRECTOR_PROVISIONING_PAYMENT_NOT_CONFIRMED");
     let verifiedSubscription: Stripe.Subscription | null = null;
     if (sanitizeString(paidOffer.offer_type, 30) === "modular") {
+      if (sanitizeEmail(paidOffer.contract_email) !== email) {
+        throw new Error("SALES_DIRECTOR_CONTRACT_EMAIL_MISMATCH");
+      }
       const verifiedSubscriptionId = sanitizeString(paidOffer.stripe_subscription_id, 200);
       if (!verifiedSubscriptionId) throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
       const candidateSubscription = await getStripe().subscriptions.retrieve(verifiedSubscriptionId);
@@ -304,6 +307,10 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       return;
     }
 
+    if (params.clinicId !== params.userId) {
+      throw new Error("SALES_DIRECTOR_CLINIC_SCOPE_MISMATCH");
+    }
+
     let modularContract = false;
     try {
       const requireActivationRecord = params.requireActivationRecord !== false;
@@ -328,7 +335,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
           .maybeSingle(),
         supabase
           .from("sales_offers")
-          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,modular_snapshot,simulation_snapshot")
+          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,contract_email,modular_snapshot,simulation_snapshot")
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("status", "paid")
@@ -343,6 +350,9 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       if (!leadResult.data || !offerResult.data || (requireActivationRecord && !activationResult.data))
         return;
       modularContract = sanitizeString(offerResult.data.offer_type, 30) === "modular";
+      if (modularContract && sanitizeEmail(offerResult.data.contract_email) !== normalizedEmail) {
+        throw new Error("SALES_DIRECTOR_CONTRACT_EMAIL_MISMATCH");
+      }
       const activationExpired = activationResult.data?.expires_at
         ? new Date(activationResult.data.expires_at).getTime() <= Date.now()
         : false;

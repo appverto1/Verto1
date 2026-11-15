@@ -9,7 +9,7 @@ const userId = '33333333-3333-4333-8333-333333333333';
 const checkoutSessionId = 'cs_test_pending_subscription';
 const subscriptionId = 'sub_test_pending_subscription';
 
-function harness({ status = 'incomplete', subscriptionPresent = true, modular = true, retrievalFails = false, verifiedSubscription = null } = {}) {
+function harness({ status = 'incomplete', subscriptionPresent = true, modular = true, retrievalFails = false, verifiedSubscription = null, contractEmail = 'buyer@example.invalid', activationEmail = 'buyer@example.invalid', clinicId = userId } = {}) {
   let writes = 0;
   let stripeReads = 0;
   const rows = {
@@ -17,7 +17,7 @@ function harness({ status = 'incomplete', subscriptionPresent = true, modular = 
     sales_offers: {
       id: offerId, lead_id: leadId, status: 'paid', stripe_checkout_session_id: checkoutSessionId,
       stripe_subscription_id: subscriptionPresent ? subscriptionId : null,
-      offer_type: modular ? 'modular' : 'legacy',
+      offer_type: modular ? 'modular' : 'legacy', contract_email: contractEmail,
     },
   };
   const select = (table) => ({
@@ -51,7 +51,7 @@ function harness({ status = 'incomplete', subscriptionPresent = true, modular = 
   const { finalizeSalesActivationForUser } = createSalesPaidDirectorAccountProvisioning(deps);
   return {
     run: () => finalizeSalesActivationForUser({
-      email: 'buyer@example.invalid', userId, clinicId: userId,
+      email: activationEmail, userId, clinicId,
       offerId, leadId, checkoutSessionId, requireActivationRecord: false, verifiedSubscription,
     }),
     metrics: () => ({ writes, stripeReads }),
@@ -108,4 +108,15 @@ test('initial trialing status cannot convert a lead even when entitlement mapper
   const h = harness({ status: 'trialing' });
   await assert.rejects(h.run(), /SALES_SUBSCRIPTION_NOT_ACTIVE/);
   assert.deepEqual(h.metrics(), { writes: 0, stripeReads: 1 });
+});
+
+test('paid subscription from another contract email cannot convert lead or write tenant', async () => {
+  const h = harness({ status: 'active', contractEmail: 'other@example.invalid' });
+  await assert.rejects(h.run(), /SALES_DIRECTOR_CONTRACT_EMAIL_MISMATCH/);
+  assert.deepEqual(h.metrics(), { writes: 0, stripeReads: 0 });
+});
+test('client or server passing unrelated clinic ID cannot convert lead or grant entitlements', async () => {
+  const h = harness({ status: 'active', clinicId: '44444444-4444-4444-8444-444444444444' });
+  await assert.rejects(h.run(), /SALES_DIRECTOR_CLINIC_SCOPE_MISMATCH/);
+  assert.deepEqual(h.metrics(), { writes: 0, stripeReads: 0 });
 });
