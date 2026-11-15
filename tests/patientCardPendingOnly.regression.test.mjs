@@ -13,6 +13,8 @@ assert.match(header, /canEditAnamnesis && !hasCompletedAnamnesis && \([\s\S]*?Fi
 assert.match(header, /canEditAnamnesis && !hasCompletedAnamnesis && \([\s\S]*?Enviar anamnese/, 'pending anamnesis can still be sent');
 assert.doesNotMatch(header, /Ver ficha enviada|onClick=\{openSubmittedAnamnesisForFiles\}/, 'no duplicate completed anamnesis action in card');
 
+assert.match(card, /anamnesisFlowSnapshot\?\.patientId === String\(patient\?\.id \|\| ''\)/, 'anamnesis flow state must be scoped to the selected patient');
+assert.match(card, /activeAnamnesisPatientIdRef\.current !== requestPatientId/, 'late responses for another patient must be ignored');
 assert.match(card, /readOnly=\{showAnamnesisReadOnly\}/, 'viewer must be read-only initially');
 assert.match(card, /onEdit=\{showAnamnesisReadOnly && canEditAnamnesis/, 'editor can be reached only when authorized');
 assert.match(card, /onReview=\{showAnamnesisReadOnly && canEditAnamnesis/, 'review remains available to authorized staff inside viewer');
