@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies deterministically
         run: npm ci
 
+      - name: IA-03 privileged RPC execute grants regression
+        run: node tests/ia03PrivilegedDirectRpcAcl.regression.test.mjs
+
       - name: Patient Drive free tier regression tests
         run: |
           node tests/patientFileStorageQuota.test.mjs
