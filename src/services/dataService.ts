@@ -6311,6 +6311,83 @@ export const dataService = {
     }
   },
 
+  // Modular CRUD: one scoped catalogue GET per patient, mutation ACK before UI refresh.
+  async getAbaPatientBehaviorCatalog(patientId: string) {
+    if (!isAbaV2Enabled() && !isAbaV3UiEnabled()) return { success: false, data: [], error: 'Módulo ABA indisponível.' };
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/behavior-catalog`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        headers: await getNoStoreAuthHeaders(),
+        credentials: 'include',
+        cache: 'no-store'
+      }, {
+        helperName: 'getAbaPatientBehaviorCatalog',
+        operation: 'list',
+        table: 'aba_behavior_definitions',
+        hasExplicitColumns: true
+      });
+      const result = await safeJson(response);
+      return response.ok && result?.success === true
+        ? { ...result, data: Array.isArray(result.data) ? result.data : [] }
+        : { success: false, error: result?.error || 'Falha ao carregar os comportamentos.', data: [] };
+    } catch (error) {
+      return { success: false, error: getApiErrorMessage(error, 'Não foi possível carregar os comportamentos.'), data: [] };
+    }
+  },
+
+  async createAbaPatientBehavior(patientId: string, payload: any) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/behavior-catalog`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'POST',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'createAbaPatientBehavior', operation: 'write',
+        table: 'aba_behavior_definitions', hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível salvar o comportamento.');
+    } catch (error) {
+      return { success: false, error: getApiErrorMessage(error, 'Não foi possível salvar o comportamento.') };
+    }
+  },
+
+  async updateAbaPatientBehavior(patientId: string, behaviorId: string, payload: any) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/behavior-catalog/${encodeURIComponent(String(behaviorId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'PATCH',
+        headers: { ...(await getAuthHeaders()), 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      }, {
+        helperName: 'updateAbaPatientBehavior', operation: 'write',
+        table: 'aba_behavior_definitions', hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível atualizar o comportamento.');
+    } catch (error) {
+      return { success: false, error: getApiErrorMessage(error, 'Não foi possível atualizar o comportamento.') };
+    }
+  },
+
+  async archiveAbaPatientBehavior(patientId: string, behaviorId: string) {
+    const endpoint = `/api/aba/patients/${encodeURIComponent(String(patientId))}/behavior-catalog/${encodeURIComponent(String(behaviorId))}`;
+    try {
+      const response = await fetchClinical(endpoint, {
+        method: 'DELETE',
+        headers: await getAuthHeaders(),
+        credentials: 'include'
+      }, {
+        helperName: 'archiveAbaPatientBehavior', operation: 'write',
+        table: 'aba_behavior_definitions', hasExplicitColumns: true
+      });
+      return normalizeClinicalMutationResult(await safeJson(response), 'Não foi possível arquivar o comportamento.');
+    } catch (error) {
+      return { success: false, error: getApiErrorMessage(error, 'Não foi possível arquivar o comportamento.') };
+    }
+  },
+
   async getAbaSessionMaintenanceProbes(sessionId: string, options: { appointmentId?: string | null; clinicalDate?: string | null; timeZone?: string | null; force?: boolean } = {}) {
     if (!isAbaV2Enabled()) return abaV2DisabledResponse({ available: [], upcoming: [] });
     if (!isPersistedUuid(sessionId)) return { success: true, data: { available: [], upcoming: [] }, available: [], upcoming: [] };
