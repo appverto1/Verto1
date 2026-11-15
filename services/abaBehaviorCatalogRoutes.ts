@@ -183,7 +183,13 @@ export function registerAbaBehaviorCatalogRoutes(app: Express, deps: {
         String(row.id) !== String(current.row?.id || '') &&
         row.status === 'active' &&
         abaCatalogNameKey(row.name) === abaCatalogNameKey(checked.data!.name));
-      if (duplicate) return res.status(409).json({ success: false, code: 'ABA_BEHAVIOR_DUPLICATE', error: 'Já existe outro comportamento com esse nome.' });
+      const reservedPreset = ABA_CATALOG_PRESETS.find((preset) =>
+        abaCatalogNameKey(preset.name) === abaCatalogNameKey(checked.data!.name));
+      const editedPresetKey = current.preset?.key || ABA_CATALOG_PRESETS.find((preset) =>
+        String(current.row?.id || '') === abaCatalogStoredPresetId(resolved.patientId, preset.key))?.key;
+      if (duplicate || (reservedPreset && reservedPreset.key !== editedPresetKey)) {
+        return res.status(409).json({ success: false, code: 'ABA_BEHAVIOR_DUPLICATE', error: 'Nome reservado para outro comportamento padrão. Edite o item correspondente.' });
+      }
       const saved = current.row
         ? await supabase.from('aba_behavior_definitions').update(checked.data)
           .eq('id', current.row.id).eq('patient_id', resolved.patientId).eq('clinic_id', resolved.clinicId)
