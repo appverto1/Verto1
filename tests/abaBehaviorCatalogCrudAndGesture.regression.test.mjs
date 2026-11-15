@@ -23,6 +23,7 @@ assert.match(routes, /MAX_BEHAVIORS = 200/, 'bounded patient catalogue');
 assert.match(routes, /Buffer\.byteLength\(JSON\.stringify/, 'limit payload size');
 assert.match(routes, /isAbaCatalogMethod/, 'server validates actual measurement method');
 assert.match(routes, /responseError/, 'database uniqueness errors must not result in false success');
+assert.match(routes, /reservedPreset && reservedPreset\.key !== editedPresetKey/, 'renames cannot shadow a different standard behavior');
 assert.match(server, /registerAbaBehaviorCatalogRoutes\(app, \{/, 'modular routes must be registered once');
 assert.match(server, /save_aba_user_session_preferences_v1/, 'original atomic preferences RPC preserved');
 assert.match(migration, /aba_behavior_definitions_patient_active_name_unique/, 'concurrent duplicate prevention required');
@@ -48,4 +49,6 @@ assert.match(pinned, /onPointerUp/, 'touch release must be the registration auth
 assert.match(pinned, /data-aba-severity-degree/, 'touch release can select the intended severity');
 assert.match(pinned, /if \(!gesture\.held\)/, 'short tap must not select severity');
 assert.match(session, /selectPinnedBehaviorSeverity/, 'saved severity must be captured in the session');
+assert.match(session, /activeBehaviorCatalogPatientRef\.current !== scopedPatientId/, 'late severity responses cannot write a record under another patient');
+assert.match(session, /startIntervalRun\(behavior, method, undefined, severityOverride, Number\(behavior\.intervalSeconds\)/, 'pinned partial interval uses its own configured interval');
 console.log('abaBehaviorCatalogCrudAndGesture.regression.test.mjs: ok');
