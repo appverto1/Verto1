@@ -169,6 +169,8 @@ jobs:
       - name: Portal role isolation and Google OAuth password-flash regressions
         run: |
           node --import tsx tests/authLoginPortalPolicy.test.ts
+          node --import tsx tests/iam01VerifiedAuthMethod.test.ts
+          node tests/iam01PersonaBindingMigration.regression.test.mjs
           node tests/googleOAuthPasswordFlash.regression.test.mjs
           node --import tsx tests/implicitGoogleOAuthLogin.regression.test.ts
 
