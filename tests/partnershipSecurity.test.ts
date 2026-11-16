@@ -49,9 +49,11 @@ function fixture(options: { auth?: any; account?: any; rpc?: any; memberships?: 
     rpc: async (name: string, args: any) => {
       calls.push({ name, args });
       if (options.rpc) return options.rpc;
-      return { data: name === 'verto_partner_referral_overview_v1' ?
-        [{ referral_id: leadId, clinic_name: 'Clínica Exemplo', lead_status: 'new', has_paid: false,
-          referred_at: '2026-11-10T12:00:00Z' }] : true, error: null };
+      return { data: name === 'verto_partner_tier_dashboard_v1' ?
+        { qualified_active: 2, current_term_months: 6, referrals: [
+          { referral_id: leadId, clinic_name: 'Clínica Exemplo', lead_status: 'new', has_paid: false,
+            referred_at: '2026-11-10T12:00:00Z', term_months: null }
+        ] } : name === 'verto_partner_referral_overview_v1' ? [] : true, error: null };
     },
   };
   const checkAuth = () => {};
@@ -94,6 +96,9 @@ test('only verified Supabase email matching a registered external partner can cr
   const ownPortal = await f.run('GET', '/api/partnerships/portal', f.req({}, session));
   assert.equal(ownPortal.body.account.id, partnerId);
   assert.equal(ownPortal.body.referrals.length, 1);
+  assert.equal(ownPortal.body.currentTermMonths, 6);
+  assert.equal(ownPortal.body.qualifiedActive, 2);
+  assert.equal(f.calls[0].name, 'verto_partner_tier_dashboard_v1');
   assert.equal(f.calls[0].args.p_partner_id, partnerId);
   assert.equal(ownPortal.headers['Cache-Control'], 'private, no-store');
 });
@@ -206,7 +211,7 @@ test('pending or suspended partners cannot create or continue an external partne
     const portal = await f.run('GET', '/api/partnerships/portal', f.req({}, alreadyLogged));
     assert.equal(portal.statusCode, 403);
     assert.equal(portal.body.error, 'PARTNER_ACCESS_DENIED');
-    assert.equal(f.calls.filter(c => c.name === 'verto_partner_referral_overview_v1').length, 0);
+    assert.equal(f.calls.filter(c => c.name === 'verto_partner_tier_dashboard_v1').length, 0);
   }
 });
 

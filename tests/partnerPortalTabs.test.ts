@@ -25,6 +25,8 @@ const account={
 const referrals=[{
   referral_id:'22222222-2222-4222-8222-222222222222',clinic_name:'Clínica Teste',
   lead_status:'won',has_paid:true,referred_at:'2026-11-13T12:00:00Z',
+  term_months:12,first_paid_at:'2026-11-13T12:00:00Z',
+  term_ends_at:'2027-11-13T12:00:00Z',subscription_active:true,
 }];
 globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
   const path=String(input);
@@ -39,7 +41,7 @@ globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
     throw new Error('Falha ao atualizar indicações de teste.');
   }
   const result=path==='/api/partnerships/portal'
-    ?{success:true,account,referrals}
+    ?{success:true,account,referrals,currentTermMonths:12,qualifiedActive:6}
     :path==='/api/partnerships/marketplace/partner'
       ?{success:true,profile:{service_name:'Serviço de teste',category:savedCategory,
         description:'Descrição comercial de teste disponível para clínicas.',photo_url:legacyPhotoPath},inbox:[
@@ -64,6 +66,7 @@ try{
   assert.equal(tab('Programa de parceiros').getAttribute('aria-selected'),'true');
   assert.equal(panel('partner-panel-program').hidden,false);
   assert.match(panel('partner-panel-program').textContent||'',/10% por até 12 meses/);
+  assert.match(panel('partner-panel-program').textContent||'',/6 clientes qualificados/);
   assert.doesNotMatch(panel('partner-panel-program').textContent||'',/Parceiro aprovado|Participação, elegibilidade/);
   assert.equal(requests.filter(path=>path==='/api/partnerships/portal').length,1);
   assert.equal(requests.filter(path=>path==='/api/partnerships/marketplace/partner').length,1);
@@ -75,6 +78,7 @@ try{
   assert.equal(panel('partner-panel-program').hidden,true);
   assert.equal(panel('partner-panel-referrals').hidden,false);
   assert.match(panel('partner-panel-referrals').textContent||'',/Clínica Teste|Pagamento confirmado/);
+  assert.match(panel('partner-panel-referrals').textContent||'',/Direito de 12 meses/);
 
   await act(async()=>tab('Sua vitrine na Verto').click());
   assert.equal(panel('partner-panel-marketplace').hidden,false);

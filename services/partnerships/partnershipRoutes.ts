@@ -119,13 +119,15 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       if(found.error)throw found.error;
       if(!found.data||found.data.status!=='approved'||found.data.compliance_approved!==true)
         return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
-      const overview=await supabase.rpc('verto_partner_referral_overview_v1',{
-        p_partner_id:found.data.id,p_limit:50,p_offset:0
+      const dashboard=await supabase.rpc('verto_partner_tier_dashboard_v1',{
+        p_partner_id:found.data.id
       });
-      if(overview.error)throw overview.error;
+      if(dashboard.error||!Array.isArray(dashboard.data?.referrals))throw dashboard.error||new Error('INVALID_TIER_DASHBOARD');
       res.setHeader('Cache-Control','private, no-store');
       const {contact_email,partner_kind,...account}=found.data;
-      return res.json({success:true,account,referrals:overview.data||[]});
+      return res.json({success:true,account,referrals:dashboard.data.referrals,
+        qualifiedActive:dashboard.data.qualified_active,
+        currentTermMonths:dashboard.data.current_term_months});
     }catch{return fail(res);}
   });
 
@@ -149,10 +151,12 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
         .select(PARTNER_ACCOUNT_FIELDS).eq('user_id',userId).maybeSingle();
       if(account.error)throw account.error;
       if(!account.data)return res.json({success:true,account:null,referrals:[]});
-      const overview=await supabase.rpc('verto_partner_referral_overview_v1',{p_partner_id:account.data.id,p_limit:50,p_offset:0});
-      if(overview.error)throw overview.error;
+      const dashboard=await supabase.rpc('verto_partner_tier_dashboard_v1',{p_partner_id:account.data.id});
+      if(dashboard.error||!Array.isArray(dashboard.data?.referrals))throw dashboard.error||new Error('INVALID_TIER_DASHBOARD');
       res.setHeader('Cache-Control','private, no-store');
-      return res.json({success:true,account:account.data,referrals:overview.data||[]});
+      return res.json({success:true,account:account.data,referrals:dashboard.data.referrals,
+        qualifiedActive:dashboard.data.qualified_active,
+        currentTermMonths:dashboard.data.current_term_months});
     }catch{return fail(res);}
   });
 
