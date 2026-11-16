@@ -531,7 +531,8 @@ export default function App() {
   // form must not flash while its verified session is still being exchanged.
   const [oauthCallbackPending, setOauthCallbackPending] = useState(() => {
     if (typeof window === 'undefined' || isAuthActionRoute ||
-        isExternalPartnerRoute || isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) return false;
+        /^\/parcerias\/?$/i.test(window.location.pathname) ||
+        isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) return false;
     const params = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     return Boolean(params.get('code') || params.get('access_token') || params.get('refresh_token') ||
