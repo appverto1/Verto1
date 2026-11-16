@@ -524,6 +524,11 @@ export default function App() {
     isInvitationAcceptanceRoute ||
     hasSupabaseAuthReturnParams;
   const [user, setUser] = useState<any>(null); 
+  const authenticatedUserIdRef = useRef('');
+  const serverLoginInFlightRef = useRef<{ key: string; promise: Promise<Response | null> } | null>(null);
+  useEffect(() => {
+    authenticatedUserIdRef.current = String(user?.id || '').trim();
+  }, [user?.id]);
   const [sessionRecoveryNotice, setSessionRecoveryNotice] = useState<'expired' | 'revoked' | null>(null);
   const [clinicPermissionNotice, setClinicPermissionNotice] = useState(false);
   useEffect(() => {
@@ -1243,6 +1248,7 @@ export default function App() {
     let resolvedUser = restoredUser;
 
     const commitUserState = (nextUser: any) => {
+      authenticatedUserIdRef.current = String(nextUser?.id || '').trim();
       setUser(nextUser);
       const nextRole = String(nextUser?.role || '').trim().toLowerCase();
       const isPatientPortalSession = ['patient', 'responsible', 'responsavel', 'guardian'].includes(nextRole);
@@ -1748,7 +1754,8 @@ export default function App() {
                 setLoading(false);
                 return;
               }
-              const intendedRole = localStorage.getItem('verto_intended_role') || 'therapist';
+              const explicitIntendedRole = localStorage.getItem('verto_intended_role');
+              const intendedRole = explicitIntendedRole || 'therapist';
               localStorage.removeItem('verto_intended_role');
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
               const currentAuthAction = typeof window !== 'undefined'
@@ -1808,6 +1815,15 @@ export default function App() {
               if (!isActivationFlow && isPasswordSignIn) {
                 // Login por senha é finalizado pelo formulário; evita emissão duplicada de sessão.
                 setLoading(false);
+                return;
+              }
+              // Supabase can re-emit SIGNED_IN when an already-authenticated tab
+              // receives focus. Do not rotate its authoritative server token.
+              // Explicit portal selection and activation/invitations must still
+              // go through the server-side role and method checks.
+              if (!isActivationFlow && !isInvitationAcceptanceContinuation && !explicitIntendedRole &&
+                  authenticatedUserIdRef.current &&
+                  authenticatedUserIdRef.current === String(session.user?.id || '').trim()) {
                 return;
               }
               const loginResult = await handleLoginSuccess(session, intendedRole, undefined, {
@@ -2249,23 +2265,39 @@ export default function App() {
       const provider = authContext?.provider || supabaseSession?.user?.app_metadata?.provider || null;
       const activationFlow = Boolean(authContext?.activationFlow);
       const accessToken = supabaseSession.access_token;
-      const response = await withTimeout(fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          accessToken,
-          intendedRole,
-          provider,
-          activationFlow,
-          passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
-          activationEmail: authContext?.activationEmail || null,
-          invitationId: authContext?.invitationId || null,
-          deferInvitationAcceptance: shouldDeferInvitationAcceptance,
-          email: credentials?.email || null,
-          password: credentials?.password || null,
-        })
-      }), 12000, null as any);
+      const loginRequestBody = JSON.stringify({
+        accessToken,
+        intendedRole,
+        provider,
+        activationFlow,
+        passwordSetupCompleted: Boolean(authContext?.passwordSetupCompleted),
+        activationEmail: authContext?.activationEmail || null,
+        invitationId: authContext?.invitationId || null,
+        deferInvitationAcceptance: shouldDeferInvitationAcceptance,
+        email: credentials?.email || null,
+        password: credentials?.password || null,
+      });
+      // Two concurrent OAuth/bootstrap handlers for the same verified request
+      // must not issue two different single-active-session tokens. Each caller
+      // receives its own Response clone so the body remains readable.
+      let loginRequest = serverLoginInFlightRef.current?.key === loginRequestBody
+        ? serverLoginInFlightRef.current.promise
+        : null;
+      if (!loginRequest) {
+        loginRequest = withTimeout(fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: loginRequestBody
+        }), 12000, null as Response | null);
+        serverLoginInFlightRef.current = { key: loginRequestBody, promise: loginRequest };
+        void loginRequest.finally(() => {
+          if (serverLoginInFlightRef.current?.promise === loginRequest) {
+            serverLoginInFlightRef.current = null;
+          }
+        }).catch(() => undefined);
+      }
+      const response = (await loginRequest)?.clone() || null;
       if (!response) {
         return { success: false, error: 'Tempo esgotado ao entrar. Tente novamente.' };
       }
@@ -8126,6 +8158,7 @@ export default function App() {
 
   const handleLogout = async (reason: 'manual' | 'expired' = 'manual') => {
     manualLogoutInProgressRef.current = true;
+    authenticatedUserIdRef.current = '';
     if (reason === 'expired') {
       // An expired server session cannot authorize uploads or activity logs.
       // Hide the protected UI immediately; encrypted pending mutations remain durable.

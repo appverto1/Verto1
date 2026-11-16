@@ -27038,7 +27038,7 @@ async function startServer() {
     });
   });
 
-  app.get('/api/auth/me', authMeLimiter, syncWorkspaceContextInSession, async (req: any, res: any) => {
+  app.get('/api/auth/me', noStoreDynamicResponse, authMeLimiter, syncWorkspaceContextInSession, async (req: any, res: any) => {
     if (req.session.user) {
       const sessionUserId = sanitizeString(req.session.user?.id, 120);
       const sessionToken = sanitizeString(req.session.user?.sessionToken, 200);
