@@ -1,0 +1,41 @@
+name: Partner referral promotion gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/publicSalesLeadInput.ts'
+      - 'services/publicSalesLeadRoutes.ts'
+      - 'supabase/migrations/20261110160000_verto_partnerships_foundation_v1.sql'
+      - 'supabase/migrations/20261111154000_verto_partner_referral_coupon_v1.sql'
+      - 'supabase/migrations/20261111190000_verto_partner_coupon_compact_format_v1.sql'
+      - 'supabase/migrations/20261111203000_verto_partner_referral_crm_reporting_v1.sql'
+      - 'tests/publicSalesLeadInput.behavior.test.ts'
+      - 'tests/publicSalesLeadRouteBehavior.test.ts'
+      - 'tests/partnerReferralLeadPromotion.test.ts'
+      - '.github/workflows/partner-referral-release-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: partner-referral-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canonical-lead-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Test existing lead and new optional referral
+        run: npx --no-install tsx --test tests/publicSalesLeadInput.behavior.test.ts tests/publicSalesLeadRouteBehavior.test.ts tests/partnerReferralLeadPromotion.test.ts
+      - name: Check production frontend build compatibility
+        run: npm run build
