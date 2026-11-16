@@ -81,8 +81,19 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       const auth=await supabase.auth.getUser(req.body.accessToken);
       const identity=auth.data?.user;
       const email=safe(identity?.email,254).toLowerCase();
-      if(auth.error || !uuid(identity?.id) || !email || !identity?.email_confirmed_at)
+      if(auth.error || !uuid(identity?.id) || !email)
         return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
+      if(!identity?.email_confirmed_at){
+        // GoTrue user payloads can omit the verification timestamp in some
+        // OAuth responses. Recheck the canonical Auth user server-side instead
+        // of accepting an unverified email or trusting provider metadata.
+        const verified=await supabase.auth.admin.getUserById(identity.id);
+        if(verified.error)throw verified.error;
+        const canonical=verified.data?.user;
+        if(!canonical?.email_confirmed_at || canonical.id!==identity.id
+           || safe(canonical.email,254).toLowerCase()!==email)
+          return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
+      }
       // Prevent a partner login from silently changing an active clinical session.
       if(req.session?.user?.id)
         return res.status(409).json({success:false,error:'CLINICAL_SESSION_ACTIVE'});
