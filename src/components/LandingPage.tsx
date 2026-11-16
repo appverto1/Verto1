@@ -33,6 +33,11 @@ import { GoogleIcon } from './GoogleIcon';
 import { SalesInterestForm } from './SalesInterestForm';
 import { getSupabase } from '../lib/supabase';
 import {
+  beginExplicitPasswordSignIn,
+  rememberExplicitPasswordSession,
+  finishExplicitPasswordSignIn,
+} from '../lib/explicitClinicalPasswordLogin';
+import {
   beginClinicalPortalOAuth,
   clearClinicalPortalOAuthIntent,
   completeClinicalPortalOAuth,
@@ -157,7 +162,11 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
     }
     setLoginError('');
     setLoading(true);
-    
+    // The form owns this password sign-in. A Supabase SIGNED_IN callback must
+    // not exchange the same login for another server session (even if the
+    // identity has Google as its primary app_metadata.provider).
+    beginExplicitPasswordSignIn();
+    let passwordSessionIssued = false;
     try {
       const supabase = await getSupabase();
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -174,6 +183,8 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
       }
 
       if (data.session) {
+        passwordSessionIssued = true;
+        rememberExplicitPasswordSession(data.session.access_token);
         if (rememberMe) {
           localStorage.setItem('verto_email', email);
           localStorage.removeItem('verto_password');
@@ -225,6 +236,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
         setLoginError(`Erro no login: ${err?.message || 'Erro de conexão. Tente novamente.'}`);
       }
     } finally {
+      finishExplicitPasswordSignIn(passwordSessionIssued);
       setLoading(false);
     }
   };
