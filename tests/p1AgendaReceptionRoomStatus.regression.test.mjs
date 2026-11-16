@@ -29,7 +29,7 @@ assert.match(calendar, /!isReceptionistActor && detailPrimaryAction\.kind !== 'n
 assert.match(calendar, /!isReceptionistActor && \(<>[\s\S]*?Ver prontuário[\s\S]*?Ver gráficos[\s\S]*?<\/>\)\}/);
 assert.match(calendar, /Ações de status/);
 assert.match(calendar, /!isReceptionistActor && \(detailEvent\.closure_readiness_status \|\| detailCancellationState\.isCancelled\)/);
-assert.match(calendar, /!isReceptionistActor && \(\s*<div className=\{`mt-5 rounded-3xl/);
+assert.match(calendar, /!isReceptionistActor && !isCaseScopedActor && \(\s*<div className=\{`mt-5 rounded-3xl/);
 for (const value of ['planItems.length', 'maintenanceProbes.length', 'recommendations.length']) {
   assert.ok(calendar.includes('!isReceptionistActor && '+value), 'reception cannot access '+value);
 }
