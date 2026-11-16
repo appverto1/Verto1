@@ -1,6 +1,7 @@
 ﻿import { createClient } from '@supabase/supabase-js';
 
 import { sanitizeTechnicalErrorMessage } from '../utils/displayLabels';
+import { establishImplicitLoginSession, readImplicitLoginTokens } from './implicitOAuthLogin';
 
 // Fetch the Supabase configuration from the server to keep it out of the bundle
 const fetchConfig = async (retries = 3, delay = 1000) => {
@@ -38,6 +39,7 @@ let initPromise: Promise<any> | null = null;
 let sessionRetryPromise: Promise<any> | null = null;
 let authUrlExchangePromise: Promise<any> | null = null;
 let authUrlExchangeCode = '';
+let implicitLoginSessionPromise: Promise<any | null> | null = null;
 
 const AUTH_SESSION_READ_TIMEOUT_MS = 1600;
 const AUTH_URL_EXCHANGE_TIMEOUT_MS = 8000;
@@ -129,6 +131,42 @@ const exchangeOAuthCodeOnce = async (client: any, timeoutMs: number) => {
   return result?.data?.session || null;
 };
 
+// The ordinary Google login uses Supabase implicit OAuth (#access_token, #refresh_token).
+// With detectSessionInUrl disabled, the login callback must establish its session
+// itself. Activation/recovery links continue to be handled by ActivationAccess.
+const exchangeImplicitLoginOnce = async (client: any, timeoutMs: number) => {
+  if (typeof window === 'undefined') return null;
+  const callbackUrl = window.location.href;
+  const tokens = readImplicitLoginTokens(callbackUrl);
+  if (!tokens) return null;
+
+  if (!implicitLoginSessionPromise) {
+    const pending = Promise.resolve()
+      .then(() => establishImplicitLoginSession(callbackUrl, client.auth))
+      .then((session) => {
+        if (session && typeof window !== 'undefined') {
+          const stillPending = readImplicitLoginTokens(window.location.href);
+          if (stillPending?.accessToken === tokens.accessToken &&
+              stillPending.refreshToken === tokens.refreshToken) {
+            const current = new URL(window.location.href);
+            // Never leave access/refresh/provider tokens in the address bar.
+            window.history.replaceState(
+              window.history.state, document.title, `${current.pathname}${current.search}` || '/',
+            );
+          }
+        }
+        return session;
+      })
+      .catch(() => null)
+      .finally(() => {
+        if (implicitLoginSessionPromise === pending) implicitLoginSessionPromise = null;
+      });
+    implicitLoginSessionPromise = pending;
+  }
+
+  return withAuthTimeout(implicitLoginSessionPromise, timeoutMs, null as any);
+};
+
 export const ensureFreshSession = async (
   options: { sessionTimeoutMs?: number; urlExchangeTimeoutMs?: number } = {},
 ) => {
@@ -143,6 +181,8 @@ export const ensureFreshSession = async (
     // disabled below so an activation callback cannot race a second manual exchange.
     const urlSession = await exchangeOAuthCodeOnce(client, urlExchangeTimeoutMs);
     if (urlSession) return urlSession;
+    const implicitSession = await exchangeImplicitLoginOnce(client, urlExchangeTimeoutMs);
+    if (implicitSession) return implicitSession;
 
     // A stalled refresh request must never block ordinary app mutations. The backend
     // also authenticates the existing HTTP-only session cookie, so a short local
