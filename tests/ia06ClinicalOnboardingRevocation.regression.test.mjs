@@ -33,7 +33,7 @@ test('IA-06 fail-closed baselines, exact scope, no unrelated DML',()=>{
   const responseAuth=migrationClinical.indexOf("onboarding_actor_can_respond_v1(p_actor_id,v_clinic_id)");
   const responseLookup=migrationClinical.indexOf("select * into v_response from public.onboarding_responses");
   assert.ok(responseAuth>0 && responseLookup>responseAuth,'authorization must precede idempotent replay');
-  assert.equal((migrationClinical.match(/response\.responded_by=p_actor_id/g)||[]).length,2);
+  assert.equal((functionSql(migrationClinical,'submit_onboarding_response_v1').match(/response\.responded_by=p_actor_id/g)||[]).length,2);
   assert.match(migrationRevocation,/participant_membership\.status = 'active'/);
   assert.match(migrationRevocation,/active_case_member\.status = 'active'/);
   assert.match(migrationRevocation,/file_owner_clinic\.owner_user_id = u\.id/);
@@ -80,8 +80,8 @@ test('IA-06 PostgreSQL verifies tenant isolation, revoked membership, onboarding
   try {
     await conn.query('BEGIN');
     await conn.query('CREATE SCHEMA IF NOT EXISTS auth');
-    await conn.query("CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $ SELECT NULLIF(current_setting('request.jwt.claim.sub',true),'')::uuid $");
-    await conn.query("CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $ SELECT current_setting('request.jwt.claim.role',true) $");
+    await conn.query("CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $q$ SELECT NULLIF(current_setting('request.jwt.claim.sub',true),'')::uuid $q$");
+    await conn.query("CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $q$ SELECT current_setting('request.jwt.claim.role',true) $q$");
     await conn.query('CREATE ROLE ia06_caller NOLOGIN');
     await conn.query("CREATE TABLE public.users(id uuid PRIMARY KEY,role text,clinic_id uuid,name text)");
     await conn.query('CREATE TABLE public.clinics(id uuid PRIMARY KEY,owner_user_id uuid,school_organization_id uuid)');
@@ -113,13 +113,13 @@ test('IA-06 PostgreSQL verifies tenant isolation, revoked membership, onboarding
     await conn.query("INSERT INTO public.patient_files(id,patient_id,clinic_id,uploaded_by,patient_portal_visible,access_scope) VALUES($1,$5,$6,$7,false,'OWNER'),($2,$5,$6,NULL,false,'CASE_TEAM'),($3,$5,$6,NULL,true,'PATIENT_ACCESS'),($4,$5,$6,NULL,false,'SELECTED')",
       [fileOwner,fileCase,fileParent,fileSelected,patientA,clinicA,therapist]);
     await conn.query('INSERT INTO public.patient_file_access_grants(file_id,patient_id,clinic_id,grantee_user_id) VALUES($1,$2,$3,$4)',[fileSelected,patientA,clinicA,guardian]);
-    await conn.query("CREATE FUNCTION public.onboarding_text_array_valid_v1(text[],int,int,int) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$ SELECT TRUE $$");
-    await conn.query("CREATE FUNCTION public.onboarding_actor_can_respond_v1(actor uuid,clinic uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $$ SELECT EXISTS(SELECT 1 FROM public.clinic_memberships cm WHERE cm.user_id=actor AND cm.clinic_id=clinic AND cm.status='active' AND cm.role IN('director','coordinator')) $$");
-    await conn.query("CREATE FUNCTION public.is_platform_admin(target_user uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $$ SELECT target_user=auth.uid() AND EXISTS(SELECT 1 FROM public.platform_admins p WHERE p.user_id=target_user AND p.active) $$");
-    await conn.query("CREATE FUNCTION public.school_actor_effective_role(actor uuid,clinic uuid) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER AS $$ SELECT (SELECT role FROM public.clinic_memberships cm WHERE cm.user_id=actor AND cm.clinic_id=clinic AND cm.status='active' LIMIT 1) $$");
+    await conn.query("CREATE FUNCTION public.onboarding_text_array_valid_v1(text[],int,int,int) RETURNS boolean LANGUAGE sql IMMUTABLE AS $q$ SELECT TRUE $q$");
+    await conn.query("CREATE FUNCTION public.onboarding_actor_can_respond_v1(actor uuid,clinic uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $q$ SELECT EXISTS(SELECT 1 FROM public.clinic_memberships cm WHERE cm.user_id=actor AND cm.clinic_id=clinic AND cm.status='active' AND cm.role IN('director','coordinator')) $q$");
+    await conn.query("CREATE FUNCTION public.is_platform_admin(target_user uuid) RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER AS $q$ SELECT target_user=auth.uid() AND EXISTS(SELECT 1 FROM public.platform_admins p WHERE p.user_id=target_user AND p.active) $q$");
+    await conn.query("CREATE FUNCTION public.school_actor_effective_role(actor uuid,clinic uuid) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER AS $q$ SELECT (SELECT role FROM public.clinic_memberships cm WHERE cm.user_id=actor AND cm.clinic_id=clinic AND cm.status='active' LIMIT 1) $q$");
     for (const name of ['school_rls_org_access','school_rls_patient_access']) await conn.query(functionSql(migrationRevocation,name));
     for (const name of ['patient_file_actor_has_patient_access_v1','patient_file_current_actor_can_read_v1']) await conn.query(functionSql(migrationRevocation,name));
-    await conn.query('CREATE FUNCTION public.ia06_school_auth_dummy() RETURNS boolean LANGUAGE sql STABLE AS $$ SELECT FALSE $$');
+    await conn.query('CREATE FUNCTION public.ia06_school_auth_dummy() RETURNS boolean LANGUAGE sql STABLE AS $q$ SELECT FALSE $q$');
     await conn.query(functionSql(migrationRevocation,'school_rls_meeting_access'));
     for (const name of clinicalFunctions) await conn.query(functionSql(migrationClinical,name));
     await conn.query('CREATE POLICY patient_files_insert ON public.patient_files FOR INSERT TO ia06_caller WITH CHECK(TRUE)');
