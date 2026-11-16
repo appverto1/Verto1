@@ -1,6 +1,7 @@
 import React, {useCallback, useEffect, useState} from 'react';
 import { PartnerMarketplacePublisher } from './PartnerMarketplacePublisher';
-import {ArrowLeft, Check, Copy, Gift, Loader2, MessageSquare, RefreshCw, Store, UsersRound} from 'lucide-react';
+import { LogoVerto } from './Common';
+import {ArrowLeft, Check, Copy, Gift, Loader2, Medal, MessageSquare, RefreshCw, Store, UsersRound} from 'lucide-react';
 
 type Account = {
   id:string; display_name:string; referral_code:string; referral_alias?:string|null; status:'pending'|'approved'|'suspended';
@@ -102,6 +103,12 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     }finally{setCouponSaving(false);}
   };
   const paid=referrals.filter(r=>r.has_paid).length;
+  const partnerLevel=currentTermMonths===12?'Ouro':currentTermMonths===9?'Prata':'Bronze';
+  const nextMilestone=currentTermMonths===12?null:currentTermMonths===9?6:3;
+  const missingToNext=nextMilestone===null?0:Math.max(0,nextMilestone-qualifiedActive);
+  const progressPercent=nextMilestone===null?100:Math.max(0,Math.min(100,(qualifiedActive/nextMilestone)*100));
+  const levelColors=currentTermMonths===12?'bg-amber-100 text-amber-700':currentTermMonths===9?'bg-slate-100 text-slate-600':'bg-orange-100 text-orange-700';
+  const progressColor=currentTermMonths===12?'bg-amber-500':currentTermMonths===9?'bg-slate-500':'bg-orange-500';
   const navigateTabs=(event:React.KeyboardEvent<HTMLButtonElement>,current:PartnerTab)=>{
     const index=partnerTabs.findIndex(tab=>tab.key===current);
     const next=event.key==='ArrowRight'?(index+1)%partnerTabs.length
@@ -116,6 +123,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
 
   return <section className="mx-auto max-w-4xl space-y-6 py-3" aria-labelledby="partner-page-title">
     <div className="flex items-center gap-3">
+      <LogoVerto size={29} showText={true} />
       <button type="button" onClick={onBack} className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:bg-slate-50" aria-label="Voltar"><ArrowLeft size={18}/></button>
       <div>
         <h1 id="partner-page-title" className="text-xl font-semibold text-slate-900">{mode==='external'?'Programa de Parcerias':'Indique e Ganhe'}</h1>
@@ -142,7 +150,34 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
       <div className="mb-2 flex items-center gap-2 text-violet-700"><Gift size={18}/><span className="text-xs font-semibold">Programa de parceiros</span></div>
       <p className="text-2xl font-semibold text-slate-900">10% por até {currentTermMonths} meses nas próximas indicações</p>
       <p className="mt-2 text-sm leading-6 text-slate-600">Comissão potencial sobre pagamentos recorrentes confirmados de novos clientes indicados.</p>
-      {approved && <p className="mt-2 text-xs leading-5 text-slate-500">Nível atual: {qualifiedActive} clientes qualificados ativos nos últimos 12 meses. De 0 a 2: 6 meses; de 3 a 5: 9 meses; 6 ou mais: 12 meses. Cada indicação ganha seu prazo próprio após dois pagamentos mensais confirmados. Reduções de nível têm carência de 30 dias; prazos já concedidos não diminuem.</p>}
+      {approved && <div className="mt-5 rounded-2xl border border-violet-100 bg-violet-50/40 p-4 sm:p-5" aria-label="Progresso do parceiro">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className={'flex h-11 w-11 shrink-0 items-center justify-center rounded-full '+levelColors}><Medal size={24} aria-hidden="true" /></span>
+            <div>
+              <p className="text-xs font-medium text-slate-500">Seu nível atual</p>
+              <p className="text-lg font-bold text-slate-900">Parceiro {partnerLevel}</p>
+            </div>
+          </div>
+          <span className="text-xs font-medium text-slate-600">{qualifiedActive} {qualifiedActive===1?'cliente qualificado ativo':'clientes qualificados ativos'}</span>
+        </div>
+        <div className="mt-4 flex items-center justify-between gap-2 text-xs font-semibold text-slate-600">
+          <span>{nextMilestone===null?'Nível máximo alcançado':missingToNext===1?'Falta 1 cliente qualificado para o próximo nível':`Faltam ${missingToNext} clientes qualificados para o próximo nível`}</span>
+          <span>{nextMilestone===null?'Ouro':`${qualifiedActive} / ${nextMilestone}`}</span>
+        </div>
+        <div role="progressbar" aria-label="Progresso para o próximo nível" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progressPercent)} className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-slate-200">
+          <div className={'h-full rounded-full transition-all '+progressColor} style={{width:progressPercent+'%'}} />
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+          {([{name:'Bronze',range:'0–2',term:6},{name:'Prata',range:'3–5',term:9},{name:'Ouro',range:'6+',term:12}] as const).map(level=>
+            <div key={level.name} className={'rounded-xl border px-2 py-2.5 '+(currentTermMonths===level.term?'border-violet-300 bg-white font-semibold text-violet-800':'border-transparent bg-white/60 text-slate-500')}>
+              <Medal size={18} className="mx-auto mb-1" aria-hidden="true" />
+              <span className="block">{level.name}</span>
+              <span className="mt-0.5 block text-[11px]">{level.range} clientes · {level.term} meses</span>
+            </div>)}
+        </div>
+        <p className="mt-3 text-xs leading-5 text-slate-500">Cada indicação conquista um prazo próprio após dois pagamentos mensais confirmados. Reduções de nível têm carência de 30 dias; os prazos já concedidos não diminuem.</p>
+      </div>}
       {loading ? <p className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={16}/> Carregando...</p>
       : !account && mode==='external' ? <p className="mt-5 text-sm text-slate-500">Seu cadastro não foi encontrado. Solicite participação ao comercial da Verto.</p>
       : !account ? <button type="button" disabled={saving} onClick={enroll} className="mt-5 rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{saving?'Enviando...':'Solicitar participação'}</button>

@@ -234,11 +234,11 @@ export function ExternalPartnershipPortal() {
 
   return <main className="min-h-screen bg-slate-50 px-4 py-8">
     <div className="mx-auto max-w-md">
+      <div className="mb-5"><LogoVerto size={29} showText={true}/></div>
       <a href="/" className="mb-7 inline-flex items-center gap-2 text-sm text-slate-600">
         <ArrowLeft size={16}/> Voltar ao site
       </a>
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8" aria-labelledby="partner-login-title">
-        <LogoVerto size={40} showText={true}/>
         <div className="mt-7 flex items-center gap-2 text-violet-700">
           <ShieldCheck size={18}/><span className="text-xs font-semibold">Acesso exclusivo</span>
         </div>

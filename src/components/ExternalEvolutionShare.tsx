@@ -214,7 +214,7 @@ export const ExternalEvolutionShare = ({ publicId }: Props) => {
   return (
     <main className="min-h-screen bg-slate-50 px-4 py-7 sm:px-6">
       <section className="mx-auto w-full max-w-2xl overflow-hidden rounded-[30px] border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
-        <header className="border-b border-slate-100 px-5 py-5 sm:px-7"><LogoVerto size={34} showText /></header>
+        <header className="border-b border-slate-100 px-5 py-5 sm:px-7"><LogoVerto size={29} showText /></header>
         <div className="p-5 sm:p-7">
           {stage === 'loading' && <div className="flex min-h-[320px] flex-col items-center justify-center gap-3 text-center"><Loader2 size={30} className="animate-spin text-[#7a32fc]" /><p className="text-sm font-medium text-slate-500">Preparando sua timeline compartilhada...</p></div>}
           {stage === 'unavailable' && <StateCard icon={<LockKeyhole size={30} />} title="Compartilhamento indisponível" text="Este acesso pode ter sido revogado, arquivado ou não estar mais disponível." />}

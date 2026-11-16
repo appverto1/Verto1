@@ -443,7 +443,7 @@ export const ExternalPatientTimeline = ({ clinicId, patientId }: Props) => {
     return (
       <main className="min-h-screen bg-slate-50 px-4 py-8 sm:py-14">
         <section className="mx-auto w-full max-w-md rounded-[30px] border border-slate-200 bg-white p-6 shadow-xl shadow-slate-900/5 sm:p-8">
-          <LogoVerto size={36} showText />
+          <LogoVerto size={29} showText />
           <div className="mt-8 rounded-2xl bg-violet-50 p-4 text-violet-800"><ShieldCheck size={20} /><p className="mt-2 text-sm font-semibold">Rede de cuidado</p><p className="mt-1 text-xs leading-5 text-violet-700">Entre com sua conta Verto para abrir a timeline compartilhada. Nenhum dado clínico é exibido antes da autenticação.</p></div>
           <div className="mt-6 space-y-4">
             <label className="block"><span className="text-xs text-slate-600">E-mail</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="mt-1.5 min-h-12 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-[#7a32fc]" /></label>
