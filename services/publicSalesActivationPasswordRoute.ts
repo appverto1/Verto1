@@ -5,6 +5,8 @@ import type { Express, RequestHandler } from 'express';
 // injected by the server; the browser cannot select any of them.
 export interface PublicSalesActivationPasswordRouteDeps {
   supabase: any;
+  getStripe: () => any;
+  stripeSubscriptionToEntitlementStatus: (status: string) => string;
   publicSalesActivationLimiter: RequestHandler;
   validateStrongPassword: (value: unknown) => string | null;
   loadPublicSalesActivation: (rawToken: unknown) => Promise<any>;
@@ -24,7 +26,8 @@ export function registerPublicSalesActivationPasswordRoute(
   app: Express, deps: PublicSalesActivationPasswordRouteDeps,
 ): void {
   const {
-    supabase, publicSalesActivationLimiter, validateStrongPassword,
+    supabase, getStripe, stripeSubscriptionToEntitlementStatus,
+    publicSalesActivationLimiter, validateStrongPassword,
     loadPublicSalesActivation, findAuthUserByEmail,
     fetchProfileWithSchemaFallback, insertUserProfileWithSchemaFallback,
     extractMissingColumnName, cleanObject, ensureClinicAndMembershipForCoordinator,
@@ -66,7 +69,36 @@ export function registerPublicSalesActivationPasswordRoute(
           });
         }
 
+        // loadPublicSalesActivation already scoped the offer to this token,
+        // paid status, lead, checkout and contractual email. Verify the Stripe
+        // subscription before touching GoTrue, profile or clinic/membership.
+        let verifiedSubscription: any = null;
+        if (sanitizeString(loaded.offer?.offer_type, 30) === "modular") {
+          const subscriptionId = sanitizeString(loaded.offer?.stripe_subscription_id, 200);
+          if (!subscriptionId) throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
+          const candidate = await getStripe().subscriptions.retrieve(subscriptionId);
+          if (sanitizeString(candidate?.status, 40) !== "active"
+            || stripeSubscriptionToEntitlementStatus(candidate.status) !== "active") {
+            throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
+          }
+          verifiedSubscription = candidate;
+        }
+
+        // A paid activation may resume its own account, never silently
+        // reassign another Auth identity, offer or clinic.
+        const authIdentityMatchesPaidOffer = (candidate: any): boolean => {
+          const marker = sanitizeString(candidate?.app_metadata?.sales_activation_offer_id, 120);
+          return sanitizeEmail(candidate?.email) === loaded.email
+            && (!marker || marker === loaded.offerId);
+        };
         let authUser = await findAuthUserByEmail(loaded.email);
+        if (authUser?.id && !authIdentityMatchesPaidOffer(authUser)) {
+          return res.status(409).json({
+            success: false,
+            error: "ACCOUNT_REVIEW_REQUIRED",
+            message: "Esta conta precisa ser conferida antes de concluir a ativação.",
+          });
+        }
         if (authUser?.id) {
           const existingProfileResult = await fetchProfileWithSchemaFallback({
             supabase,
@@ -113,6 +145,10 @@ export function registerPublicSalesActivationPasswordRoute(
             await supabase.auth.admin.updateUserById(authUser.id, {
               password,
               email_confirm: true,
+              app_metadata: {
+                ...(authUser.app_metadata || {}),
+                sales_activation_offer_id: loaded.offerId,
+              },
               user_metadata: {
                 ...(authUser.user_metadata || {}),
                 full_name:
@@ -129,7 +165,6 @@ export function registerPublicSalesActivationPasswordRoute(
               email: loaded.email,
               password,
               email_confirm: true,
-              // Keep the same server-only Checkout marker as webhook provisioning.
               app_metadata: { sales_activation_offer_id: loaded.offerId },
               user_metadata: {
                 full_name:
@@ -146,10 +181,17 @@ export function registerPublicSalesActivationPasswordRoute(
             if (normalizedError.includes("already")) {
               authUser = await findAuthUserByEmail(loaded.email);
               if (!authUser?.id) throw createError;
+              if (!authIdentityMatchesPaidOffer(authUser)) {
+                throw new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+              }
               const { error: retryUpdateError } =
                 await supabase.auth.admin.updateUserById(authUser.id, {
                   password,
                   email_confirm: true,
+                  app_metadata: {
+                    ...(authUser.app_metadata || {}),
+                    sales_activation_offer_id: loaded.offerId,
+                  },
                 });
               if (retryUpdateError) throw retryUpdateError;
             } else {
@@ -259,6 +301,7 @@ export function registerPublicSalesActivationPasswordRoute(
           offerId: loaded.offerId,
           leadId: loaded.leadId,
           checkoutSessionId: loaded.checkoutSessionId,
+          verifiedSubscription,
         });
 
         const { error: ownerMetadataError } = await supabase.auth.admin.updateUserById(

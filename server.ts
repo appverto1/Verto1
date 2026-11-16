@@ -23511,6 +23511,9 @@ async function startServer() {
 
   registerPublicSalesActivationPasswordRoute(app, {
     supabase,
+    getStripe,
+    // Declared later in startServer; evaluated only on the actual POST.
+    stripeSubscriptionToEntitlementStatus: (status) => stripeSubscriptionToEntitlementStatus(status),
     publicSalesActivationLimiter,
     validateStrongPassword,
     loadPublicSalesActivation,

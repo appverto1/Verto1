@@ -24,7 +24,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
     // profiles or clinic membership, rather than creating an early Director.
     const { data: paidOffer, error: paidOfferError } = await supabase
       .from("sales_offers")
-      .select("offer_type,stripe_subscription_id")
+      .select("offer_type,stripe_subscription_id,contract_email")
       .eq("id", offerId)
       .eq("lead_id", leadId)
       .eq("stripe_checkout_session_id", checkoutSessionId)
@@ -34,11 +34,16 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
     if (!paidOffer) throw new Error("SALES_DIRECTOR_PROVISIONING_PAYMENT_NOT_CONFIRMED");
     let verifiedSubscription: Stripe.Subscription | null = null;
     if (sanitizeString(paidOffer.offer_type, 30) === "modular") {
+      if (sanitizeEmail(paidOffer.contract_email) !== email) {
+        throw new Error("SALES_DIRECTOR_CONTRACT_EMAIL_MISMATCH");
+      }
       const verifiedSubscriptionId = sanitizeString(paidOffer.stripe_subscription_id, 200);
       if (!verifiedSubscriptionId) throw new Error("SALES_SUBSCRIPTION_LINKAGE_MISSING");
       const candidateSubscription = await getStripe().subscriptions.retrieve(verifiedSubscriptionId);
       const candidateStatus = stripeSubscriptionToEntitlementStatus(candidateSubscription.status);
-      if (!["active", "trial", "grace"].includes(candidateStatus)) {
+      // New commercial contracts require first payment; trial/grace are not
+      // eligible for an initial Director/clinic grant.
+      if (sanitizeString(candidateSubscription.status, 40) !== "active" || candidateStatus !== "active") {
         throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
       }
       verifiedSubscription = candidateSubscription;
@@ -86,6 +91,14 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       }
     }
     if (!authUser?.id) throw new Error("SALES_AUTH_USER_NOT_CREATED");
+    // No lookup or concurrent Auth create can grant a different email/offer
+    // clinical permissions, even if user_metadata claims another identity.
+    const serverOfferMarker = sanitizeString(authUser?.app_metadata?.sales_activation_offer_id, 120);
+    if (sanitizeEmail(authUser.email) !== email || (serverOfferMarker && serverOfferMarker !== offerId)) {
+      const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+      (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+      throw conflict;
+    }
 
     const existingProfile = await fetchProfileWithSchemaFallback({
       supabase,
@@ -93,6 +106,13 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       logger: console,
     });
     if (existingProfile.error) throw existingProfile.error;
+    // Unlinked pre-existing Auth users (including patients without profiles)
+    // must not silently become clinic directors from a webhook replay.
+    if (!existingProfile.data && !serverOfferMarker) {
+      const conflict = new Error("SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED");
+      (conflict as any).code = "SALES_DIRECTOR_EXISTING_ACCOUNT_REVIEW_REQUIRED";
+      throw conflict;
+    }
     const existingMetadataOfferId = sanitizeString(
       authUser?.user_metadata?.sales_activation_offer_id,
       120,
@@ -143,6 +163,10 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
     const { data: updatedAuthUser, error: updateAuthError } =
       await supabase.auth.admin.updateUserById(authUser.id, {
         email_confirm: true,
+        app_metadata: {
+          ...(authUser.app_metadata || {}),
+          sales_activation_offer_id: offerId,
+        },
         user_metadata: {
           ...(authUser.user_metadata || {}),
           full_name: ownerName,
@@ -283,6 +307,10 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       return;
     }
 
+    if (params.clinicId !== params.userId) {
+      throw new Error("SALES_DIRECTOR_CLINIC_SCOPE_MISMATCH");
+    }
+
     let modularContract = false;
     try {
       const requireActivationRecord = params.requireActivationRecord !== false;
@@ -307,7 +335,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
           .maybeSingle(),
         supabase
           .from("sales_offers")
-          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,modular_snapshot,simulation_snapshot")
+          .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,contract_email,modular_snapshot,simulation_snapshot")
           .eq("id", offerId)
           .eq("lead_id", leadId)
           .eq("status", "paid")
@@ -322,6 +350,9 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       if (!leadResult.data || !offerResult.data || (requireActivationRecord && !activationResult.data))
         return;
       modularContract = sanitizeString(offerResult.data.offer_type, 30) === "modular";
+      if (modularContract && sanitizeEmail(offerResult.data.contract_email) !== normalizedEmail) {
+        throw new Error("SALES_DIRECTOR_CONTRACT_EMAIL_MISMATCH");
+      }
       const activationExpired = activationResult.data?.expires_at
         ? new Date(activationResult.data.expires_at).getTime() <= Date.now()
         : false;
@@ -349,7 +380,7 @@ export function createSalesPaidDirectorAccountProvisioning(deps: Record<string, 
       const entitlementStatus = subscription
         ? stripeSubscriptionToEntitlementStatus(subscription.status)
         : null;
-      if (modularContract && !["active", "trial", "grace"].includes(entitlementStatus || "")) {
+      if (modularContract && (sanitizeString(subscription?.status, 40) !== "active" || entitlementStatus !== "active")) {
         throw new Error("SALES_SUBSCRIPTION_NOT_ACTIVE");
       }
 
