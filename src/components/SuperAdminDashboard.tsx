@@ -36,8 +36,6 @@ import {
   YAxis
 } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
-import { CommercialKanban } from './CommercialKanban';
-import { CommercialDashboard } from './CommercialDashboard';
 import { LogoVerto } from './Common';
 import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
@@ -552,40 +550,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
     fetchData();
   }, []);
 
-  // Kanban's manual refresh must not reload financials, customers, surveys or demo data.
-  const refreshKanbanLeads = async () => {
-    const supabase = await getSupabase();
-    const { data: { session } } = await supabase.auth.getSession();
-    const headers = { Authorization: session?.access_token ? 'Bearer ' + session.access_token : '' };
-    const result = await fetchJsonSoft('/api/owner/sales/leads?page=1&pageSize=100', headers, 'Leads comerciais');
-    if (!result?.success) return;
-    setLeadRecoveryItems(result.data || []);
-    setLeadTotal(Number(result.pagination?.total || 0));
-    setLeadNextPage(2);
-  };
-
-  const loadMoreLeads = async () => {
-    if (loadingMoreLeads) return;
-    setLoadingMoreLeads(true);
-    try {
-      const supabase = await getSupabase();
-      const { data: { session } } = await supabase.auth.getSession();
-      const response = await fetch('/api/owner/sales/leads?page='+leadNextPage+'&pageSize=100',{
-        credentials:'include',headers:{Authorization:session?.access_token?'Bearer '+session.access_token:''},
-      });
-      const json = await response.json().catch(()=>({}));
-      if (!response.ok || !json.success) throw Error(json.error || 'Falha ao carregar mais leads.');
-      const next = json.data || [];
-      setLeadRecoveryItems(current=>{
-        const existing = new Set(current.map(x=>x.id));
-        return [...current,...next.filter((x:any)=>!existing.has(x.id))];
-      });
-      setLeadTotal(Number(json.pagination?.total || 0));
-      setLeadNextPage(p=>p+1);
-    } catch(error:any) { setDashboardWarning(error?.message || 'Falha ao carregar próxima página.'); }
-    finally {setLoadingMoreLeads(false);}
-  };
-
   const refreshAll = async () => {
     const supabase = await getSupabase();
     const { data: { session } } = await supabase.auth.getSession();
@@ -993,8 +957,6 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   const delinquentCustomers = financial.delinquentCustomers || [];
   const trialingCustomers = financial.trialingCustomers || [];
   const hasRealFinancialLedger = financial.source === 'platform_invoice_ledger';
-  // Desktop Kanban uses a fixed, compact sidebar; the rest of Super Admin retains its full menu.
-  const compactDesktopMenu = activeTab === 'leads' && commercialView === 'kanban';
 
   const compactDesktopMenu = activeTab === 'leads' && commercialView === 'kanban' &&
     import.meta.env.VITE_FEATURE_COMMERCIAL_PROSPECTING === 'true';
