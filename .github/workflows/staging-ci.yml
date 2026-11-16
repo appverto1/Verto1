@@ -330,6 +330,13 @@ jobs:
       - name: Expired server session and safe re-entry regression
         run: node tests/sessionExpiredCleanLogout.regression.test.mjs
 
+      - name: Idempotent login and no-store server session regression
+        run: |
+          node tests/stagingIdempotentServerSession.regression.test.mjs
+          node tests/authStateChangeDeadlockRegression.test.mjs
+          node tests/stabilizationPhase2SessionOwnership.test.mjs
+          node tests/productionSessionPersistence.regression.test.mjs
+
       - name: Clinic authorization-denial guidance regression
         run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
 
