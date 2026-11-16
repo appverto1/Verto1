@@ -4,11 +4,14 @@ on:
     branches: [main]
     paths:
       - 'src/lib/supabase.ts'
+      - 'src/lib/implicitOAuthLogin.ts'
       - 'src/App.tsx'
       - 'src/services/salesActivationGoogleOAuth.ts'
       - 'src/components/SalesActivationAccess.tsx'
       - 'tests/salesDirectorGoogleFirstAccessTask12.regression.test.mjs'
       - 'tests/googleOauthActivationUi.regression.test.mjs'
+      - 'tests/googleOAuthPasswordFlash.regression.test.mjs'
+      - 'tests/implicitGoogleOAuthLogin.regression.test.ts'
       - '.github/workflows/main-paid-director-google-activation.yml'
 permissions:
   contents: read
@@ -34,6 +37,8 @@ jobs:
           node --test tests/salesDirectorGoogleFirstAccessTask12.regression.test.mjs
           node tests/googleOauthActivationUi.regression.test.mjs
           node tests/authStateChangeDeadlockRegression.test.mjs
+          node tests/googleOAuthPasswordFlash.regression.test.mjs
+          node --import tsx tests/implicitGoogleOAuthLogin.regression.test.ts
       - name: Reject new TypeScript diagnostics versus production main
         shell: bash
         run: |
