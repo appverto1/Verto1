@@ -10,8 +10,10 @@ const auth = fs.readFileSync('src/constants/authorizationModel.ts', 'utf8');
 // Professionals' local clinic state must never override the server's scoped
 // appointment list. Admin/coordinator merge behavior remains unchanged.
 assert.match(agenda, /const isTherapistActor = String\(currentUser\?\.role \|\| ''\).*=== 'therapist'/);
-assert.match(agenda, /const localEvents = useMemo\(\(\) => \(isTherapistActor \? \[\] : agenda \|\| \[\]\)/);
-assert.match(agenda, /isTherapistActor \? \(remoteState\.loaded \? serverEvents : \[\]\) : mergeCalendarEventsForRender/);
+assert.match(agenda, /const isSupervisorActor = String\(currentUser\?\.role \|\| ''\).*=== 'supervisor'/);
+assert.match(agenda, /const isCaseScopedActor = isTherapistActor \|\| isSupervisorActor/);
+assert.match(agenda, /const localEvents = useMemo\(\(\) => \(isCaseScopedActor \? \[\] : agenda \|\| \[\]\)/);
+assert.match(agenda, /isCaseScopedActor \? \(remoteState\.loaded \? serverEvents : \[\]\) : mergeCalendarEventsForRender/);
 assert.match(agenda, /if \(result\?\.error === 'CALENDAR_SCOPE_DENIED' \|\| result\?\.error === 'CLINIC_SCOPE_DENIED'\)/);
 assert.match(agenda, /setSelectedEvent\(null\);[\s\S]*setRemoteRefreshNonce\(\(value\) => value \+ 1\)/);
 
