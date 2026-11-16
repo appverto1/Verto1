@@ -11,6 +11,7 @@ const tests = [
   'tests/abaV3PtsCollectionContextIdempotency.regression.test.mjs',
   'tests/ia02AuthSessionLogPrivacy.regression.test.mjs',
   'tests/googleOAuthPasswordFlash.regression.test.mjs',
+  'tests/implicitGoogleOAuthLogin.regression.test.ts',
   'tests/ia01PrivilegedRpcAcl.regression.test.mjs',
   'tests/factoryRecoveryControls.regression.test.mjs',
   'tests/sessionCompletionNoShow.regression.test.mjs',

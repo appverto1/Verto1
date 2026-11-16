@@ -170,6 +170,7 @@ jobs:
         run: |
           node --import tsx tests/authLoginPortalPolicy.test.ts
           node tests/googleOAuthPasswordFlash.regression.test.mjs
+          node --import tsx tests/implicitGoogleOAuthLogin.regression.test.ts
 
       - name: Typecheck ratchet regression tests
         run: node tests/typecheckRatchet.regression.test.mjs
