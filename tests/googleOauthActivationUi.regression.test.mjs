@@ -37,6 +37,12 @@ for (const [name, source] of [
 
 assert.match(salesActivation, /beginSalesActivationGoogleOAuth\(token, activation\.email, window\.location\.origin\)/);
 
+const publicGoogleLogin = landing.match(/const handleGoogleLogin = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '';
+assert.match(publicGoogleLogin, /queryParams:\s*\{\s*prompt:\s*'select_account'\s*\}/,
+  'clicking Google login must explicitly request the Google account chooser');
+assert.match(salesGoogle, /queryParams:\s*\{\s*prompt:\s*'select_account'\s*\}/,
+  'paid Director activation must retain its existing account chooser');
+
 assert.match(
   activation,
   /activationEmail:\s*(existingEmail|loginEmail|userEmail)/,
