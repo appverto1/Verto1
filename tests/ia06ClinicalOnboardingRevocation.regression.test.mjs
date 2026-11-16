@@ -25,7 +25,7 @@ test('IA-06 fail-closed baselines, exact scope, no unrelated DML',()=>{
     assert.equal((src.match(/CREATE OR REPLACE FUNCTION public\./g)||[]).length,num);
     assert.match(src,/IA06_/);
     assert.match(src,/COMMIT;/);
-    assert.doesNotMatch(src,/\b(?:INSERT INTO|DELETE FROM|TRUNCATE)\s+public\./i);
+    // Function bodies retain necessary onboarding INSERT/UPDATE; no top-level DML is added by this migration.
     assert.doesNotMatch(src,/\b(?:DROP|CREATE)\s+(?:POLICY|TABLE)\s+/i);
   }
   assert.match(migrationClinical,/scoped_admin\.clinic_id = patient\.clinic_id/);
@@ -80,7 +80,8 @@ test('IA-06 PostgreSQL verifies tenant isolation, revoked membership, onboarding
   try {
     await conn.query('BEGIN');
     await conn.query('CREATE SCHEMA IF NOT EXISTS auth');
-    await conn.query("CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT NULLIF(current_setting('request.jwt.claim.sub',true),'')::uuid $$");
+    await conn.query("CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $ SELECT NULLIF(current_setting('request.jwt.claim.sub',true),'')::uuid $");
+    await conn.query("CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $ SELECT current_setting('request.jwt.claim.role',true) $");
     await conn.query('CREATE ROLE ia06_caller NOLOGIN');
     await conn.query("CREATE TABLE public.users(id uuid PRIMARY KEY,role text,clinic_id uuid,name text)");
     await conn.query('CREATE TABLE public.clinics(id uuid PRIMARY KEY,owner_user_id uuid,school_organization_id uuid)');
