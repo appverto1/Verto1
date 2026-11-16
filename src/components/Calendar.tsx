@@ -1467,15 +1467,19 @@ export const ClinicalAgendaBoard = ({
   const isDark = theme === 'dark';
   const isReceptionistActor = ['receptionist', 'reception'].includes(String(currentUser?.role || '').trim().toLowerCase());
   const isTherapistActor = String(currentUser?.role || '').trim().toLowerCase() === 'therapist';
+  const isSupervisorActor = String(currentUser?.role || '').trim().toLowerCase() === 'supervisor';
+  const isCaseScopedActor = isTherapistActor || isSupervisorActor;
   const activeDate = currentDate instanceof Date ? currentDate : new Date(currentDate || Date.now());
   // Server-filtered actor capabilities determine whether TISS is subscribed and authorized.
   // Never infer module access from payer values on an existing appointment.
   const hasAgendaCapability = (key: string) => capabilities instanceof Set
     ? capabilities.has(key)
     : Array.isArray(capabilities) ? capabilities.includes(key) : false;
-  const canUseTissBilling = hasAgendaCapability('patient.insurance.view')
+  const canUseTissBilling = !isCaseScopedActor && (
+    hasAgendaCapability('patient.insurance.view')
     || hasAgendaCapability('billing.preguide.view')
-    || hasAgendaCapability('billing.context.view');
+    || hasAgendaCapability('billing.context.view')
+  );
   const canViewAbaSessionReport = capabilities instanceof Set
     ? capabilities.has('aba.analytics.view')
     : Array.isArray(capabilities)
@@ -1839,6 +1843,7 @@ export const ClinicalAgendaBoard = ({
   }, [schoolModuleEnabled]);
 
   useEffect(() => {
+    if (isCaseScopedActor) return;
     let active = true;
     dataService.getClinicAppointmentPolicy()
       .then((result: any) => {
@@ -1850,7 +1855,7 @@ export const ClinicalAgendaBoard = ({
     return () => {
       active = false;
     };
-  }, []);
+  }, [isCaseScopedActor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2005,17 +2010,16 @@ export const ClinicalAgendaBoard = ({
     };
   }, []);
 
-  // The server-scoped calendar is authoritative for therapists. Merging locally
-  // hydrated clinic events would expose other professionals' appointments,
-  // even though the detail endpoint correctly returns CALENDAR_SCOPE_DENIED.
-  const localEvents = useMemo(() => (isTherapistActor ? [] : agenda || [])
+  // For specialty professionals and case supervisors, the server-scoped calendar
+  // is authoritative. Never merge locally hydrated clinic-wide events.
+  const localEvents = useMemo(() => (isCaseScopedActor ? [] : agenda || [])
     .filter((event: any) => !isDeletedAppointmentEvent(event))
     .map((event: any) => normalizeClinicalEvent(event, roomLookup)),
-    [agenda, isTherapistActor, roomLookup]);
+    [agenda, isCaseScopedActor, roomLookup]);
   const serverEvents = useMemo(() => (remoteEvents || []).filter((event: any) => !isDeletedAppointmentEvent(event)).map((event: any) => normalizeClinicalEvent(event, roomLookup)), [remoteEvents, roomLookup]);
   const baseEvents = useMemo(
-    () => isTherapistActor ? (remoteState.loaded ? serverEvents : []) : mergeCalendarEventsForRender(localEvents, serverEvents, remoteState.loaded),
-    [isTherapistActor, localEvents, serverEvents, remoteState.loaded]
+    () => isCaseScopedActor ? (remoteState.loaded ? serverEvents : []) : mergeCalendarEventsForRender(localEvents, serverEvents, remoteState.loaded),
+    [isCaseScopedActor, localEvents, serverEvents, remoteState.loaded]
   );
 
   const selectedDateKey = toDateKey(activeDate);
@@ -2153,10 +2157,11 @@ export const ClinicalAgendaBoard = ({
     const search = patientSearch.trim().toLowerCase();
     const recentIds = new Set(baseEvents.slice(0, 30).map((event: any) => String(event.patient_id || '')).filter(Boolean));
     return (patients || [])
+      .filter((patient: any) => !isCaseScopedActor || recentIds.has(String(patient?.id || '')))
       .filter((patient: any) => !search || String(patient?.name || '').toLowerCase().includes(search))
       .sort((a: any, b: any) => Number(recentIds.has(String(b?.id))) - Number(recentIds.has(String(a?.id))))
       .slice(0, 8);
-  }, [patients, patientSearch, baseEvents]);
+  }, [patients, patientSearch, baseEvents, isCaseScopedActor]);
 
   const moveDate = (direction: -1 | 1) => {
     const next = new Date(activeDate);
@@ -2168,12 +2173,11 @@ export const ClinicalAgendaBoard = ({
 
   const openEventDetail = (event: any) => {
     const normalized = normalizeClinicalEvent(event);
-    // A specialty professional only opens the patient's authorized clinical record.
-    // Do not load appointment management details or offer status mutations.
-    if (isTherapistActor) {
-      const patientId = String(normalized.patientId || normalized.patient_id || '').trim();
-      if (patientId) onOpenPatient?.(patientId, { tab: 'history' }, normalized.patientName);
-      return;
+    if (isCaseScopedActor) {
+      // Only server-returned case appointments can open the details modal.
+      // The detail endpoint must still authorize the actor and patient scope.
+      if (!remoteState.loaded || normalized.source === 'school_meeting' || normalized.schoolMeetingId ||
+          !serverEvents.some((item: any) => String(item.id) === String(normalized.id))) return;
     }
     if (normalized.source === 'school_meeting' || normalized.schoolMeetingId) {
       setSelectedEvent(null);
@@ -2932,7 +2936,7 @@ export const ClinicalAgendaBoard = ({
   const renderSidebarContent = () => (
     <div className="space-y-4">
       {renderSection('calendar', 'Mini calendário', null, renderMiniCalendar())}
-      {!isTherapistActor && renderSection('team', 'Equipe', selectedTherapistIds.length, (
+      {!isCaseScopedActor && renderSection('team', 'Equipe', selectedTherapistIds.length, (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setSelectedTherapistIds([])} className={chipClass(selectedTherapistIds.length === 0)}>
@@ -3318,7 +3322,7 @@ export const ClinicalAgendaBoard = ({
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Hoje no foco</p>
             <h3 className={`text-base font-bold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatLongDate(activeDate)}</h3>
           </div>
-          {onCreateAppointment && !isTherapistActor && (
+          {onCreateAppointment && !isCaseScopedActor && (
             <button type="button" onClick={() => onCreateAppointment(selectedDateKey, '08:00')} className="rounded-2xl bg-[#7a32fc] p-3 text-white shadow-lg shadow-violet-500/20" aria-label="Criar agendamento">
               <Plus size={18} />
             </button>
@@ -3690,7 +3694,7 @@ export const ClinicalAgendaBoard = ({
 
   return (
     <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-4.25rem)] xl:min-h-[580px] xl:overflow-hidden xl:pb-0">
-      {!isTherapistActor && patientReschedulePolicy !== null && (
+      {!isCaseScopedActor && patientReschedulePolicy !== null && (
         <div className={`mx-1 flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs ${patientReschedulePolicy ? (isDark ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-300' : 'border-emerald-100 bg-emerald-50 text-emerald-700') : (isDark ? 'border-amber-900/60 bg-amber-950/30 text-amber-300' : 'border-amber-100 bg-amber-50 text-amber-800')}`}>
           {patientReschedulePolicy ? <CheckCircle2 size={15} className="shrink-0" /> : <Ban size={15} className="shrink-0" />}
           <span>{patientReschedulePolicy ? 'Portal: pacientes podem solicitar remarcação.' : 'Portal: solicitações de remarcação estão desativadas; pacientes ainda podem confirmar ou cancelar.'}</span>
@@ -3855,7 +3859,7 @@ export const ClinicalAgendaBoard = ({
         </div>
       )}
 
-      {statusActionEvent && (
+      {!isCaseScopedActor && statusActionEvent && (
         <div className="fixed inset-0 z-[155] flex items-end justify-center bg-black/35 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={() => setStatusActionEvent(null)}>
           <div className="w-full max-w-md rounded-t-[28px] bg-white p-5 text-slate-900 shadow-2xl sm:rounded-[28px]" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-start justify-between gap-4">
@@ -4494,9 +4498,11 @@ export const ClinicalAgendaBoard = ({
                 </p>
               </div>
               <div className="flex items-center gap-2">
-                <button type="button" onClick={() => openAppointmentEditor(detailEvent)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Editar sessão">
-                  <Edit2 size={18} />
-                </button>
+                {!isCaseScopedActor && (
+                  <button type="button" onClick={() => openAppointmentEditor(detailEvent)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Editar sessão">
+                    <Edit2 size={18} />
+                  </button>
+                )}
                 <button type="button" onClick={() => setSelectedEvent(null)} className={`rounded-2xl border p-2 ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`} aria-label="Fechar detalhes">
                   <X size={18} />
                 </button>
@@ -4543,7 +4549,7 @@ export const ClinicalAgendaBoard = ({
               })}
             </div>
 
-            {!isReceptionistActor && (
+            {!isReceptionistActor && !isCaseScopedActor && (
             <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-violet-100 bg-violet-50/70'}`}>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -4640,7 +4646,7 @@ export const ClinicalAgendaBoard = ({
             </div>
 
             )}
-            {!isReceptionistActor && (billingFinancialContextType === 'PRIVATE' || isMonthlySessionFinance) && (
+            {!isReceptionistActor && !isCaseScopedActor && (billingFinancialContextType === 'PRIVATE' || isMonthlySessionFinance) && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-slate-700 bg-slate-900' : 'border-slate-100 bg-white'}`} data-appointment-patient-finance>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
@@ -4706,7 +4712,7 @@ export const ClinicalAgendaBoard = ({
               </div>
             )}
 
-            {actionRequests.filter((request: any) => request.status === 'PENDING').length > 0 && (
+            {!isCaseScopedActor && actionRequests.filter((request: any) => request.status === 'PENDING').length > 0 && (
               <div className={`mt-5 rounded-3xl border p-4 ${isDark ? 'border-violet-500/30 bg-violet-500/10' : 'border-violet-100 bg-violet-50/70'}`}>
                 <h4 className="flex items-center gap-2 text-sm font-bold text-[#7a32fc]">
                   <RefreshCcw size={16} />
@@ -5086,10 +5092,12 @@ export const ClinicalAgendaBoard = ({
                   {detailPrimaryAction.label}
                 </button>
               )}
-              <button type="button" onClick={() => setStatusActionEvent(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
-                <CheckCircle2 size={16} />
-                Ações de status
-              </button>
+              {!isCaseScopedActor && (
+                <button type="button" onClick={() => setStatusActionEvent(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-violet-200 bg-white px-4 py-3 text-sm font-bold text-[#7a32fc] hover:bg-violet-50">
+                  <CheckCircle2 size={16} />
+                  Ações de status
+                </button>
+              )}
               {!isReceptionistActor && (<>
               <button type="button" onClick={() => onOpenPatient?.(detailEvent.patientId, { tab: 'history' }, detailEvent.patientName)} className={`flex items-center justify-center gap-2 rounded-2xl border px-4 py-3 text-sm font-bold ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50'}`}>
                 <FileText size={16} />
@@ -5120,10 +5128,12 @@ export const ClinicalAgendaBoard = ({
                 Ver gráficos
               </button>
               </>)}
-              <button type="button" onClick={() => onDeleteAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-700 hover:bg-rose-50">
-                <Trash2 size={16} />
-                Excluir
-              </button>
+              {!isCaseScopedActor && (
+                <button type="button" onClick={() => onDeleteAppointment?.(detailEvent)} className="flex items-center justify-center gap-2 rounded-2xl border border-rose-200 px-4 py-3 text-sm font-bold text-rose-700 hover:bg-rose-50">
+                  <Trash2 size={16} />
+                  Excluir
+                </button>
+              )}
             </div>
 
             {!isReceptionistActor && detailEvent.has_session_record && !detailCancellationState.isCancelled && (
