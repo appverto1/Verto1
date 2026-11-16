@@ -500,15 +500,22 @@ export default function App() {
   const hasSupabaseAuthReturnParams = typeof window !== 'undefined' && (() => {
     const searchParams = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const returnType = String(searchParams.get('type') || hashParams.get('type') || '').toLowerCase();
+    // An untyped OAuth code/token on / is a normal Google login, not an
+    // invitation or password setup. Only explicit activation links own that UI.
+    const explicitActivation = ['activate', 'recovery', 'accept_invitation'].includes(authAction) ||
+      Boolean(searchParams.get('invitation_id'));
     return Boolean(
-      searchParams.get('code') ||
-      searchParams.get('token_hash') ||
-      searchParams.get('access_token') ||
-      searchParams.get('refresh_token') ||
-      hashParams.get('token_hash') ||
-      hashParams.get('access_token') ||
-      hashParams.get('refresh_token') ||
-      ['signup', 'invite', 'recovery'].includes(String(searchParams.get('type') || hashParams.get('type') || '').toLowerCase())
+      ['signup', 'invite', 'recovery'].includes(returnType) ||
+      (explicitActivation && (
+        searchParams.get('code') ||
+        searchParams.get('token_hash') ||
+        searchParams.get('access_token') ||
+        searchParams.get('refresh_token') ||
+        hashParams.get('token_hash') ||
+        hashParams.get('access_token') ||
+        hashParams.get('refresh_token')
+      ))
     );
   })();
   const isAuthActionRoute =
@@ -534,6 +541,17 @@ export default function App() {
     }
   }, [user, isSalesActivationRoute]);
   const [loading, setLoading] = useState(true);
+  // Keep the first OAuth paint neutral until the server has resolved the login.
+  // This also covers Google returning to /ativacao-comercial/:token: the password
+  // form must not flash while its verified session is still being exchanged.
+  const [oauthCallbackPending, setOauthCallbackPending] = useState(() => {
+    if (typeof window === 'undefined' || isAuthActionRoute ||
+        isExternalPartnerRoute || isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) return false;
+    const params = new URLSearchParams(window.location.search);
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    return Boolean(params.get('code') || params.get('access_token') || params.get('refresh_token') ||
+      hashParams.get('access_token') || hashParams.get('refresh_token'));
+  });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
@@ -2000,6 +2018,7 @@ export default function App() {
         // Evita logout visual por erro temporário de rede no refresh.
       } finally {
         window.clearTimeout(timeoutId);
+        setOauthCallbackPending(false);
         setLoading(false);
       }
     };
@@ -8341,7 +8360,7 @@ export default function App() {
     }
   };
 
-  if (loading) {
+  if (loading || oauthCallbackPending) {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-white">
         <LogoVerto size={patientSessionRestorePending ? 54 : 42} showText={true} />
