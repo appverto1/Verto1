@@ -1,0 +1,285 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { registerPartnershipRoutes } from '../services/partnerships/partnershipRoutes';
+
+const userId='11111111-1111-4111-8111-111111111111';
+const clinicId='22222222-2222-4222-8222-222222222222';
+const partnerId='33333333-3333-4333-8333-333333333333';
+const leadId='44444444-4444-4444-8444-444444444444';
+const email='owner@example.test';
+
+function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean;summaryRows?:any[];reviewRows?:any[];leadRows?:any[];existingReviewRows?:any[];reviewSaveResult?:boolean}={}){
+  const routes:Record<string,any[]>={};
+  const calls:any[]=[];
+  const app:any={};
+  for(const method of ['get','post','patch']){
+    app[method]=(path:string,...handlers:any[])=>{routes[method.toUpperCase()+' '+path]=handlers;};
+  }
+  const supabase:any={
+    auth:{getUser:async()=>({data:{user:null},error:null})},
+    from(table:string){
+      const filters:Record<string,any>={};
+      const q:any={
+        select(){return q;},eq(k:string,v:any){filters[k]=v;return q;},
+        order(){return q;},in(){return q;},not(){return q;},
+        update(values:any){calls.push({type:'update',table,values});return q;},
+        upsert(values:any){calls.push({type:'upsert',table,values});return q;},
+        range:async(start:number,end:number)=>({
+          data:table==='verto_partner_marketplace_reviews'?(options.reviewRows||[]).slice(start,end+1):[],error:null
+        }),
+        limit:async(value:number)=>{
+          calls.push({type:'limit',table,value});
+          return {
+          data:table==='clinic_memberships'?(role?[{role}]:[])
+            :table==='verto_partner_marketplace_services'?[{
+              partner_id:partnerId,service_name:'Tráfego pago',category:'Marketing',
+              description:'Descrição de serviço que atende empresas.',logo_url:null,
+              partner:{display_name:'Somar'}
+            }]
+            :table==='verto_partner_marketplace_leads'?(options.leadRows||[])
+            :table==='verto_partner_marketplace_reviews'?(options.existingReviewRows||[]):[],
+          error:null
+          };
+        },
+        maybeSingle:async()=>({
+          data:table==='users'?{name:'Diretora Verto',email}
+            :table==='clinics'?{phone_commercial:'11988887777'}
+            :table==='verto_partner_accounts'?{id:partnerId,status:'approved',compliance_approved:true}
+            :table==='verto_partner_marketplace_leads'?{id:leadId,partner_id:partnerId,
+              clinic_confirmed_at:options.confirmedContract===false?null:'2026-11-11T12:00:00Z',
+              partner_confirmed_at:options.confirmedContract===false?null:'2026-11-11T11:00:00Z'}
+            :table==='verto_partner_marketplace_services'?null:null,error:null
+        }),
+        single:async()=>({data:{service_name:'Tráfego pago'},error:null}),
+      };
+      calls.push({type:'from',table,filters});
+      return q;
+    },
+    rpc:async(name:string,args:any)=>{
+      calls.push({type:'rpc',name,args});
+      return {data:name==='verto_marketplace_review_summaries_v1'?(options.summaryRows||[]):
+        name==='verto_marketplace_request_v1'?(options.requestResult===undefined?leadId:options.requestResult):
+        name==='verto_marketplace_save_review_v1'?(options.reviewSaveResult??true):true,error:null};
+    }
+  };
+  const checkAuth=()=>{};
+  const checkPlatformAdmin=()=>{};
+  registerPartnershipRoutes(app,{supabase,checkAuth,checkPlatformAdmin});
+  async function run(method:string,path:string,body:any={},session:any={user:{id:userId}},query:any={}){
+    const handlers=routes[method+' '+path];
+    assert.ok(handlers,path+' registered');
+    const result:any={statusCode:200,body:null,headers:{}};
+    const res:any={
+      status(n:number){result.statusCode=n;return res;},
+      json(v:any){result.body=v;return res;},
+      setHeader(k:string,v:string){result.headers[k]=v;return res;}
+    };
+    const req:any={body,session,query,params:{id:leadId,partnerId},is:()=>true};
+    await handlers[handlers.length-1](req,res);
+    return result;
+  }
+  return {run,calls,routes,checkAuth,checkPlatformAdmin};
+}
+
+test('clinic directory requires real membership and never accepts session role alone',async()=>{
+  const noMembership=fixture('');
+  const result=await noMembership.run('GET','/api/partnerships/marketplace',{},{
+    user:{id:userId,role:'director',clinicId}
+  },{clinicId});
+  assert.equal(result.statusCode,403);
+  assert.equal(result.body.error,'CLINIC_MEMBERSHIP_REQUIRED');
+  assert.equal(noMembership.calls.some(c=>c.table==='verto_partner_marketplace_services'),false);
+});
+
+test('professional can discover services but cannot share the clinic contact',async()=>{
+  const f=fixture('therapist');
+  const found=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(found.statusCode,200);
+  assert.equal(found.body.canManage,false);
+  assert.equal(found.body.contact,null);
+  const denied=await f.run('POST','/api/partnerships/marketplace/interest',{
+    clinicId,partnerId,consent:true
+  });
+  assert.equal(denied.statusCode,403);
+  assert.equal(f.calls.some(c=>c.type==='rpc'&&c.name==='verto_marketplace_request_v1'),false);
+});
+
+test('consent is opt-in; forged role, email, phone and partner status fields are rejected',async()=>{
+  const f=fixture();
+  for(const payload of [
+    {clinicId,partnerId,consent:false},
+    {clinicId,partnerId,consent:true,contact_email:'victim@example.test'},
+    {clinicId,partnerId,consent:true,contact_phone:'9999'},
+    {clinicId,partnerId,consent:true,status:'active'}
+  ]){
+    const result=await f.run('POST','/api/partnerships/marketplace/interest',payload);
+    assert.equal(result.statusCode,400);
+  }
+  assert.equal(f.calls.some(c=>c.type==='rpc'),false);
+});
+
+test('director share persists only server-fetched, scoped contact attributes',async()=>{
+  const f=fixture();
+  const accepted=await f.run('POST','/api/partnerships/marketplace/interest',{
+    clinicId,partnerId,consent:true
+  });
+  assert.equal(accepted.statusCode,201);
+  assert.equal(accepted.body.leadId,leadId);
+  const call=f.calls.find(c=>c.name==='verto_marketplace_request_v1');
+  assert.deepEqual(call.args,{
+    p_clinic_id:clinicId,p_partner_id:partnerId,p_user_id:userId,
+    p_contact_name:'Diretora Verto',p_contact_email:email,
+    p_contact_phone:'11988887777',p_consent_version:'marketplace-2026-11-v1'
+  });
+});
+
+test('duplicate interest cannot overwrite prior attribution or contact consent',async()=>{
+  const f=fixture('director',{requestResult:null});
+  const result=await f.run('POST','/api/partnerships/marketplace/interest',{
+    clinicId,partnerId,consent:true
+  });
+  assert.equal(result.statusCode,409);
+});
+
+test('partner inbox and contract declaration are denied without isolated verified identity',async()=>{
+  const f=fixture();
+  const read=await f.run('GET','/api/partnerships/marketplace/partner',{}, {});
+  assert.equal(read.statusCode,401);
+  const write=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
+    {monthlyCents:10000},{});
+  assert.equal(write.statusCode,401);
+  assert.equal(f.calls.some(c=>c.name==='verto_marketplace_partner_confirm_v1'),false);
+});
+
+test('approved partner cannot confirm someone else’s ID via browser input',async()=>{
+  const f=fixture();
+  const session={partnerAccountId:partnerId,partnerAuthUserId:userId,partnerEmail:email,
+    partnerAuthAt:Date.now()};
+  const result=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
+    {monthlyCents:150000,partnerId:clinicId},session);
+  assert.equal(result.statusCode,400);
+  const accepted=await f.run('POST','/api/partnerships/marketplace/partner/confirm/:id',
+    {monthlyCents:150000},session);
+  assert.equal(accepted.statusCode,200);
+  const call=f.calls.find(c=>c.name==='verto_marketplace_partner_confirm_v1');
+  assert.equal(call.args.p_partner_id,partnerId);
+});
+
+test('reviews require mutual confirmed contract, rating range and clinic representative',async()=>{
+  const f=fixture();
+  assert.equal((await f.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:0,comment:'ok'})).statusCode,400);
+  assert.equal((await f.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:5,comment:'Boa empresa'})).statusCode,200);
+  const bad=fixture('therapist');
+  assert.equal((await bad.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:5,comment:'ok'})).statusCode,403);
+});
+
+test('reviews reject interest-only leads and are authorized for completed contract history',async()=>{
+  const pending=fixture('director',{confirmedContract:false});
+  const denied=await pending.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:5,comment:'Boa experiência'});
+  assert.equal(denied.statusCode,403);
+  assert.equal(pending.calls.some(c=>c.name==='verto_marketplace_save_review_v1'),false);
+
+  const confirmed=fixture();
+  const accepted=await confirmed.run('POST','/api/partnerships/marketplace/review/:id',
+    {clinicId,rating:4,comment:'Bom atendimento'});
+  assert.equal(accepted.statusCode,200);
+  const query=confirmed.calls.find(c=>c.type==='from'&&c.table==='verto_partner_marketplace_leads');
+  assert.equal(query.filters.clinic_id,clinicId);
+  assert.equal(confirmed.calls.some(c=>c.name==='verto_marketplace_save_review_v1'),true);
+});
+
+test('contract closure requires a verified clinic representative',async()=>{
+  const denied=fixture('therapist');
+  const result=await denied.run('POST','/api/partnerships/marketplace/clinic-end/:id',{clinicId});
+  assert.equal(result.statusCode,403);
+  assert.equal(denied.calls.some(c=>c.type==='update'),false);
+  const allowed=fixture();
+  const success=await allowed.run('POST','/api/partnerships/marketplace/clinic-end/:id',{clinicId});
+  assert.equal(success.statusCode,200);
+  assert.equal(allowed.calls.find(c=>c.type==='update').values.status,'declined');
+});
+
+test('directory reports only this clinic’s review count using the existing leads fetch',async()=>{
+  const f=fixture('director',{leadRows:[{
+    id:leadId,partner_id:partnerId,status:'active',agreed_monthly_cents:10000,
+    partner_confirmed_at:'2026-11-11T11:00:00Z',clinic_confirmed_at:'2026-11-11T12:00:00Z',
+    reviews:[{id:'review-1'},{id:'review-2'}]
+  }]});
+  const result=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(result.statusCode,200);
+  assert.equal(result.body.mine[0].my_review_count,2);
+  assert.equal(Object.hasOwn(result.body.mine[0],'reviews'),false,'review IDs must not be exposed');
+  assert.equal(f.calls.filter(c=>c.type==='from'&&c.table==='verto_partner_marketplace_reviews').length,0);
+});
+
+test('exhausted review allowance returns a meaningful 409 without bypassing the RPC',async()=>{
+  const maxed=fixture('director',{reviewSaveResult:false,
+    existingReviewRows:Array.from({length:5},(_,i)=>({id:'review-'+(i+1)}))});
+  const denied=await maxed.run('POST','/api/partnerships/marketplace/review/:id',{
+    clinicId,rating:5,comment:'Nova tentativa'
+  });
+  assert.equal(denied.statusCode,409);
+  assert.equal(denied.body.error,'REVIEW_LIMIT_REACHED');
+  assert.equal(maxed.calls.filter(c=>c.name==='verto_marketplace_save_review_v1').length,1);
+  assert.equal(maxed.calls.filter(c=>c.table==='verto_partner_marketplace_reviews'&&c.type==='from').length,1,
+    'only failed writes should query the review count');
+  assert.equal(maxed.calls.find(c=>c.table==='verto_partner_marketplace_reviews'&&c.type==='limit')?.value,5,
+    'failure diagnostics must check the full five-review allowance');
+  const otherReason=fixture('director',{reviewSaveResult:false,existingReviewRows:[]});
+  const other=await otherReason.run('POST','/api/partnerships/marketplace/review/:id',{
+    clinicId,rating:4,comment:'Nova tentativa'
+  });
+  assert.equal(other.statusCode,409);
+  assert.equal(other.body.error,'REVIEW_NOT_ALLOWED');
+  const unconfirmed=fixture('director',{confirmedContract:false,reviewSaveResult:false});
+  const blocked=await unconfirmed.run('POST','/api/partnerships/marketplace/review/:id',{
+    clinicId,rating:4,comment:'Sem contrato'
+  });
+  assert.equal(blocked.statusCode,403);
+  assert.equal(unconfirmed.calls.some(c=>c.table==='verto_partner_marketplace_reviews'),false);
+});
+
+test('owner opportunity report keeps both existing administrative guards',()=>{
+  const f=fixture();
+  const chain=f.routes['GET /api/owner/partnerships/marketplace'];
+  assert.equal(chain[0],f.checkAuth);
+  assert.equal(chain[1],f.checkPlatformAdmin);
+});
+
+test('directory aggregates reviews in one RPC and returns average plus count without exposing review text',async()=>{
+  const f=fixture('director',{summaryRows:[{partner_id:partnerId,review_count:2,rating_average:3}]});
+  const result=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(result.statusCode,200);
+  assert.equal(result.body.services[0].review_count,2);
+  assert.equal(result.body.services[0].rating_average,3);
+  assert.equal(f.calls.filter(c=>c.type==='rpc'&&c.name==='verto_marketplace_review_summaries_v1').length,1);
+  assert.deepEqual(f.calls.find(c=>c.name==='verto_marketplace_review_summaries_v1').args.p_partner_ids,[partnerId]);
+  assert.equal(f.calls.some(c=>c.type==='from'&&c.table==='verto_partner_marketplace_reviews'),false);
+});
+
+test('directory shows zero reviews without inventing ratings',async()=>{
+  const f=fixture();
+  const result=await f.run('GET','/api/partnerships/marketplace',{},undefined,{clinicId});
+  assert.equal(result.body.services[0].review_count,0);
+  assert.equal(result.body.services[0].rating_average,0);
+});
+
+test('review comments are paginated in stable batches of twenty and offsets are validated',async()=>{
+  const reviewRows=Array.from({length:21},(_,i)=>({id:String(i),rating:i%2?1:5,comment:'Avaliação',created_at:'2026-11-13T15:00:00Z',clinic:{name:'Clínica'}}));
+  const f=fixture('director',{reviewRows});
+  const first=await f.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId});
+  assert.equal(first.statusCode,200);
+  assert.equal(first.body.reviews.length,20);
+  assert.equal(first.body.hasMore,true);
+  const second=await f.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId,offset:'20'});
+  assert.equal(second.body.reviews.length,1);
+  assert.equal(second.body.hasMore,false);
+  const invalid=await f.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId,offset:'-1'});
+  assert.equal(invalid.statusCode,400);
+  const forbidden=fixture('');
+  assert.equal((await forbidden.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId})).statusCode,403);
+});

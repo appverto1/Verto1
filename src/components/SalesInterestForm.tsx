@@ -35,6 +35,16 @@ export const SalesInterestForm = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [referralWarning, setReferralWarning] = useState('');
+  // Shareable codes are untrusted; the server validates eligibility and attribution.
+  const [partnerCode,setPartnerCode]=useState(() => typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('ref') || ''
+    : '');
+  const normalizedReferralCode=partnerCode.toUpperCase();
+  // Historical VERTO-* links remain usable; new coupons are compact alphanumeric only.
+  const referralFormatError=partnerCode && !(/^[A-Z0-9]{4,24}$/.test(normalizedReferralCode)
+    || /^VERTO-[A-F0-9]{18}$/.test(normalizedReferralCode))
+    ? 'Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.' : '';
 
   useEffect(() => {
     if (initialName) setName(initialName);
@@ -59,12 +69,13 @@ export const SalesInterestForm = ({
       setError("Informe um WhatsApp válido com DDD.");
       return;
     }
+    if (referralFormatError) return;
 
     submissionInFlightRef.current = true;
     setLoading(true);
     let persisted = false;
     try {
-      await submitSalesInterest({
+      const result = await submitSalesInterest({
         normalizedName,
         phone,
         clinicName,
@@ -72,8 +83,10 @@ export const SalesInterestForm = ({
         website,
         startedAt: startedAtRef.current,
         idempotencyKey: idempotencyKeyRef.current,
+        ...(partnerCode ? {partnerCode} : {}),
       });
       persisted = true;
+      setReferralWarning(result.referralWarning || '');
       setSubmitted(true);
       onSubmitted?.({ name: normalizedName });
     } catch (submitError: any) {
@@ -101,6 +114,7 @@ export const SalesInterestForm = ({
         <p className="mx-auto mt-2 max-w-lg text-sm font-normal leading-6 text-slate-600">
           {SALES_INTEREST_SUCCESS_MESSAGE}
         </p>
+        {referralWarning && <p className="mt-3 text-xs text-amber-700" role="status">{referralWarning}</p>}
       </div>
     );
   }
@@ -152,6 +166,24 @@ export const SalesInterestForm = ({
           onChange={(event) => setClinicName(event.target.value)}
           autoComplete="organization"
         />
+      </div>
+
+      <div>
+        <label className={labelClass} htmlFor="sales-referral-coupon">
+          Quem te indicou? <span className="text-slate-400">(opcional)</span>
+        </label>
+        <input
+          id="sales-referral-coupon"
+          className={inputClass}
+          maxLength={64}
+          autoComplete="off"
+          value={partnerCode}
+          onChange={event=>setPartnerCode(event.target.value)}
+          placeholder="Cupom de indicação, ex.: FRATELLI10"
+          aria-invalid={!!referralFormatError}
+          aria-describedby={referralFormatError?'sales-referral-coupon-error':undefined}
+        />
+        {referralFormatError && <p id="sales-referral-coupon-error" role="alert" className="mt-1.5 text-xs text-rose-600">{referralFormatError}</p>}
       </div>
 
       <div className="hidden" aria-hidden="true">

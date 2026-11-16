@@ -350,7 +350,7 @@ export const ExternalCareNetworkCentral = () => {
     return (
       <main className="flex min-h-screen items-center justify-center bg-[#faf9fd] px-4 py-8 sm:py-14">
         <section className="w-full max-w-md rounded-[32px] bg-white p-6 shadow-[0_24px_80px_rgba(60,38,115,0.10)] ring-1 ring-violet-100/70 sm:p-8">
-          <LogoVerto size={38} showText />
+          <LogoVerto size={29} showText />
           <div className="mt-8">
             <p className="text-xs font-medium uppercase tracking-[0.18em] text-[#7a32fc]">Rede de cuidado</p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight text-slate-900">Acesso do profissional parceiro</h1>

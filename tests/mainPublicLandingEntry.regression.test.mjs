@@ -60,7 +60,8 @@ test('care-network sharing remains invitation-only and routes to the existing po
   const login = section('const openAudienceLogin =', 'const audienceCards =');
   assert.match(login, /window\.location\.assign\('\/rede-de-cuidado'\)/);
   assert.match(landing, /onClick=\{\(\) => openAudienceEntry\('care-network'\)\}/);
-  assert.doesNotMatch(landing, /href="\/parcerias"/);
+  // The care-network flow stays invite-only, while commercial partners have a separate public entry.
+  assert.match(landing, /href="\/parcerias"/);
 });
 
 test('the Google account selector and existing credential checks remain present', () => {

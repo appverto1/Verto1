@@ -838,11 +838,21 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                   <Users size={21} />
                 </span>
                 <span className="min-w-0">
-                  <span className="block text-sm font-semibold text-slate-900">Sou parceiro</span>
+                  <span className="block text-sm font-semibold text-slate-900">Rede de Cuidado</span>
                   <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos compartilhados por clínicas Verto</span>
                 </span>
                 <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400" />
               </button>
+
+              <a href="/parcerias"
+                className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-violet-100 bg-white px-4 py-4 text-left transition hover:border-[#7a32fc]/35 hover:bg-violet-50/40 active:scale-[0.99]">
+                <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-[#7a32fc]"><Users size={21}/></span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-semibold text-slate-900">Parcerias comerciais</span>
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Indique clínicas e acompanhe suas parcerias</span>
+                </span>
+                <ArrowRight size={18} className="ml-auto shrink-0 text-slate-400"/>
+              </a>
 
               <button
                 type="button"
@@ -880,13 +890,20 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
             >
               Sou Paciente
             </button>
-            <button
-              onClick={() => openAudienceEntry('care-network')}
-              className="hidden whitespace-nowrap rounded-full border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs font-medium text-[#6d2ee8] shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 sm:inline-flex sm:px-4 sm:text-sm"
-              title="Acesse conteúdos compartilhados por clínicas que utilizam a Verto"
-            >
-              Sou parceiro
-            </button>
+            <details className="group relative hidden sm:block">
+              <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 whitespace-nowrap rounded-full border border-violet-100 bg-violet-50/70 px-3 py-2 text-xs font-medium text-[#6d2ee8] shadow-sm transition-colors hover:border-violet-200 hover:bg-violet-50 sm:px-4 sm:text-sm [&::-webkit-details-marker]:hidden"
+                title="Acessos de parceiros da Verto">Sou parceiro <span aria-hidden="true">▾</span></summary>
+              <div className="absolute right-0 top-full z-50 mt-2 w-64 space-y-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                <button type="button" onClick={() => openAudienceEntry('care-network')} className="block w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-violet-50">
+                  Rede de Cuidado
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos clínicos compartilhados</span>
+                </button>
+                <a href="/parcerias" className="block rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-violet-50">
+                  Programa de Parcerias
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Indicações comerciais e acompanhamento</span>
+                </a>
+              </div>
+            </details>
             <button
               onClick={() => openAudienceEntry('professional')}
               className="hidden whitespace-nowrap rounded-full bg-[#7a32fc] px-3 py-2 text-xs font-semibold text-white shadow-lg shadow-purple-500/20 transition-all hover:opacity-90 active:scale-95 sm:inline-flex sm:px-5 sm:py-2.5 sm:text-sm"
