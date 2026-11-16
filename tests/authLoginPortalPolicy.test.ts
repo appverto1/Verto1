@@ -78,8 +78,11 @@ assert.match(landing, /rawMessage\.includes\('e-mail ou senha inválidos'\)/);
 assert.match(landing, /setLoginError\('E-mail ou senha inválidos\.'\)/);
 
 const partnerPage = fs.readFileSync('src/components/ExternalPartnershipPortal.tsx', 'utf8');
-assert.match(partnerPage, /throw new Error\(result\?\.error === 'PARTNER_APPROVAL_PENDING'/);
-assert.match(partnerPage, /: 'E-mail ou senha inválidos\.'\)/);
+assert.match(partnerPage, /PARTNER_APPROVAL_PENDING: 'Sua inscrição está em análise/);
+assert.match(partnerPage, /CLINICAL_SESSION_ACTIVE: 'Existe uma sessão clínica ativa/);
+assert.match(partnerPage, /EMAIL_VERIFICATION_REQUIRED: 'Não foi possível validar/);
+assert.match(partnerPage, /\['PARTNER_NOT_REGISTERED', 'INVALID_CREDENTIALS', 'EMAIL_VERIFICATION_REQUIRED'/);
+assert.doesNotMatch(partnerPage, /\['CLINICAL_SESSION_ACTIVE', 'PARTNER_NOT_REGISTERED'/);
 assert.match(partnerPage, /supabase\.auth\.signOut\(\{ scope: 'local' \}\)/);
 
 console.log('authLoginPortalPolicy.test.ts: ok');
