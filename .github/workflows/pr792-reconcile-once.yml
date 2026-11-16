@@ -23,6 +23,8 @@ jobs:
           node-version: '20'
       - name: Apply only two guarded partner gate replacements to server.ts
         run: node scripts/pr792-reconcile-once.cjs
+      - name: Install locked dependencies for Node20 regressions
+        run: npm ci --no-audit --no-fund
       - name: Confirm scoped test suites pass before committing
         run: |
           node --import tsx tests/partnershipSecurity.test.ts
