@@ -16,25 +16,23 @@ function replaceOne(oldPart, newPart, label) {
 }
 const oldImport = "import { registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';";
 const newImport = "import { approvedExternalPartnerForClinicalIdentity, registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';";
-const oldGuard = 'if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role)) return rejectWrongPortal();';
+const oldGuard = [
+  "if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role)) {",
+  "        return rejectWrongPortal();",
+  "      }"
+].join('\n');
 const newGuard = [
-  '// A clinical identity may also hold an independently approved external partner role.',
-  '// This does not create a session or bypass the partner token and approval checks.',
-  'if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role) &&',
-  '    !(await approvedExternalPartnerForClinicalIdentity(supabase, user.email)))',
-  '  return rejectWrongPortal();'
-].join('\n      ');
+  "if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role) &&",
+  "    !(await approvedExternalPartnerForClinicalIdentity(supabase, user.email))) {",
+  "        return rejectWrongPortal();",
+  "      }"
+].join('\n');
 const ix = server.indexOf(oldGuard);
-console.log('Partner gate anchors:', { oldGuardCount: server.split(oldGuard).length - 1, hasMainImport: server.includes(oldImport) });
-let cursor = 0;
-const contexts = [];
-while ((cursor = server.indexOf('persistedClinicalLoginPortal(clinicalProfile.role)', cursor)) !== -1) {
-  contexts.push(server.slice(Math.max(0, cursor - 650), cursor + 700));
-  cursor += 'persistedClinicalLoginPortal(clinicalProfile.role)'.length;
-}
-console.log('PR792 partner gate code context:', JSON.stringify(contexts.slice(0, 3)));
-if (ix < 0 || server.indexOf(oldGuard, ix + oldGuard.length) !== -1) {
-  throw new Error('PR792 guard: clinical/partner middleware context differs from Main');
+const anchor = "const profileResult = await fetchProfileWithSchemaFallback({";
+const lastAnchor = server.lastIndexOf(anchor, ix);
+if (ix < 0 || lastAnchor < 0 || ix - lastAnchor > 2000 ||
+    server.indexOf(oldGuard, ix + oldGuard.length) !== -1) {
+  throw new Error('PR792 guard: expected isolated partner clinical role gate missing or not unique');
 }
 replaceOne(oldImport, newImport, 'partner route import');
 replaceOne(oldGuard, newGuard, 'partner pre-session check');
