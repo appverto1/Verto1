@@ -10432,6 +10432,7 @@ export function CoordinatorDashboard({
 
   const renderAgendaContent = () => (
     <ClinicalAgendaBoard
+      key={`${String(user?.id || '')}:${String(user?.activeWorkspaceId || user?.clinicId || '')}:${String(user?.activeAccessContextId || '')}:${normalizedRole}`}
       agenda={normalizedAgenda}
       patients={allPatients}
       rooms={rooms}
