@@ -40,7 +40,8 @@ assert.match(memberLoader, /const schedulingMembers = canReadTeam \? result\.dat
 assert.match(memberLoader, /clinicSpecialtiesResult\.data\.map/);
 assert.doesNotMatch(memberLoader, /^\s*dataService\.getClinicMembers\(\),/m);
 
-assert.match(dashboard, /const canLoadAnamnesisTemplate = hasCapability\("clinical\.anamnesis\.view"\) \|\| isDirectTherapist/);
+assert.match(dashboard, /const canLoadAnamnesisTemplate = hasCapability\("clinical\.anamnesis\.view"\);/);
+assert.doesNotMatch(dashboard, /const canLoadAnamnesisTemplate = [^\n]*\|\| isDirectTherapist/);
 assert.match(dashboard, /if \(authorizationHydrated && canLoadAnamnesisTemplate\) loadClinicAnamnesisTemplate\(\)/);
 assert.match(dashboard, /authorizationHydrated && canLoadAnamnesisTemplate && isAnamnesisTemplateModalOpen/);
 
