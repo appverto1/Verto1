@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const migration = fs.readFileSync(
   'supabase/migrations/20260814190000_module_entitlement_stale_event_fence.sql',
   'utf8',

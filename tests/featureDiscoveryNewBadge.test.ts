@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {
@@ -8,7 +9,7 @@ import {
 const dashboard = fs.readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const badge = fs.readFileSync('src/components/NewBadge.tsx', 'utf8');
 const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const migration = fs.readFileSync('supabase/migrations/20260820101500_user_feature_discovery_v1.sql', 'utf8');
 
 assert.equal(FEATURE_METADATA.clinic_notices.releasedAt, '2026-08-20T00:00:00-03:00');

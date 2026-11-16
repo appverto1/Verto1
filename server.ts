@@ -20955,6 +20955,13 @@ async function startServer() {
   const validateCriticalTissAuthorizationReservationSchema = async () => {
     const result = await checkCriticalSchema(supabase);
     if (result.compatible) return;
+    if (result.reason === 'rpc_pool_unavailable') {
+      // PostgREST may return 504 while its connection pool is unavailable. This is
+      // not evidence of a schema change; every TISS reservation still goes through
+      // the database RPC, which fails closed while the pool is unavailable.
+      console.error('[Schema] Pool PostgREST indisponível (PGRST003). API iniciando em modo degradado; reservas TISS continuam protegidas pela RPC.');
+      return;
+    }
     throw new Error(
       `Schema crítico de reserva TISS incompatível (${result.reason}; esperado ${TISS_AUTHORIZATION_RESERVATION_SCHEMA_VERSION}). ` +
       'Aplique as migrations antes do deploy.'
@@ -21887,7 +21894,7 @@ async function startServer() {
   if (process.env.DATABASE_URL && process.env.DATABASE_URL !== 'undefined' && process.env.DATABASE_URL !== '') {
     try {
       const dbUrl = process.env.DATABASE_URL.trim();
-      
+
       // Basic validation to prevent TypeError: Invalid URL
       if (dbUrl.startsWith('postgres://') || dbUrl.startsWith('postgresql://')) {
         // Try parsing it to ensure it's a valid URL format for Node's URL constructor
@@ -21896,7 +21903,7 @@ async function startServer() {
         } catch (urlErr) {
           throw new Error(`Invalid DATABASE_URL format: ${dbUrl.substring(0, 20)}...`);
         }
-        
+
         const parsedDbUrl = new URL(dbUrl);
         const { Pool } = pg;
         const pool = new Pool({
@@ -21969,12 +21976,12 @@ async function startServer() {
   app.use(session({
     store: sessionStore,
     secret: process.env.SESSION_SECRET || (() => { throw new Error('SESSION_SECRET must be set'); })(),
-    resave: false, 
-    saveUninitialized: false, 
-    rolling: true, 
+    resave: false,
+    saveUninitialized: false,
+    rolling: true,
     name: 'verto-session',
     proxy: true,
-    cookie: { 
+    cookie: {
       secure: isProd,
       httpOnly: true,
       maxAge: sessionMaxAgeDays * 24 * 60 * 60 * 1000,
@@ -23404,7 +23411,7 @@ async function startServer() {
     const [offerResult, leadResult] = await Promise.all([
       supabase
         .from("sales_offers")
-        .select("id,lead_id,status,stripe_checkout_session_id,offer_type,contract_email")
+        .select("id,lead_id,status,stripe_checkout_session_id,stripe_subscription_id,offer_type,contract_email")
         .eq("id", offerId)
         .eq("lead_id", leadId)
         .eq("status", "paid")
@@ -26204,7 +26211,7 @@ async function startServer() {
           const { data: resumableDirectorActivation, error: resumableDirectorActivationError } =
             await supabase
               .from('pending_activations')
-              .select('sales_offer_id')
+              .select('sales_offer_id,sales_lead_id,stripe_checkout_session_id,expires_at')
               .eq('email', safeAuthEmail)
               .eq('source', 'sales_assisted_signup')
               .eq('used', false)
@@ -26217,7 +26224,33 @@ async function startServer() {
           ) {
             throw resumableDirectorActivationError;
           }
-          if (resumableDirectorActivation?.sales_offer_id === activationOfferHint) {
+          const resumeLeadId = sanitizeString(resumableDirectorActivation?.sales_lead_id, 120);
+          const resumeCheckoutId = sanitizeString(resumableDirectorActivation?.stripe_checkout_session_id, 200);
+          const resumeExpiresAt = resumableDirectorActivation?.expires_at
+            ? new Date(resumableDirectorActivation.expires_at).getTime()
+            : Number.POSITIVE_INFINITY;
+          if (resumableDirectorActivation?.sales_offer_id === activationOfferHint
+            && isUuid(resumeLeadId) && resumeCheckoutId && resumeExpiresAt > Date.now()) {
+            // Legacy partial Coordinator accounts may only be promoted after
+            // a real paid offer and (for modular) an active Stripe subscription.
+            const { data: paidResumeOffer, error: paidResumeError } = await supabase
+              .from('sales_offers')
+              .select('offer_type,stripe_subscription_id,contract_email')
+              .eq('id', activationOfferHint)
+              .eq('lead_id', resumeLeadId)
+              .eq('stripe_checkout_session_id', resumeCheckoutId)
+              .eq('status', 'paid')
+              .maybeSingle();
+            if (paidResumeError) throw paidResumeError;
+            const resumeModular = sanitizeString(paidResumeOffer?.offer_type, 30) === 'modular';
+            const resumeSubscriptionId = sanitizeString(paidResumeOffer?.stripe_subscription_id, 200);
+            const resumeContractEmail = sanitizeEmail(paidResumeOffer?.contract_email);
+            const resumeIdentityMatches = paidResumeOffer && (!resumeModular || resumeContractEmail === safeAuthEmail);
+            const resumeSubscription = resumeIdentityMatches && resumeModular && resumeSubscriptionId
+              ? await getStripe().subscriptions.retrieve(resumeSubscriptionId)
+              : null;
+            const resumeEligible = resumeIdentityMatches && (!resumeModular || resumeSubscription?.status === 'active');
+            if (resumeEligible) {
             const directorProfileUpdate = await supabase
               .from('users')
               .update({ role: 'director', clinic_id: user.id })
@@ -26226,6 +26259,7 @@ async function startServer() {
             if (directorProfileUpdate.error) throw directorProfileUpdate.error;
             await ensureClinicAndMembershipForCoordinator(user.id, 'director');
             profile = { ...profile, role: 'director', clinic_id: user.id };
+            }
           }
         }
       }
@@ -26236,6 +26270,7 @@ async function startServer() {
         offerId: string;
         leadId: string;
         checkoutSessionId: string;
+        verifiedSubscription?: Stripe.Subscription | null;
       } | null = null;
       let invitationPendingAcceptance: any = requestedClinicInvitation;
       if (!profile) {
@@ -26276,6 +26311,7 @@ async function startServer() {
             offerId: string;
             leadId: string;
             checkoutSessionId: string;
+            verifiedSubscription?: Stripe.Subscription | null;
           } | null = null;
           const safeUserEmail = sanitizeEmail(user.email);
           if (safeUserEmail) {
@@ -26317,7 +26353,7 @@ async function startServer() {
                 const [offerResult, leadResult] = await Promise.all([
                   supabase
                     .from("sales_offers")
-                    .select("id,lead_id,status,stripe_checkout_session_id")
+                    .select("id,lead_id,status,stripe_checkout_session_id,offer_type,stripe_subscription_id,contract_email")
                     .eq("id", offerId)
                     .eq("lead_id", leadId)
                     .eq("status", "paid")
@@ -26334,14 +26370,27 @@ async function startServer() {
                   !offerResult.error &&
                   offerResult.data &&
                   !leadResult.error &&
-                  leadResult.data
+                  leadResult.data &&
+                  sanitizeEmail(paidActivation.email) === safeUserEmail
                 ) {
-                  validPaidActivation = {
-                    email: safeUserEmail,
-                    offerId,
-                    leadId,
-                    checkoutSessionId,
-                  };
+                  const modularOffer = sanitizeString(offerResult.data.offer_type, 30) === "modular";
+                  const contractedEmail = sanitizeEmail(offerResult.data.contract_email);
+                  const subscriptionId = sanitizeString(offerResult.data.stripe_subscription_id, 200);
+                  // A signed paid Checkout is necessary but not sufficient for
+                  // first Google sign-in: Stripe must have activated the subscription.
+                  const verifiedSubscription = modularOffer && subscriptionId && contractedEmail === safeUserEmail
+                    ? await getStripe().subscriptions.retrieve(subscriptionId)
+                    : null;
+                  if ((!modularOffer || contractedEmail === safeUserEmail)
+                    && (!modularOffer || verifiedSubscription?.status === "active")) {
+                    validPaidActivation = {
+                      email: safeUserEmail,
+                      offerId,
+                      leadId,
+                      checkoutSessionId,
+                      verifiedSubscription,
+                    };
+                  }
                 }
               }
             } catch {
@@ -26366,7 +26415,12 @@ async function startServer() {
             });
           }
 
-          // A clínica somente pode ser criada após uma ativação paga persistida pelo webhook assinado.
+          // Paid and active subscription already validated above. Do not let
+          // a Google user associated with a different offer become this Director.
+          const priorOfferMarker = sanitizeString((user as any)?.app_metadata?.sales_activation_offer_id, 120);
+          if (priorOfferMarker && priorOfferMarker !== validPaidActivation.offerId) {
+            return res.status(403).json({ success: false, error: 'SALES_ACTIVATION_ACCOUNT_REVIEW_REQUIRED' });
+          }
           commercialPaidActivation = validPaidActivation;
           const activationMetadata = {
             ...((user as any)?.user_metadata || {}),
@@ -26374,6 +26428,10 @@ async function startServer() {
           };
           const { data: activationUserUpdate, error: activationUserUpdateError } =
             await supabase.auth.admin.updateUserById(user.id, {
+              app_metadata: {
+                ...((user as any)?.app_metadata || {}),
+                sales_activation_offer_id: validPaidActivation.offerId,
+              },
               user_metadata: activationMetadata,
             });
           if (activationUserUpdateError) throw activationUserUpdateError;
@@ -84185,6 +84243,14 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
         return null;
       }
       return await task();
+    } catch (error: any) {
+      // Background jobs must never crash the API when the lease service is down.
+      // No task runs unless its distributed lease was confirmed.
+      console.warn('[Runtime Lease] Job interrompido; execução não confirmada.', {
+        jobKey,
+        message: sanitizeString(error?.message || String(error), 240),
+      });
+      return null;
     } finally {
       if (acquired) {
         try {

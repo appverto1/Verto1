@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -5,7 +6,7 @@ const read = (path) => fs.readFileSync(path, 'utf8');
 const coordinator = read('src/components/CoordinatorDashboard.tsx');
 const panel = read('src/components/ClinicGlobalSettingsPanel.tsx');
 const app = read('src/App.tsx');
-const server = read('server.ts');
+const server = readModularServerSource();
 
 // Reading the generic professional profile must not call the TISS projection without entitlement.
 const loadStart = coordinator.indexOf('const loadOwnProfessionalSettings = async () => {');

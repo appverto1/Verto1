@@ -56,6 +56,8 @@ check('patient belongs to different clinic', job, appointment, { ...patient, cli
 check('queued patient not matching persisted patient', { ...job, patient_id: otherClinicId }, appointment, patient);
 check('missing original schedule metadata fails closed', { ...job, payload: {} }, appointment, patient);
 check('future job cannot send early', { ...job, scheduled_for: '2026-10-08T15:00:00Z' }, appointment, patient);
+check('a reminder created after its due time does not send retroactively', { ...job, created_at: '2026-10-08T12:00:00Z' }, appointment, patient);
+check('missing job creation time fails closed', { ...job, created_at: null }, appointment, patient);
 check('completed appointment does not generate reminder', job, { ...appointment, status: 'completed' }, patient);
 check('cancelled appointment does not generate reminder', job, { ...appointment, status: 'cancelled' }, patient);
 check('inactive patient cannot receive reminder', job, appointment, { ...patient, is_active: false });
@@ -114,6 +116,7 @@ check('two unresponded fields preserve a valid 12h reminder', followup,
   { ...appointment, patient_response: 'pending', patient_confirmation_status: 'pending' },
   patient, '2026-10-09T06:00:00Z', true);
 check('patient asked to reschedule, no 12h reminder', followup, { ...appointment, patient_confirmation_status: 'reschedule_requested' }, patient, '2026-10-09T06:00:00Z');
+check('either persisted response can suppress followup', followup, { ...appointment, patient_response: 'pending', patient_confirmation_status: 'confirmed' }, patient, '2026-10-09T06:00:00Z');
 check('rejected unknown kind', { ...job, notification_kind: 'INVALID' }, appointment, patient);
 check('after start time, both reminders rejected', followup, appointment, patient, '2026-10-09T18:01:00Z');
 

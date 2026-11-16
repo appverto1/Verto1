@@ -1,0 +1,175 @@
+-- P0 #352 — Persist the selected clinic professional on the current canonical
+-- financial-plan version without rewriting historic billing snapshots.
+-- Staging candidate only; apply before deploying backend v3. No backfill.
+begin;
+
+-- This column travels with the canonical versioned financial-plan row. It
+-- remains nullable for all historic/legacy plans; no historical backfill.
+alter table public.patient_financial_plans
+  add column if not exists professional_user_id uuid;
+create index if not exists patient_financial_plans_professional_active_idx
+  on public.patient_financial_plans(organization_id,professional_user_id)
+  where status='ACTIVE' and professional_user_id is not null;
+
+-- The service invokes one atomic reconciliation. The v2 financial-history
+-- engine is untouched: it still versions price changes and preserves receipts.
+-- No new endpoint, grant or client-direct privileged access is introduced.
+create or replace function public.reconcile_patient_financial_plans_v3(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_actor_id uuid,
+  p_plans jsonb,
+  p_preserve_insurance_context boolean default false
+)
+returns jsonb language plpgsql security invoker set search_path=public,pg_temp as $$
+declare
+  v_row jsonb;
+  v_key text;
+  v_requested_id uuid;
+  v_user uuid;
+  v_service_key text;
+  v_canonical_service_key text;
+  v_current public.patient_financial_plans%rowtype;
+  v_previous public.patient_financial_plans%rowtype;
+  v_result jsonb;
+  v_data jsonb;
+begin
+  if p_organization_id is null or p_patient_id is null or
+     jsonb_typeof(p_plans) is distinct from 'array' then
+    raise exception 'FINANCIAL_PLAN_INPUT_INVALID';
+  end if;
+
+  -- Share the exact per-clinic/patient transaction lock used by v2 BEFORE
+  -- inspecting legacy plans. Otherwise a concurrent v2 save could change
+  -- an unbound plan between the eligibility check and reconciliation.
+  -- Reacquiring the same advisory lock inside v2 is transaction-reentrant.
+  perform pg_advisory_xact_lock(
+    hashtextextended(p_organization_id::text || ':' || p_patient_id::text, 0)
+  );
+
+  -- Every new plan must have an explicit valid assignment. Existing unbound
+  -- plans are grandfathered only with their unchanged canonical specialty.
+  for v_row in select value from jsonb_array_elements(p_plans) loop
+    v_key:=nullif(btrim(coalesce(v_row->>'client_plan_key','')),'');
+    v_requested_id:=null;
+    if coalesce(v_row->>'id','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+      v_requested_id:=(v_row->>'id')::uuid;
+    end if;
+    v_service_key:=public.appointment_financial_service_key_v1(
+      coalesce(nullif(v_row->>'service_name_snapshot',''),
+        nullif(v_row->>'custom_service_name',''),v_row->>'service_type')
+    );
+    if nullif(v_service_key,'') is null then
+      raise exception 'FINANCIAL_PLAN_SPECIALTY_INVALID';
+    end if;
+    v_user:=null;
+    if nullif(btrim(coalesce(v_row->>'professional_user_id','')),'') is not null then
+      if (v_row->>'professional_user_id') !~*
+        '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+        raise exception 'FINANCIAL_PLAN_PROFESSIONAL_INVALID';
+      end if;
+      v_user:=(v_row->>'professional_user_id')::uuid;
+      -- Do not trust the display snapshot as the authority for a NEW
+      -- therapist binding: v2 uses it for pricing, but the professional
+      -- must match both the canonical service type and that snapshot.
+      -- Legacy unbound plans retain their original compatibility path.
+      v_canonical_service_key:=public.appointment_financial_service_key_v1(
+        case when upper(coalesce(v_row->>'service_type',''))='CUSTOM'
+          then coalesce(nullif(v_row->>'custom_service_name',''),
+            nullif(v_row->>'service_name_snapshot',''))
+          else v_row->>'service_type'
+        end
+      );
+      if nullif(v_canonical_service_key,'') is null
+         or v_canonical_service_key is distinct from v_service_key then
+        raise exception 'FINANCIAL_PLAN_SPECIALTY_INVALID';
+      end if;
+      perform 1 from public.clinic_memberships m
+      where m.clinic_id=p_organization_id and m.user_id=v_user
+        and m.role='therapist' and m.status='active'
+        and public.appointment_financial_service_key_v1(m.specialty)=v_service_key
+      for share;
+      if not found then raise exception 'FINANCIAL_PLAN_PROFESSIONAL_NOT_ELIGIBLE'; end if;
+    else
+      select plan.* into v_previous from public.patient_financial_plans plan
+      where plan.organization_id=p_organization_id and plan.patient_id=p_patient_id
+        and plan.status='ACTIVE'
+        and ((v_requested_id is not null and plan.id=v_requested_id)
+          or (v_key is not null and plan.client_plan_key=v_key))
+      order by plan.version desc limit 1;
+      if not found or public.appointment_financial_service_key_v1(
+        coalesce(nullif(v_previous.service_name_snapshot,''),
+          nullif(v_previous.custom_service_name,''),v_previous.service_type)
+      ) is distinct from v_service_key then
+        raise exception 'FINANCIAL_PLAN_PROFESSIONAL_REQUIRED';
+      end if;
+    end if;
+  end loop;
+
+  -- A PL/pgSQL function and the nested v2 function share one SQL transaction:
+  -- an exception in the association phase rolls back the financial mutations.
+  v_result:=public.reconcile_patient_financial_plans_v2(
+    p_organization_id,p_patient_id,p_actor_id,p_plans,p_preserve_insurance_context
+  );
+  if v_result->>'success' is distinct from 'true' then return v_result; end if;
+
+  for v_row in select value from jsonb_array_elements(p_plans) loop
+    if nullif(btrim(coalesce(v_row->>'professional_user_id','')),'') is null then continue; end if;
+    v_user:=(v_row->>'professional_user_id')::uuid;
+    v_key:=nullif(btrim(coalesce(v_row->>'client_plan_key','')),'');
+    v_requested_id:=null;
+    if coalesce(v_row->>'id','') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
+      v_requested_id:=(v_row->>'id')::uuid;
+    end if;
+    select plan.* into v_current from public.patient_financial_plans plan
+    where plan.organization_id=p_organization_id and plan.patient_id=p_patient_id
+      and plan.status='ACTIVE'
+      and ((v_requested_id is not null and plan.id=v_requested_id)
+        or (v_key is not null and plan.client_plan_key=v_key))
+    order by plan.version desc limit 1;
+    if not found then raise exception 'FINANCIAL_PLAN_BINDING_NOT_PERSISTED'; end if;
+    -- No billing amount, charge, receipt or historic version is rewritten.
+    -- The currently ACTIVE version carries its own responsible professional.
+    update public.patient_financial_plans
+      set professional_user_id=v_user
+    where id=v_current.id and organization_id=p_organization_id
+      and patient_id=p_patient_id and status='ACTIVE';
+    if not found then raise exception 'FINANCIAL_PLAN_BINDING_NOT_PERSISTED'; end if;
+  end loop;
+
+  -- Older authorized clients may omit the assignment when editing an
+  -- existing plan. If v2 versioned that same specialty, preserve its prior
+  -- assignment on the new active version instead of silently dropping it.
+  update public.patient_financial_plans current_plan
+    set professional_user_id=prior_plan.professional_user_id
+  from public.patient_financial_plans prior_plan
+  where current_plan.organization_id=p_organization_id
+    and current_plan.patient_id=p_patient_id and current_plan.status='ACTIVE'
+    and current_plan.professional_user_id is null
+    and current_plan.supersedes_plan_id=prior_plan.id
+    and prior_plan.organization_id=current_plan.organization_id
+    and prior_plan.patient_id=current_plan.patient_id
+    and prior_plan.professional_user_id is not null
+    and public.appointment_financial_service_key_v1(
+      coalesce(nullif(current_plan.service_name_snapshot,''),
+        nullif(current_plan.custom_service_name,''),current_plan.service_type)
+    )=public.appointment_financial_service_key_v1(
+      coalesce(nullif(prior_plan.service_name_snapshot,''),
+        nullif(prior_plan.custom_service_name,''),prior_plan.service_type)
+    );
+
+  select coalesce(jsonb_agg(to_jsonb(plan) order by plan.created_at asc),'[]'::jsonb)
+    into v_data
+  from public.patient_financial_plans plan
+  where plan.organization_id=p_organization_id and plan.patient_id=p_patient_id
+    and plan.status='ACTIVE';
+
+  return v_result || jsonb_build_object('data',v_data);
+end;
+$$;
+revoke all on function public.reconcile_patient_financial_plans_v3(uuid,uuid,uuid,jsonb,boolean)
+  from public,anon,authenticated;
+grant execute on function public.reconcile_patient_financial_plans_v3(uuid,uuid,uuid,jsonb,boolean)
+  to service_role;
+
+commit;

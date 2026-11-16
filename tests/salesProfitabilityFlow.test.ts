@@ -1,9 +1,10 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const legacyEngine = fs.readFileSync('src/utils/salesProfitability.ts', 'utf8');
 const modularEngine = fs.readFileSync('src/utils/salesModularProposal.ts', 'utf8');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 
 assert.doesNotMatch(legacyEngine, /customBasePackageLimit/);
 assert.doesNotMatch(legacyEngine, /basePackageSelectionMode/);

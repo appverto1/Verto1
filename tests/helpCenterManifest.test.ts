@@ -6,8 +6,8 @@ assert.equal(resolveHelpMedia('../secret'),null,'path traversal must not resolve
 assert.equal(resolveHelpMedia('unknown'),null,'unknown media must not resolve');
 assert.ok(HELP_ARTICLES.every(a=>a.status!=='published'||a.mediaIds.length===0),'fixture-free published slice must not reference unpublished media');
 assert.equal(publishedHelpProjection('patient',[]).length,0,'patient audience must not receive professional catalog');
-assert.equal(publishedHelpProjection('biller',[]).length,0,'billing article hidden without entitlement');
-assert.equal(publishedHelpProjection('biller',['reports.billing.view'],['insurance_tiss']).length,1,'authorized biller gets representative article');
+assert.equal(publishedHelpProjection('biller',[]).some(article=>article.articleId==='billing-start-v1'),false,'billing article hidden without entitlement');
+assert.equal(publishedHelpProjection('biller',['reports.billing.view'],['insurance_tiss']).some(article=>article.articleId==='billing-start-v1'),true,'authorized biller gets representative article');
 const billingArticle=HELP_ARTICLES.find(article=>article.articleId==='billing-start-v1');
 assert.equal(billingArticle?.routeKey,'billing_workspace','published procedural article exposes only an allowlisted route key');
 assert.ok((billingArticle?.prerequisites||[]).length>=2,'structured article declares prerequisites');

@@ -13,7 +13,7 @@ const eventHandlersSource = readItem09Source('services/salesAssistedStripeEventH
 const server = fs.readFileSync('server.ts', 'utf8');
 
 const activationFlow = server.match(
-  /const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS[\s\S]*?const preparePaidDirectorSessionBootstrap/,
+  /const SALES_ACTIVATION_EMAIL_CLAIM_TTL_MS[\s\S]*?const \{ preparePaidDirectorSessionBootstrap \}/,
 )?.[0] || '';
 const processPaid = stripePaidProcessorSource.match(/const processSalesAssistedCheckoutCompleted =[^]*?ITEM09_SOURCE_END/,
 )?.[0] || '';

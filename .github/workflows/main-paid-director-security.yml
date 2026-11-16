@@ -1,0 +1,75 @@
+name: Main paid Director security and initial Stripe eligibility regression
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/salesPaidDirectorAccountProvisioning.ts'
+      - 'services/publicSalesActivationPasswordRoute.ts'
+      - 'server.ts'
+      - 'tests/salesPaidDirectorBackendExtraction.regression.test.mjs'
+      - 'tests/salesPaidDirectorConcurrentAuthCreate.regression.test.ts'
+      - 'tests/salesSubscriptionActiveBeforeLeadConversion.regression.test.ts'
+      - 'tests/salesPasswordActivationPaidGate.regression.test.ts'
+      - 'tests/salesGooglePaidActivationPreprofileGate.regression.test.mjs'
+      - '.github/workflows/main-paid-director-security.yml'
+permissions:
+  contents: read
+concurrency:
+  group: main-paid-director-security-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  paid-director-gate:
+    name: paid-director-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Paid Director Stripe, Auth, tenant and password path regression
+        run: |
+          node --import tsx --test tests/salesPaidDirectorConcurrentAuthCreate.regression.test.ts
+          node --import tsx --test tests/salesSubscriptionActiveBeforeLeadConversion.regression.test.ts
+          node --import tsx --test tests/salesPasswordActivationPaidGate.regression.test.ts
+          node --test tests/salesGooglePaidActivationPreprofileGate.regression.test.mjs
+          node --test tests/salesPaidDirectorBackendExtraction.regression.test.mjs
+          node tests/salesDirectorContractActivation20260831.regression.test.mjs
+      - name: Reject new TypeScript diagnostics versus production main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/verto-main-typebase origin/main
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/verto-main-typebase/node_modules
+          echo 0 > /tmp/base-ts-exit
+          echo 0 > /tmp/candidate-ts-exit
+          (cd /tmp/verto-main-typebase && "$GITHUB_WORKSPACE/node_modules/.bin/tsc" --noEmit --pretty false) > /tmp/base-tsc.log 2>&1 || echo $? > /tmp/base-ts-exit
+          ./node_modules/.bin/tsc --noEmit --pretty false > /tmp/candidate-tsc.log 2>&1 || echo $? > /tmp/candidate-ts-exit
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { parseTypeScriptDiagnostics, findNewTypeScriptDiagnostics } from './scripts/typecheck-ratchet.mjs';
+          const baseline = readFileSync('/tmp/base-tsc.log', 'utf8');
+          const candidate = readFileSync('/tmp/candidate-tsc.log', 'utf8');
+          const baselineExit = Number(readFileSync('/tmp/base-ts-exit', 'utf8').trim());
+          const candidateExit = Number(readFileSync('/tmp/candidate-ts-exit', 'utf8').trim());
+          const b = parseTypeScriptDiagnostics(baseline);
+          const c = parseTypeScriptDiagnostics(candidate);
+          if ((baselineExit !== 0 && b.length === 0) || (candidateExit !== 0 && c.length === 0)) {
+            throw new Error('Typecheck ended unexpectedly without parseable TypeScript diagnostics');
+          }
+          const added = c.length === 0 ? [] : b.length === 0 ? c : findNewTypeScriptDiagnostics(candidate, baseline);
+          if (added.length) {
+            console.error('New TypeScript diagnostics compared with main:', added.map(d => d.original).join('\n'));
+            process.exitCode = 1;
+          } else {
+            console.log('TypeScript differential PASS; baseline diagnostics:', b.length, 'candidate:', c.length, 'new:', added.length);
+          }
+          NODE
+      - name: Runtime imports
+        run: npm run check:docker-runtime-imports
+      - name: Production UI build
+        run: npm run build

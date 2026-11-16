@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const lifecycle = server.match(/const linkStatus = event\.type === "invoice\.payment_failed"[\s\S]*?if \(linkLifecycleError\) throw linkLifecycleError;/)?.[0] || '';
 
 assert.match(lifecycle, /linkStatus !== "completed"/);

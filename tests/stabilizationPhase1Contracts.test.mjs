@@ -1,7 +1,8 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const server = readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readModularServerSource();
 const activation = readFileSync(new URL('../src/components/ActivationAccess.tsx', import.meta.url), 'utf8');
 const railway = JSON.parse(readFileSync(new URL('../railway.json', import.meta.url), 'utf8'));
 

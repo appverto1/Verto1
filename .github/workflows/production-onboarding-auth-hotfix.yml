@@ -1,0 +1,64 @@
+name: Production onboarding authentication hotfix verification
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/components/ProfessionalOnboarding.tsx'
+      - 'src/services/dataService.ts'
+      - 'tests/professionalOnboardingAuth.regression.test.mjs'
+      - '.github/workflows/production-onboarding-auth-hotfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Verify authentication guard remains enforced
+        run: node tests/professionalOnboardingAuth.regression.test.mjs
+      - name: Verify modular initial schedule and role labels (no persistence changes)
+        run: node --import tsx tests/professionalOnboardingPresentation.test.ts
+      - name: Reject new TypeScript diagnostics versus production main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/verto-main-typebase origin/main
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/verto-main-typebase/node_modules
+          echo 0 > /tmp/base-ts-exit
+          echo 0 > /tmp/candidate-ts-exit
+          (cd /tmp/verto-main-typebase && "$GITHUB_WORKSPACE/node_modules/.bin/tsc" --noEmit --pretty false) > /tmp/base-tsc.log 2>&1 || echo $? > /tmp/base-ts-exit
+          ./node_modules/.bin/tsc --noEmit --pretty false > /tmp/candidate-tsc.log 2>&1 || echo $? > /tmp/candidate-ts-exit
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { parseTypeScriptDiagnostics, findNewTypeScriptDiagnostics } from './scripts/typecheck-ratchet.mjs';
+          const baseline = readFileSync('/tmp/base-tsc.log', 'utf8');
+          const candidate = readFileSync('/tmp/candidate-tsc.log', 'utf8');
+          const baselineExit = Number(readFileSync('/tmp/base-ts-exit', 'utf8').trim());
+          const candidateExit = Number(readFileSync('/tmp/candidate-ts-exit', 'utf8').trim());
+          const b = parseTypeScriptDiagnostics(baseline);
+          const c = parseTypeScriptDiagnostics(candidate);
+          if ((baselineExit !== 0 && b.length === 0) || (candidateExit !== 0 && c.length === 0)) {
+            throw new Error('Typecheck ended unexpectedly without parseable TypeScript diagnostics');
+          }
+          const added = c.length === 0 ? [] : b.length === 0 ? c : findNewTypeScriptDiagnostics(candidate, baseline);
+          if (added.length) {
+            console.error('New TypeScript diagnostics compared with main:', added.map(d => d.original).join('\n'));
+            process.exitCode = 1;
+          } else {
+            console.log('TypeScript differential PASS; baseline diagnostics:', b.length, 'candidate:', c.length, 'new:', added.length);
+          }
+          NODE
+      - name: Compile production UI
+        run: npm run build

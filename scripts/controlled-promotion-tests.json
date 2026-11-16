@@ -75,5 +75,14 @@
   "helpCenterIntegration.test.ts",
   "helpTutorialSupport.test.ts",
   "patientFinancialPlanFinanceWithoutTissPayload.regression.test.mjs",
-  "patientFinancialPlanTissPreservationOnGenericFinancialSave.regression.test.mjs"
+  "patientFinancialPlanTissPreservationOnGenericFinancialSave.regression.test.mjs",
+  "productionClinicalExtraction.test.mjs",
+  "productionExtractedRouteParity.test.mjs",
+  "productionStripeExtraction.test.mjs",
+  "stripeWebhookEventState.behavior.test.ts",
+  "salesModularSubscriptionSchedule.behavior.test.ts",
+  "salesPaidDirectorBackendExtraction.regression.test.mjs",
+  "clinicRouteBatch02Handlers.test.ts",
+  "serverReadyRouteHandler.test.ts",
+  "abaChartRegistration.regression.test.mjs"
 ]

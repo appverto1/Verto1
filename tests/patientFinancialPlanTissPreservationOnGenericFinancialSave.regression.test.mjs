@@ -190,6 +190,7 @@ const persistStart = server.indexOf('async function persistPatientFinancialPlans
 const persistEnd = server.indexOf('async function updatePatientStatusIfNeeded', persistStart);
 const persistContext = {
   isUuid,
+  validateActiveClinicFinancialPlanSpecialties: async () => ({ ok: true }),
   loadCanonicalActivePatientFinancialPlansForTissPreservation: async () => canonicalForMock,
   hydrateOmittedPatientFinancialPlanTissFieldsForPersistence: hydrateTiss,
   buildPatientFinancialPlanRows: buildRows,

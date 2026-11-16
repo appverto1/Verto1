@@ -1,8 +1,9 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const panel = fs.readFileSync(new URL('../src/components/TherapeuticPlanPanel.tsx', import.meta.url), 'utf8');
-const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const server = readModularServerSource();
 
 assert.match(panel, /const changePlanScopeStatus = async \(scope: any, nextStatus: 'active' \| 'paused'\)/);
 assert.match(panel, /updatePatientTherapeuticPlanScope\(patientId, scopeId, \{/);

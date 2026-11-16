@@ -2,6 +2,7 @@ import type { Express } from 'express';
 import { buildHelpContext } from './helpContext';
 import { registerSalesProspectingRoutes } from './salesProspectingRoutes';
 import { fileURLToPath } from 'node:url';
+import { registerSalesProspectingRoutes } from './salesProspectingRoutes';
 import { HELP_MEDIA_BUCKET, publishedHelpProjection, resolveHelpMedia } from '../src/help/helpManifest';
 import { publishedTutorialHelpProjection } from './helpTutorialCatalog';
 import { CAPABILITY_CATALOG, isClinicBaseRole } from '../src/constants/authorizationModel';
