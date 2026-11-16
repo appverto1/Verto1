@@ -2484,8 +2484,10 @@ export function CoordinatorDashboard({
   const canManageProtocolLibrary = hasCapability("aba.program.edit");
   const canManageClinicSettings = ["director", "coordinator"].includes(normalizedRole) && hasCapability("clinic.settings.edit");
   const canManageBilling = !isDemoAccount && hasCapability("billing.sessions.view");
-  const canEditAnamnesisTemplate = canManageClinicSettings || isDirectTherapist;
-  const canLoadAnamnesisTemplate = hasCapability("clinical.anamnesis.view") || isDirectTherapist;
+  // A specialty professional must not trigger protected anamnesis reads on login.
+  // Supervisory professionals keep access only when the server grants it.
+  const canEditAnamnesisTemplate = canManageClinicSettings || (isDirectTherapist && hasCapability("clinical.anamnesis.edit"));
+  const canLoadAnamnesisTemplate = hasCapability("clinical.anamnesis.view");
   const DAY_GRID_SLOT_HEIGHT_PX = 66;
   const DAY_GRID_START_HOUR = 7;
   const DAY_GRID_END_HOUR = 20;
