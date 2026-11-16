@@ -11,7 +11,7 @@ const account = { id: partnerId, user_id: null, display_name: 'Parceiro',
   contact_email: email, partner_kind: 'external', referral_code: 'VERTO-0123456789ABCDEF01',
   status: 'approved', compliance_approved: true, created_at: '2026-11-10T12:00:00Z' };
 
-function fixture(options: { auth?: any; account?: any; rpc?: any; memberships?: any[]; insertError?: any } = {}) {
+function fixture(options: { auth?: any; adminIdentity?: any; adminError?: any; account?: any; rpc?: any; memberships?: any[]; insertError?: any } = {}) {
   const calls: any[] = [];
   const routes: Record<string, any[]> = {};
   const app: any = {};
@@ -19,10 +19,18 @@ function fixture(options: { auth?: any; account?: any; rpc?: any; memberships?: 
     app[method] = (path: string, ...handlers: any[]) => { routes[method.toUpperCase() + ' ' + path] = handlers; };
   }
   const supabase = {
-    auth: { getUser: async () => options.auth || {
-      data: { user: { id: userId, email, email_confirmed_at: '2026-11-10T12:00:00Z' } },
-      error: null,
-    } },
+    auth: {
+      getUser: async () => options.auth || {
+        data: { user: { id: userId, email, email_confirmed_at: '2026-11-10T12:00:00Z' } },
+        error: null,
+      },
+      admin: { getUserById: async () => ({
+        data: { user: options.adminIdentity === undefined
+          ? (options.auth?.data?.user || { id: userId, email, email_confirmed_at: '2026-11-10T12:00:00Z' })
+          : options.adminIdentity },
+        error: options.adminError || null,
+      }) },
+    },
     from: (table: string) => {
       const query: any = { filters: {} };
       query.select = () => query;
@@ -101,6 +109,40 @@ test('only verified Supabase email matching a registered external partner can cr
   assert.equal(f.calls[0].name, 'verto_partner_tier_dashboard_v1');
   assert.equal(f.calls[0].args.p_partner_id, partnerId);
   assert.equal(ownPortal.headers['Cache-Control'], 'private, no-store');
+});
+
+test('Google OAuth with missing verification field uses verified canonical Auth identity', async () => {
+  const f = fixture({
+    auth: { data: { user: { id: userId, email } }, error: null },
+    adminIdentity: { id: userId, email, email_confirmed_at: '2026-11-10T12:00:00Z' },
+  });
+  const session: any = { save(cb: any) { cb(null); } };
+  const response = await f.run('POST', '/api/partnerships/auth/session',
+    f.req({ accessToken: 'a'.repeat(60) }, session));
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(session.partnerAuthUserId, userId);
+});
+
+test('canonical Auth fallback rejects another account, unverified email or API failures', async () => {
+  const auth = { data: { user: { id: userId, email } }, error: null };
+  for (const adminIdentity of [
+    { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email, email_confirmed_at: '2026-11-10' },
+    { id: userId, email: 'other@example.test', email_confirmed_at: '2026-11-10' },
+    { id: userId, email },
+    null,
+  ]) {
+    const f = fixture({ auth, adminIdentity });
+    const session: any = { save(cb: any) { cb(null); } };
+    const response = await f.run('POST', '/api/partnerships/auth/session',
+      f.req({ accessToken: 'a'.repeat(60) }, session));
+    assert.equal(response.statusCode, 401);
+    assert.equal(session.partnerAccountId, undefined);
+  }
+  const unavailable = fixture({ auth, adminError: { message: 'AUTH_API_DOWN' } });
+  const response = await unavailable.run('POST', '/api/partnerships/auth/session',
+    unavailable.req({ accessToken: 'a'.repeat(60) }, { save(cb: any) { cb(null); } }));
+  assert.equal(response.statusCode, 503);
 });
 
 test('an active clinical session cannot be silently turned into an external partner session', async () => {
