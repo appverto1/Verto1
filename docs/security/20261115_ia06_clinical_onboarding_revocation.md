@@ -24,3 +24,11 @@ Postchecks do Supabase Staging: 3 funções críticas ajustadas; 5 helpers de re
 - **Produção** segue vulnerável até promoção seletiva das correções após avaliação do seu schema específico. O catálogo de produção é distinto (90 funções SECDEF authenticated na auditoria).
 - Análises ainda necessárias para restrições por status de papel em permissões de arquivos `SELECTED` e acesso de responsáveis legais, além de revisão das outras funções SECDEF não modificadas.
 - Smoke manual real via login/Salvar/F5/logout/login/isolamento de clínicas **adiado** conforme decisão do usuário. A simulação PostgreSQL e SQL no catálogo não substituem teste de aplicação.
+
+
+## Bloqueio da manipulação de identidade por clientes autenticados
+A auditoria adicional revelou que `public.users` tinha grant UPDATE **sobre a tabela inteira** para authenticated, e a política `users_update_self_or_admin` só validava o ID da linha. Isso permitia que um usuário atualizasse seu próprio `role`, `clinic_id`, acesso financeiro, Stripe, modo demo, tipo de portal, onboarding e MFA, contornando outras checagens de autorização.
+
+Migração `supabase/migrations/20261116002542_ia06_block_authenticated_users_role_clinic_payment_mfa_mutation.sql` instalou somente o trigger `trg_users_privileged_fields_guard_v1` e a função SECURITY INVOKER `users_privileged_field_update_guard_v1()`, sem grants de EXECUTE a anon/authenticated. Bloqueia alterações de 38 campos privilegiados iniciadas de `anon`/`authenticated` pelo contexto PostgREST/role SQL; preserva nome, foto, idade, updated_at e processos autorizados de backend/service_role. Nenhum dado foi alterado.
+
+Regressão adicionada: `tests/ia06UsersPrivilegedFields.regression.test.mjs` usa PostgreSQL isolado para provar que a edição de perfil é permitida e que role/clinic/Stripe/MFA não podem ser adulterados por uma sessão comum. A migração tem preflight para RLS, grants, triggers e colunas, postchecks transacionais, sem dependência de dados reais.
