@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Rocket, 
   ShieldCheck, 
@@ -107,6 +107,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
   const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
   const [loading, setLoading] = useState(false);
+  const passwordLoginSubmittingRef = useRef(false);
   const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const [twoFactorToken, setTwoFactorToken] = useState('');
   const [twoFactorChallengeId, setTwoFactorChallengeId] = useState('');
@@ -160,6 +161,8 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
       setLoginStep('password');
       return;
     }
+    if (passwordLoginSubmittingRef.current) return;
+    passwordLoginSubmittingRef.current = true;
     setLoginError('');
     setLoading(true);
     // The form owns this password sign-in. A Supabase SIGNED_IN callback must
@@ -237,6 +240,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
       }
     } finally {
       finishExplicitPasswordSignIn(passwordSessionIssued);
+      passwordLoginSubmittingRef.current = false;
       setLoading(false);
     }
   };
