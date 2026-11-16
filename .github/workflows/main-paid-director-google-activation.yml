@@ -6,6 +6,7 @@ on:
       - 'src/lib/supabase.ts'
       - 'src/lib/implicitOAuthLogin.ts'
       - 'src/App.tsx'
+      - 'src/components/LandingPage.tsx'
       - 'src/services/salesActivationGoogleOAuth.ts'
       - 'src/components/SalesActivationAccess.tsx'
       - 'tests/salesDirectorGoogleFirstAccessTask12.regression.test.mjs'

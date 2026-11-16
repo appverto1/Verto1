@@ -282,6 +282,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
         options: {
           redirectTo: window.location.origin,
           scopes: 'https://www.googleapis.com/auth/userinfo.email',
+          queryParams: { prompt: 'select_account' },
         }
       });
       if (error) throw error;
