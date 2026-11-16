@@ -39,8 +39,11 @@ export function ExternalPartnershipPortal() {
     });
     const result = await readJson(response);
     if (!response.ok || !result?.success) {
-      if (['CLINICAL_SESSION_ACTIVE', 'PARTNER_NOT_REGISTERED', 'INVALID_CREDENTIALS'].includes(result?.error)) {
-        // Covers the Google/OAuth return as well as the password form.
+      const failure = String(result?.error || '');
+      // Do not sign out an existing clinical identity if the backend found a
+      // clinical session. The partner portal cannot take it over implicitly.
+      if (['PARTNER_NOT_REGISTERED', 'INVALID_CREDENTIALS', 'EMAIL_VERIFICATION_REQUIRED',
+        'PARTNER_APPROVAL_PENDING', 'PARTNER_ACCESS_DENIED'].includes(failure)) {
         try {
           const supabase = await getSupabase();
           await supabase.auth.signOut({ scope: 'local' });
@@ -48,9 +51,16 @@ export function ExternalPartnershipPortal() {
           // The backend still rejects access independently.
         }
       }
-      throw new Error(result?.error === 'PARTNER_APPROVAL_PENDING'
-        ? 'Sua inscrição está em análise. O acesso será liberado após aprovação da Verto.'
-        : 'E-mail ou senha inválidos.');
+      const messages: Record<string, string> = {
+        CLINICAL_SESSION_ACTIVE: 'Existe uma sessão clínica ativa neste navegador. Saia do portal clínico antes de entrar como parceiro.',
+        PARTNER_NOT_REGISTERED: 'Esta conta não está vinculada a uma inscrição de parceiro. Use o e-mail aprovado.',
+        PARTNER_APPROVAL_PENDING: 'Sua inscrição está em análise. O acesso será liberado após aprovação da Verto.',
+        PARTNER_ACCESS_DENIED: 'O acesso desta parceria está indisponível. Entre em contato com a Verto.',
+        EMAIL_VERIFICATION_REQUIRED: 'Não foi possível validar o e-mail desta conta. Verifique sua identidade e tente novamente.',
+        TOO_MANY_LOGIN_ATTEMPTS: 'Muitas tentativas de login. Aguarde antes de tentar novamente.',
+        PARTNERSHIPS_UNAVAILABLE: 'O portal de parcerias está temporariamente indisponível. Tente novamente.',
+      };
+      throw new Error(messages[failure] || 'Não foi possível concluir o acesso do parceiro. Tente novamente.');
     }
     if (!(await checkPortal())) throw new Error('Não foi possível confirmar a sessão do parceiro.');
   };
@@ -145,14 +155,8 @@ export function ExternalPartnershipPortal() {
       await exchangeSession(result.data.session.access_token);
       setPassword('');
     } catch (err: any) {
-      // A verified Supabase identity is not an approved partner session.
-      // Do not retain it after a rejected portal-specific login.
-      try {
-        const supabase = await getSupabase();
-        await supabase.auth.signOut({ scope: 'local' });
-      } catch {
-        // Best-effort local cleanup; no partner session is issued by this UI.
-      }
+      // Failed password authentication must not sign out an unrelated clinical
+      // session. exchangeSession cleans up only explicitly denied partner logins.
       setError(err?.message || 'Não foi possível entrar com sua senha.');
     } finally { setBusy(false); }
   };

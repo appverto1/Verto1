@@ -1,0 +1,39 @@
+name: PR792 one-shot main to staging server reconcile
+on:
+  push:
+    branches:
+      - reconcile/pr792-main-to-staging-gha-20261116
+permissions:
+  contents: write
+concurrency:
+  group: pr792-reconcile-once
+  cancel-in-progress: false
+jobs:
+  safely-apply-main-partner-gate:
+    if: github.repository == 'appverto1/Verto1'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Apply only two guarded partner gate replacements to server.ts
+        run: node scripts/pr792-reconcile-once.cjs
+      - name: Confirm scoped test suites pass before committing
+        run: |
+          node --import tsx tests/partnershipSecurity.test.ts
+          node tests/partnershipRouteMount.regression.test.mjs
+          node tests/partnerMainIntegration.regression.test.mjs
+      - name: Check diff, create commit, and push to reconciliation branch only
+        run: |
+          git diff --check
+          git add -- server.ts .github/workflows/pr792-reconcile-once.yml scripts/pr792-reconcile-once.cjs
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(reconcile): integrate approved partner pre-session gate without replacing staging server'
+          git push origin "HEAD:$GITHUB_REF_NAME"
