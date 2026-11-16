@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { registerPartnershipRoutes } from '../services/partnerships/partnershipRoutes';
+import { approvedExternalPartnerForClinicalIdentity, registerPartnershipRoutes } from '../services/partnerships/partnershipRoutes';
 import { createSensitiveApiMutationProtectionMiddleware, isExternalPreAuthMutationPath } from '../src/utils/sensitiveApiMutationProtection.mjs';
 
 const userId = '11111111-1111-4111-8111-111111111111';
@@ -84,6 +84,53 @@ function fixture(options: { auth?: any; adminIdentity?: any; adminError?: any; a
   };
   return { routes, calls, req, run, checkAuth, checkPlatformAdmin };
 }
+
+test('pre-session partner gate allows dual clinical role only for a matching approved external partner', async () => {
+  const calls: { field: string; value: unknown }[] = [];
+  const partner = { id: partnerId, contact_email: email, partner_kind: 'external',
+    status: 'approved', compliance_approved: true };
+  const db: any = {
+    from(table: string) {
+      assert.equal(table, 'verto_partner_accounts');
+      const filters: Record<string, unknown> = {};
+      const q: any = {
+        select(fields: string) { assert.equal(fields, 'id'); return q; },
+        eq(field: string, value: unknown) {
+          calls.push({ field, value }); filters[field] = value; return q;
+        },
+        async maybeSingle() {
+          const matches = Object.entries(filters).every(([field, value]) =>
+            (partner as any)[field] === value);
+          return { data: matches ? { id: partner.id } : null, error: null };
+        },
+      };
+      return q;
+    },
+  };
+  assert.equal(await approvedExternalPartnerForClinicalIdentity(db, 'PARTNER@EXAMPLE.TEST'), true);
+  assert.deepEqual(calls.map(c => c.field),
+    ['partner_kind', 'contact_email', 'status', 'compliance_approved']);
+  assert.equal(await approvedExternalPartnerForClinicalIdentity(db, 'stranger@example.test'), false);
+  for (const state of [
+    { status: 'pending' }, { status: 'suspended' },
+    { compliance_approved: false }, { partner_kind: 'professional' },
+  ]) {
+    const previous = { ...partner };
+    Object.assign(partner, state);
+    assert.equal(await approvedExternalPartnerForClinicalIdentity(db, email), false);
+    Object.assign(partner, previous);
+  }
+  assert.equal(await approvedExternalPartnerForClinicalIdentity(db, ''), false);
+  assert.equal(await approvedExternalPartnerForClinicalIdentity(db, 'x'.repeat(255)+'@example.test'), false);
+  assert.equal(await approvedExternalPartnerForClinicalIdentity(db, 'invalid-email'), false);
+  const unavailable: any = { from: () => ({
+    select() { return this; }, eq() { return this; },
+    async maybeSingle() { return { data: null, error: { message: 'DB_UNAVAILABLE' } }; },
+  }) };
+  await assert.rejects(
+    approvedExternalPartnerForClinicalIdentity(unavailable, email),
+    (error: any) => error?.message === 'DB_UNAVAILABLE');
+});
 
 test('unauthenticated partner cannot read the portal or select another partner', async () => {
   const f = fixture();

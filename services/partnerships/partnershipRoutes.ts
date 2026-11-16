@@ -18,6 +18,23 @@ const saveSession = (req:any) => new Promise<void>((resolve,reject) => {
 });
 
 
+/**
+ * A clinical Supabase identity may explicitly access an approved EXTERNAL
+ * partnership, but only when that same verified e-mail was approved by Verto.
+ * This pre-session check never grants access; the partner route still validates
+ * the OAuth token, confirmation, approval and HTTP session isolation.
+ */
+export async function approvedExternalPartnerForClinicalIdentity(supabase:any, rawEmail:unknown):Promise<boolean> {
+  const email=safe(rawEmail,254).toLowerCase();
+  if(!email || !isValidEmail(email) || typeof rawEmail!=='string' || rawEmail.length>254) return false;
+  const found=await supabase.from('verto_partner_accounts')
+    .select('id')
+    .eq('partner_kind','external').eq('contact_email',email)
+    .eq('status','approved').eq('compliance_approved',true).maybeSingle();
+  if(found.error)throw found.error;
+  return Boolean(found.data?.id);
+}
+
 type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any; notifyPartnerApproval?: typeof sendPartnerApprovalEmail};
 
 /**
