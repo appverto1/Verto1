@@ -290,9 +290,11 @@ export const getAppointmentPatientConfirmationVisualState = (appointment: any) =
       ? 'confirmed'
       : canonical === 'RESCHEDULE_REQUESTED'
         ? 'reschedule_requested'
-        : canonical === 'CANCEL_REQUESTED' || canonical === 'CANCELLED_BY_CLINIC' || canonical === 'CANCELLED'
-          ? 'cancel_requested'
-          : 'pending';
+        : canonical === 'CANCELLED_BY_CLINIC' || canonical === 'CANCELLED'
+          ? 'cancelled'
+          : canonical === 'CANCEL_REQUESTED'
+            ? 'cancel_requested'
+            : 'pending';
   return {
     ...getAppointmentStatusColor(statusForColor),
     canonical,
@@ -2166,6 +2168,13 @@ export const ClinicalAgendaBoard = ({
 
   const openEventDetail = (event: any) => {
     const normalized = normalizeClinicalEvent(event);
+    // A specialty professional only opens the patient's authorized clinical record.
+    // Do not load appointment management details or offer status mutations.
+    if (isTherapistActor) {
+      const patientId = String(normalized.patientId || normalized.patient_id || '').trim();
+      if (patientId) onOpenPatient?.(patientId, { tab: 'history' }, normalized.patientName);
+      return;
+    }
     if (normalized.source === 'school_meeting' || normalized.schoolMeetingId) {
       setSelectedEvent(null);
       setSelectedSchoolMeetingId(String(normalized.schoolMeetingId || normalized.id).replace(/^school-/, ''));
@@ -2923,7 +2932,7 @@ export const ClinicalAgendaBoard = ({
   const renderSidebarContent = () => (
     <div className="space-y-4">
       {renderSection('calendar', 'Mini calendário', null, renderMiniCalendar())}
-      {renderSection('team', 'Equipe', selectedTherapistIds.length, (
+      {!isTherapistActor && renderSection('team', 'Equipe', selectedTherapistIds.length, (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setSelectedTherapistIds([])} className={chipClass(selectedTherapistIds.length === 0)}>
@@ -3309,9 +3318,11 @@ export const ClinicalAgendaBoard = ({
             <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-slate-400">Hoje no foco</p>
             <h3 className={`text-base font-bold capitalize ${isDark ? 'text-white' : 'text-slate-900'}`}>{formatLongDate(activeDate)}</h3>
           </div>
-          <button type="button" onClick={() => onCreateAppointment?.(selectedDateKey, '08:00')} className="rounded-2xl bg-[#7a32fc] p-3 text-white shadow-lg shadow-violet-500/20">
-            <Plus size={18} />
-          </button>
+          {onCreateAppointment && !isTherapistActor && (
+            <button type="button" onClick={() => onCreateAppointment(selectedDateKey, '08:00')} className="rounded-2xl bg-[#7a32fc] p-3 text-white shadow-lg shadow-violet-500/20" aria-label="Criar agendamento">
+              <Plus size={18} />
+            </button>
+          )}
         </div>
         <div className="space-y-3">
           {dayEvents.map((event: any) => renderEventCard(event))}
@@ -3679,7 +3690,7 @@ export const ClinicalAgendaBoard = ({
 
   return (
     <div className="flex flex-col gap-2 pb-[calc(env(safe-area-inset-bottom)+5rem)] xl:h-[calc(100vh-4.25rem)] xl:min-h-[580px] xl:overflow-hidden xl:pb-0">
-      {patientReschedulePolicy !== null && (
+      {!isTherapistActor && patientReschedulePolicy !== null && (
         <div className={`mx-1 flex shrink-0 items-center gap-2 rounded-xl border px-3 py-2 text-xs ${patientReschedulePolicy ? (isDark ? 'border-emerald-900/60 bg-emerald-950/30 text-emerald-300' : 'border-emerald-100 bg-emerald-50 text-emerald-700') : (isDark ? 'border-amber-900/60 bg-amber-950/30 text-amber-300' : 'border-amber-100 bg-amber-50 text-amber-800')}`}>
           {patientReschedulePolicy ? <CheckCircle2 size={15} className="shrink-0" /> : <Ban size={15} className="shrink-0" />}
           <span>{patientReschedulePolicy ? 'Portal: pacientes podem solicitar remarcação.' : 'Portal: solicitações de remarcação estão desativadas; pacientes ainda podem confirmar ou cancelar.'}</span>
