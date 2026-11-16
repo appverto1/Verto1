@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const calendar = readFileSync('src/components/Calendar.tsx', 'utf8');
-const statusModalStart = calendar.indexOf('{statusActionEvent && (');
+const statusModalStart = calendar.indexOf('{!isCaseScopedActor && statusActionEvent && (');
 const statusModalEnd = calendar.indexOf('{filterSheetOpen && (', statusModalStart);
 assert.ok(statusModalStart > 0 && statusModalEnd > statusModalStart, 'status actions modal remains available');
 const statusModal = calendar.slice(statusModalStart, statusModalEnd);

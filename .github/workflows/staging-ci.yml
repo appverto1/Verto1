@@ -330,6 +330,13 @@ jobs:
       - name: Clinic authorization-denial guidance regression
         run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
 
+      - name: Case-scoped calendar details and appointment permissions
+        run: |
+          node tests/caseScopedCalendarDetails.regression.test.mjs
+          node tests/therapistCalendarReadOnly.regression.test.mjs
+          node tests/therapistCalendarScopeAndAnnouncements.regression.test.mjs
+          node tests/p2PendingCancellationAgendaHighlight.regression.test.mjs
+
       - name: Professional onboarding bearer regression
         run: node tests/professionalOnboardingAuth.regression.test.mjs
 

@@ -34,7 +34,7 @@ assert.match(detail, /!isKidsProfile && \(\s*<section data-testid="adult-protoco
 
 // P1-21/22: clinic module entitlement must be present in server-filtered
 // capability set; payer data alone never opts a clinic into TISS.
-assert.match(agenda, /const canUseTissBilling = hasAgendaCapability\('patient\.insurance\.view'\)/);
+assert.match(agenda, /const canUseTissBilling = !isCaseScopedActor && \(\s*hasAgendaCapability\('patient\.insurance\.view'\)/);
 assert.match(agenda, /const canEditBillingContext = canUseTissBilling/);
 assert.match(agenda, /const patientFinancialPlans = normalizePatientFinancialPlans/);
 assert.match(agenda, /const simplePatientFinancialPlan = findUniqueActiveFinancialPlanForService/);
