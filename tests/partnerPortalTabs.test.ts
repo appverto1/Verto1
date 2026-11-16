@@ -66,7 +66,10 @@ try{
   assert.equal(tab('Programa de parceiros').getAttribute('aria-selected'),'true');
   assert.equal(panel('partner-panel-program').hidden,false);
   assert.match(panel('partner-panel-program').textContent||'',/10% por até 12 meses/);
-  assert.match(panel('partner-panel-program').textContent||'',/6 clientes qualificados/);
+  assert.match(panel('partner-panel-program').textContent||'',/Parceiro Ouro/);
+  assert.match(panel('partner-panel-program').textContent||'',/Nível máximo alcançado/);
+  assert.equal(panel('partner-panel-program').querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow'),'100');
+  assert.equal(panel('partner-panel-program').querySelectorAll('div.grid.grid-cols-3 > div').length,3);
   assert.doesNotMatch(panel('partner-panel-program').textContent||'',/Parceiro aprovado|Participação, elegibilidade/);
   assert.equal(requests.filter(path=>path==='/api/partnerships/portal').length,1);
   assert.equal(requests.filter(path=>path==='/api/partnerships/marketplace/partner').length,1);
