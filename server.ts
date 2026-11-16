@@ -52,6 +52,7 @@ import { createClinicAuthorizationMeHandler, createUserFeatureAccessReadHandler,
 import { createClinicWorkScheduleReadHandler, createClinicWorkScheduleWriteHandler, createClinicWorkScheduleApplyHandler } from './services/clinicWorkScheduleHandlers';
 import { createReadyRouteHandler } from './services/readyRouteHandler';
 import { registerPublicSalesLeadRoute } from './services/publicSalesLeadRoutes';
+import { registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';
 import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPaymentStatusRoute';
 import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';
 import { createSalesAssistedStripeEventHandlers } from './services/salesAssistedStripeEventHandlers';
@@ -84158,6 +84159,10 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
       triggerAppointmentReminderScan(`group.${action}`);
     }
   });
+
+  // Commercial partners use a standalone, server-verified session and never inherit clinical roles.
+  // Register after the global API CSRF guard, before the unknown-route catch-all.
+  registerPartnershipRoutes(app, {supabase,checkAuth,checkPlatformAdmin});
 
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback
   app.all('/api/*', (req, res) => {
