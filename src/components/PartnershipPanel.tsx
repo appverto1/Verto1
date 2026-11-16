@@ -6,7 +6,8 @@ type Account = {
   id:string; display_name:string; referral_code:string; referral_alias?:string|null; status:'pending'|'approved'|'suspended';
   compliance_approved:boolean;
 };
-type Referral = {referral_id:string; clinic_name:string; lead_status:string; has_paid:boolean; referred_at:string};
+type Referral = {referral_id:string; clinic_name:string; lead_status:string; has_paid:boolean; referred_at:string;
+  term_months?:6|9|12|null; first_paid_at?:string|null; term_ends_at?:string|null; subscription_active?:boolean;};
 
 async function callApi(path:string,init?:RequestInit) {
   const response=await fetch(path,{credentials:'include',...init});
@@ -30,6 +31,8 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
   const [activeTab,setActiveTab]=useState<PartnerTab>('program');
   const [pendingInterests,setPendingInterests]=useState<number|null>(null);
   const [referrals,setReferrals]=useState<Referral[]>([]);
+  const [currentTermMonths,setCurrentTermMonths]=useState<6|9|12>(6);
+  const [qualifiedActive,setQualifiedActive]=useState(0);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState('');
@@ -46,6 +49,8 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
       setAccount(data.account||null);
       setCouponDraft(data.account?.referral_alias||'');
       setReferrals(Array.isArray(data.referrals)?data.referrals:[]);
+      setCurrentTermMonths([6,9,12].includes(data.currentTermMonths)?data.currentTermMonths:6);
+      setQualifiedActive(Number.isSafeInteger(data.qualifiedActive)?data.qualifiedActive:0);
     }catch(e:any){setError(e?.message||'Serviço temporariamente indisponível.');}
     finally{setLoading(false);}
   },[mode]);
@@ -135,8 +140,9 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
       hidden={approved&&activeTab!=='program'}>
     <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-7">
       <div className="mb-2 flex items-center gap-2 text-violet-700"><Gift size={18}/><span className="text-xs font-semibold">Programa de parceiros</span></div>
-      <p className="text-2xl font-semibold text-slate-900">10% por até 12 meses</p>
+      <p className="text-2xl font-semibold text-slate-900">10% por até {currentTermMonths} meses nas próximas indicações</p>
       <p className="mt-2 text-sm leading-6 text-slate-600">Comissão potencial sobre pagamentos recorrentes confirmados de novos clientes indicados.</p>
+      {approved && <p className="mt-2 text-xs leading-5 text-slate-500">Nível atual: {qualifiedActive} clientes qualificados ativos nos últimos 12 meses. De 0 a 2: 6 meses; de 3 a 5: 9 meses; 6 ou mais: 12 meses. Cada indicação ganha seu prazo próprio após dois pagamentos mensais confirmados. Reduções de nível têm carência de 30 dias; prazos já concedidos não diminuem.</p>}
       {loading ? <p className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={16}/> Carregando...</p>
       : !account && mode==='external' ? <p className="mt-5 text-sm text-slate-500">Seu cadastro não foi encontrado. Solicite participação ao comercial da Verto.</p>
       : !account ? <button type="button" disabled={saving} onClick={enroll} className="mt-5 rounded-xl bg-violet-700 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{saving?'Enviando...':'Solicitar participação'}</button>
@@ -196,12 +202,16 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
       : <ul className="divide-y divide-slate-100">
         {referrals.map(item=><li key={item.referral_id} className="flex flex-wrap items-center justify-between gap-2 py-3">
           <span className="min-w-0 truncate text-sm font-medium text-slate-800">{item.clinic_name}</span>
-          <span className={'rounded-lg px-2.5 py-1 text-xs font-medium '+(item.has_paid?'bg-emerald-50 text-emerald-700':'bg-slate-100 text-slate-600')}>
-            {item.has_paid?'Pagamento confirmado':'Sem pagamento confirmado'}
+          <span className="flex flex-col items-end gap-1 text-right">
+            <span className={'rounded-lg px-2.5 py-1 text-xs font-medium '+(item.has_paid?'bg-emerald-50 text-emerald-700':'bg-slate-100 text-slate-600')}>
+              {item.has_paid?'Pagamento confirmado':'Sem pagamento confirmado'}
+            </span>
+            {item.term_months ? <span className="text-xs text-slate-600">Direito de {item.term_months} meses · até {item.term_ends_at?new Date(item.term_ends_at).toLocaleDateString('pt-BR'):'data indisponível'}{!item.subscription_active?' · assinatura inativa':''}</span>
+              : <span className="text-xs text-slate-500">Prazo pendente de qualificação</span>}
           </span>
         </li>)}
       </ul>}
-      <p className="mt-4 text-xs text-slate-500">A lista exibe até 50 indicações recentes. Pagamento confirmado não equivale a comissão aprovada ou repasse realizado.</p>
+      <p className="mt-4 text-xs text-slate-500">A lista exibe até 50 indicações recentes. O prazo começa no primeiro pagamento mensal elegível. Cancelamento interrompe novas comissões, mas preserva os prazos das demais indicações. Pagamento confirmado não equivale a comissão aprovada ou repasse realizado.</p>
     </div>
     </div>}
     {approved && <div id="partner-panel-marketplace" role="tabpanel"
