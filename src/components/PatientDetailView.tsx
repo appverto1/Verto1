@@ -843,6 +843,13 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
   const canRequestClinicalCharts = !hasClinicalChartCapabilityContext
     || (hasCapability('clinical.record.view')
       && (hasCapability('treatment_plan.view') || hasCapability('aba.analytics.view')));
+  // The chart can be viewed without granting permission to publish it to patients.
+  // Case supervisors keep server-scoped sharing access; specialty professionals
+  // require an actual supervisory capability from the hydrated authorization set.
+  const normalizedChartActorRole = String(userRole || '').trim().toLowerCase();
+  const canManagePatientChartSharing =
+    ['director', 'coordinator', 'supervisor'].includes(normalizedChartActorRole)
+    || (normalizedChartActorRole === 'therapist' && hasCapability('calendar.team.view'));
   const getSessionFallbackTab = () =>
     allTabs.find((tab) => tab !== 'session' && canAccessTab(tab)) || 'files';
 
@@ -13195,12 +13202,12 @@ export const PatientDetailView = ({ patient, onBack, history, notes: externalNot
               </section>
             )}
             {isKidsProfile ? (
-              <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+              <ClinicalChartsWorkspace patientId={String(patient.id)} canManagePatientChartSharing={canManagePatientChartSharing} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={hasAbaClinicalProfile && abaV2Enabled} showAbaV3Details={hasAbaClinicalProfile && abaV3UiEnabled} showClinicalMeasurementV3Details={hasAbaClinicalProfile && abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
             ) : hasAbaClinicalProfile ? (
               <details className="rounded-2xl border border-slate-200 p-4 dark:border-slate-700" data-testid="adult-aba-intervention-charts-optional">
                 <summary className="cursor-pointer text-sm font-medium">Gráficos de intervenção ABA (complementares à avaliação)</summary>
                 <div className="mt-4">
-                  <ClinicalChartsWorkspace patientId={String(patient.id)} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={abaV2Enabled} showAbaV3Details={abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
+                  <ClinicalChartsWorkspace patientId={String(patient.id)} canManagePatientChartSharing={canManagePatientChartSharing} organizationId={String(resolvedClinicContext?.clinicId || clinicContext?.clinicId || patient?.clinicId || patient?.clinic_id || '')} isPanelDark={isPanelDark} showAbaDetails={abaV2Enabled} showAbaV3Details={abaV3UiEnabled} showClinicalMeasurementV3Details={abaV3UiEnabled} onOpenSessionReport={openCompletedSessionReport} legacyAssessmentProtocols={planProtocolCatalog} protocols={planProtocolCatalog} history={history} />
                 </div>
               </details>
             ) : null}
