@@ -128,7 +128,8 @@ test('pre-session partner gate allows dual clinical role only for a matching app
     async maybeSingle() { return { data: null, error: { message: 'DB_UNAVAILABLE' } }; },
   }) };
   await assert.rejects(
-    approvedExternalPartnerForClinicalIdentity(unavailable, email), /DB_UNAVAILABLE/);
+    approvedExternalPartnerForClinicalIdentity(unavailable, email),
+    (error: any) => error?.message === 'DB_UNAVAILABLE');
 });
 
 test('unauthenticated partner cannot read the portal or select another partner', async () => {
