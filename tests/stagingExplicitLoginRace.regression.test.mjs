@@ -54,6 +54,9 @@ const before = (a, b) => {
   const bi = form.indexOf(b);
   assert.ok(ai >= 0 && bi > ai, a + ' must precede ' + b);
 };
+assert.match(form, /if \(passwordLoginSubmittingRef\.current\) return;/);
+assert.match(form, /passwordLoginSubmittingRef\.current = true;/);
+assert.match(form, /finally \{[\s\S]*?passwordLoginSubmittingRef\.current = false;/);
 before('beginExplicitPasswordSignIn();', 'supabase.auth.signInWithPassword({');
 before('rememberExplicitPasswordSession(data.session.access_token);', 'const loginRes = await onLogin(');
 assert.match(form, /finally \{\s*finishExplicitPasswordSignIn\(passwordSessionIssued\);/);
