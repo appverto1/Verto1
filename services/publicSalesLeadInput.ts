@@ -89,6 +89,16 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
         : clinicName
           ? "clinic"
           : "independent_professional";
+      const rawPartnerCode = req.body?.partnerCode;
+      const partnerCode = typeof rawPartnerCode === 'string'
+        ? rawPartnerCode.toUpperCase() : '';
+      const isInternalCode = /^VERTO-[A-F0-9]{18}$/.test(partnerCode);
+      const isCouponCode = /^[A-Z0-9]{4,24}$/.test(partnerCode);
+      if (rawPartnerCode !== undefined && (typeof rawPartnerCode !== 'string'
+          || rawPartnerCode.length > 64
+          || (partnerCode.length > 0 && !isInternalCode && !isCouponCode))) {
+        return { ok: false as const, status: 400, error: 'Cupom inválido. Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.' };
+      }
       const acquisitionChannel =
         sanitizeString(req.body?.acquisitionChannel, 120) || "public_landing";
       const jobTitle = sanitizeString(req.body?.jobTitle, 120);
@@ -148,6 +158,7 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
         operationType,
         acquisitionChannel,
         source,
+        partnerCode,
       });
       const idempotencyKey =
         suppliedIdempotencyKey.length >= 12
@@ -173,6 +184,7 @@ export function parsePublicSalesLeadInput(req: any, deps: any) {
         consentVersion,
         consentPurpose,
         source,
+        partnerCode,
         idempotencyKey,
       } };
 }

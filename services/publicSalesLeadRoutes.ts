@@ -41,6 +41,7 @@ export function registerPublicSalesLeadRoute(app: any, deps: any): void {
         consentPurpose,
         source,
         idempotencyKey,
+        partnerCode,
       } = parsed.input;
 
       try {
@@ -73,6 +74,26 @@ export function registerPublicSalesLeadRoute(app: any, deps: any): void {
         const eventCreated = Boolean(row?.event_created);
         if (!isUuid(leadId)) throw new Error("SALES_LEAD_ID_MISSING");
 
+        // Optional attribution. The lead write above remains the authoritative
+        // save; a partner code cannot overwrite or reassign existing customers.
+        // This adds NO query for ordinary traffic without a partner code.
+        let referralRecorded: boolean | null = null;
+        if (partnerCode) {
+          try {
+            const attribution = await supabase.rpc('verto_claim_partner_referral_v1', {
+              p_lead_id: leadId, p_referral_code: partnerCode,
+              p_idempotency_key: idempotencyKey,
+            });
+            if (attribution.error) throw attribution.error;
+            referralRecorded = attribution.data === true;
+          } catch (referralError: any) {
+            referralRecorded = false;
+            console.warn('[Partnerships] Atribuição de indicação indisponível.', {
+              code: sanitizeString(referralError?.code, 40) || 'unavailable',
+            });
+          }
+        }
+
         if (eventCreated) {
           void notifySalesOwnerForLead({
             leadId,
@@ -100,6 +121,7 @@ export function registerPublicSalesLeadRoute(app: any, deps: any): void {
 
         return res.status(201).json({
           success: true,
+          ...(partnerCode ? { referralRecorded, referralWarning: referralRecorded === false ? "Código de indicação não confirmado. O cadastro foi recebido." : null } : {}),
           message:
             "Recebemos seu interesse na Verto. Entraremos em contato para conhecer sua operação e apresentar a plataforma.",
         });
