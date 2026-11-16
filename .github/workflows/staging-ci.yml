@@ -331,6 +331,11 @@ jobs:
       - name: Clinic authorization-denial guidance regression
         run: node tests/clinicPermissionDeniedGuidance.regression.test.mjs
 
+      - name: Therapist anamnesis and graph sharing permission regressions
+        run: |
+          node --import tsx tests/therapistAnamnesisChartShare.regression.test.mjs
+          node tests/p1ClinicalChartHydration.regression.test.mjs
+
       - name: Case-scoped calendar details and appointment permissions
         run: |
           node tests/caseScopedCalendarDetails.regression.test.mjs
