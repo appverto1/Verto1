@@ -57,9 +57,15 @@ test('extraction retains auth middleware, patient denial and no DB/network acces
   const routes = readFileSync('services/helpCenterRoutes.ts', 'utf8');
   const moduleText = readFileSync('services/helpContext.ts', 'utf8');
   assert.match(routes, /const helpContext = \(req:any\) => buildHelpContext\(req, currentClinicId\)/);
-  assert.match(routes, /const requireActiveHelpMembership=/);
-  assert.match(routes, /isClinicBaseRole\(help\.audience\)/);
+  assert.match(routes, /const requireActiveHelpMembership\s*=/);
+  assert.match(routes, /isClinicBaseRole\((?:help|current)\.audience\)/);
+  assert.match(routes, /(?:trusted|trustedClinicId)\s*!==\s*(?:clinic|sessionClinicId)/);
+  assert.match(routes, /(?:help|current)\.membershipId/);
   assert.match(routes, /requireClinicMembershipContext/);
   assert.match(routes, /registerSalesProspectingRoutes\(app, \{ supabase, checkAuth \}\)/);
-  assert.doesNotMatch(moduleText, /\bsupabase\b|\bfetch\s*\(|\.from\s*\(|\.insert\s*\(|\.update\s*\(/);
+  assert.doesNotMatch(moduleText, /\bsupabase\b|\bfetch\s*\(|\.insert\s*\(|\.delete\s*\(|\.upsert\s*\(/);
+  assert.match(moduleText, /Array\.from\(value\)/);
+  assert.equal([...moduleText.matchAll(/\.from\s*\(/g)].length, 1, 'only Array.from may read collections in the helper');
+  assert.match(moduleText, /createHash\('sha256'\)\.update\(JSON\.stringify\(/);
+  assert.equal([...moduleText.matchAll(/\.update\s*\(/g)].length, 1, 'only crypto hashing may update in the helper');
 });
