@@ -33,3 +33,18 @@ test('partner Google login preserves active clinical sessions and explains denia
   assert.ok(passwordLogin,'password login form must exist');
   assert.doesNotMatch(passwordLogin,/\.auth\.signOut\(/,'failed password login must not sign out a clinical session');
 });
+
+test('approved external partner using clinical Google identity reaches isolated login only',()=>{
+  const server=read('server.ts');
+  const gate=server.split("app.use('/api/partnerships/auth/session'")[1]
+    ?.split("  app.use((req: any, res: any, next: any) => {")[0];
+  assert.ok(gate, 'pre-session partner identity gate must remain mounted');
+  assert.match(gate,/getUserFromAccessToken\(accessToken\)/);
+  assert.match(gate,/persistedClinicalLoginPortal\(clinicalProfile.role\)/);
+  assert.match(gate,/approvedExternalPartnerForClinicalIdentity\(supabase, user.email\)/);
+  assert.match(gate,/return rejectWrongPortal\(\)/);
+  const backend=read('services/partnerships/partnershipRoutes.ts');
+  assert.match(backend,/if\(req.session\?\.user\?\.id\)\s*return res.status\(409\)/);
+  assert.match(backend,/\.eq\('partner_kind','external'\)\.eq\('contact_email',email\)/);
+  assert.match(backend,/found.data.status!=='approved'\|\|found.data.compliance_approved!==true/);
+});
