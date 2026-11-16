@@ -2155,9 +2155,12 @@ export const ClinicalAgendaBoard = ({
 
   const filteredPatientOptions = useMemo(() => {
     const search = patientSearch.trim().toLowerCase();
-    const recentIds = new Set(baseEvents.slice(0, 30).map((event: any) => String(event.patient_id || '')).filter(Boolean));
+    const recentIds = new Set(baseEvents.slice(0, 30).map((event: any) => String(event.patient_id || event.patientId || '')).filter(Boolean));
+    const visibleCasePatientIds = isCaseScopedActor
+      ? new Set(baseEvents.map((event: any) => String(event.patient_id || event.patientId || '')).filter(Boolean))
+      : null;
     return (patients || [])
-      .filter((patient: any) => !isCaseScopedActor || recentIds.has(String(patient?.id || '')))
+      .filter((patient: any) => !visibleCasePatientIds || visibleCasePatientIds.has(String(patient?.id || '')))
       .filter((patient: any) => !search || String(patient?.name || '').toLowerCase().includes(search))
       .sort((a: any, b: any) => Number(recentIds.has(String(b?.id))) - Number(recentIds.has(String(a?.id))))
       .slice(0, 8);
