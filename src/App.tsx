@@ -1,6 +1,7 @@
 import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
+import { isExplicitPasswordSignInEvent } from './lib/explicitClinicalPasswordLogin';
 import {
   clearClinicalPortalOAuthIntent,
   completeClinicalPortalOAuth,
@@ -1762,7 +1763,13 @@ export default function App() {
                 setLoading(false);
                 return;
               }
-              const patientOAuthPending = readClinicalPortalOAuthIntent(window.sessionStorage) === 'patient';
+              const explicitClinicalOAuthPortal = readClinicalPortalOAuthIntent(window.sessionStorage);
+              const patientOAuthPending = explicitClinicalOAuthPortal === 'patient';
+              const professionalOAuthPending = explicitClinicalOAuthPortal === 'professional';
+              // A password form performs its own /api/auth/login exchange.
+              // Supabase may report provider=google for a linked account even
+              // when this specific event came from signInWithPassword.
+              if (!patientOAuthPending && isExplicitPasswordSignInEvent(session.access_token)) return;
               // A rejected patient login must never reuse an existing professional session.
               if (isClinicalPortalOAuthBlocked(window.sessionStorage) && !patientOAuthPending) {
                 setUser(null);
@@ -1792,7 +1799,7 @@ export default function App() {
                 hasSupabaseAuthReturnParams ||
                 Boolean(metadataInvitationId);
               // Google may be linked to an older email account whose primary provider remains 'email'.
-              const authProvider = patientOAuthPending
+              const authProvider = patientOAuthPending || professionalOAuthPending
                 ? 'google'
                 : String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
@@ -1848,7 +1855,7 @@ export default function App() {
                 return;
               }
               const loginResult = await handleLoginSuccess(session, intendedRole, undefined, {
-                provider: patientOAuthPending ? 'google' : session?.user?.app_metadata?.provider || null,
+                provider: patientOAuthPending || professionalOAuthPending ? 'google' : session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
                 activationEmail: activationEmail || null,
                 invitationId: activationInvitationId || null,
@@ -1933,6 +1940,9 @@ export default function App() {
 
   useEffect(() => {
     const checkSession = async () => {
+      // Snapshot the explicit portal before any async Supabase initialization.
+      // The SIGNED_IN owner can clear its intent while this function awaits.
+      const explicitOAuthIntentAtBootstrap = readClinicalPortalOAuthIntent(window.sessionStorage);
       // The external partner portal owns its verified Supabase-to-server session.
       // Never create clinical roles or memberships from a partner OAuth/OTP login.
       if (isExternalPartnerRoute) { setLoading(false); return; }
@@ -1949,9 +1959,12 @@ export default function App() {
         let session = await withTimeout(ensureFreshSession(), 8000, null as any);
         const salesActivationOAuth = await completeSalesActivationOAuth(session);
         if (salesActivationOAuth.handled) return;
-        // Do not let /auth/me restore a director while an explicit patient OAuth
-        // attempt is still being authorized by /api/auth/login.
-        if (readClinicalPortalOAuthIntent(window.sessionStorage) === 'patient' ||
+        // A deliberate clinical login owns session creation. In particular,
+        // professional OAuth and password login must not race bootstrap fallback
+        // and issue a second single-active-session token for the same browser.
+        if (explicitOAuthIntentAtBootstrap ||
+            readClinicalPortalOAuthIntent(window.sessionStorage) ||
+            isExplicitPasswordSignInEvent(session?.access_token) ||
             isClinicalPortalOAuthBlocked(window.sessionStorage)) return;
 
         let token = session?.access_token;
