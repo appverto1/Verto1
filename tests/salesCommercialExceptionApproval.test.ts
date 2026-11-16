@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -268,7 +269,7 @@ assert.equal(
   'política histórica null após a coluna existir continua compatível'
 );
 
-const server = readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 const builder = readFileSync(
   'src/components/SalesModularProposalBuilder.tsx',
   'utf8'

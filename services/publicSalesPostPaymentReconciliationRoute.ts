@@ -64,14 +64,19 @@ export function registerPublicSalesPostPaymentReconciliationRoute(deps: Record<s
           result.paymentConfirmed === true
           && result.accountActivated === true
           && result.sessionClaimed !== true
+          && result.reviewRequired !== true
           && result.settledPaymentMethod === "card"
           && typeof result.cardActivationPath === "string"
           && /^\/ativacao-comercial\/[A-Za-z0-9_-]{43,80}$/.test(result.cardActivationPath),
         );
         const boletoEmailReady = Boolean(
-          result.settledPaymentMethod === "boleto"
-          && result.directorSessionReady
-          && result.activationEmailSent,
+          result.paymentConfirmed === true
+          && result.accountActivated === true
+          && result.sessionClaimed !== true
+          && result.reviewRequired !== true
+          && result.settledPaymentMethod === "boleto"
+          && result.directorSessionReady === true
+          && result.activationEmailSent === true,
         );
         const state = result.reviewRequired
           ? "review_required"

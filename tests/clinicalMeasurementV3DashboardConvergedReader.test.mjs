@@ -1,3 +1,4 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
@@ -11,7 +12,7 @@ const routes = [
   fs.readFileSync('services/clinicalMeasurementV3CatalogRoutes.ts', 'utf8'),
   fs.readFileSync('services/clinicalMeasurementV3Shared.ts', 'utf8'),
 ].join('\n');
-const server = fs.readFileSync('server.ts', 'utf8');
+const server = readModularServerSource();
 
 assert.match(sql, /create or replace function public\.read_clinical_outcomes_converged_v3\(/);
 assert.match(sql, /from public\.read_clinical_plan_outcomes_v3\(/, 'generic PTS/specialty CMV3 projections must be reused, not rebuilt');

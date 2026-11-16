@@ -41,8 +41,9 @@ test('bounded payment polling never relabels a possibly unpaid boleto as provisi
   assert.match(publicPage,/\['payment_pending', 'payment_confirmed', 'provisioning', 'director_ready'\]\.includes\(paymentReturnState\)/);
 });
 test('paid status and activation remain backend-authoritative and never use client payment status',()=>{
-  assert.match(stripePaidProcessorSource,/paymentStatus === "paid" \|\|/);
-  assert.match(stripePaidProcessorSource,/paymentStatus === "no_payment_required"/);
+  assert.match(stripePaidProcessorSource,/paymentStatus === "paid" &&/);
+  assert.match(stripePaidProcessorSource,/Number\.isSafeInteger\(paidAmountCents\) &&/);
+  assert.match(stripePaidProcessorSource,/paidAmountCents > 0/);
   assert.match(stripePaidProcessorSource,/if \(!paymentConfirmed\) \{/);
   assert.match(stripePaidProcessorSource,/activationPrepared: false/);
   assert.match(stripePaidProcessorSource,/confirm_sales_assisted_checkout_payment/);

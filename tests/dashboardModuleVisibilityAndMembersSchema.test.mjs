@@ -1,10 +1,11 @@
+import { readModularServerSource } from './helpers/modularServerSource.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
 const dashboard = fs.readFileSync(path.join(root, 'src/components/CoordinatorDashboard.tsx'), 'utf8');
-const server = fs.readFileSync(path.join(root, 'server.ts'), 'utf8');
+const server = readModularServerSource();
 
 assert.match(
   dashboard,

@@ -21,9 +21,10 @@ export interface PublicSalesDirectorSessionRouteDeps {
 export function registerPublicSalesDirectorSessionRoute(
   app: Express, deps: PublicSalesDirectorSessionRouteDeps,
 ): void {
+  const { publicSalesPostPaymentLimiter } = deps;
   app.post(
     "/api/public/sales-offers/:token/director-session",
-    deps.publicSalesPostPaymentLimiter,
+    publicSalesPostPaymentLimiter,
     (_req, res) => {
       res.setHeader("Cache-Control", "no-store");
       return res.status(410).json({
