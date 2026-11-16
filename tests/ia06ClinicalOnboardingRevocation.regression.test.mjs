@@ -9,7 +9,7 @@ const migrationRevocation = readFileSync(join(process.cwd(),'supabase/migrations
 const clinicalFunctions = ['therapeutic_plan_current_actor_can_access_v1','ack_onboarding_response_v1','submit_onboarding_response_v1'];
 const revocationFunctions = ['school_rls_meeting_access','school_rls_org_access','school_rls_patient_access','patient_file_actor_has_patient_access_v1','patient_file_current_actor_can_read_v1'];
 function functionSql(migration,name) {
-  const result=migration.match(new RegExp('CREATE OR REPLACE FUNCTION public\\.'+name+'\\([\\s\\S]*?\\$function\\$;'));
+  const result=migration.match(new RegExp('CREATE OR REPLACE FUNCTION public\\.'+name+'\\([\\s\\S]*?\\$function\\$\\s*;'));
   assert.ok(result,'Missing actual function SQL: '+name);
   return result[0];
 }
