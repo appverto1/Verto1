@@ -5571,7 +5571,7 @@ export function CoordinatorDashboard({
 
   useEffect(() => {
     // Never probe privileged conflict checks from the specialty professional's read-only agenda.
-    if (!isAddSessionModalOpen || isDirectTherapist ||
+    if (!isAddSessionModalOpen || isTherapist ||
         !(hasCapability('calendar.appointment.create') || hasCapability('calendar.appointment.edit'))) return;
     if (!sessionPatientName || !sessionDate || !sessionApproach || !selectedSessionProfessional?.id) {
       setScheduleConflictState({ loading: false, checked: false, blocking: false, message: "", conflicts: [] });
@@ -5770,7 +5770,7 @@ export function CoordinatorDashboard({
     sessionWeeklyValidationError,
     therapistAgenda,
     hasCapability,
-    isDirectTherapist,
+    isTherapist,
   ]);
 
   const resetSessionForm = () => {
@@ -5849,7 +5849,7 @@ export function CoordinatorDashboard({
     : appointmentEditScope;
 
   const openNewAppointmentAt = (date: string, time = "08:00") => {
-    if (isDirectTherapist || !hasCapability('calendar.appointment.create')) return;
+    if (isTherapist || !hasCapability('calendar.appointment.create')) return;
     const clickedDate = String(date || "").trim() || new Date().toISOString().split("T")[0];
     const clickedTime = String(time || "").trim();
     const normalizedClickedTime = /^\d{2}:\d{2}/.test(clickedTime)
@@ -10442,13 +10442,13 @@ export function CoordinatorDashboard({
       view={agendaView}
       onDateChange={setCalendarDate}
       onViewChange={handleAgendaViewChange}
-      onCreateAppointment={!isDirectTherapist && hasCapability('calendar.appointment.create') ? openNewAppointmentAt : undefined}
-      onManageGroupSessions={!isDirectTherapist && canViewGroups ? () => setGroupSessionDialog({showList:true}) : undefined}
-      onEditAppointment={isDirectTherapist ? undefined : handleEditAppointment}
-      onConfirmAppointment={isDirectTherapist ? undefined : handleConfirmAppointmentFromAgenda}
-      onCancelAppointment={isDirectTherapist ? undefined : handleCancelAppointmentFromAgenda}
-      onDeleteAppointment={isDirectTherapist ? undefined : handleDeleteAppointmentFromAgenda}
-      onAppointmentActionResolved={onAppointmentActionResolved}
+      onCreateAppointment={!isTherapist && hasCapability('calendar.appointment.create') ? openNewAppointmentAt : undefined}
+      onManageGroupSessions={!isTherapist && canViewGroups ? () => setGroupSessionDialog({showList:true}) : undefined}
+      onEditAppointment={isTherapist ? undefined : handleEditAppointment}
+      onConfirmAppointment={isTherapist ? undefined : handleConfirmAppointmentFromAgenda}
+      onCancelAppointment={isTherapist ? undefined : handleCancelAppointmentFromAgenda}
+      onDeleteAppointment={isTherapist ? undefined : handleDeleteAppointmentFromAgenda}
+      onAppointmentActionResolved={isTherapist ? undefined : onAppointmentActionResolved}
       onOpenPatient={onPatientClick}
       onNavigateTissPreGuides={
         hasCapability("billing.preguide.view")
