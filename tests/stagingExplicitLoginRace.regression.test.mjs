@@ -60,6 +60,9 @@ assert.match(form, /finally \{\s*finishExplicitPasswordSignIn\(passwordSessionIs
 
 const signedIn = app.slice(app.indexOf("if (event === 'SIGNED_IN' && session)"), app.indexOf("} else if (event === 'SIGNED_OUT')"));
 assert.match(signedIn, /if \(!patientOAuthPending && isExplicitPasswordSignInEvent\(session\.access_token\)\) return;/);
+assert.match(signedIn, /const professionalOAuthPending = explicitClinicalOAuthPortal === 'professional';/);
+assert.match(signedIn, /const authProvider = patientOAuthPending \|\| professionalOAuthPending\s*\? 'google'/);
+assert.match(signedIn, /provider: patientOAuthPending \|\| professionalOAuthPending \? 'google'/);
 assert.ok(signedIn.indexOf('isExplicitPasswordSignInEvent(session.access_token)') < signedIn.indexOf('const authProvider ='), 'event guard must precede inference from persistent user metadata');
 assert.ok(signedIn.indexOf('isExplicitPasswordSignInEvent(session.access_token)') < signedIn.indexOf('await handleLoginSuccess(session, intendedRole'), 'password sign-in notification must not issue a second server token');
 
