@@ -1763,7 +1763,9 @@ export default function App() {
                 setLoading(false);
                 return;
               }
-              const patientOAuthPending = readClinicalPortalOAuthIntent(window.sessionStorage) === 'patient';
+              const explicitClinicalOAuthPortal = readClinicalPortalOAuthIntent(window.sessionStorage);
+              const patientOAuthPending = explicitClinicalOAuthPortal === 'patient';
+              const professionalOAuthPending = explicitClinicalOAuthPortal === 'professional';
               // A password form performs its own /api/auth/login exchange.
               // Supabase may report provider=google for a linked account even
               // when this specific event came from signInWithPassword.
@@ -1797,7 +1799,7 @@ export default function App() {
                 hasSupabaseAuthReturnParams ||
                 Boolean(metadataInvitationId);
               // Google may be linked to an older email account whose primary provider remains 'email'.
-              const authProvider = patientOAuthPending
+              const authProvider = patientOAuthPending || professionalOAuthPending
                 ? 'google'
                 : String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
@@ -1853,7 +1855,7 @@ export default function App() {
                 return;
               }
               const loginResult = await handleLoginSuccess(session, intendedRole, undefined, {
-                provider: patientOAuthPending ? 'google' : session?.user?.app_metadata?.provider || null,
+                provider: patientOAuthPending || professionalOAuthPending ? 'google' : session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
                 activationEmail: activationEmail || null,
                 invitationId: activationInvitationId || null,
