@@ -25,7 +25,8 @@ const newGuard = [
   '  return rejectWrongPortal();'
 ].join('\n      ');
 const ix = server.indexOf(oldGuard);
-if (ix < 0 || !server.slice(ix, ix + 600).includes('Partner portal role check failed')) {
+const routeStart = server.lastIndexOf("app.use('/api/partnerships/auth/session'", ix);
+if (ix < 0 || routeStart < 0 || ix - routeStart > 8000) {
   throw new Error('PR792 guard: clinical/partner middleware context differs from Main');
 }
 replaceOne(oldImport, newImport, 'partner route import');
