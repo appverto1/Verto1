@@ -219,6 +219,9 @@ const ExternalEvolutionShare = React.lazy(() =>
 const ExternalCareNetworkCentral = React.lazy(() =>
   import('./components/ExternalCareNetworkCentral').then((m) => ({ default: m.ExternalCareNetworkCentral }))
 );
+const ExternalPartnershipPortal = React.lazy(() =>
+  import('./components/ExternalPartnershipPortal').then((m) => ({ default: m.ExternalPartnershipPortal }))
+);
 const ExternalPatientTimeline = React.lazy(() =>
   import('./components/ExternalPatientTimeline').then((m) => ({ default: m.ExternalPatientTimeline }))
 );
@@ -448,6 +451,8 @@ export default function App() {
   const isExternalCarePatientRoute = Boolean(externalCarePatientRouteMatch);
   const isExternalCareNetworkRoute =
     typeof window !== 'undefined' && /^\/rede-de-cuidado\/?$/i.test(window.location.pathname);
+  const isExternalPartnerRoute =
+    typeof window !== 'undefined' && /^\/parcerias\/?$/i.test(window.location.pathname);
   const externalCarePatientClinicId = (() => {
     if (!externalCarePatientRouteMatch) return '';
     try { return decodeURIComponent(externalCarePatientRouteMatch[1]); } catch { return ''; }
@@ -1724,7 +1729,7 @@ export default function App() {
               // External care-network routes own their authenticated context. A Google OAuth
               // return here must not create/overwrite clinic role or membership; the external
               // surface exchanges the verified Supabase session for its isolated server session.
-              if (isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute) {
+              if (isExternalEvolutionRoute || isExternalCareNetworkRoute || isExternalCarePatientRoute || isExternalPartnerRoute) {
                 setLoading(false);
                 return;
               }
@@ -1855,6 +1860,8 @@ export default function App() {
 
   useEffect(() => {
     const checkSession = async () => {
+      // External partners use their own approved, email-verified portal session.
+      if (isExternalPartnerRoute) { setLoading(false); return; }
       const sessionTimeoutMs = 12000;
       const timeoutController = new AbortController();
       const timeoutId = window.setTimeout(() => timeoutController.abort(), sessionTimeoutMs);
@@ -8539,6 +8546,8 @@ export default function App() {
           <ExternalPatientTimeline clinicId={externalCarePatientClinicId} patientId={externalCarePatientId} />
         ) : isExternalCareNetworkRoute ? (
           <ExternalCareNetworkCentral />
+        ) : isExternalPartnerRoute ? (
+          <ExternalPartnershipPortal />
         ) : isSalesOfferRoute ? (
           <PublicSalesOffer token={salesOfferToken} />
         ) : isSalesActivationRoute && !user ? (

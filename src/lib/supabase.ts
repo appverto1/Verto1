@@ -76,6 +76,8 @@ const currentOAuthCodeFromUrl = (): string => {
       path.startsWith('/ativar') ||
       path.startsWith('/reset-password') ||
       path.startsWith('/ativacao-comercial/') ||
+      path === '/parcerias' ||
+      path === '/parcerias/' ||
       authAction === 'activate' ||
       authAction === 'recovery' ||
       authAction === 'accept_invitation';

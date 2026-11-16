@@ -30,8 +30,11 @@ import {
   CreditCard,
   Check,
   Activity,
+  Gift,
 } from "lucide-react";
 import { LogoVerto } from "./Common";
+import { PartnershipPanel } from "./PartnershipPanel";
+import { PartnerMarketplace } from "./PartnerMarketplace";
 import { TutorialOverlay } from "./Tutorial";
 import { AnamnesisModal } from "./Anamnesis";
 import { DayDetailsModal, CalendarWidget } from "./Calendar";
@@ -341,6 +344,7 @@ export const TherapistDashboard = ({
   const [isAddSessionModalOpen, setIsAddSessionModalOpen] = useState(false);
   const [editingAppointmentId, setEditingAppointmentId] = useState<any>(null);
   const [isMarketplaceOpen, setIsMarketplaceOpen] = useState(false);
+  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [isFinancialOpen, setIsFinancialOpen] = useState(false);
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [payments, setPayments] = useState<any[]>([
@@ -991,6 +995,13 @@ export const TherapistDashboard = ({
             {isSidebarExpanded && <span>Reserva de Salas</span>}
           </button>
 
+          <button type="button" onClick={() => handleSetView("partnerships")}
+            className={`w-full flex items-center ${isSidebarExpanded ? 'gap-3 p-3.5' : 'justify-center p-3.5'} rounded-2xl transition-all font-bold text-sm ${view === "partnerships" ? "bg-[#7a32fc] text-white shadow-lg shadow-purple-500/20" : "text-slate-400 hover:bg-slate-50 hover:text-slate-600"}`}
+            title={!isSidebarExpanded ? "Indique e Ganhe" : ""}>
+            <Gift size={20} />
+            {isSidebarExpanded && <span>Indique e Ganhe</span>}
+          </button>
+
           {user?.role === "coordinator" && (
             <button
               onClick={() => onViewTeam()}
@@ -1025,6 +1036,7 @@ export const TherapistDashboard = ({
 
       {/* Main Content Area */}
       <main className="flex-1 overflow-y-auto h-screen relative">
+        <PartnerMarketplace open={marketplaceOpen} clinicId={String(user?.activeWorkspaceId || user?.clinicId || '')} onClose={() => setMarketplaceOpen(false)} />
         {runTutorial && (
           <TutorialOverlay
             steps={dashboardSteps}
@@ -1033,6 +1045,8 @@ export const TherapistDashboard = ({
             onStepChange={setTutorialStep}
           />
         )}
+
+        {view === "partnerships" && <div className="p-4 sm:p-8"><PartnershipPanel onBack={handleBackView} /></div>}
 
         {view === "protocols" && (
           <div className="p-4 sm:p-8">
@@ -1902,6 +1916,15 @@ export const TherapistDashboard = ({
                         className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#7a32fc] transition-colors text-xs font-semibold uppercase tracking-wider text-left"
                       >
                         <DoorOpen size={18} /> Reserva de Salas
+                      </button>
+
+                      <button type="button" onClick={() => { handleSetView("partnerships"); setIsMenuOpen(false); }}
+                        className="flex items-center gap-3 p-3 hover:bg-gray-50 rounded-xl text-gray-600 hover:text-[#7a32fc] transition-colors text-xs font-semibold uppercase tracking-wider text-left">
+                        <Gift size={18} /> Indique e Ganhe
+                      </button>
+                      <button type="button" onClick={() => { setIsMenuOpen(false); setMarketplaceOpen(true); }}
+                        className="flex items-center gap-3 rounded-xl p-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-600 hover:bg-gray-50 hover:text-[#7a32fc]">
+                        <Gift size={18} /> Encontrar parceiros
                       </button>
 
                       <div className="h-px bg-gray-100 my-1"></div>

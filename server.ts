@@ -38,6 +38,8 @@ import { createSalesAssistedStripeEventHandlers } from './services/salesAssisted
 import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';
 import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPaymentStatusRoute';
 import { registerPublicSalesLeadRoute } from './services/publicSalesLeadRoutes';
+import { registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';
+import { INVALID_PORTAL_CREDENTIALS_MESSAGE, matchesClinicalLoginPortal, persistedClinicalLoginPortal, requestedClinicalLoginPortal } from './services/authLoginPortalPolicy';
 import { createInternalSchemaStatusHandler } from './services/internalSchemaStatusRouteHandler';
 import { createAbaV3DrainStatusHandler } from './services/abaV3DrainStatusHandler';
 import { registerPatientTimeReportRoute } from './services/patientTimeReportRoute';
@@ -21802,6 +21804,34 @@ async function startServer() {
     type: 'application/x-www-form-urlencoded'
   }));
   app.use(cookieParser());
+
+  // Partner login must not reuse verified patient or clinic credentials.
+  app.use('/api/partnerships/auth/session', async (req: any, res: any, next: any) => {
+    if (req.method !== 'POST') return next();
+    const rejectWrongPortal = () => res.status(401).json({
+      success: false, error: 'INVALID_CREDENTIALS', message: INVALID_PORTAL_CREDENTIALS_MESSAGE,
+    });
+    try {
+      const accessToken = sanitizeString(req.body?.accessToken, 8000);
+      if (!accessToken || !tokenMatchesCurrentProject(accessToken).ok) return rejectWrongPortal();
+      const { user, error } = await getUserFromAccessToken(accessToken);
+      if (error || !user) return rejectWrongPortal();
+      if (!supabase) return res.status(503).json({ success: false, error: 'AUTH_UNAVAILABLE' });
+      const profileResult = await fetchProfileWithSchemaFallback({supabase, userId: user.id, logger: console});
+      if (profileResult.error) throw profileResult.error;
+      let clinicalProfile = profileResult.data as any;
+      if (!clinicalProfile && user.email) {
+        const byEmail = await fetchProfileByEmailWithSchemaFallback({supabase, email:sanitizeEmail(user.email), logger:console});
+        if (byEmail.error) throw byEmail.error;
+        clinicalProfile=byEmail.data;
+      }
+      if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role)) return rejectWrongPortal();
+      return next();
+    } catch (error: any) {
+      console.error('[Auth] Partner portal role check failed:', sanitizeString(error?.message,160));
+      return res.status(503).json({success:false,error:'AUTH_UNAVAILABLE'});
+    }
+  });
   app.use((req: any, res: any, next: any) => {
     const originalJson = res.json.bind(res);
     res.json = (body: any) => {
@@ -26098,6 +26128,31 @@ async function startServer() {
             }
           }
         }
+      }
+
+      // Public login does not accept a frontend-requested role as account authority.
+      // Valid clinic invitation activation has its own verified onboarding scope.
+      const verifiedProfessionalInvitationActivation =
+        activationFlow &&
+        requestedClinicInvitation?.status === 'pending' &&
+        ensureClinicRole(requestedClinicInvitation?.role) &&
+        requestedClinicalLoginPortal(intendedRole) === 'professional';
+      if (profile && !verifiedProfessionalInvitationActivation &&
+          !matchesClinicalLoginPortal(intendedRole, profile.role)) {
+        return res.status(401).json({
+          success: false, error: 'INVALID_CREDENTIALS',
+          message: INVALID_PORTAL_CREDENTIALS_MESSAGE,
+        });
+      }
+      if (!profile && safeAuthEmail && !verifiedProfessionalInvitationActivation) {
+        const { data: externalPartner, error: partnerLookupError } = await supabase
+          .from('verto_partner_accounts').select('id')
+          .eq('partner_kind','external').eq('status','approved')
+          .eq('contact_email',safeAuthEmail).limit(1).maybeSingle();
+        if (partnerLookupError) throw partnerLookupError;
+        if (externalPartner) return res.status(401).json({
+          success:false,error:'INVALID_CREDENTIALS',message:INVALID_PORTAL_CREDENTIALS_MESSAGE,
+        });
       }
 
       // A commercial activation that was partially created by an older build may
@@ -84013,6 +84068,9 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
       triggerAppointmentReminderScan(`group.${action}`);
     }
   });
+
+  // Partner routes run after global CSRF protection and before the API 404 catch-all.
+  registerPartnershipRoutes(app,{supabase,checkAuth,checkPlatformAdmin});
 
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback
   app.all('/api/*', (req, res) => {

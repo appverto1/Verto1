@@ -8,6 +8,7 @@ import {
   DollarSign,
   FileText,
   FlaskConical,
+  Gift,
   KeyRound,
   LayoutDashboard,
   Loader2,
@@ -37,6 +38,8 @@ import {
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { CommercialKanban } from './CommercialKanban';
 import { CommercialDashboard } from './CommercialDashboard';
+import { OwnerPartnershipsPanel } from './OwnerPartnershipsPanel';
+import { OwnerPartnerReferralsPanel } from './OwnerPartnerReferralsPanel';
 import { LogoVerto } from './Common';
 import { SalesProfitabilitySimulator } from './SalesProfitabilitySimulator';
 import { SalesFinancialAssumptionsPanel } from './SalesFinancialAssumptionsPanel';
@@ -129,7 +132,7 @@ const VERTO_PROTOCOL_OPTIONS = VERTO_PROTOCOL_EDITOR_CATALOG.map(({ protocol, ..
 export const SuperAdminDashboard = ({ onLogout }: any) => {
   const [loading, setLoading] = useState(true);
   const [bootstrapping, setBootstrapping] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'simulation-settings' | 'demos' | 'protocols' | 'aba-v3-rollout'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'financial' | 'customers' | 'leads' | 'partnerships' | 'partner-referrals' | 'simulation-settings' | 'demos' | 'protocols' | 'aba-v3-rollout'>('overview');
   const [stats, setStats] = useState<any>(null);
   const [financial, setFinancial] = useState<any>({
     summary: {},
@@ -972,6 +975,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
               {id:'financial',label:'DRE e gráficos',icon:<BarChart3 size={19}/>},
               {id:'customers',label:'Clientes',icon:<Users size={19}/>},
               {id:'leads',label:'Comercial',icon:<MessageCircle size={19}/>},
+              {id:'partnerships',label:'Parcerias',icon:<Gift size={19}/>},
+              {id:'partner-referrals',label:'Indicações',icon:<Users size={19}/>},
               {id:'simulation-settings',label:'Configurações',icon:<Settings2 size={19}/>},
               {id:'demos',label:'Ambientes Demo',icon:<FlaskConical size={19}/>},
               {id:'protocols',label:'Protocolos',icon:<ClipboardCheck size={19}/>},
@@ -989,6 +994,8 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
           <SidebarItem icon={<BarChart3 size={18} />} label="DRE e EBITDA" active={activeTab === 'financial'} onClick={() => selectAdminTab('financial')} />
           <SidebarItem icon={<Users size={18} />} label="Clientes e Lucro" active={activeTab === 'customers'} onClick={() => selectAdminTab('customers')} />
           <SidebarItem icon={<MessageCircle size={18} />} label="Comercial" active={activeTab === 'leads'} onClick={() => selectAdminTab('leads')} />
+          <SidebarItem icon={<Gift size={18} />} label="Parcerias" active={activeTab === 'partnerships'} onClick={() => selectAdminTab('partnerships')} />
+          <SidebarItem icon={<Users size={18} />} label="Indicações" active={activeTab === 'partner-referrals'} onClick={() => selectAdminTab('partner-referrals')} />
           <SidebarItem icon={<Settings2 size={18} />} label="Configurações financeiras" active={activeTab === 'simulation-settings'} onClick={() => selectAdminTab('simulation-settings')} />
           <SidebarItem icon={<FlaskConical size={18} />} label="Ambientes Demo" active={activeTab === 'demos'} onClick={() => selectAdminTab('demos')} />
           <SidebarItem icon={<ClipboardCheck size={18} />} label="Protocolos" active={activeTab === 'protocols'} onClick={() => selectAdminTab('protocols')} />
@@ -1021,6 +1028,10 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
                     ? 'Clientes e Performance'
                     : activeTab === 'leads'
                       ? 'Leads e propostas'
+                      : activeTab === 'partnerships'
+                        ? 'Programa de Parcerias'
+                        : activeTab === 'partner-referrals'
+                          ? 'Indicações de parceiros'
                       : activeTab === 'simulation-settings'
                         ? 'Configurações financeiras'
                       : activeTab === 'demos'
@@ -1058,6 +1069,9 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
             {dashboardWarning}
           </div>
         )}
+
+        {activeTab === 'partnerships' && <OwnerPartnershipsPanel />}
+        {activeTab === 'partner-referrals' && <OwnerPartnerReferralsPanel />}
 
         {activeTab === 'overview' && (
           <div className="space-y-7">
