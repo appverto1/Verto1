@@ -38,7 +38,7 @@ import { createSalesAssistedStripeEventHandlers } from './services/salesAssisted
 import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';
 import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPaymentStatusRoute';
 import { registerPublicSalesLeadRoute } from './services/publicSalesLeadRoutes';
-import { registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';
+import { approvedExternalPartnerForClinicalIdentity, registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';
 import { INVALID_PORTAL_CREDENTIALS_MESSAGE, matchesClinicalLoginPortal, persistedClinicalLoginPortal, requestedClinicalLoginPortal } from './services/authLoginPortalPolicy';
 import { createInternalSchemaStatusHandler } from './services/internalSchemaStatusRouteHandler';
 import { createAbaV3DrainStatusHandler } from './services/abaV3DrainStatusHandler';
@@ -21825,7 +21825,12 @@ async function startServer() {
         if (byEmail.error) throw byEmail.error;
         clinicalProfile=byEmail.data;
       }
-      if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role)) return rejectWrongPortal();
+      // An approved partner may share the same verified Google identity as a
+      // clinical user. This check ONLY permits the request to reach the isolated
+      // partner authentication route; it never creates a clinical/partner session.
+      if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role) &&
+          !(await approvedExternalPartnerForClinicalIdentity(supabase, user.email)))
+        return rejectWrongPortal();
       return next();
     } catch (error: any) {
       console.error('[Auth] Partner portal role check failed:', sanitizeString(error?.message,160));
