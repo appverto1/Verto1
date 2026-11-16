@@ -22,7 +22,7 @@ type ClinicalChartsWorkspaceProps = {
   canManagePatientChartSharing?: boolean;
 };
 
-export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, legacyAssessmentProtocols = [], onOpenSessionReport, canManagePatientChartSharing = true }: ClinicalChartsWorkspaceProps) {
+export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, legacyAssessmentProtocols = [], onOpenSessionReport, canManagePatientChartSharing = false }: ClinicalChartsWorkspaceProps) {
   const [view, setView] = useState<'plans' | 'aba' | 'aba-v3' | 'clinical-v3'>('plans');
   const [planDescriptor, setPlanDescriptor] = useState<ClinicalPlanShareDescriptor | null>(null);
   const [abaDescriptor, setAbaDescriptor] = useState<AbaV3ShareDescriptor | null>(null);
