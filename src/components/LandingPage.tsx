@@ -32,6 +32,12 @@ import { SecureImage } from './SecureMedia';
 import { GoogleIcon } from './GoogleIcon';
 import { SalesInterestForm } from './SalesInterestForm';
 import { getSupabase } from '../lib/supabase';
+import {
+  beginClinicalPortalOAuth,
+  clearClinicalPortalOAuthIntent,
+  completeClinicalPortalOAuth,
+  consumeClinicalPortalOAuthError,
+} from '../lib/clinicalPortalOAuth';
 import { dataService } from '../services/dataService';
 
 const heroStories = [
@@ -84,6 +90,14 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loginError, setLoginError] = useState('');
+  useEffect(() => {
+    const deniedLogin = consumeClinicalPortalOAuthError(window.sessionStorage);
+    if (!deniedLogin) return;
+    setLoginType(deniedLogin.portal);
+    setLoginStep('email');
+    setLoginError(deniedLogin.message);
+    setShowLogin(true);
+  }, []);
   const [registerError, setRegisterError] = useState('');
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
   const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
@@ -186,6 +200,9 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
           setLoginStep('password');
           setShowLogin(true); // Ensure login modal is still open
         } else if (loginRes?.success) {
+          // A fresh, explicitly authorized password login also clears an earlier
+          // denied Google attempt, so it cannot block a legitimate patient/director.
+          completeClinicalPortalOAuth(window.sessionStorage);
           setShowLogin(false);
           // App.tsx handles setUser
         } else if (loginRes?.error) {
@@ -273,6 +290,11 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
       const isPublicProfessionalInterest = showRegister && rawRole === 'professional';
       const roleToStore = rawRole === 'patient' ? 'patient' : 'coordinator';
       localStorage.setItem('verto_intended_role', roleToStore);
+      // Track a new explicit login and clear any block from a previous failed
+      // attempt; a partner or registration flow does not modify this state.
+      if (!showRegister && (rawRole === 'patient' || rawRole === 'professional')) {
+        beginClinicalPortalOAuth(window.sessionStorage, rawRole);
+      }
       if (isPublicProfessionalInterest) {
         sessionStorage.setItem('verto_sales_google_interest', '1');
       } else {
@@ -290,6 +312,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
       });
       if (error) throw error;
     } catch (err: any) {
+      clearClinicalPortalOAuthIntent(window.sessionStorage);
       console.error('Google login error:', err);
       setLoginError('Erro ao entrar com Google: ' + err.message);
     }

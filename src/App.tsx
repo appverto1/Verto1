@@ -1,6 +1,13 @@
 import React, { Suspense, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { GlobalStyles, ENERGY_TAGS, ADULT_CONVENTIONAL_TAGS, LogoVerto } from './components/Common';
 import { testSupabaseConnection, getSupabase, ensureFreshSession } from './lib/supabase';
+import {
+  clearClinicalPortalOAuthIntent,
+  completeClinicalPortalOAuth,
+  failClinicalPortalOAuth,
+  isClinicalPortalOAuthBlocked,
+  readClinicalPortalOAuthIntent,
+} from './lib/clinicalPortalOAuth';
 import { SALES_ACTIVATION_OAUTH_PENDING_KEY, readSalesActivationOAuthContext } from './services/salesActivationGoogleOAuth';
 import { Database, CheckCircle2, AlertCircle, Lock, ShieldCheck, WifiOff, LayoutDashboard, RefreshCw } from 'lucide-react';
 import { clearSensitiveOfflineCacheForUser, getFailedSyncRecords, resetFailedSyncRecord, syncOfflineData } from './services/localDb';
@@ -539,6 +546,7 @@ export default function App() {
   }, [user?.id]);
   const userResolutionRef = useRef<{ key: string; promise: Promise<any>; settledAt: number } | null>(null);
   const salesActivationOAuthLoginRef = useRef<{ accessToken: string; promise: Promise<any> } | null>(null);
+  const handledPatientOAuthTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (user && isSalesActivationRoute && typeof window !== 'undefined') {
@@ -1754,8 +1762,17 @@ export default function App() {
                 setLoading(false);
                 return;
               }
+              const patientOAuthPending = readClinicalPortalOAuthIntent(window.sessionStorage) === 'patient';
+              // A rejected patient login must never reuse an existing professional session.
+              if (isClinicalPortalOAuthBlocked(window.sessionStorage) && !patientOAuthPending) {
+                setUser(null);
+                setProfilePicture(null);
+                setShowWorkspacePicker(false);
+                return;
+              }
+              if (patientOAuthPending && handledPatientOAuthTokenRef.current === session.access_token) return;
               const explicitIntendedRole = localStorage.getItem('verto_intended_role');
-              const intendedRole = explicitIntendedRole || 'therapist';
+              const intendedRole = patientOAuthPending ? 'patient' : explicitIntendedRole || 'therapist';
               localStorage.removeItem('verto_intended_role');
               const currentPath = typeof window !== 'undefined' ? window.location.pathname : '';
               const currentAuthAction = typeof window !== 'undefined'
@@ -1774,7 +1791,10 @@ export default function App() {
                 ['activate', 'recovery'].includes(currentAuthAction) ||
                 hasSupabaseAuthReturnParams ||
                 Boolean(metadataInvitationId);
-              const authProvider = String(session?.user?.app_metadata?.provider || '').toLowerCase();
+              // Google may be linked to an older email account whose primary provider remains 'email'.
+              const authProvider = patientOAuthPending
+                ? 'google'
+                : String(session?.user?.app_metadata?.provider || '').toLowerCase();
               const isPasswordSignIn = authProvider === 'email' || authProvider === '';
               const activationEmail = String(localStorage.getItem('verto_activation_email') || '').trim().toLowerCase();
               const activationInvitationId = String(
@@ -1822,23 +1842,50 @@ export default function App() {
               // Explicit portal selection and activation/invitations must still
               // go through the server-side role and method checks.
               if (!isActivationFlow && !isInvitationAcceptanceContinuation && !explicitIntendedRole &&
+                  !patientOAuthPending &&
                   authenticatedUserIdRef.current &&
                   authenticatedUserIdRef.current === String(session.user?.id || '').trim()) {
                 return;
               }
               const loginResult = await handleLoginSuccess(session, intendedRole, undefined, {
-                provider: session?.user?.app_metadata?.provider || null,
+                provider: patientOAuthPending ? 'google' : session?.user?.app_metadata?.provider || null,
                 activationFlow: isActivationFlow,
                 activationEmail: activationEmail || null,
                 invitationId: activationInvitationId || null,
                 deferInvitationAcceptance: isInvitationAcceptanceContinuation,
               });
+              if (!patientOAuthPending &&
+                  readClinicalPortalOAuthIntent(window.sessionStorage) === 'professional') {
+                clearClinicalPortalOAuthIntent(window.sessionStorage);
+              }
+              if (patientOAuthPending) {
+                handledPatientOAuthTokenRef.current = String(session.access_token || '');
+                if (loginResult?.success && !loginResult.twoFactorRequired && loginResult.user) {
+                  completeClinicalPortalOAuth(window.sessionStorage);
+                } else {
+                  failClinicalPortalOAuth(window.sessionStorage, 'patient', loginResult?.code);
+                  setUser(null);
+                  setProfilePicture(null);
+                  setShowWorkspacePicker(false);
+                  // Revoke the previous server session as well as the Supabase browser session.
+                  // If either fails, the restoration block still keeps the wrong portal hidden.
+                  try {
+                    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+                  } catch { /* fail closed in the client */ }
+                  try {
+                    const auth = await getSupabase();
+                    await auth.auth.signOut({ scope: 'local' } as any);
+                  } catch { /* fail closed in the client */ }
+                  window.location.replace('/');
+                  return;
+                }
+              }
               if (!loginResult?.success && (isActivationFlow || isInvitationAcceptanceContinuation)) {
                 publishActivationErrorMessage(loginResult?.error);
               }
             } else if (event === 'SIGNED_OUT') {
               if (import.meta.env.DEV) console.log('Sessao encerrada pelo provedor de autenticacao.');
-              if (manualLogoutInProgressRef.current) {
+              if (manualLogoutInProgressRef.current || isClinicalPortalOAuthBlocked(window.sessionStorage)) {
                 setUser(null);
                 setProfilePicture(null);
                 setShowWorkspacePicker(false);
@@ -1889,6 +1936,11 @@ export default function App() {
       // The external partner portal owns its verified Supabase-to-server session.
       // Never create clinical roles or memberships from a partner OAuth/OTP login.
       if (isExternalPartnerRoute) { setLoading(false); return; }
+      if (isClinicalPortalOAuthBlocked(window.sessionStorage)) {
+        setOauthCallbackPending(false);
+        setLoading(false);
+        return;
+      }
       const sessionTimeoutMs = 12000;
       const timeoutController = new AbortController();
       const timeoutId = window.setTimeout(() => timeoutController.abort(), sessionTimeoutMs);
@@ -1897,6 +1949,10 @@ export default function App() {
         let session = await withTimeout(ensureFreshSession(), 8000, null as any);
         const salesActivationOAuth = await completeSalesActivationOAuth(session);
         if (salesActivationOAuth.handled) return;
+        // Do not let /auth/me restore a director while an explicit patient OAuth
+        // attempt is still being authorized by /api/auth/login.
+        if (readClinicalPortalOAuthIntent(window.sessionStorage) === 'patient' ||
+            isClinicalPortalOAuthBlocked(window.sessionStorage)) return;
 
         let token = session?.access_token;
         let authData: any = null;
@@ -2367,6 +2423,11 @@ export default function App() {
             qrCodeUrl: data.qrCodeUrl || null,
             expiresAt: data.expiresAt || null,
           };
+        }
+        // Defensive UI gate: never commit a professional view during a patient login.
+        // The persisted server-side role check remains the actual authorization authority.
+        if (intendedRole === 'patient' && String(data.user?.role || '').toLowerCase() !== 'patient') {
+          return { success: false, code: 'INVALID_CREDENTIALS', error: 'Acesso não disponível para este portal.' };
         }
         const resolvedUser = await applyResolvedUserState(data.user, supabaseSession);
         if (!shouldDeferInvitationAcceptance) clearActivationInvitationContext();
