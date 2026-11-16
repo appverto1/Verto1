@@ -6,8 +6,8 @@ const module=readFileSync(new URL('../services/partnerships/partnershipRoutes.ts
 test('standalone partner routes are mounted once after API guards and before fallback',()=>{
   assert.match(server,/import \{ registerPartnershipRoutes \} from '\.\/services\/partnerships\/partnershipRoutes';/);
   assert.equal((server.match(/registerPartnershipRoutes\(app,\s*\{supabase,checkAuth,checkPlatformAdmin\}\)/g)||[]).length,1);
-  assert.ok(server.indexOf('createSensitiveApiMutationProtectionMiddleware({')<server.indexOf('registerPartnershipRoutes(app, {'));
-  assert.ok(server.indexOf('registerPartnershipRoutes(app, {')<server.indexOf("app.all('/api/*'"));
+  assert.ok(server.indexOf('createSensitiveApiMutationProtectionMiddleware({')<server.indexOf('registerPartnershipRoutes(app,{'));
+  assert.ok(server.indexOf('registerPartnershipRoutes(app,{')<server.indexOf("app.all('/api/*'"));
   assert.match(module,/app\.post\('\/api\/partnerships\/apply'/);
   assert.match(module,/registerPartnerMarketplaceRoutes\(app,deps\)/);
 });
