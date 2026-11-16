@@ -18,6 +18,23 @@ const saveSession = (req:any) => new Promise<void>((resolve,reject) => {
 });
 
 
+/**
+ * A clinical Supabase identity may explicitly access an approved EXTERNAL
+ * partnership, but only when that same verified e-mail was approved by Verto.
+ * This pre-session check never grants access; the partner route still validates
+ * the OAuth token, confirmation, approval and HTTP session isolation.
+ */
+export async function approvedExternalPartnerForClinicalIdentity(supabase:any, rawEmail:unknown):Promise<boolean> {
+  const email=safe(rawEmail,254).toLowerCase();
+  if(!email || !isValidEmail(email) || typeof rawEmail!=='string' || rawEmail.length>254) return false;
+  const found=await supabase.from('verto_partner_accounts')
+    .select('id')
+    .eq('partner_kind','external').eq('contact_email',email)
+    .eq('status','approved').eq('compliance_approved',true).maybeSingle();
+  if(found.error)throw found.error;
+  return Boolean(found.data?.id);
+}
+
 type Deps = {supabase:any;checkAuth:any;checkPlatformAdmin:any; notifyPartnerApproval?: typeof sendPartnerApprovalEmail};
 
 /**
@@ -81,8 +98,19 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
       const auth=await supabase.auth.getUser(req.body.accessToken);
       const identity=auth.data?.user;
       const email=safe(identity?.email,254).toLowerCase();
-      if(auth.error || !uuid(identity?.id) || !email || !identity?.email_confirmed_at)
+      if(auth.error || !uuid(identity?.id) || !email)
         return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
+      if(!identity?.email_confirmed_at){
+        // GoTrue user payloads can omit the verification timestamp in some
+        // OAuth responses. Recheck the canonical Auth user server-side instead
+        // of accepting an unverified email or trusting provider metadata.
+        const verified=await supabase.auth.admin.getUserById(identity.id);
+        if(verified.error)throw verified.error;
+        const canonical=verified.data?.user;
+        if(!canonical?.email_confirmed_at || canonical.id!==identity.id
+           || safe(canonical.email,254).toLowerCase()!==email)
+          return res.status(401).json({success:false,error:'EMAIL_VERIFICATION_REQUIRED'});
+      }
       // Prevent a partner login from silently changing an active clinical session.
       if(req.session?.user?.id)
         return res.status(409).json({success:false,error:'CLINICAL_SESSION_ACTIVE'});

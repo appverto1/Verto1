@@ -14,6 +14,22 @@ on:
       - 'tests/publicSalesLeadRouteBehavior.test.ts'
       - 'tests/partnerReferralLeadPromotion.test.ts'
       - '.github/workflows/partner-referral-release-ci.yml'
+      - 'server.ts'
+      - 'src/App.tsx'
+      - 'src/components/LandingPage.tsx'
+      - 'src/components/SuperAdminDashboard.tsx'
+      - 'src/components/TherapistDashboard.tsx'
+      - 'src/components/SalesInterestForm.tsx'
+      - 'src/components/PartnershipPanel.tsx'
+      - 'src/components/ExternalPartnershipPortal.tsx'
+      - 'src/components/PartnerMarketplace*.tsx'
+      - 'services/partnerships/**'
+      - 'src/lib/partnerEmailCallback.ts'
+      - 'src/utils/sensitiveApiMutationProtection.mjs'
+      - 'supabase/migrations/*partner*'
+      - 'tests/partner*'
+      - 'tests/partnership*'
+      - 'docs/releases/20261116-partnerships-full-production-reconciliation.md'
   workflow_dispatch:
 
 permissions:
@@ -37,5 +53,20 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Test existing lead and new optional referral
         run: npx --no-install tsx --test tests/publicSalesLeadInput.behavior.test.ts tests/publicSalesLeadRouteBehavior.test.ts tests/partnerReferralLeadPromotion.test.ts
+      - name: Partner signup, authorization, coupons, marketplace and tier regressions
+        run: |
+          node --import tsx tests/partnershipSecurity.test.ts
+          node --import tsx tests/partnerReferralCoupon.test.ts
+          node --import tsx tests/partnerApprovalFlow.test.ts
+          node --import tsx tests/partnershipEmailCallback.test.ts
+          node --import tsx tests/partnerMarketplaceSecurity.test.ts
+          node --import tsx tests/partnerMarketplaceImageUpload.test.ts
+          node tests/partnerTieredCommission.regression.test.mjs
+          node tests/partnerTierBrand.regression.test.mjs
+          node --import tsx tests/partnerPortalTabs.test.ts
+          node --import tsx tests/partnerMarketplaceReviewLimit.test.ts
+          node --import tsx tests/partnerMarketplaceFiveReviewsSchema.test.ts
+          node tests/partnershipRouteMount.regression.test.mjs
+          node tests/partnerMainIntegration.regression.test.mjs
       - name: Check production frontend build compatibility
         run: npm run build

@@ -52,7 +52,7 @@ import { createClinicAuthorizationMeHandler, createUserFeatureAccessReadHandler,
 import { createClinicWorkScheduleReadHandler, createClinicWorkScheduleWriteHandler, createClinicWorkScheduleApplyHandler } from './services/clinicWorkScheduleHandlers';
 import { createReadyRouteHandler } from './services/readyRouteHandler';
 import { registerPublicSalesLeadRoute } from './services/publicSalesLeadRoutes';
-import { registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';
+import { approvedExternalPartnerForClinicalIdentity, registerPartnershipRoutes } from './services/partnerships/partnershipRoutes';
 import { registerPublicSalesPaymentStatusRoute } from './services/publicSalesPaymentStatusRoute';
 import { registerLegacySalesActivationStripeWebhookRoute } from './services/legacySalesActivationStripeWebhookRoute';
 import { createSalesAssistedStripeEventHandlers } from './services/salesAssistedStripeEventHandlers';
@@ -21847,7 +21847,8 @@ async function startServer() {
         if (byEmailResult.error) throw byEmailResult.error;
         clinicalProfile = byEmailResult.data;
       }
-      if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role)) {
+      if (clinicalProfile && persistedClinicalLoginPortal(clinicalProfile.role) &&
+    !(await approvedExternalPartnerForClinicalIdentity(supabase, user.email))) {
         return rejectWrongPortal();
       }
       return next();
