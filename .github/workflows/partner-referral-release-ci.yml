@@ -29,6 +29,7 @@ on:
       - 'supabase/migrations/*partner*'
       - 'tests/partner*'
       - 'tests/partnership*'
+      - 'docs/releases/20261116-partnerships-full-production-reconciliation.md'
   workflow_dispatch:
 
 permissions:
@@ -62,6 +63,9 @@ jobs:
           node --import tsx tests/partnerMarketplaceImageUpload.test.ts
           node tests/partnerTieredCommission.regression.test.mjs
           node tests/partnerTierBrand.regression.test.mjs
+          node --import tsx tests/partnerPortalTabs.test.ts
+          node --import tsx tests/partnerMarketplaceReviewLimit.test.ts
+          node --import tsx tests/partnerMarketplaceFiveReviewsSchema.test.ts
           node tests/partnershipRouteMount.regression.test.mjs
           node tests/partnerMainIntegration.regression.test.mjs
       - name: Check production frontend build compatibility
