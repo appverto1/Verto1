@@ -19,19 +19,22 @@ type ClinicalChartsWorkspaceProps = {
   protocols?: any[];
   history?: any[];
   onOpenSessionReport?: (sessionId: string) => void;
+  canManagePatientChartSharing?: boolean;
 };
 
-export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, legacyAssessmentProtocols = [], onOpenSessionReport }: ClinicalChartsWorkspaceProps) {
+export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPanelDark = false, showAbaDetails = false, showAbaV3Details = false, showClinicalMeasurementV3Details = false, legacyAssessmentProtocols = [], onOpenSessionReport, canManagePatientChartSharing = true }: ClinicalChartsWorkspaceProps) {
   const [view, setView] = useState<'plans' | 'aba' | 'aba-v3' | 'clinical-v3'>('plans');
   const [planDescriptor, setPlanDescriptor] = useState<ClinicalPlanShareDescriptor | null>(null);
   const [abaDescriptor, setAbaDescriptor] = useState<AbaV3ShareDescriptor | null>(null);
   const [sharingMenuOpen, setSharingMenuOpen] = useState(false);
+  const [sharingMenuActivated, setSharingMenuActivated] = useState(false);
   const sharingMenuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPlanDescriptor(null);
     setAbaDescriptor(null);
     setView('plans');
     setSharingMenuOpen(false);
+    setSharingMenuActivated(false);
   }, [patientId]);
   useEffect(() => { setSharingMenuOpen(false); }, [view]);
   useEffect(() => {
@@ -75,7 +78,7 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
             aria-label="Compartilhar gráfico com o paciente"
             aria-expanded={sharingMenuOpen}
             aria-controls="chart-sharing-dropdown-panel"
-            onClick={() => setSharingMenuOpen((open) => !open)}
+            onClick={() => { setSharingMenuActivated(true); setSharingMenuOpen((open) => !open); }}
             className={`inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${isPanelDark
               ? 'border-slate-700 text-slate-300 hover:bg-slate-800'
               : 'border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700'}`}
@@ -90,7 +93,10 @@ export function ClinicalChartsWorkspace({ patientId, organizationId = null, isPa
             aria-label="Configurações de compartilhamento do gráfico"
             className={`${sharingMenuOpen ? 'absolute' : 'hidden'} right-0 top-full z-[60] mt-2 max-h-[72vh] w-[min(420px,calc(100vw-24px))] overflow-y-auto rounded-2xl border p-2 shadow-xl ${isPanelDark ? 'border-slate-700 bg-slate-900' : 'border-slate-200 bg-white'}`}
           >
-            <ProfessionalSharedChartControl key={patientId} patientId={patientId} descriptor={descriptor} isDark={isPanelDark} />
+            {sharingMenuActivated && (canManagePatientChartSharing
+               ? <ProfessionalSharedChartControl key={patientId} patientId={patientId} descriptor={descriptor} isDark={isPanelDark} />
+               : <p role="status" className={`p-3 text-sm font-medium ${isPanelDark ? 'text-slate-200' : 'text-slate-700'}`}>Você não tem permissão para compartilhar gráficos com pacientes</p>
+             )}
           </div>
         </div>
       )}
