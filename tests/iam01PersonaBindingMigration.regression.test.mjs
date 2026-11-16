@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const sql = readFileSync(
-  'supabase/migrations/20261116190000_iam01_persona_login_bindings.sql',
+  'supabase/migrations/20261116185752_iam01_persona_login_bindings_v1.sql',
   'utf8',
 );
 
