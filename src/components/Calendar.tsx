@@ -2176,16 +2176,19 @@ export const ClinicalAgendaBoard = ({
 
   const openEventDetail = (event: any) => {
     const normalized = normalizeClinicalEvent(event);
-    if (isCaseScopedActor) {
-      // Only server-returned case appointments can open the details modal.
-      // The detail endpoint must still authorize the actor and patient scope.
-      if (!remoteState.loaded || normalized.source === 'school_meeting' || normalized.schoolMeetingId ||
-          !serverEvents.some((item: any) => String(item.id) === String(normalized.id))) return;
-    }
+    // School meetings keep their existing separate workspace; they are not
+    // patient appointment details and should not be redirected to a chart.
     if (normalized.source === 'school_meeting' || normalized.schoolMeetingId) {
+      if (isTherapistActor) return;
       setSelectedEvent(null);
       setSelectedSchoolMeetingId(String(normalized.schoolMeetingId || normalized.id).replace(/^school-/, ''));
       return;
+    }
+    if (isCaseScopedActor) {
+      // Only server-returned case appointments can open the details modal.
+      // The detail endpoint must still authorize the actor and patient scope.
+      if (!remoteState.loaded ||
+          !serverEvents.some((item: any) => String(item.id) === String(normalized.id))) return;
     }
     setSelectedEvent(normalized);
     setEventDetail(null);
