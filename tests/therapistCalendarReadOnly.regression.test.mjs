@@ -5,17 +5,18 @@ const calendar = readFileSync('src/components/Calendar.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 
 const openEvent = calendar.slice(calendar.indexOf('const openEventDetail ='), calendar.indexOf('const openClosureChecklist ='));
-assert.match(openEvent, /if \(isTherapistActor\) \{[\s\S]*?onOpenPatient\?\.\(patientId, \{ tab: 'history' \}, normalized\.patientName\);[\s\S]*?return;/);
-assert.ok(openEvent.indexOf('if (isTherapistActor)') < openEvent.indexOf('dataService.getCalendarEventDetail('), 'therapist must navigate before appointment detail requests');
+assert.match(openEvent, /if \(isCaseScopedActor\) \{[\s\S]*?!remoteState\.loaded[\s\S]*?!serverEvents\.some/);
+assert.match(openEvent, /setSelectedEvent\(normalized\);[\s\S]*?dataService\.getCalendarEventDetail\(normalized\.id\)/);
+assert.doesNotMatch(openEvent, /onOpenPatient\?\.\(/, 'the professional and supervisor see session details before opening a chart');
 
-assert.match(dashboard, /onCreateAppointment=\{!isDirectTherapist && hasCapability\('calendar\.appointment\.create'\)/);
-assert.match(dashboard, /onEditAppointment=\{isDirectTherapist \? undefined : handleEditAppointment\}/);
-assert.match(dashboard, /onConfirmAppointment=\{isDirectTherapist \? undefined : handleConfirmAppointmentFromAgenda\}/);
-assert.match(dashboard, /onCancelAppointment=\{isDirectTherapist \? undefined : handleCancelAppointmentFromAgenda\}/);
-assert.match(dashboard, /onDeleteAppointment=\{isDirectTherapist \? undefined : handleDeleteAppointmentFromAgenda\}/);
-assert.match(dashboard, /if \(!isAddSessionModalOpen \|\| isDirectTherapist \|\|[\s\S]*?hasCapability\('calendar\.appointment\.create'\)/);
-assert.match(calendar, /\{onCreateAppointment && !isTherapistActor && \(/);
-assert.match(calendar, /\{!isTherapistActor && renderSection\('team'/);
+assert.match(dashboard, /onCreateAppointment=\{!isTherapist && hasCapability\('calendar\.appointment\.create'\)/);
+assert.match(dashboard, /onEditAppointment=\{isTherapist \? undefined : handleEditAppointment\}/);
+assert.match(dashboard, /onConfirmAppointment=\{isTherapist \? undefined : handleConfirmAppointmentFromAgenda\}/);
+assert.match(dashboard, /onCancelAppointment=\{isTherapist \? undefined : handleCancelAppointmentFromAgenda\}/);
+assert.match(dashboard, /onDeleteAppointment=\{isTherapist \? undefined : handleDeleteAppointmentFromAgenda\}/);
+assert.match(dashboard, /if \(!isAddSessionModalOpen \|\| isTherapist \|\|[\s\S]*?hasCapability\('calendar\.appointment\.create'\)/);
+assert.match(calendar, /\{onCreateAppointment && !isCaseScopedActor && \(/);
+assert.match(calendar, /\{!isCaseScopedActor && renderSection\('team'/);
 
 const status = calendar.slice(calendar.indexOf('const statusForColor ='), calendar.indexOf('const normalizeAgendaStatus'));
 assert.match(status, /canonical === 'CANCELLED_BY_CLINIC' \|\| canonical === 'CANCELLED'\s*\? 'cancelled'/);
