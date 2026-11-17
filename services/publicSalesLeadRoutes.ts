@@ -45,6 +45,27 @@ export function registerPublicSalesLeadRoute(app: any, deps: any): void {
       } = parsed.input;
 
       try {
+        // Reject unknown or inactive referral codes before writing a lead.
+        // Ordinary submissions never incur this additional lookup.
+        if (partnerCode) {
+          const { data: eligiblePartner, error: eligibilityError } = await supabase
+            .from('verto_partner_accounts')
+            .select('id')
+            .or(`referral_code.eq.${partnerCode},referral_alias.eq.${partnerCode}`)
+            .eq('status', 'approved')
+            .eq('compliance_approved', true)
+            .limit(1)
+            .maybeSingle();
+          if (eligibilityError) {
+            console.warn('[Partnerships] Falha ao validar código de indicação.', {
+              code: sanitizeString(eligibilityError.code, 40) || 'unavailable',
+            });
+            return res.status(503).json({ success: false, error: 'Não foi possível validar o código de indicação agora. Tente novamente.' });
+          }
+          if (!eligiblePartner) {
+            return res.status(400).json({ success: false, error: 'Este código de indicação é inválido ou não está ativo. Peça um novo link ao parceiro.' });
+          }
+        }
         const { data, error } = await supabase.rpc("upsert_public_sales_lead", {
           p_name: name,
           p_email: email || null,

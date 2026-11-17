@@ -70,6 +70,10 @@ try{
   assert.match(panel('partner-panel-program').textContent||'',/Nível máximo alcançado/);
   assert.equal(panel('partner-panel-program').querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow'),'100');
   assert.equal(panel('partner-panel-program').querySelectorAll('div.grid.grid-cols-3 > div').length,3);
+  assert.equal(document.querySelector<HTMLInputElement>('#partner-share-url')?.value,
+    'https://verto.test/interesse?ref=TESTE1234','approved partner link opens direct interest with its existing code');
+  assert.equal(document.querySelector<HTMLInputElement>('#partner-share-url')?.readOnly,true);
+  assert.match(panel('partner-panel-program').textContent||'',/Copiar link/);
   assert.doesNotMatch(panel('partner-panel-program').textContent||'',/Parceiro aprovado|Participação, elegibilidade/);
   assert.equal(requests.filter(path=>path==='/api/partnerships/portal').length,1);
   assert.equal(requests.filter(path=>path==='/api/partnerships/marketplace/partner').length,1);

@@ -204,6 +204,9 @@ const getAccessContextRoleLabel = (role: unknown) => {
 const LandingPage = React.lazy(() =>
   import('./components/LandingPage').then((m) => ({ default: m.LandingPage }))
 );
+const PartnerInterestPage = React.lazy(() =>
+  import('./components/PartnerInterestPage').then((m) => ({ default: m.PartnerInterestPage }))
+);
 const ActivationAccess = React.lazy(() =>
   import('./components/ActivationAccess').then((m) => ({ default: m.ActivationAccess }))
 );
@@ -453,6 +456,8 @@ export default function App() {
     typeof window !== 'undefined' && /^\/rede-de-cuidado\/?$/i.test(window.location.pathname);
   const isExternalPartnerRoute =
     typeof window !== 'undefined' && /^\/parcerias\/?$/i.test(window.location.pathname);
+  const isPartnerInterestRoute =
+    typeof window !== 'undefined' && /^\/interesse\/?$/i.test(window.location.pathname);
   const externalCarePatientClinicId = (() => {
     if (!externalCarePatientRouteMatch) return '';
     try { return decodeURIComponent(externalCarePatientRouteMatch[1]); } catch { return ''; }
@@ -8548,6 +8553,8 @@ export default function App() {
           <ExternalCareNetworkCentral />
         ) : isExternalPartnerRoute ? (
           <ExternalPartnershipPortal />
+        ) : isPartnerInterestRoute ? (
+          <PartnerInterestPage />
         ) : isSalesOfferRoute ? (
           <PublicSalesOffer token={salesOfferToken} />
         ) : isSalesActivationRoute && !user ? (
