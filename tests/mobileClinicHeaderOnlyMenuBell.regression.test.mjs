@@ -84,9 +84,22 @@ const headerSection = settings.slice(settings.indexOf('export function Professio
 assert.ok(identityPosition !== -1, 'shared header keeps user identity');
 assert.doesNotMatch(headerSection, /onClick=\{onToggleTheme\}/, 'no theme button before modules');
 assert.match(settings, /onClick=\{onToggleTheme\}/, 'theme is available in account tools');
-assert.match(settings, /order-\[89\]/, 'account settings are a separate final section');
-assert.match(settings, /order-\[90\]/, 'professional settings follow account section heading');
-assert.match(settings, /order-\[91\]/, 'clinic settings follow professional settings');
+const footerStart = settings.indexOf('data-mobile-account-settings');
+const profileAction = settings.indexOf('{profileSettingsAction}', footerStart);
+const clinicAction = settings.indexOf('{clinicSettingsAction}', footerStart);
+const teamAction = settings.indexOf('{teamSettingsAction}', footerStart);
+const billingAction = settings.indexOf('{billingSettingsAction}', footerStart);
+const utilitiesStart = settings.indexOf('const accountActions =');
+assert.ok(footerStart > utilitiesStart, 'settings footer follows the main actions');
+assert.ok(settings.indexOf('Central de ajuda e tutoriais', utilitiesStart) < footerStart,
+  'help remains before final settings');
+assert.ok(settings.indexOf('onClick={onToggleTheme}', utilitiesStart) < footerStart,
+  'theme remains after modules but before final settings');
+assert.ok(profileAction > footerStart && clinicAction > profileAction &&
+  teamAction > clinicAction && billingAction > teamAction,
+  'professional and clinic settings preserve visual, keyboard and screen-reader order');
+assert.match(settings, /\{!inline && profileSettingsAction\}/, 'desktop profile stays in original menu position');
+assert.match(settings, /\{!inline && clinicSettingsAction\}/, 'desktop clinic settings stay in original menu position');
 assert.match(settings, /themeMode\?: 'light' \| 'dark'/);
 assert.match(settings, /onToggleTheme\?: \(\) => void/);
 assert.match(settings, /themeMode === 'light' \? 'Tema escuro' : 'Tema claro'/);
