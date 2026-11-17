@@ -256,6 +256,83 @@ export function SettingsMenu({
     }
   };
 
+  const profileSettingsAction = (
+<button
+                ref={firstActionRef}
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setIsOpen(false);
+                  onAction?.();
+                  onViewProfile?.();
+                }}
+                className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+              >
+                <div className="flex items-center gap-3">
+                  <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                  <span className="text-sm font-medium">{inline ? "Configurações do profissional" : "Meu perfil profissional"}</span>
+                </div>
+                <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+              </button>
+  );
+
+  const clinicSettingsAction = canManageClinicSettings && onViewClinicSettings ? (
+<button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onAction?.();
+                    onViewClinicSettings();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Configurações da clínica</span>
+                  </div>
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+                </button>
+  ) : null;
+
+  const teamSettingsAction = canManageTeam ? (
+<button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onAction?.();
+                    onViewTeam?.();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <Users size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Gestão da Equipe</span>
+                  </div>
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+                </button>
+  ) : null;
+
+  const billingSettingsAction = canSeeBilling ? (
+<button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setIsOpen(false);
+                    onAction?.();
+                    onViewBilling?.();
+                  }}
+                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                >
+                  <div className="flex items-center gap-3">
+                    <CreditCard size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
+                    <span className="text-sm font-medium">Assinatura e Faturamento</span>
+                  </div>
+                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+                </button>
+  ) : null;
+
   const accountActions = (
     <>
             {showAccountIdentity && (
@@ -265,23 +342,7 @@ export function SettingsMenu({
             )}
 
             <div className={inline ? "flex flex-col p-2" : "p-2"}>
-              <button
-                ref={firstActionRef}
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setIsOpen(false);
-                  onAction?.();
-                  onViewProfile?.();
-                }}
-                className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[90]' : ''}`}
-              >
-                <div className="flex items-center gap-3">
-                  <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">{inline ? "Configurações do profissional" : "Meu perfil profissional"}</span>
-                </div>
-                <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
-              </button>
+              {!inline && profileSettingsAction}
 
               {onOpenGuidedTutorial && (
                 <button
@@ -302,24 +363,7 @@ export function SettingsMenu({
                 </button>
               )}
 
-              {canManageClinicSettings && onViewClinicSettings && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setIsOpen(false);
-                    onAction?.();
-                    onViewClinicSettings();
-                  }}
-                  className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[91]' : ''}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                    <span className="text-sm font-medium">Configurações da clínica</span>
-                  </div>
-                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
-                </button>
-              )}
+              {!inline && clinicSettingsAction}
 
               <button type="button" role="menuitem"
                 onClick={() => {
@@ -355,24 +399,7 @@ export function SettingsMenu({
                 </button>
               )}
 
-              {canManageTeam && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setIsOpen(false);
-                    onAction?.();
-                    onViewTeam?.();
-                  }}
-                  className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[92]' : ''}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <Users size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                    <span className="text-sm font-medium">Gestão da Equipe</span>
-                  </div>
-                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
-                </button>
-              )}
+              {!inline && teamSettingsAction}
 
               {import.meta.env.VITE_FEATURE_LOYALTY_STAGING === 'true'
                 && String(user?.role || '').trim().toLowerCase() === 'director' && (
@@ -387,24 +414,7 @@ export function SettingsMenu({
                 </button>
               )}
 
-              {canSeeBilling && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setIsOpen(false);
-                    onAction?.();
-                    onViewBilling?.();
-                  }}
-                  className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[93]' : ''}`}
-                >
-                  <div className="flex items-center gap-3">
-                    <CreditCard size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                    <span className="text-sm font-medium">Assinatura e Faturamento</span>
-                  </div>
-                  <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
-                </button>
-              )}
+              {!inline && billingSettingsAction}
 
               <button
                 type="button"
@@ -452,21 +462,25 @@ export function SettingsMenu({
               </div>
             )}
               {inline && (
-                <div className="order-[89] mt-4 border-t border-slate-200 px-3 pt-4" data-mobile-account-settings>
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Configurações</h3>
+                <div className="mt-4 border-t border-slate-200 px-1 pt-4" data-mobile-account-settings>
+                  <h3 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Configurações</h3>
+                  {profileSettingsAction}
+                  {clinicSettingsAction}
+                  {teamSettingsAction}
+                  {billingSettingsAction}
+                  {onViewRooms && (
+                    <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewRooms(); }}
+                      className="flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
+                      <User size={18} className="text-slate-400" /> Salas
+                    </button>
+                  )}
+                  {onViewLogs && (
+                    <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewLogs(); }}
+                      className="flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
+                      <BookOpenCheck size={18} className="text-slate-400" /> Log de atividades
+                    </button>
+                  )}
                 </div>
-              )}
-              {inline && onViewRooms && (
-                <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewRooms(); }}
-                  className="order-[94] flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
-                  <User size={18} className="text-slate-400" /> Salas
-                </button>
-              )}
-              {inline && onViewLogs && (
-                <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewLogs(); }}
-                  className="order-[95] flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
-                  <BookOpenCheck size={18} className="text-slate-400" /> Log de atividades
-                </button>
               )}
             </div>
 
