@@ -36,6 +36,9 @@ globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
     savedPhotoUrl=JSON.parse(String(init.body)).photoUrl;
     return {ok:true,json:async()=>({success:true})} as Response;
   }
+  if(path==='/api/partnerships/portal/whatsapp-contacts'){
+    return {ok:true,json:async()=>({success:true,contacts:[]})} as Response;
+  }
   if(path==='/api/partnerships/portal' && failNextPortalRead){
     failNextPortalRead=false;
     throw new Error('Falha ao atualizar indicações de teste.');
