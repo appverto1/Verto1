@@ -270,7 +270,7 @@ export function SettingsMenu({
               >
                 <div className="flex items-center gap-3">
                   <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">{inline ? "Configurações do profissional" : "Meu perfil profissional"}</span>
+                  <span className={inline ? "text-[13px] font-medium" : "text-sm font-medium"}>{inline ? "Configurações do profissional" : "Meu perfil profissional"}</span>
                 </div>
                 <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
               </button>
@@ -289,7 +289,7 @@ export function SettingsMenu({
                 >
                   <div className="flex items-center gap-3">
                     <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                    <span className="text-sm font-medium">Configurações da clínica</span>
+                    <span className={inline ? "text-[13px] font-medium" : "text-sm font-medium"}>Configurações da clínica</span>
                   </div>
                   <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
                 </button>
@@ -427,8 +427,8 @@ export function SettingsMenu({
               >
                 <div className="flex items-center gap-3">
                   <ShoppingBag size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">Módulos e recursos</span>
-                  <span className="text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full font-bold">
+                  <span className={inline ? "whitespace-nowrap text-[13px] font-medium" : "text-sm font-medium"}>Módulos e recursos</span>
+                  <span className="shrink-0 text-[8px] bg-purple-100 text-[#7a32fc] px-1.5 py-0.5 rounded-full font-bold">
                     CONHEÇA
                   </span>
                 </div>
@@ -441,7 +441,7 @@ export function SettingsMenu({
                   type="button"
                   role="menuitem"
                   onClick={() => window.open('/ajuda', '_blank', 'noopener,noreferrer')}
-                  className="flex w-full items-center gap-3 rounded-xl p-3 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                  className="flex w-full items-center gap-2 rounded-xl px-2 py-3 text-[13px] font-medium text-slate-600 hover:bg-slate-50 sm:text-sm"
                 >
                   <CircleHelp size={18} className="text-slate-400" />
                   Central de ajuda e tutoriais

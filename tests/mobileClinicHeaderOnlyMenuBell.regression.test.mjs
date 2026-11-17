@@ -114,4 +114,22 @@ assert.match(source, /!mobileDrawer \|\| !group\.some\(\(item\) => item\.id === 
 assert.match(source, /<ClinicalMentionNotifications themeMode=\{theme\} inMobileDrawer/, 'notifications relocated into drawer');
 assert.match(source, /onViewRooms=\{canAccessTab\("rooms"\)/, 'rooms remain capability-gated');
 assert.match(source, /onViewLogs=\{canAccessTab\("logs"\)/, 'logs remain capability-gated');
+// Layout regression: both clinical drawers must use the responsive width,
+// rather than the 280px panel that forced long menu labels onto two lines.
+const responsiveDrawer = 'w-[calc(100vw-12px)] max-w-[360px]';
+assert.equal(source.split(responsiveDrawer).length - 1, 2,
+  'patient-record and workspace drawers must share the wider mobile width');
+assert.ok(!source.includes('fixed top-0 right-0 bottom-0 w-[280px]'),
+  'do not restore the narrow clinical mobile drawer');
+assert.equal(source.split('lg:hidden shadow-2xl flex flex-col p-4').length - 1, 2,
+  'mobile drawer uses compact outer padding without altering desktop');
+assert.ok(settings.includes('whitespace-nowrap text-[13px] font-medium" : "text-sm font-medium"}>Módulos e recursos'),
+  'the mobile module label stays on one line without changing desktop typography');
+assert.ok(settings.includes('shrink-0 text-[8px] bg-purple-100'),
+  'the module badge keeps its own space beside the label');
+assert.ok(settings.includes('text-[13px] font-medium" : "text-sm font-medium"}>Configurações da clínica'),
+  'clinic settings keep a legible compact mobile label');
+assert.ok(settings.includes('Central de ajuda e tutoriais'),
+  'help stays available and legible');
+
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');
