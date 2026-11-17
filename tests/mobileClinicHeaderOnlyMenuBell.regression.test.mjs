@@ -132,4 +132,23 @@ assert.ok(settings.includes('text-[13px] font-medium" : "text-sm font-medium"}>C
 assert.ok(settings.includes('Central de ajuda e tutoriais'),
   'help stays available and legible');
 
+// The popup must be owned by the dashboard, not the drawer's SettingsMenu:
+assert.ok(source.includes('const [isMobileMarketplaceOpen, setIsMobileMarketplaceOpen] = useState(false);'));
+assert.ok(source.includes('onOpenMarketplace={() => setIsMobileMarketplaceOpen(true)}'));
+assert.ok(source.includes('const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"'));
+assert.ok(source.includes('createPortal(\n        <PartnerMarketplace'), 'popup is rendered in a viewport portal');
+assert.ok(source.includes('document.body,'), 'popup must not be clipped by drawer scroll');
+assert.equal(source.split('{mobileMarketplaceOverlay}').length - 1, 2,
+  'the popup lives outside both mobile drawers');
+const patientBranchStart = source.indexOf('if (view === "patient" && selectedPatientId)');
+const workspaceBranchStart = source.indexOf('\n  return (\n    <div className="h-screen overflow-hidden', patientBranchStart);
+const patientOverlayIndex = source.indexOf('{mobileMarketplaceOverlay}', patientBranchStart);
+const workspaceOverlayIndex = source.indexOf('{mobileMarketplaceOverlay}', workspaceBranchStart);
+assert.ok(patientOverlayIndex > source.indexOf('{renderMobileDrawerUtilities(true)}') &&
+  patientOverlayIndex < workspaceBranchStart, 'patient-record drawer can close while popup remains');
+assert.ok(workspaceOverlayIndex > source.indexOf('{renderMobileDrawerUtilities(false)}') &&
+  workspaceOverlayIndex > workspaceBranchStart, 'workspace drawer can close while popup remains');
+assert.ok(settings.includes('if (onOpenMarketplace) onOpenMarketplace();'), 'mobile uses the stable popup handler');
+assert.ok(settings.includes('else setMarketplaceOpen(true);'), 'desktop account menu keeps its own popup');
+
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');
