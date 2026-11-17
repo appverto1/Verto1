@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-// Both clinic headers (main workspace and patient record) must leave exactly
-// two visible top-bar actions below lg: the hamburger and clinical bell.
-// Secondary features remain reachable through the same mobile drawer.
+// Both clinic headers (main workspace and patient record) expose only a
+// hamburger below lg. Notifications and account tools move inside the drawer.
 const source = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const headers = [...source.matchAll(/\{\/\* Header \*\/\}([\s\S]*?)\{\/\* Mobile Menu Drawer \*\/\}/g)];
 assert.equal(headers.length, 2, 'workspace and patient-record headers must be covered');
@@ -11,10 +10,9 @@ assert.equal(headers.length, 2, 'workspace and patient-record headers must be co
 for (const [index, match] of headers.entries()) {
   const header = match[1];
   const label = index === 0 ? 'patient record' : 'workspace';
-  assert.ok(header.indexOf('<ClinicalMentionNotifications') < header.indexOf('<Menu size={20}'),
-    label + ': clinical bell comes before hamburger on mobile');
+  assert.match(header, /\{!isMobileHeader && <ClinicalMentionNotifications/, label + ': clinical bell is desktop-only');
   assert.equal((header.match(/<Menu size=\{20\}/g) || []).length, 1, label + ': one hamburger');
-  assert.equal((header.match(/<ClinicalMentionNotifications/g) || []).length, 1, label + ': one bell');
+  assert.equal((header.match(/<ClinicalMentionNotifications/g) || []).length, 1, label + ': desktop bell preserved');
   assert.match(header, /aria-label="Abrir menu"/, label + ': hamburger accessible label');
   assert.match(header, /hidden lg:inline-flex[^\n]*p-2/, label + ': desktop-only theme');
   assert.match(header, /!isMobileHeader && hasCapability\("communication\.billing_updates\.view"\)/,
@@ -69,26 +67,41 @@ assert.match(settings, /\{inline \? \(/, 'inline actions rendered directly');
 assert.match(settings, /onAction\?\.\(\)/, 'navigating away closes hamburger');
 assert.match(settings, /canManageClinicSettings && onViewClinicSettings/, 'clinic settings preserve authorization');
 assert.match(settings, /canSwitchAccessContext &&/, 'context switching remains conditional');
-assert.match(settings, /canManageTeam &&/, 'team actions remain conditional');
-assert.match(settings, /canSeeBilling &&/, 'subscription remains conditional');
+assert.match(settings, /const teamSettingsAction = canManageTeam \? \(/, 'team actions remain conditional');
+assert.match(settings, /const billingSettingsAction = canSeeBilling \? \(/, 'subscription remains conditional');
 assert.match(settings, /handleLogout\(\)/, 'logout remains supported');
 assert.match(settings, /Central de ajuda e tutoriais/, 'help is directly accessible');
 assert.match(settings, /\{inline \? \(/, 'no nested trigger on mobile');
-// The first block of each mobile drawer must contain the professional image,
-// name, workspace role, theme action and close button. Navigation/account
-// actions remain below it without repeating the identity.
+// Each drawer starts with identity (portrait, name, role) and close button.
+// Theme control now lives after modules with the account tools.
 const mobileProfessionalHeaders = [...source.matchAll(/<ProfessionalMobileDrawerHeader[\s\S]*?onClose=\{\(\) => setIsMobileMenuOpen\(false\)\}/g)];
 assert.equal(mobileProfessionalHeaders.length, 2,
   'both mobile drawers begin with the same reusable professional header');
 assert.match(settings, /export function ProfessionalMobileDrawerHeader\(/);
 assert.match(settings, /data-mobile-professional-header/);
 const identityPosition = settings.indexOf('<ProfessionalAccountIdentity user={user} />');
-const themePosition = settings.indexOf('onClick={onToggleTheme}');
-const profilePosition = settings.indexOf('<span className="text-sm font-medium">Meu perfil profissional</span>');
-assert.ok(identityPosition !== -1 && themePosition > identityPosition &&
-  profilePosition > themePosition, 'professional identity precedes theme switch and account actions');
-assert.match(settings, /themeMode: 'light' \| 'dark'/);
-assert.match(settings, /onToggleTheme: \(\) => void/);
+const headerSection = settings.slice(settings.indexOf('export function ProfessionalMobileDrawerHeader('), settings.indexOf('export function SettingsMenu('));
+assert.ok(identityPosition !== -1, 'shared header keeps user identity');
+assert.doesNotMatch(headerSection, /onClick=\{onToggleTheme\}/, 'no theme button before modules');
+assert.match(settings, /onClick=\{onToggleTheme\}/, 'theme is available in account tools');
+const footerStart = settings.indexOf('data-mobile-account-settings');
+const profileAction = settings.indexOf('{profileSettingsAction}', footerStart);
+const clinicAction = settings.indexOf('{clinicSettingsAction}', footerStart);
+const teamAction = settings.indexOf('{teamSettingsAction}', footerStart);
+const billingAction = settings.indexOf('{billingSettingsAction}', footerStart);
+const utilitiesStart = settings.indexOf('const accountActions =');
+assert.ok(footerStart > utilitiesStart, 'settings footer follows the main actions');
+assert.ok(settings.indexOf('Central de ajuda e tutoriais', utilitiesStart) < footerStart,
+  'help remains before final settings');
+assert.ok(settings.indexOf('onClick={onToggleTheme}', utilitiesStart) < footerStart,
+  'theme remains after modules but before final settings');
+assert.ok(profileAction > footerStart && clinicAction > profileAction &&
+  teamAction > clinicAction && billingAction > teamAction,
+  'professional and clinic settings preserve visual, keyboard and screen-reader order');
+assert.match(settings, /\{!inline && profileSettingsAction\}/, 'desktop profile stays in original menu position');
+assert.match(settings, /\{!inline && clinicSettingsAction\}/, 'desktop clinic settings stay in original menu position');
+assert.match(settings, /themeMode\?: 'light' \| 'dark'/);
+assert.match(settings, /onToggleTheme\?: \(\) => void/);
 assert.match(settings, /themeMode === 'light' \? 'Tema escuro' : 'Tema claro'/);
 assert.match(settings, /profileImageUrl && !profileImageFailed/, 'professional image retained');
 assert.match(settings, /\{roleLabel\}/);
@@ -96,4 +109,9 @@ assert.match(settings, /\{organizationName\}/);
 assert.match(settings, /showAccountIdentity && \(/);
 assert.doesNotMatch(source, /className="flex items-center justify-between mb-2">\s*<div className="flex items-center gap-3">\s*<LogoVerto size=\{32\} showText=\{true\}/,
   'the old logo-only header is replaced by professional identity in both drawers');
+assert.match(source, /mobileDrawer: true/, 'mobile nav excludes duplicate settings group');
+assert.match(source, /!mobileDrawer \|\| !group\.some\(\(item\) => item\.id === "settings-root"\)/);
+assert.match(source, /<ClinicalMentionNotifications themeMode=\{theme\} inMobileDrawer/, 'notifications relocated into drawer');
+assert.match(source, /onViewRooms=\{canAccessTab\("rooms"\)/, 'rooms remain capability-gated');
+assert.match(source, /onViewLogs=\{canAccessTab\("logs"\)/, 'logs remain capability-gated');
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');

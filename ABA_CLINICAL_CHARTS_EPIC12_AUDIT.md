@@ -10,7 +10,7 @@ Data: 2026-05-25
 | Evolução por domínio | `src/components/Charts.tsx` via `PatientDetailView` e `PatientDashboard` | Dados já carregados do prontuário | `history`, `tasks`/protocolos | Query bruta indireta | Limitado por endpoints de histórico/tarefas | Front | Médio | Não migrado neste épico; documentado como legado não ABA. |
 | Radar individual por domínio | `src/components/RadarDomainAssessmentChart.tsx` | Props do prontuário/coordenador | `history`, protocolos | Query bruta indireta | Sem date range próprio no componente | Front | Médio | Criar summary não ABA por domínio em épico próprio. |
 | Crescimento cumulativo | `src/components/CumulativeGrowthChart.tsx` | Props do prontuário/paciente | `history`, protocolos | Query bruta indireta | Sem date range próprio no componente | Front | Médio | Criar snapshot de habilidades dominadas por paciente em épico próprio. |
-| Status das habilidades por domínio | `src/components/StackedDomainStatusChart.tsx` | Props do dashboard coordenador | `history`, `patients`, protocolos | Query bruta indireta | Sem date range próprio no componente | Front | Médio | Criar agregação backend por protocolo/domínio. |
+| Status das habilidades por domínio (descontinuado em 2026-11-16) | Componente excluído de `src/components` e removido do dashboard da coordenação | Nenhuma | Nenhuma | Não aplicável | Não aplicável | Não aplicável | Nenhum | Não reintroduzir sem solicitação explícita; dados clínicos e outros gráficos preservados. |
 | Relatório PDF de progresso | `src/components/ProgressReportPDFLayout.tsx` | Dados preparados no front | `history`, protocolos | Query bruta indireta | Período escolhido no relatório | Front | Baixo/Médio | Mantido; PDF fora do escopo deste épico. |
 | DRE admin | `src/components/AdminDashboard.tsx` | `/api/admin/dre` | Views/consultas financeiras | Summary/view | Endpoint com payload agregado | Backend | Baixo | Sem ação. |
 | DRE coordenador | `src/components/CoordinatorDashboard.tsx` | `/api/payments`, estado financeiro | `payments` | Query bruta paginada/limitada | Endpoints com limit | Front/backend | Médio | Não ABA; abrir épico financeiro se precisar consolidar views. |
@@ -68,6 +68,6 @@ Thresholds iniciais:
 ## Pendências
 
 - Migrar gráficos não ABA baseados em `history`/protocolos para summaries próprias.
-- Criar views clínicas não ABA por domínio/protocolo para `RadarDomainAssessmentChart`, `CumulativeGrowthChart` e `StackedDomainStatusChart`.
+- Criar views clínicas não ABA por domínio/protocolo para `RadarDomainAssessmentChart` e `CumulativeGrowthChart`. O antigo `StackedDomainStatusChart` foi retirado do produto e não deve ser reconstruído sem decisão explícita.
 - Permitir configuração dos thresholds por clínica em tabela própria.
 - Expandir anotações com edição/remoção e renderização avançada por linha de condição no eixo X.

@@ -69,7 +69,6 @@ import { SchoolsManagement } from "./SchoolsManagement";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
-import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { APPOINTMENT_CANCELLATION_REASONS, buildAppointmentCancellationNote } from "../utils/appointmentCancellationReasons";
@@ -10819,16 +10818,6 @@ export function CoordinatorDashboard({
         )}
       </div>
 
-      {!isTherapist && (
-        <section className="space-y-4 sm:space-y-6">
-          <StackedDomainStatusChart
-            protocols={protocols}
-            history={patientsHistory}
-            patients={allPatients}
-          />
-        </section>
-      )}
-
       {hasAppointmentsCommunicationModule && (
         <>
           {/* Agenda Global Section */}
@@ -11370,10 +11359,12 @@ export function CoordinatorDashboard({
     expanded,
     iconSize,
     onNavigate,
+    mobileDrawer = false,
   }: {
     expanded: boolean;
     iconSize: number;
     onNavigate?: () => void;
+    mobileDrawer?: boolean;
   }) => {
     const renderNode = (item: NavigationNode, depth = 0): React.ReactNode => {
       const hasChildren = Boolean(item.children?.length);
@@ -11433,7 +11424,9 @@ export function CoordinatorDashboard({
 
     return (
       <div className="space-y-5">
-        {visibleNavigationGroups.map((group, groupIndex) => (
+        {visibleNavigationGroups
+          .filter((group) => !mobileDrawer || !group.some((item) => item.id === "settings-root"))
+          .map((group, groupIndex) => (
           <div key={`navigation-group-${groupIndex}`} className={`${groupIndex > 0 ? "border-t border-slate-100 pt-4" : ""} space-y-2`}>
             {group.map((item) => renderNode(item))}
           </div>
@@ -11583,8 +11576,8 @@ export function CoordinatorDashboard({
     </div>
   );
 
-  // Mobile top bars show only the hamburger and clinical notification bell.
-  // Theme, billing inbox, and account tools remain accessible inside the drawer.
+  // Mobile clinical headers show only the hamburger; account tools remain
+  // reachable from the drawer and desktop navigation remains unchanged.
   const renderMobileDrawerUtilities = (fromPatientRecord: boolean) => {
     const navigateFromDrawer = (tab: DashboardTab) => {
       setIsMobileMenuOpen(false);
@@ -11592,19 +11585,27 @@ export function CoordinatorDashboard({
       if (fromPatientRecord) setView("home");
     };
     return (
-      <section className="mt-6 border-t border-slate-200 pt-4" aria-label="Conta e configurações" data-mobile-drawer-settings>
+      <section className="mt-6 border-t border-slate-200 pt-4" aria-label="Ferramentas e configurações" data-mobile-drawer-settings>
         <h3 className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
-          Conta e configurações
+          Ferramentas e ajuda
         </h3>
+        <div className="mb-2 flex min-h-11 items-center justify-between px-3 text-sm font-medium text-slate-600">
+          <span>Notificações clínicas</span>
+          <ClinicalMentionNotifications themeMode={theme} inMobileDrawer onOpenNotification={(notification) => { setIsMobileMenuOpen(false); openClinicalMentionNotification(notification); }} />
+        </div>
         <SettingsMenu
           inline
           showAccountIdentity={false}
+          themeMode={theme}
+          onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
           onAction={() => setIsMobileMenuOpen(false)}
           user={user}
           onLogout={onLogout}
           onViewTeam={() => navigateFromDrawer("team")}
           onOpenInvitations={() => { setIsMobileMenuOpen(false); setShowInvitationModal(true); }}
           onViewProfile={() => navigateFromDrawer("professionalProfile")}
+          onViewRooms={canAccessTab("rooms") ? () => navigateFromDrawer("rooms") : undefined}
+          onViewLogs={canAccessTab("logs") ? () => navigateFromDrawer("logs") : undefined}
           canManageClinicSettings={canManageClinicSettings}
           onViewClinicSettings={() => navigateFromDrawer("settings")}
           onViewBilling={() => navigateFromDrawer("billing")}
@@ -11727,7 +11728,7 @@ export function CoordinatorDashboard({
               >
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
-              <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+              {!isMobileHeader && <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />}
               <button
                 type="button"
                 onClick={() => setIsMobileMenuOpen(true)}
@@ -11802,8 +11803,6 @@ export function CoordinatorDashboard({
                 >
                   <ProfessionalMobileDrawerHeader
                     user={user}
-                    themeMode={theme}
-                    onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
                     onClose={() => setIsMobileMenuOpen(false)}
                   />
 
@@ -11818,6 +11817,7 @@ export function CoordinatorDashboard({
                     {renderNavigationGroups({
                       expanded: true,
                       iconSize: 18,
+                      mobileDrawer: true,
                       onNavigate: () => {
                         setView("home");
                         setIsMobileMenuOpen(false);
@@ -12072,7 +12072,7 @@ export function CoordinatorDashboard({
               {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
-            <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
+            {!isMobileHeader && <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />}
             <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
@@ -12132,8 +12132,6 @@ export function CoordinatorDashboard({
               >
                 <ProfessionalMobileDrawerHeader
                   user={user}
-                  themeMode={theme}
-                  onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
                   onClose={() => setIsMobileMenuOpen(false)}
                 />
 
@@ -12141,6 +12139,7 @@ export function CoordinatorDashboard({
                   {renderNavigationGroups({
                     expanded: true,
                     iconSize: 18,
+                      mobileDrawer: true,
                     onNavigate: () => {
                       setIsMobileMenuOpen(false);
                     },
