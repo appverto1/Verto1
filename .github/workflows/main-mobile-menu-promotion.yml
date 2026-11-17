@@ -1,0 +1,86 @@
+name: Main mobile menu and partners promotion gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/components/SettingsMenu.tsx'
+      - 'src/components/CoordinatorDashboard.tsx'
+      - 'src/components/ClinicalMentionNotifications.tsx'
+      - 'src/components/StackedDomainStatusChart.tsx'
+      - 'tests/mainMobileClinicalMenuPromotion.regression.test.mjs'
+      - '.github/workflows/main-mobile-menu-promotion.yml'
+      - 'ABA_CLINICAL_CHARTS_EPIC12_AUDIT.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: main-mobile-clinical-menu-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  production-mobile-regressions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Clinical mobile drawer and partner modal lifetime regression
+        run: node tests/mainMobileClinicalMenuPromotion.regression.test.mjs
+      - name: Partner signup, approval, marketplace authorization, clinic identity regression
+        run: |
+          node --import tsx tests/partnershipSecurity.test.ts
+          node --import tsx tests/partnerApprovalFlow.test.ts
+          node --import tsx tests/partnerMarketplaceSecurity.test.ts
+          node --import tsx tests/partnerMarketplaceImageUpload.test.ts
+          node tests/partnerMainIntegration.regression.test.mjs
+      - name: Security and clinical authorization regressions
+        run: |
+          node tests/security.regression.test.mjs
+          node --import tsx tests/clinicalGraphRoleScopeP0.regression.test.ts
+          node tests/sessionExpiredCleanLogout.regression.test.mjs
+      - name: Reject new TypeScript diagnostics versus production main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/verto-main-typebase origin/main
+          ln -s "$GITHUB_WORKSPACE/node_modules" /tmp/verto-main-typebase/node_modules
+          echo 0 > /tmp/base-ts-exit
+          echo 0 > /tmp/candidate-ts-exit
+          (cd /tmp/verto-main-typebase && "$GITHUB_WORKSPACE/node_modules/.bin/tsc" --noEmit --pretty false) > /tmp/base-tsc.log 2>&1 || echo $? > /tmp/base-ts-exit
+          ./node_modules/.bin/tsc --noEmit --pretty false > /tmp/candidate-tsc.log 2>&1 || echo $? > /tmp/candidate-ts-exit
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import { parseTypeScriptDiagnostics, findNewTypeScriptDiagnostics } from './scripts/typecheck-ratchet.mjs';
+          const baseline = readFileSync('/tmp/base-tsc.log', 'utf8');
+          const candidate = readFileSync('/tmp/candidate-tsc.log', 'utf8');
+          const baselineExit = Number(readFileSync('/tmp/base-ts-exit', 'utf8').trim());
+          const candidateExit = Number(readFileSync('/tmp/candidate-ts-exit', 'utf8').trim());
+          const b = parseTypeScriptDiagnostics(baseline);
+          const c = parseTypeScriptDiagnostics(candidate);
+          if ((baselineExit !== 0 && b.length === 0) || (candidateExit !== 0 && c.length === 0)) {
+            throw new Error('Typecheck ended unexpectedly without parseable TypeScript diagnostics');
+          }
+          const added = c.length === 0 ? [] : b.length === 0 ? c : findNewTypeScriptDiagnostics(candidate, baseline);
+          if (added.length) {
+            console.error('New TypeScript diagnostics compared with main:', added.map(d => d.original).join('\n'));
+            process.exitCode = 1;
+          } else {
+            console.log('TypeScript differential PASS; baseline diagnostics:', b.length, 'candidate:', c.length, 'new:', added.length);
+          }
+          NODE
+      - name: Runtime import integrity
+        run: npm run check:docker-runtime-imports
+      - name: Production Vite build
+        run: npm run build
