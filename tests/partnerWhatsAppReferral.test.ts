@@ -48,7 +48,7 @@ const update=(selector:string,value:string)=>{
 };
 try{
   await act(async()=>root.render(React.createElement(PartnerWhatsAppReferral,{
-    mode:'external',referralLink,partnerName:'Parceira Teste',messageTemplate:message
+    mode:'external',referralLink,partnerName:'Parceira Teste',messageTemplate:'Olá, {{clinica}}! Sou {{parceiro}}. {{link}}'
   })));
   await act(async()=>{await Promise.resolve();});
   assert.equal(requests.length,1,'one on-demand list read per mount');
