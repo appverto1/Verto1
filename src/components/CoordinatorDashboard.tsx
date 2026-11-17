@@ -11741,7 +11741,7 @@ export function CoordinatorDashboard({
             >
               <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-                className={`rounded-xl p-2 transition-all sm:p-2.5 ${
+                className={`hidden lg:inline-flex rounded-xl p-2 transition-all sm:p-2.5 ${
                   theme === "dark"
                     ? "text-slate-300 hover:text-slate-100 hover:bg-[#122544]"
                     : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
@@ -11750,15 +11750,16 @@ export function CoordinatorDashboard({
               >
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
-              <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
-              {hasCapability("communication.billing_updates.view") && (
+              {!isMobileHeader && <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />}
+              {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
                 <BillingCommunicationNotifications
                   clinicId={workspaceScopeKey}
                   themeMode={theme}
                   onOpenThread={openBillingCommunicationThread}
                 />
               )}
-              <SettingsMenu
+              <div className="hidden lg:flex">
+<SettingsMenu
                 user={user}
                 onLogout={onLogout}
                 onViewTeam={() => {
@@ -11782,6 +11783,7 @@ export function CoordinatorDashboard({
                 onOpenOnboarding={onOpenOnboarding}
                 onOpenGuidedTutorial={startGuidedTutorial}
               />
+</div>
               {runGuidedTutorial && (
                 <TutorialOverlay
                   steps={guidedTutorialSteps}
@@ -11794,6 +11796,7 @@ export function CoordinatorDashboard({
               <button
                 onClick={() => setIsMobileMenuOpen(true)}
                 className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
+                aria-label="Abrir menu"
               >
                 <Menu size={20} />
               </button>
@@ -12063,7 +12066,7 @@ export function CoordinatorDashboard({
                 : "bg-white border-slate-100"
             }`}
           >
-            <div className="relative hidden md:block">
+            <div className="relative hidden lg:block">
               <Search
                 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
                 size={18}
@@ -12082,27 +12085,29 @@ export function CoordinatorDashboard({
             <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              aria-label="Abrir menu"
             >
               <Menu size={20} />
             </button>
 
             <button
               onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-              className="p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
+              className="hidden lg:inline-flex p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
               title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
             >
               {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
-            <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
-            {hasCapability("communication.billing_updates.view") && (
+            {!isMobileHeader && <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />}
+            {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
               <BillingCommunicationNotifications
                 clinicId={workspaceScopeKey}
                 themeMode={theme}
                 onOpenThread={openBillingCommunicationThread}
               />
             )}
-            <SettingsMenu
+            <div className="hidden lg:flex">
+<SettingsMenu
               user={user}
               onLogout={onLogout}
               onViewTeam={() => navigateToTab("team")}
@@ -12114,6 +12119,7 @@ export function CoordinatorDashboard({
               onOpenOnboarding={onOpenOnboarding}
               onOpenGuidedTutorial={startGuidedTutorial}
             />
+</div>
             {runGuidedTutorial && (
               <TutorialOverlay
                 steps={guidedTutorialSteps}
