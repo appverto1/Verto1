@@ -60,26 +60,38 @@ export function registerPartnerWhatsappContactRoutes(app:any,{supabase,checkAuth
     }catch{return res.status(503).json({success:false,error:'PARTNERSHIPS_UNAVAILABLE'});}
   };
   const save=async(req:any,res:any,mode:'external'|'professional')=>{
-    if(!req.is('application/json')||!req.body||Array.isArray(req.body)
-      ||Object.keys(req.body).sort().join(',')!=='clinicName,phone'
-      ||typeof req.body.clinicName!=='string'||req.body.clinicName.length>180){
+    const keys=req.body&&!Array.isArray(req.body)
+      ? Object.keys(req.body).sort().join(',') : '';
+    const batch=keys==='clinicName,phones';
+    if(!req.is('application/json')||(!batch&&keys!=='clinicName,phone')
+      ||typeof req.body.clinicName!=='string'||req.body.clinicName.length>180)
       return res.status(400).json({success:false,error:'INVALID_REQUEST'});
-    }
+
     const clinicName=req.body.clinicName.trim();
-    const phone=normalizePhone(req.body.phone);
-    if(clinicName.length<2||!phone)
+    const rawPhones=batch?req.body.phones:[req.body.phone];
+    if(!Array.isArray(rawPhones)||rawPhones.length<1||rawPhones.length>10
+      ||clinicName.length<2)
+      return res.status(400).json({success:false,error:'INVALID_CONTACT'});
+    const phones=rawPhones.map(normalizePhone);
+    if(phones.some(phone=>!phone)||new Set(phones).size!==phones.length)
       return res.status(400).json({success:false,error:'INVALID_CONTACT'});
     try{
       const partnerId=await authorizedPartner(req,mode);
       if(!partnerId)return res.status(403).json({success:false,error:'PARTNER_ACCESS_DENIED'});
-      const result=await supabase.from('verto_partner_whatsapp_contacts').upsert({
+      const updatedAt=new Date().toISOString();
+      const rows=phones.map(phone=>({
         partner_id:partnerId,clinic_name:clinicName,phone_e164:phone,
-        updated_at:new Date().toISOString(),
-      },{onConflict:'partner_id,phone_e164'}).select(CONTACT_FIELDS).single();
+        updated_at:updatedAt,
+      }));
+      // One atomic upsert for up to ten numbers; the original one-contact request stays compatible.
+      const query=supabase.from('verto_partner_whatsapp_contacts')
+        .upsert(batch?rows:rows[0],{onConflict:'partner_id,phone_e164'})
+        .select(CONTACT_FIELDS);
+      const result=batch?await query:await query.single();
       if(result.error)throw result.error;
       res.setHeader('Cache-Control','private, no-store');
-      // Saving a contact NEVER claims a referral, creates a sales lead, or marks WhatsApp as sent.
-      return res.json({success:true,contact:result.data});
+      // Saving an opportunity NEVER creates a lead, claims commission or marks WhatsApp as sent.
+      return res.json(batch?{success:true,contacts:result.data}:{success:true,contact:result.data});
     }catch{return res.status(503).json({success:false,error:'PARTNERSHIPS_UNAVAILABLE'});}
   };
   app.get('/api/partnerships/portal/whatsapp-contacts',
