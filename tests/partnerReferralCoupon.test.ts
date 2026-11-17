@@ -233,5 +233,8 @@ test('migration preserves canonical referral uniqueness, existing anti-fraud RPC
   assert.match(ui,/setPartnerCode/);
   assert.match(panel,/Salvar cupom/);
   assert.match(readFileSync('src/components/OwnerPartnershipsPanel.tsx','utf8'),/Salvar cupom/);
-  assert.match(panel,/referral_alias\|\|account\.referral_code/);
+  assert.match(panel,/Copiar cupom/);
+  assert.match(panel,/account\.referral_alias/);
+  assert.doesNotMatch(panel,/partner-share-url|referralLink|Seu link de indicação|Copie seu link/);
+  assert.match(panel,/O código de indicação será disponibilizado somente após aprovação/);
 });
