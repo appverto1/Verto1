@@ -98,7 +98,7 @@ export function PartnerWhatsAppReferral({mode,referralLink,partnerName,messageTe
     <form onSubmit={event=>{void save(event);}} className="mt-4 space-y-3">
       <label className="block space-y-1 text-xs font-medium text-slate-700">
         Nome da clínica
-        <input id="partner-whatsapp-clinic" className={inputClass} maxLength={180} required
+        <input id="partner-whatsapp-clinic" className={inputClass} maxLength={180} required disabled={saving}
           value={clinicName} onChange={e=>{setClinicName(e.target.value);setSavedRows({});setSavedCount(0);}}
           placeholder="Nome da clínica" autoComplete="organization"/>
       </label>
@@ -108,7 +108,7 @@ export function PartnerWhatsAppReferral({mode,referralLink,partnerName,messageTe
           <label className="min-w-[160px] flex-1 space-y-1 text-xs text-slate-600">
             <span>WhatsApp {index+1}</span>
             <input id={index===0?'partner-whatsapp-phone':'partner-whatsapp-phone-'+row.id}
-              className={inputClass} type="tel" inputMode="tel" maxLength={32} required
+              className={inputClass} type="tel" inputMode="tel" maxLength={32} required disabled={saving}
               value={row.value} onChange={e=>updatePhone(row.id,e.target.value)}
               placeholder="(11) 99999-9999" autoComplete="off"/>
           </label>
