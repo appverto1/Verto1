@@ -1,6 +1,7 @@
 import {GroupSessionDialog} from "./GroupSessionDialog";
 import {getAppointmentGroupId} from "../utils/groupSessionRules";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   LayoutDashboard,
   Users,
@@ -56,7 +57,8 @@ import {
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
-import { SettingsMenu } from "./SettingsMenu";
+import { ProfessionalMobileDrawerHeader, SettingsMenu } from "./SettingsMenu";
+import { PartnerMarketplace } from "./PartnerMarketplace";
 import { TutorialOverlay } from "./Tutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
@@ -68,7 +70,6 @@ import { SchoolsManagement } from "./SchoolsManagement";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
-import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
@@ -1038,6 +1039,19 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileMarketplaceOpen, setIsMobileMarketplaceOpen] = useState(false);
+  const [isMobileHeader, setIsMobileHeader] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 1023px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const sync = () => setIsMobileHeader(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
   const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
@@ -10756,16 +10770,6 @@ export function CoordinatorDashboard({
         )}
       </div>
 
-      {!isTherapist && (
-        <section className="space-y-4 sm:space-y-6">
-          <StackedDomainStatusChart
-            protocols={protocols}
-            history={patientsHistory}
-            patients={allPatients}
-          />
-        </section>
-      )}
-
       {hasAppointmentsCommunicationModule && (
         <>
           {/* Agenda Global Section */}
@@ -11363,10 +11367,12 @@ export function CoordinatorDashboard({
     expanded,
     iconSize,
     onNavigate,
+    mobileDrawer = false,
   }: {
     expanded: boolean;
     iconSize: number;
     onNavigate?: () => void;
+    mobileDrawer?: boolean;
   }) => {
     const renderNode = (item: NavigationNode, depth = 0): React.ReactNode => {
       const hasChildren = Boolean(item.children?.length);
@@ -11426,7 +11432,9 @@ export function CoordinatorDashboard({
 
     return (
       <div className="space-y-5">
-        {visibleNavigationGroups.map((group, groupIndex) => (
+        {visibleNavigationGroups
+          .filter((group) => !mobileDrawer || !group.some((item) => item.id === "settings-root"))
+          .map((group, groupIndex) => (
           <div key={`navigation-group-${groupIndex}`} className={`${groupIndex > 0 ? "border-t border-slate-100 pt-4" : ""} space-y-2`}>
             {group.map((item) => renderNode(item))}
           </div>
@@ -11576,6 +11584,60 @@ export function CoordinatorDashboard({
     </div>
   );
 
+  // Mobile clinical headers show only the hamburger; account tools remain
+  // reachable from the drawer and desktop navigation remains unchanged.
+  const renderMobileDrawerUtilities = (fromPatientRecord: boolean) => {
+    const navigateFromDrawer = (tab: DashboardTab) => {
+      setIsMobileMenuOpen(false);
+      navigateToTab(tab);
+      if (fromPatientRecord) setView("home");
+    };
+    return (
+      <section className="mt-6 border-t border-slate-200 pt-4" aria-label="Ferramentas e configurações" data-mobile-drawer-settings>
+        <h3 className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          Ferramentas e ajuda
+        </h3>
+        <div className="mb-2 flex min-h-11 items-center justify-between px-3 text-sm font-medium text-slate-600">
+          <span>Notificações clínicas</span>
+          <ClinicalMentionNotifications themeMode={theme} inMobileDrawer onOpenNotification={(notification) => { setIsMobileMenuOpen(false); openClinicalMentionNotification(notification); }} />
+        </div>
+        <SettingsMenu
+          inline
+          showAccountIdentity={false}
+          themeMode={theme}
+          onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
+          onAction={() => setIsMobileMenuOpen(false)}
+          onOpenMarketplace={() => setIsMobileMarketplaceOpen(true)}
+          user={user}
+          onLogout={onLogout}
+          onViewTeam={() => navigateFromDrawer("team")}
+          onOpenInvitations={() => { setIsMobileMenuOpen(false); setShowInvitationModal(true); }}
+          onViewProfile={() => navigateFromDrawer("professionalProfile")}
+          onViewRooms={canAccessTab("rooms") ? () => navigateFromDrawer("rooms") : undefined}
+          onViewLogs={canAccessTab("logs") ? () => navigateFromDrawer("logs") : undefined}
+          canManageClinicSettings={canManageClinicSettings}
+          onViewClinicSettings={() => navigateFromDrawer("settings")}
+          onViewBilling={() => navigateFromDrawer("billing")}
+          onOpenOnboarding={() => { setIsMobileMenuOpen(false); onOpenOnboarding?.(); }}
+          onOpenGuidedTutorial={() => { setIsMobileMenuOpen(false); startGuidedTutorial(); }}
+        />
+      </section>
+    );
+  };
+
+  // The drawer unmounts when its hamburger closes. Keep this popup in the
+  // dashboard, so opening partners does not destroy the popup a moment later.
+  const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"
+    ? createPortal(
+        <PartnerMarketplace
+          open={true}
+          clinicId={String(user?.activeWorkspaceId || user?.clinicId || "")}
+          onClose={() => setIsMobileMarketplaceOpen(false)}
+        />,
+        document.body,
+      )
+    : null;
+
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
       (p) => String(p.id) === String(selectedPatientId),
@@ -11656,7 +11718,7 @@ export function CoordinatorDashboard({
             <div className="flex min-w-0 items-center gap-2 sm:gap-4">
               <button
                 onClick={goBackFromPatientRecord}
-                className={`shrink-0 rounded-full p-2 transition-all ${
+                className={`hidden lg:inline-flex shrink-0 rounded-full p-2 transition-all ${
                   theme === "dark"
                     ? "bg-slate-800 text-slate-300 hover:text-violet-300"
                     : "bg-slate-100 text-slate-500 hover:bg-violet-50 hover:text-[#7a32fc]"
@@ -11679,7 +11741,7 @@ export function CoordinatorDashboard({
             >
               <button
                 onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-                className={`rounded-xl p-2 transition-all sm:p-2.5 ${
+                className={`hidden lg:inline-flex rounded-xl p-2 transition-all sm:p-2.5 ${
                   theme === "dark"
                     ? "text-slate-300 hover:text-slate-100 hover:bg-[#122544]"
                     : "text-slate-400 hover:text-slate-700 hover:bg-slate-50"
@@ -11688,15 +11750,16 @@ export function CoordinatorDashboard({
               >
                 {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
               </button>
-              <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
-              {hasCapability("communication.billing_updates.view") && (
+              {!isMobileHeader && <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />}
+              {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
                 <BillingCommunicationNotifications
                   clinicId={workspaceScopeKey}
                   themeMode={theme}
                   onOpenThread={openBillingCommunicationThread}
                 />
               )}
-              <SettingsMenu
+              <div className="hidden lg:flex">
+<SettingsMenu
                 user={user}
                 onLogout={onLogout}
                 onViewTeam={() => {
@@ -11720,6 +11783,7 @@ export function CoordinatorDashboard({
                 onOpenOnboarding={onOpenOnboarding}
                 onOpenGuidedTutorial={startGuidedTutorial}
               />
+</div>
               {runGuidedTutorial && (
                 <TutorialOverlay
                   steps={guidedTutorialSteps}
@@ -11732,6 +11796,7 @@ export function CoordinatorDashboard({
               <button
                 onClick={() => setIsMobileMenuOpen(true)}
                 className="rounded-xl p-2 text-slate-400 transition-all hover:bg-slate-50 hover:text-slate-600 lg:hidden sm:p-2.5"
+                aria-label="Abrir menu"
               >
                 <Menu size={20} />
               </button>
@@ -11754,29 +11819,31 @@ export function CoordinatorDashboard({
                   animate={{ x: 0 }}
                   exit={{ x: "100%" }}
                   transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                  className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
+                  className="fixed top-0 right-0 bottom-0 w-[calc(100vw-12px)] max-w-[360px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-4"
                 >
-                  <div className="flex items-center justify-between mb-8">
-                    <div className="flex items-center gap-3">
-                      <LogoVerto size={32} showText={true} />
-                    </div>
-                    <button
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className="p-2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X size={24} />
-                    </button>
-                  </div>
+                  <ProfessionalMobileDrawerHeader
+                    user={user}
+                    onClose={() => setIsMobileMenuOpen(false)}
+                  />
 
-                  <nav className="flex-1 overflow-y-auto no-scrollbar">
+                  <button
+                    type="button"
+                    onClick={() => { setIsMobileMenuOpen(false); goBackFromPatientRecord(); }}
+                    className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-violet-50"
+                  >
+                    Voltar ao painel
+                  </button>
+                  <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">
                     {renderNavigationGroups({
                       expanded: true,
                       iconSize: 18,
+                      mobileDrawer: true,
                       onNavigate: () => {
                         setView("home");
                         setIsMobileMenuOpen(false);
                       },
                     })}
+                    {renderMobileDrawerUtilities(true)}
                   </nav>
 
                 </motion.div>
@@ -11915,6 +11982,7 @@ export function CoordinatorDashboard({
             />
           </main>
         </div>
+        {mobileMarketplaceOverlay}
       </div>
     );
   }
@@ -12001,7 +12069,7 @@ export function CoordinatorDashboard({
                 : "bg-white border-slate-100"
             }`}
           >
-            <div className="relative hidden md:block">
+            <div className="relative hidden lg:block">
               <Search
                 className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400"
                 size={18}
@@ -12020,27 +12088,29 @@ export function CoordinatorDashboard({
             <button
               onClick={() => setIsMobileMenuOpen(true)}
               className="lg:hidden p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-xl transition-all"
+              aria-label="Abrir menu"
             >
               <Menu size={20} />
             </button>
 
             <button
               onClick={() => setTheme((prev) => (prev === "light" ? "dark" : "light"))}
-              className="p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
+              className="hidden lg:inline-flex p-2.5 text-slate-500 hover:text-slate-900 hover:bg-slate-50 rounded-xl transition-all"
               title={theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"}
             >
               {theme === "light" ? <Moon size={18} /> : <Sun size={18} />}
             </button>
 
-            <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />
-            {hasCapability("communication.billing_updates.view") && (
+            {!isMobileHeader && <ClinicalMentionNotifications themeMode={theme} onOpenNotification={openClinicalMentionNotification} />}
+            {!isMobileHeader && hasCapability("communication.billing_updates.view") && (
               <BillingCommunicationNotifications
                 clinicId={workspaceScopeKey}
                 themeMode={theme}
                 onOpenThread={openBillingCommunicationThread}
               />
             )}
-            <SettingsMenu
+            <div className="hidden lg:flex">
+<SettingsMenu
               user={user}
               onLogout={onLogout}
               onViewTeam={() => navigateToTab("team")}
@@ -12052,6 +12122,7 @@ export function CoordinatorDashboard({
               onOpenOnboarding={onOpenOnboarding}
               onOpenGuidedTutorial={startGuidedTutorial}
             />
+</div>
             {runGuidedTutorial && (
               <TutorialOverlay
                 steps={guidedTutorialSteps}
@@ -12079,28 +12150,23 @@ export function CoordinatorDashboard({
                 animate={{ x: 0 }}
                 exit={{ x: "100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
+                className="fixed top-0 right-0 bottom-0 w-[calc(100vw-12px)] max-w-[360px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-4"
               >
-                <div className="flex items-center justify-between mb-8">
-                  <div className="flex items-center gap-3">
-                    <LogoVerto size={32} showText={true} />
-                  </div>
-                  <button
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="p-2 text-slate-400 hover:text-slate-600"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
+                <ProfessionalMobileDrawerHeader
+                  user={user}
+                  onClose={() => setIsMobileMenuOpen(false)}
+                />
 
-                <nav className="flex-1 overflow-y-auto no-scrollbar">
+                <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">
                   {renderNavigationGroups({
                     expanded: true,
                     iconSize: 18,
+                      mobileDrawer: true,
                     onNavigate: () => {
                       setIsMobileMenuOpen(false);
                     },
                   })}
+                  {renderMobileDrawerUtilities(false)}
                 </nav>
 
               </motion.div>
@@ -18889,6 +18955,8 @@ export function CoordinatorDashboard({
           </div>
         </div>
       )}
+
+      {mobileMarketplaceOverlay}
 
       {actionPopup && (
         <div className="fixed inset-0 z-[170] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
