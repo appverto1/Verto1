@@ -1,6 +1,7 @@
 import {GroupSessionDialog} from "./GroupSessionDialog";
 import {getAppointmentGroupId} from "../utils/groupSessionRules";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   LayoutDashboard,
   Users,
@@ -56,7 +57,8 @@ import {
 } from "lucide-react";
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
-import { SettingsMenu } from "./SettingsMenu";
+import { ProfessionalMobileDrawerHeader, SettingsMenu } from "./SettingsMenu";
+import { PartnerMarketplace } from "./PartnerMarketplace";
 import { TutorialOverlay } from "./Tutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
 import { BillingCommunicationPanel } from "./BillingCommunicationPanel";
@@ -68,7 +70,6 @@ import { SchoolsManagement } from "./SchoolsManagement";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
-import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { PatientFinanceWorkspace } from "./PatientFinanceWorkspace";
@@ -1038,6 +1039,19 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileMarketplaceOpen, setIsMobileMarketplaceOpen] = useState(false);
+  const [isMobileHeader, setIsMobileHeader] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 1023px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(max-width: 1023px)");
+    const sync = () => setIsMobileHeader(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
   const [isSidebarExpanded, setIsSidebarExpanded] = useState(false);
   const [runGuidedTutorial, setRunGuidedTutorial] = useState(false);
   const [guidedTutorialStep, setGuidedTutorialStep] = useState(0);
@@ -10756,16 +10770,6 @@ export function CoordinatorDashboard({
         )}
       </div>
 
-      {!isTherapist && (
-        <section className="space-y-4 sm:space-y-6">
-          <StackedDomainStatusChart
-            protocols={protocols}
-            history={patientsHistory}
-            patients={allPatients}
-          />
-        </section>
-      )}
-
       {hasAppointmentsCommunicationModule && (
         <>
           {/* Agenda Global Section */}
@@ -11363,10 +11367,12 @@ export function CoordinatorDashboard({
     expanded,
     iconSize,
     onNavigate,
+    mobileDrawer = false,
   }: {
     expanded: boolean;
     iconSize: number;
     onNavigate?: () => void;
+    mobileDrawer?: boolean;
   }) => {
     const renderNode = (item: NavigationNode, depth = 0): React.ReactNode => {
       const hasChildren = Boolean(item.children?.length);
@@ -11426,7 +11432,9 @@ export function CoordinatorDashboard({
 
     return (
       <div className="space-y-5">
-        {visibleNavigationGroups.map((group, groupIndex) => (
+        {visibleNavigationGroups
+          .filter((group) => !mobileDrawer || !group.some((item) => item.id === "settings-root"))
+          .map((group, groupIndex) => (
           <div key={`navigation-group-${groupIndex}`} className={`${groupIndex > 0 ? "border-t border-slate-100 pt-4" : ""} space-y-2`}>
             {group.map((item) => renderNode(item))}
           </div>
