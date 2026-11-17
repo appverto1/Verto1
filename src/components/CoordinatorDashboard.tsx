@@ -11819,29 +11819,31 @@ export function CoordinatorDashboard({
                   animate={{ x: 0 }}
                   exit={{ x: "100%" }}
                   transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                  className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
+                  className="fixed top-0 right-0 bottom-0 w-[calc(100vw-12px)] max-w-[360px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-4"
                 >
-                  <div className="flex items-center justify-between mb-8">
-                    <div className="flex items-center gap-3">
-                      <LogoVerto size={32} showText={true} />
-                    </div>
-                    <button
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className="p-2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X size={24} />
-                    </button>
-                  </div>
+                  <ProfessionalMobileDrawerHeader
+                    user={user}
+                    onClose={() => setIsMobileMenuOpen(false)}
+                  />
 
-                  <nav className="flex-1 overflow-y-auto no-scrollbar">
+                  <button
+                    type="button"
+                    onClick={() => { setIsMobileMenuOpen(false); goBackFromPatientRecord(); }}
+                    className="mb-3 rounded-xl bg-slate-50 px-3 py-2 text-left text-sm font-medium text-slate-700 hover:bg-violet-50"
+                  >
+                    Voltar ao painel
+                  </button>
+                  <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">
                     {renderNavigationGroups({
                       expanded: true,
                       iconSize: 18,
+                      mobileDrawer: true,
                       onNavigate: () => {
                         setView("home");
                         setIsMobileMenuOpen(false);
                       },
                     })}
+                    {renderMobileDrawerUtilities(true)}
                   </nav>
 
                 </motion.div>
@@ -12147,28 +12149,23 @@ export function CoordinatorDashboard({
                 animate={{ x: 0 }}
                 exit={{ x: "100%" }}
                 transition={{ type: "spring", damping: 25, stiffness: 200 }}
-                className="fixed top-0 right-0 bottom-0 w-[280px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-6"
+                className="fixed top-0 right-0 bottom-0 w-[calc(100vw-12px)] max-w-[360px] bg-white z-[101] lg:hidden shadow-2xl flex flex-col p-4"
               >
-                <div className="flex items-center justify-between mb-8">
-                  <div className="flex items-center gap-3">
-                    <LogoVerto size={32} showText={true} />
-                  </div>
-                  <button
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className="p-2 text-slate-400 hover:text-slate-600"
-                  >
-                    <X size={24} />
-                  </button>
-                </div>
+                <ProfessionalMobileDrawerHeader
+                  user={user}
+                  onClose={() => setIsMobileMenuOpen(false)}
+                />
 
-                <nav className="flex-1 overflow-y-auto no-scrollbar">
+                <nav className="min-h-0 flex-1 overflow-y-auto no-scrollbar overflow-x-hidden">
                   {renderNavigationGroups({
                     expanded: true,
                     iconSize: 18,
+                      mobileDrawer: true,
                     onNavigate: () => {
                       setIsMobileMenuOpen(false);
                     },
                   })}
+                  {renderMobileDrawerUtilities(false)}
                 </nav>
 
               </motion.div>
