@@ -11982,6 +11982,7 @@ export function CoordinatorDashboard({
             />
           </main>
         </div>
+        {mobileMarketplaceOverlay}
       </div>
     );
   }
@@ -18954,6 +18955,8 @@ export function CoordinatorDashboard({
           </div>
         </div>
       )}
+
+      {mobileMarketplaceOverlay}
 
       {actionPopup && (
         <div className="fixed inset-0 z-[170] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
