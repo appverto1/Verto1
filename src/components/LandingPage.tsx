@@ -896,7 +896,6 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
               <div className="absolute right-0 top-full z-50 mt-2 w-64 space-y-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                 <button type="button" onClick={() => openAudienceEntry('care-network')} className="block w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 hover:bg-violet-50">
                   Rede de Cuidado
-                  <span className="mt-0.5 block text-xs font-normal text-slate-500">Conteúdos clínicos compartilhados</span>
                 </button>
                 <a href="/parcerias" className="block rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 hover:bg-violet-50">
                   Programa de Parcerias
