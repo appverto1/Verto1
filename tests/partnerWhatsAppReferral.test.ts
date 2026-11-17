@@ -11,18 +11,19 @@ assert.equal(normalizeBrazilWhatsApp('https://attacker.invalid'),null);
 const referralLink='https://verto.test/interesse?ref=TESTE1234';
 const message=preparePartnerWhatsAppMessage(
   'Olá, {{clinica}}! Sou {{parceiro}}. {{link}}',
-  {partnerName:'Parceira Teste',clinicName:'Clínica Alfa',referralLink});
-assert.equal(message,'Olá, Clínica Alfa! Sou Parceira Teste. '+referralLink);
+  {partnerName:'Parceira Teste',clinicName:'Clínica Alfa'});
+assert.equal(message,'Olá, Clínica Alfa! Sou Parceira Teste.');
+assert.ok(!message.includes(referralLink),'WhatsApp copy must never include the referral link');
 assert.equal(preparePartnerWhatsAppMessage('Conheça a Verto',
-  {partnerName:'Teste',clinicName:'Alfa',referralLink}),'Conheça a Verto\n\n'+referralLink);
+  {partnerName:'Teste',clinicName:'Alfa'}),'Conheça a Verto');
 assert.match(PARTNER_WHATSAPP_COPY,/mais liberdade e tranquilidade no dia a dia clínico/);
 assert.match(PARTNER_WHATSAPP_COPY,/se você não tiver interesse, me avisa/);
 const defaultCopyMessage=preparePartnerWhatsAppMessage(PARTNER_WHATSAPP_COPY,{
-  partnerName:'Parceira Teste',clinicName:'Clínica Alfa',referralLink
+  partnerName:'Parceira Teste',clinicName:'Clínica Alfa'
 });
 assert.ok(defaultCopyMessage.startsWith('Oi, tudo bem?'),'copy supplied by owner is prefilled');
-assert.equal(defaultCopyMessage.split(referralLink).length,2,'unique referral URL is included exactly once');
-assert.ok(defaultCopyMessage.endsWith(referralLink),'referral link is appended after the supplied copy');
+assert.equal(defaultCopyMessage,PARTNER_WHATSAPP_COPY,'approved message is unchanged and contains no appended URL');
+assert.ok(!defaultCopyMessage.includes(referralLink),'referral URL is shared separately');
 const target=buildPartnerWhatsAppUrl('(11) 99999-9999',message)!;
 assert.equal(new URL(target).hostname,'wa.me');
 assert.equal(new URL(target).pathname,'/5511999999999');
@@ -32,6 +33,10 @@ const dom=new JSDOM('<!doctype html><html><body><div id="test"></div></body></ht
 Object.assign(globalThis,{window:dom.window,document:dom.window.document,
   HTMLElement:dom.window.HTMLElement,IS_REACT_ACT_ENVIRONMENT:true});
 Object.defineProperty(globalThis,'navigator',{value:dom.window.navigator,configurable:true});
+const copiedLinks:string[]=[];
+Object.defineProperty(dom.window.navigator,'clipboard',{
+  value:{writeText:async(value:string)=>{copiedLinks.push(value);}},configurable:true
+});
 const React=await import('react');
 const {act}=React;
 const {createRoot}=await import('react-dom/client');
@@ -66,6 +71,15 @@ try{
   assert.equal(document.querySelectorAll('a[href*="wa.me"]').length,0,
     'nothing is shared before explicit save');
   assert.match(document.body.textContent||'',/Cadastre aqui suas oportunidades/);
+  assert.match(document.body.textContent||'',/quando seu contato demonstrar interesse/);
+  assert.equal(document.querySelector<HTMLInputElement>('#partner-opportunity-referral-link')?.value,
+    referralLink,'referral link is available separately before saving any phone');
+  const copyButton=Array.from(document.querySelectorAll('button'))
+    .find(button=>button.textContent?.includes('Copiar'));
+  assert.ok(copyButton,'separate Copy link button exists');
+  await act(async()=>copyButton.click());
+  assert.deepEqual(copiedLinks,[referralLink],'Copy transfers exactly the partner link');
+  assert.equal(requests.length,1,'copying a link never persists or claims a lead');
   await act(async()=>{
     update('#partner-whatsapp-clinic','Clínica Alfa');
     update('#partner-whatsapp-phone','(11) 99999-9999');
@@ -94,6 +108,8 @@ try{
   assert.ok(destinations.includes('/5521988887777'));
   assert.ok(links.every(link=>new URL(link.href).searchParams.get('text')===message),
     'both numbers receive the same prefilled message without auto-send');
+  assert.ok(links.every(link=>!new URL(link.href).searchParams.get('text')?.includes(referralLink)),
+    'no WhatsApp message may contain the partner referral URL');
   assert.ok(links.every(link=>link.getAttribute('target')==='_blank'));
   assert.ok(links.every(link=>link.textContent?.includes('Enviar mensagem')));
 
@@ -112,9 +128,9 @@ try{
   const defaultShare=document.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
   assert.ok(defaultShare,'supplied default copy enables WhatsApp for a saved contact');
   assert.equal(new URL(defaultShare.href).searchParams.get('text'),defaultCopyMessage,
-    'approved default copy and referral link are prefilled without sending');
+    'approved default copy is prefilled without a link or automatic sending');
 
-  console.log('partnerWhatsappReferral: batch save, per-number WhatsApp, no auto-send, attribution isolation and default copy passed');
+  console.log('partnerWhatsappReferral: batch save, WhatsApp without link, separate Copy, no auto-send and attribution isolation passed');
 }finally{
   await act(async()=>root.unmount());
   dom.window.close();
