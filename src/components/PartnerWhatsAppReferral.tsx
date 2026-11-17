@@ -1,5 +1,5 @@
 import React, {useCallback,useEffect,useRef,useState} from 'react';
-import {Check, Loader2, MessageCircle, Plus, Trash2} from 'lucide-react';
+import {Check, Copy, Loader2, MessageCircle, Plus, Trash2} from 'lucide-react';
 import {buildPartnerWhatsAppUrl,normalizeBrazilWhatsApp,preparePartnerWhatsAppMessage} from '../utils/partnerWhatsApp';
 import {PARTNER_WHATSAPP_COPY} from '../constants/partnerWhatsAppCopy';
 
@@ -14,6 +14,7 @@ export function PartnerWhatsAppReferral({mode,referralLink,partnerName,messageTe
   const [contacts,setContacts]=useState<Contact[]>([]);
   const [savedRows,setSavedRows]=useState<Record<number,Contact>>({});
   const [savedCount,setSavedCount]=useState(0);
+  const [linkCopied,setLinkCopied]=useState(false);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState('');
@@ -75,8 +76,13 @@ export function PartnerWhatsAppReferral({mode,referralLink,partnerName,messageTe
     }catch(err:any){setError(err?.message||'Não foi possível salvar as oportunidades.');}
     finally{setSaving(false);}
   };
+  const copyLink=async()=>{
+    if(!referralLink)return;
+    try{await navigator.clipboard.writeText(referralLink);setLinkCopied(true);}
+    catch{window.prompt('Copie seu link de indicação:',referralLink);}
+  };
   const messageFor=(contact:Contact)=>messageTemplate
-    ? preparePartnerWhatsAppMessage(messageTemplate,{partnerName,clinicName:contact.clinic_name,referralLink})
+    ? preparePartnerWhatsAppMessage(messageTemplate,{partnerName,clinicName:contact.clinic_name})
     : '';
   const linkFor=(contact:Contact)=>buildPartnerWhatsAppUrl(contact.phone_e164,messageFor(contact));
   const shareButton=(contact:Contact)=> {
@@ -144,6 +150,17 @@ export function PartnerWhatsAppReferral({mode,referralLink,partnerName,messageTe
         </span>}
       </div>
     </form>
+    <div className="mt-4 rounded-xl border border-violet-200 bg-white p-3 sm:p-4">
+      <p className="text-xs leading-5 text-slate-700">Depois de enviar a mensagem pelo WhatsApp, quando seu contato demonstrar interesse, envie este link para ele fazer o cadastro de interesse.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <input id="partner-opportunity-referral-link" aria-label="Seu link de indicação" readOnly value={referralLink}
+          className="min-w-[180px] flex-1 rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-xs text-slate-700" />
+        <button type="button" disabled={!referralLink} onClick={()=>{void copyLink();}}
+          className="inline-flex items-center justify-center gap-2 rounded-xl bg-violet-700 px-4 py-2.5 text-xs font-semibold text-white disabled:opacity-50">
+          <Copy size={16}/> {linkCopied?'Copiado!':'Copiar'}
+        </button>
+      </div>
+    </div>
     {error && <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p>}
     {!messageTemplate && <p className="mt-3 text-xs text-amber-800">O texto comercial está em definição. O botão do WhatsApp será liberado após a aprovação da mensagem.</p>}
     <p className="mt-3 text-xs text-slate-500">Salvar oportunidades não registra indicações nem gera comissões. A atribuição ocorre quando a clínica se cadastra pelo seu link exclusivo. Aborde apenas contatos comerciais com quem você tenha relação ou autorização.</p>
