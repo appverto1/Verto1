@@ -3,20 +3,37 @@ import { test } from 'node:test';
 import { registerPublicSalesLeadRoute } from '../services/publicSalesLeadRoutes';
 
 const leadId='11111111-1111-4111-8111-111111111111';
-function fixture(referralError: any = null) {
+function fixture(referralError: any = null, opts: {eligible?:boolean; validationError?:any} = {}) {
   const calls: Array<{name: string; args: any}>=[];
   let handler: (req:any,res:any)=>Promise<any>;
   registerPublicSalesLeadRoute({
     post: (_path:string, ...handlers:any[]) => { handler=handlers[handlers.length-1]; }
   },{
-    supabase:{rpc:async(name:string,args:any)=>{
-      calls.push({name,args});
-      if(name==='upsert_public_sales_lead')
-        return {data:{lead_id:leadId,event_created:true},error:null};
-      if(name==='verto_claim_partner_referral_v1')
-        return {data:!referralError,error:referralError};
-      throw new Error('UNEXPECTED_RPC');
-    }},
+    supabase:{
+      from(table:string){
+        assert.equal(table,'verto_partner_accounts');
+        const filters:Record<string,unknown>={};
+        const q:any={
+          select(columns:string){assert.equal(columns,'id');return q;},
+          or(expression:string){filters.or=expression;return q;},
+          eq(key:string,value:unknown){filters[key]=value;return q;},
+          limit(n:number){assert.equal(n,1);return q;},
+          async maybeSingle(){
+            calls.push({name:'validate_partner',args:filters});
+            return {data:opts.eligible===false?null:{id:'partner-1'},error:opts.validationError||null};
+          },
+        };
+        return q;
+      },
+      async rpc(name:string,args:any){
+        calls.push({name,args});
+        if(name==='upsert_public_sales_lead')
+          return {data:{lead_id:leadId,event_created:true},error:null};
+        if(name==='verto_claim_partner_referral_v1')
+          return {data:!referralError,error:referralError};
+        throw new Error('UNEXPECTED_RPC');
+      },
+    },
     publicSalesLeadIpLimiter:(_req:any,_res:any,next:any)=>next(),
     publicSalesLeadIdentityLimiter:(_req:any,_res:any,next:any)=>next(),
     sanitizeString:(v:unknown,max:number)=>String(v??'').trim().slice(0,max),
@@ -66,10 +83,13 @@ test('approved coupon is claimed only after canonical lead save, with same idemp
   assert.equal(result.status,201);
   assert.equal(result.body.referralRecorded,true);
   assert.deepEqual(f.calls.map(call=>call.name),
-    ['upsert_public_sales_lead','verto_claim_partner_referral_v1']);
-  assert.equal(f.calls[1].args.p_lead_id,leadId);
-  assert.equal(f.calls[1].args.p_referral_code,'FRATELLI10');
-  assert.equal(f.calls[1].args.p_idempotency_key,f.calls[0].args.p_idempotency_key);
+    ['validate_partner','upsert_public_sales_lead','verto_claim_partner_referral_v1']);
+  assert.equal(f.calls[0].args.or,'referral_code.eq.FRATELLI10,referral_alias.eq.FRATELLI10');
+  assert.equal(f.calls[0].args.status,'approved');
+  assert.equal(f.calls[0].args.compliance_approved,true);
+  assert.equal(f.calls[2].args.p_lead_id,leadId);
+  assert.equal(f.calls[2].args.p_referral_code,'FRATELLI10');
+  assert.equal(f.calls[2].args.p_idempotency_key,f.calls[1].args.p_idempotency_key);
 });
 
 test('invalid coupon rejects before any database write',async()=>{
@@ -79,12 +99,29 @@ test('invalid coupon rejects before any database write',async()=>{
   assert.equal(f.calls.length,0);
 });
 
-test('unavailable referral RPC never undoes a saved lead or reports referral confirmed',async()=>{
+test('unknown or inactive referral codes never create a commercial lead',async()=>{
+  const f=fixture(null,{eligible:false});
+  const result=await f.invoke('FRATELLI10');
+  assert.equal(result.status,400);
+  assert.match(result.body.error,/inválido ou não está ativo/);
+  assert.deepEqual(f.calls.map(call=>call.name),['validate_partner']);
+});
+
+test('referral validation outage rejects before any lead write',async()=>{
+  const f=fixture(null,{validationError:{code:'PGRST202'}});
+  const result=await f.invoke('FRATELLI10');
+  assert.equal(result.status,503);
+  assert.equal(result.body.success,false);
+  assert.deepEqual(f.calls.map(call=>call.name),['validate_partner']);
+});
+
+test('unavailable attribution RPC never undoes a saved lead or reports referral confirmed',async()=>{
   const f=fixture({code:'PGRST202'});
   const result=await f.invoke('FRATELLI10');
   assert.equal(result.status,201);
   assert.equal(result.body.success,true);
   assert.equal(result.body.referralRecorded,false);
   assert.equal(typeof result.body.referralWarning,'string');
-  assert.equal(f.calls[0].name,'upsert_public_sales_lead');
+  assert.deepEqual(f.calls.map(call=>call.name),
+    ['validate_partner','upsert_public_sales_lead','verto_claim_partner_referral_v1']);
 });
