@@ -69,7 +69,6 @@ import { SchoolsManagement } from "./SchoolsManagement";
 import { AnamnesisModal } from "./Anamnesis";
 import { RoomReservation } from "./RoomReservation";
 import { ProtocolManagementSystem } from "./Protocols";
-import { StackedDomainStatusChart } from "./StackedDomainStatusChart";
 import { RoleCapabilityMatrix } from "./RoleCapabilityMatrix";
 import { ClinicalAgendaBoard } from "./Calendar";
 import { APPOINTMENT_CANCELLATION_REASONS, buildAppointmentCancellationNote } from "../utils/appointmentCancellationReasons";
@@ -10818,16 +10817,6 @@ export function CoordinatorDashboard({
           </button>
         )}
       </div>
-
-      {!isTherapist && (
-        <section className="space-y-4 sm:space-y-6">
-          <StackedDomainStatusChart
-            protocols={protocols}
-            history={patientsHistory}
-            patients={allPatients}
-          />
-        </section>
-      )}
 
       {hasAppointmentsCommunicationModule && (
         <>
