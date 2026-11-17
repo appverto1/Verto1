@@ -29,6 +29,8 @@ interface SettingsMenuProps {
   onOpenInvitations?: () => void;
   onViewProfile?: () => void;
   onViewClinicSettings?: () => void;
+  onViewRooms?: () => void;
+  onViewLogs?: () => void;
   canManageClinicSettings?: boolean;
   onViewBilling?: () => void;
   onOpenOnboarding?: () => void;
@@ -135,14 +137,12 @@ function ProfessionalAccountIdentity({ user }: { user: any }) {
 
 interface ProfessionalMobileDrawerHeaderProps {
   user: any;
-  themeMode: 'light' | 'dark';
-  onToggleTheme: () => void;
   onClose: () => void;
 }
 
 /** Shared top section for every clinic professional's mobile hamburger menu. */
 export function ProfessionalMobileDrawerHeader({
-  user, themeMode, onToggleTheme, onClose
+  user, onClose
 }: ProfessionalMobileDrawerHeaderProps) {
   return (
     <div className="mb-4 shrink-0 border-b border-slate-100 pb-3" data-mobile-professional-header>
@@ -157,15 +157,6 @@ export function ProfessionalMobileDrawerHeader({
           <X size={20} />
         </button>
       </div>
-      <button
-        type="button"
-        onClick={onToggleTheme}
-        aria-label={themeMode === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'}
-        className="mt-3 flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
-      >
-        {themeMode === 'light' ? <Moon size={18} /> : <Sun size={18} />}
-        <span>{themeMode === 'light' ? 'Tema escuro' : 'Tema claro'}</span>
-      </button>
     </div>
   );
 }
@@ -177,6 +168,8 @@ export function SettingsMenu({
   onOpenInvitations, 
   onViewProfile, 
   onViewClinicSettings,
+  onViewRooms,
+  onViewLogs,
   canManageClinicSettings = false,
   onViewBilling,
   onOpenOnboarding,
@@ -265,21 +258,8 @@ export function SettingsMenu({
                 <ProfessionalAccountIdentity user={user} />
               </div>
             )}
-            {inline && onToggleTheme && (
-              <div className="px-2 pb-3">
-                <button
-                  type="button"
-                  onClick={onToggleTheme}
-                  className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
-                  aria-label={themeMode === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'}
-                >
-                  {themeMode === 'light' ? <Moon size={18} className="text-slate-400" /> : <Sun size={18} className="text-slate-400" />}
-                  {themeMode === 'light' ? 'Tema escuro' : 'Tema claro'}
-                </button>
-              </div>
-            )}
 
-            <div className="p-2">
+            <div className={inline ? "flex flex-col p-2" : "p-2"}>
               <button
                 ref={firstActionRef}
                 type="button"
@@ -289,11 +269,11 @@ export function SettingsMenu({
                   onAction?.();
                   onViewProfile?.();
                 }}
-                className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[90]' : ''}`}
               >
                 <div className="flex items-center gap-3">
                   <User size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
-                  <span className="text-sm font-medium">Meu perfil profissional</span>
+                  <span className="text-sm font-medium">{inline ? "Configurações do profissional" : "Meu perfil profissional"}</span>
                 </div>
                 <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
               </button>
@@ -326,7 +306,7 @@ export function SettingsMenu({
                     onAction?.();
                     onViewClinicSettings();
                   }}
-                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                  className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[91]' : ''}`}
                 >
                   <div className="flex items-center gap-3">
                     <Settings size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
@@ -379,7 +359,7 @@ export function SettingsMenu({
                     onAction?.();
                     onViewTeam?.();
                   }}
-                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                  className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[92]' : ''}`}
                 >
                   <div className="flex items-center gap-3">
                     <Users size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
@@ -411,7 +391,7 @@ export function SettingsMenu({
                     onAction?.();
                     onViewBilling?.();
                   }}
-                  className="w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group"
+                  className={`w-full flex items-center justify-between p-3 text-slate-600 hover:bg-slate-50 rounded-xl transition-all group ${inline ? 'order-[93]' : ''}`}
                 >
                   <div className="flex items-center gap-3">
                     <CreditCard size={18} className="text-slate-400 group-hover:text-[#7a32fc]" />
@@ -439,7 +419,6 @@ export function SettingsMenu({
                 </div>
                 <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
               </button>
-            </div>
 
             {inline && (
               <div className="px-2 pb-2">
@@ -454,6 +433,37 @@ export function SettingsMenu({
                 </button>
               </div>
             )}
+            {inline && onToggleTheme && (
+              <div className="px-2 pb-3">
+                <button
+                  type="button"
+                  onClick={onToggleTheme}
+                  className="flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                  aria-label={themeMode === 'light' ? 'Ativar tema escuro' : 'Ativar tema claro'}
+                >
+                  {themeMode === 'light' ? <Moon size={18} className="text-slate-400" /> : <Sun size={18} className="text-slate-400" />}
+                  {themeMode === 'light' ? 'Tema escuro' : 'Tema claro'}
+                </button>
+              </div>
+            )}
+              {inline && (
+                <div className="order-[89] mt-4 border-t border-slate-200 px-3 pt-4" data-mobile-account-settings>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">Configurações</h3>
+                </div>
+              )}
+              {inline && onViewRooms && (
+                <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewRooms(); }}
+                  className="order-[94] flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
+                  <User size={18} className="text-slate-400" /> Salas
+                </button>
+              )}
+              {inline && onViewLogs && (
+                <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewLogs(); }}
+                  className="order-[95] flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">
+                  <BookOpenCheck size={18} className="text-slate-400" /> Log de atividades
+                </button>
+              )}
+            </div>
 
             <div className="p-2 border-t border-slate-50 bg-slate-50/50">
               {logoutError && (
