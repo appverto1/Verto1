@@ -132,20 +132,23 @@ assert.ok(settings.includes('text-[13px] font-medium" : "text-sm font-medium"}>C
 assert.ok(settings.includes('Central de ajuda e tutoriais'),
   'help stays available and legible');
 
-// Opening partners from the mobile drawer must not own the popup lifecycle:
-// closing the hamburger unmounts SettingsMenu, so the parent dashboard keeps
-// the modal alive in both the workspace and patient-record render branches.
-assert.match(source, /const \\[isMobileMarketplaceOpen, setIsMobileMarketplaceOpen\\] = useState\\(false\\)/);
-assert.match(source, /onOpenMarketplace=\\{\\(\\) => setIsMobileMarketplaceOpen\\(true\\)\\}/);
-assert.match(source, /const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"/);
-assert.match(source, /createPortal\\(\\s*<PartnerMarketplace[\\s\\S]*?document\\.body/);
+// The popup must be owned by the dashboard, not the drawer's SettingsMenu:
+assert.ok(source.includes('const [isMobileMarketplaceOpen, setIsMobileMarketplaceOpen] = useState(false);'));
+assert.ok(source.includes('onOpenMarketplace={() => setIsMobileMarketplaceOpen(true)}'));
+assert.ok(source.includes('const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"'));
+assert.ok(source.includes('createPortal(\n        <PartnerMarketplace'), 'popup is rendered in a viewport portal');
+assert.ok(source.includes('document.body,'), 'popup must not be clipped by drawer scroll');
 assert.equal(source.split('{mobileMarketplaceOverlay}').length - 1, 2,
-  'partners popup must outlive both versions of the mobile drawer');
-assert.match(source, /\\{mobileMarketplaceOverlay\\}\\s*<\\/div>\\s*\\);\\s*\\}\\s*return \\(/,
-  'patient-record branch owns the modal separately from its hamburger');
-assert.match(source, /\\{mobileMarketplaceOverlay\\}\\s*\\{actionPopup &&/,
-  'workspace branch owns the modal separately from its hamburger');
-assert.match(settings, /onAction\\?\\.\\(\\);\\s*if \\(onOpenMarketplace\\) onOpenMarketplace\\(\\);\\s*else setMarketplaceOpen\\(true\\);/,
-  'desktop fallback stays intact while mobile uses the dashboard callback');
+  'the popup lives outside both mobile drawers');
+const patientBranchStart = source.indexOf('if (view === "patient" && selectedPatientId)');
+const workspaceBranchStart = source.indexOf('\n  return (\n    <div className="h-screen overflow-hidden', patientBranchStart);
+const patientOverlayIndex = source.indexOf('{mobileMarketplaceOverlay}', patientBranchStart);
+const workspaceOverlayIndex = source.indexOf('{mobileMarketplaceOverlay}', workspaceBranchStart);
+assert.ok(patientOverlayIndex > source.indexOf('{renderMobileDrawerUtilities(true)}') &&
+  patientOverlayIndex < workspaceBranchStart, 'patient-record drawer can close while popup remains');
+assert.ok(workspaceOverlayIndex > source.indexOf('{renderMobileDrawerUtilities(false)}') &&
+  workspaceOverlayIndex > workspaceBranchStart, 'workspace drawer can close while popup remains');
+assert.ok(settings.includes('if (onOpenMarketplace) onOpenMarketplace();'), 'mobile uses the stable popup handler');
+assert.ok(settings.includes('else setMarketplaceOpen(true);'), 'desktop account menu keeps its own popup');
 
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');
