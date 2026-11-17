@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Bell, Eye, FileText, MessageCircle, X } from 'lucide-react';
 import { dataService } from '../services/dataService';
 
@@ -22,10 +23,11 @@ type ClinicalNotification = {
 
 type Props = {
   themeMode?: 'light' | 'dark' | string;
+  inMobileDrawer?: boolean;
   onOpenNotification: (notification: ClinicalNotification) => void;
 };
 
-export const ClinicalMentionNotifications = ({ themeMode = 'light', onOpenNotification }: Props) => {
+export const ClinicalMentionNotifications = ({ themeMode = 'light', inMobileDrawer = false, onOpenNotification }: Props) => {
   const [items, setItems] = useState<ClinicalNotification[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -76,25 +78,8 @@ export const ClinicalMentionNotifications = ({ themeMode = 'light', onOpenNotifi
     };
   };
 
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        onClick={() => { setOpen((value) => !value); if (!open) void load(); }}
-        className={`relative rounded-xl p-2.5 transition-all ${isDark ? 'text-slate-300 hover:bg-[#122544]' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
-        title="Notificações clínicas"
-        aria-label="Notificações clínicas"
-      >
-        <Bell size={18} />
-        {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-[#7a32fc] px-1 text-center text-[9px] font-bold leading-4 text-white">
-            {Math.min(unread, 9)}{unread > 9 ? '+' : ''}
-          </span>
-        )}
-      </button>
-
-      {open && (
-        <div className={`absolute right-0 top-12 z-[120] w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border shadow-2xl ${isDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
+  const notificationsPanel = (
+        <div className={`${inMobileDrawer ? 'fixed right-4 top-16 z-[150]' : 'absolute right-0 top-12 z-[120]'} w-[min(23rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border shadow-2xl ${isDark ? 'border-slate-700 bg-[#101b2e]' : 'border-slate-100 bg-white'}`}>
           <div className={`flex items-center justify-between border-b px-4 py-3 ${isDark ? 'border-slate-700' : 'border-slate-100'}`}>
             <div>
               <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-slate-900'}`}>Notificações</p>
@@ -129,7 +114,28 @@ export const ClinicalMentionNotifications = ({ themeMode = 'light', onOpenNotifi
             })}
           </div>
         </div>
-      )}
+  );
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => { setOpen((value) => !value); if (!open) void load(); }}
+        className={`relative rounded-xl p-2.5 transition-all ${isDark ? 'text-slate-300 hover:bg-[#122544]' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}`}
+        title="Notificações clínicas"
+        aria-label="Notificações clínicas"
+      >
+        <Bell size={18} />
+        {unread > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 min-w-4 rounded-full bg-[#7a32fc] px-1 text-center text-[9px] font-bold leading-4 text-white">
+            {Math.min(unread, 9)}{unread > 9 ? '+' : ''}
+          </span>
+        )}
+      </button>
+
+      {open && (inMobileDrawer && typeof document !== 'undefined'
+        ? createPortal(notificationsPanel, document.body)
+        : notificationsPanel)}
     </div>
   );
 };
