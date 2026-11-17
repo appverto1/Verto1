@@ -254,6 +254,9 @@ jobs:
           node --import tsx tests/partnershipSecurity.test.ts
           node tests/partnershipRouteMount.regression.test.mjs
           node --import tsx tests/partnerReferralCoupon.test.ts
+          node --import tsx tests/partnerWhatsappContactRoutes.test.ts
+          node --import tsx tests/partnerWhatsAppReferral.test.ts
+          node --import tsx tests/partnerPortalTabs.test.ts
           node tests/partnerReferralCrmReporting.regression.test.mjs
           node --import tsx tests/partnerMarketplaceSecurity.test.ts
           node --import tsx tests/partnerMarketplaceImageUpload.test.ts
