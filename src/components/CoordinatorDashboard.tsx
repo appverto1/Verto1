@@ -1,6 +1,7 @@
 import {GroupSessionDialog} from "./GroupSessionDialog";
 import {getAppointmentGroupId} from "../utils/groupSessionRules";
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   LayoutDashboard,
   Users,
@@ -57,6 +58,7 @@ import {
 import { TeamManagement } from "./TeamManagement";
 import { InvitationModal } from "./InvitationModal";
 import { ProfessionalMobileDrawerHeader, SettingsMenu } from "./SettingsMenu";
+import { PartnerMarketplace } from "./PartnerMarketplace";
 import { TutorialOverlay } from "./Tutorial";
 import { useClinicalGuidedTutorial } from "../hooks/useClinicalGuidedTutorial";
 import { ClinicalMentionNotifications } from "./ClinicalMentionNotifications";
@@ -1041,6 +1043,7 @@ export function CoordinatorDashboard({
   const [showInvitationModal, setShowInvitationModal] = useState(false);
   const [showBillingDetails, setShowBillingDetails] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobileMarketplaceOpen, setIsMobileMarketplaceOpen] = useState(false);
   // Keep billing notifications mounted in one place to avoid redundant reads.
   const [isMobileHeader, setIsMobileHeader] = useState(() =>
     typeof window !== "undefined" && typeof window.matchMedia === "function" &&
@@ -11599,6 +11602,7 @@ export function CoordinatorDashboard({
           themeMode={theme}
           onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
           onAction={() => setIsMobileMenuOpen(false)}
+          onOpenMarketplace={() => setIsMobileMarketplaceOpen(true)}
           user={user}
           onLogout={onLogout}
           onViewTeam={() => navigateFromDrawer("team")}
@@ -11615,6 +11619,19 @@ export function CoordinatorDashboard({
       </section>
     );
   };
+
+  // The drawer unmounts when its hamburger closes. Keep this popup in the
+  // dashboard, so opening partners does not destroy the popup a moment later.
+  const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"
+    ? createPortal(
+        <PartnerMarketplace
+          open={true}
+          clinicId={String(user?.activeWorkspaceId || user?.clinicId || "")}
+          onClose={() => setIsMobileMarketplaceOpen(false)}
+        />,
+        document.body,
+      )
+    : null;
 
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
@@ -11962,6 +11979,7 @@ export function CoordinatorDashboard({
             />
           </main>
         </div>
+        {mobileMarketplaceOverlay}
       </div>
     );
   }
@@ -18954,6 +18972,8 @@ export function CoordinatorDashboard({
           </div>
         </div>
       )}
+
+      {mobileMarketplaceOverlay}
 
       {actionPopup && (
         <div className="fixed inset-0 z-[170] bg-black/35 backdrop-blur-[1px] flex items-center justify-center p-4">
