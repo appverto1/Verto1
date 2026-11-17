@@ -132,4 +132,20 @@ assert.ok(settings.includes('text-[13px] font-medium" : "text-sm font-medium"}>C
 assert.ok(settings.includes('Central de ajuda e tutoriais'),
   'help stays available and legible');
 
+// Opening partners from the mobile drawer must not own the popup lifecycle:
+// closing the hamburger unmounts SettingsMenu, so the parent dashboard keeps
+// the modal alive in both the workspace and patient-record render branches.
+assert.match(source, /const \\[isMobileMarketplaceOpen, setIsMobileMarketplaceOpen\\] = useState\\(false\\)/);
+assert.match(source, /onOpenMarketplace=\\{\\(\\) => setIsMobileMarketplaceOpen\\(true\\)\\}/);
+assert.match(source, /const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"/);
+assert.match(source, /createPortal\\(\\s*<PartnerMarketplace[\\s\\S]*?document\\.body/);
+assert.equal(source.split('{mobileMarketplaceOverlay}').length - 1, 2,
+  'partners popup must outlive both versions of the mobile drawer');
+assert.match(source, /\\{mobileMarketplaceOverlay\\}\\s*<\\/div>\\s*\\);\\s*\\}\\s*return \\(/,
+  'patient-record branch owns the modal separately from its hamburger');
+assert.match(source, /\\{mobileMarketplaceOverlay\\}\\s*\\{actionPopup &&/,
+  'workspace branch owns the modal separately from its hamburger');
+assert.match(settings, /onAction\\?\\.\\(\\);\\s*if \\(onOpenMarketplace\\) onOpenMarketplace\\(\\);\\s*else setMarketplaceOpen\\(true\\);/,
+  'desktop fallback stays intact while mobile uses the dashboard callback');
+
 console.log('mobileClinicHeaderOnlyMenuBell: PASS');
