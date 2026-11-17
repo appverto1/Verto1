@@ -129,7 +129,7 @@ try{
     'Rascunho não salvo','switching tabs must not discard unsaved drafts');
   assert.equal(panel('partner-panel-marketplace').querySelector<HTMLSelectElement>('select')?.value,
     'Marketing','alternar abas não pode descartar categoria escolhida');
-  assert.equal(requests.length,2,'tab changes must not reload portal or marketplace data');
+  assert.equal(requests.length,3,'tab changes must not reload portal or marketplace data; contacts load once when referrals first opens');
   await act(async()=>{
     const key=new window.KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true});
     tab('Sua vitrine na Verto').dispatchEvent(key);
