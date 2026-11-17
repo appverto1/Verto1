@@ -93,6 +93,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
   const [acquisitionRefreshKey,setAcquisitionRefreshKey]=useState(0);
   const [acquisitionChannels,setAcquisitionChannels]=useState<Array<{id:string;name:string;is_active:boolean}>>([]);
   const [acquisitionByLead,setAcquisitionByLead]=useState<Record<string,string[]>>({});
+  const [referralsByLead,setReferralsByLead]=useState<Record<string,{partnerName:string;couponCode:string|null;partnerCouponCode:string|null}>>({});
   const [acquisitionDialog,setAcquisitionDialog]=useState<{leadId:string;channelIds:string[]}|null>(null);
   const [savingAcquisition,setSavingAcquisition]=useState(false);
   const [inlineChannelIds,setInlineChannelIds]=useState<string[]>([]);
@@ -322,6 +323,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
         const dedup = new Map<string,CommercialAttempt>();
         const loadedFollowups:Record<string,SalesFollowup>={};
         const acquired:Record<string,string[]>={};
+        const referred:Record<string,{partnerName:string;couponCode:string|null;partnerCouponCode:string|null}>={};
         for (const page of pages) {
           for (const item of page.board.placements || []) nextPlacements[item.lead_id] = item.column_id;
           for (const item of page.board.overrides || []) {
@@ -329,6 +331,13 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
           }
           for (const item of page.history.data || []) dedup.set(item.id,item);
           for (const followup of page.history.followups || []) loadedFollowups[followup.lead_id]=followup;
+          for(const item of page.board.referrals||[]){
+            if(item.leadId)referred[item.leadId]={
+              partnerName:String(item.partnerName||'Parceiro'),
+              couponCode:item.couponCode||null,
+              partnerCouponCode:item.partnerCouponCode||null,
+            };
+          }
           for(const link of page.acquisition.links||[]){
             const arr=acquired[link.lead_id]||[];
             arr.push(link.channel_id);acquired[link.lead_id]=arr;
@@ -343,6 +352,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
         }
         setAcquisitionChannels(pages[0]?.acquisition.channels||[]);
         setAcquisitionByLead(acquired);
+        setReferralsByLead(referred);
         setAttempts([...dedup.values()]);
         setHistoryReady(true);
         setFollowups(loadedFollowups);
@@ -1224,6 +1234,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
                   const newLead=historyReady&&total===0&&!['converted','lost','archived'].includes(lead.status);
                   const dueToday=callDueToday(lead);
+                  const partnerReferral=referralsByLead[lead.id];
                   return <article key={lead.id} draggable={!busyLead&&lead.status!=='converted'}
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
@@ -1254,6 +1265,15 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                         <GripVertical size={15} className="shrink-0 text-slate-300 group-hover:text-slate-500"/>
                       </div>
                       <p className="mt-1 truncate text-[11px] font-semibold text-slate-600">{lead.clinicName||'Clínica não informada'}</p>
+                      {partnerReferral&&<div className="mt-1.5 rounded-md border border-violet-200 bg-violet-50 px-2 py-1.5 text-[10px] text-violet-950">
+                        <span className="font-bold">Aquisição: Indicação</span>
+                        <span className="block truncate" title={partnerReferral.partnerName}>Parceiro: {partnerReferral.partnerName}</span>
+                        {partnerReferral.couponCode
+                          ? <span className="block truncate">Cupom informado: {partnerReferral.couponCode}</span>
+                          : partnerReferral.partnerCouponCode
+                            ? <span className="block truncate">Cupom atual do parceiro: {partnerReferral.partnerCouponCode}</span>
+                            : null}
+                      </div>}
                       <p className="mt-1 truncate text-[11px] text-slate-500">{lead.phone||'Telefone não informado'}</p>
                       <div className="mt-3 grid grid-cols-2 gap-1.5">
                         <div className="rounded bg-slate-50 p-1.5"><span className="block text-[9px] text-slate-500">Tentativas</span><b className="text-xs">{total} ligações</b></div>
@@ -1680,6 +1700,18 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                 onClick={()=>void deleteLead(selected)}
                 className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-2 text-xs font-bold text-red-700 disabled:opacity-40"><Trash2 size={14}/> {deletingLead?'Excluindo...':'Excluir oportunidade'}</button>
             </div>
+            {referralsByLead[selected.id]&&<section aria-label="Indicação do parceiro" className="rounded-xl border border-violet-200 bg-violet-50 p-4">
+              <h4 className="text-sm font-bold text-violet-900">Canal de aquisição: Indicação</h4>
+              <p className="mt-2 break-words text-sm text-slate-800">Parceiro: <strong>{referralsByLead[selected.id].partnerName}</strong></p>
+              {referralsByLead[selected.id].couponCode
+                ? <p className="mt-1 break-all text-sm text-slate-800">Cupom informado: <strong>{referralsByLead[selected.id].couponCode}</strong></p>
+                : referralsByLead[selected.id].partnerCouponCode
+                  ? <>
+                    <p className="mt-1 break-all text-sm text-slate-800">Cupom atual do parceiro: <strong>{referralsByLead[selected.id].partnerCouponCode}</strong></p>
+                    <p className="mt-1 text-xs text-slate-600">O código utilizado na inscrição anterior não ficou registrado; este é o cupom atual do parceiro.</p>
+                  </>
+                  : <p className="mt-1 text-xs text-slate-600">O cupom informado não foi registrado nesta indicação.</p>}
+            </section>}
             <div className="space-y-3 rounded-xl border border-violet-200 bg-violet-50/50 p-4">
               <div className="flex items-center justify-between gap-2">
                 <h4 className="text-xs font-black text-violet-900">Dados da oportunidade e observações</h4>
