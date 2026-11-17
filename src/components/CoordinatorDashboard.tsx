@@ -11584,6 +11584,60 @@ export function CoordinatorDashboard({
     </div>
   );
 
+  // Mobile clinical headers show only the hamburger; account tools remain
+  // reachable from the drawer and desktop navigation remains unchanged.
+  const renderMobileDrawerUtilities = (fromPatientRecord: boolean) => {
+    const navigateFromDrawer = (tab: DashboardTab) => {
+      setIsMobileMenuOpen(false);
+      navigateToTab(tab);
+      if (fromPatientRecord) setView("home");
+    };
+    return (
+      <section className="mt-6 border-t border-slate-200 pt-4" aria-label="Ferramentas e configurações" data-mobile-drawer-settings>
+        <h3 className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          Ferramentas e ajuda
+        </h3>
+        <div className="mb-2 flex min-h-11 items-center justify-between px-3 text-sm font-medium text-slate-600">
+          <span>Notificações clínicas</span>
+          <ClinicalMentionNotifications themeMode={theme} inMobileDrawer onOpenNotification={(notification) => { setIsMobileMenuOpen(false); openClinicalMentionNotification(notification); }} />
+        </div>
+        <SettingsMenu
+          inline
+          showAccountIdentity={false}
+          themeMode={theme}
+          onToggleTheme={() => setTheme((previous) => previous === "light" ? "dark" : "light")}
+          onAction={() => setIsMobileMenuOpen(false)}
+          onOpenMarketplace={() => setIsMobileMarketplaceOpen(true)}
+          user={user}
+          onLogout={onLogout}
+          onViewTeam={() => navigateFromDrawer("team")}
+          onOpenInvitations={() => { setIsMobileMenuOpen(false); setShowInvitationModal(true); }}
+          onViewProfile={() => navigateFromDrawer("professionalProfile")}
+          onViewRooms={canAccessTab("rooms") ? () => navigateFromDrawer("rooms") : undefined}
+          onViewLogs={canAccessTab("logs") ? () => navigateFromDrawer("logs") : undefined}
+          canManageClinicSettings={canManageClinicSettings}
+          onViewClinicSettings={() => navigateFromDrawer("settings")}
+          onViewBilling={() => navigateFromDrawer("billing")}
+          onOpenOnboarding={() => { setIsMobileMenuOpen(false); onOpenOnboarding?.(); }}
+          onOpenGuidedTutorial={() => { setIsMobileMenuOpen(false); startGuidedTutorial(); }}
+        />
+      </section>
+    );
+  };
+
+  // The drawer unmounts when its hamburger closes. Keep this popup in the
+  // dashboard, so opening partners does not destroy the popup a moment later.
+  const mobileMarketplaceOverlay = isMobileMarketplaceOpen && typeof document !== "undefined"
+    ? createPortal(
+        <PartnerMarketplace
+          open={true}
+          clinicId={String(user?.activeWorkspaceId || user?.clinicId || "")}
+          onClose={() => setIsMobileMarketplaceOpen(false)}
+        />,
+        document.body,
+      )
+    : null;
+
   if (view === "patient" && selectedPatientId) {
     const patient = allPatients.find(
       (p) => String(p.id) === String(selectedPatientId),
