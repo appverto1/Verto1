@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {JSDOM} from 'jsdom';
 import {buildPartnerWhatsAppUrl,normalizeBrazilWhatsApp,preparePartnerWhatsAppMessage} from '../src/utils/partnerWhatsApp';
+import {PARTNER_WHATSAPP_COPY} from '../src/constants/partnerWhatsAppCopy';
 
 assert.equal(normalizeBrazilWhatsApp('(11) 99999-9999'),'5511999999999');
 assert.equal(normalizeBrazilWhatsApp('5511999999999'),'5511999999999');
@@ -14,6 +15,14 @@ const message=preparePartnerWhatsAppMessage(
 assert.equal(message,'Olá, Clínica Alfa! Sou Parceira Teste. '+referralLink);
 assert.equal(preparePartnerWhatsAppMessage('Conheça a Verto',
   {partnerName:'Teste',clinicName:'Alfa',referralLink}),'Conheça a Verto\n\n'+referralLink);
+assert.match(PARTNER_WHATSAPP_COPY,/mais liberdade e tranquilidade no dia a dia clínico/);
+assert.match(PARTNER_WHATSAPP_COPY,/se você não tiver interesse, me avisa/);
+const defaultCopyMessage=preparePartnerWhatsAppMessage(PARTNER_WHATSAPP_COPY,{
+  partnerName:'Parceira Teste',clinicName:'Clínica Alfa',referralLink
+});
+assert.ok(defaultCopyMessage.startsWith('Oi, tudo bem?'),'copy supplied by owner is prefilled');
+assert.equal(defaultCopyMessage.split(referralLink).length,2,'unique referral URL is included exactly once');
+assert.ok(defaultCopyMessage.endsWith(referralLink),'referral link is appended after the supplied copy');
 const target=buildPartnerWhatsAppUrl('(11) 99999-9999',message)!;
 assert.equal(new URL(target).hostname,'wa.me');
 assert.equal(new URL(target).pathname,'/5511999999999');
@@ -78,6 +87,14 @@ try{
   assert.equal(document.querySelectorAll('a[href*="wa.me"]').length,0,
     'unapproved copy must never enable WhatsApp');
   assert.match(document.body.textContent||'',/Mensagem em definição/);
+  await act(async()=>root.render(React.createElement(PartnerWhatsAppReferral,{
+    mode:'external',referralLink,partnerName:'Parceira Teste'
+  })));
+  const defaultShare=document.querySelector<HTMLAnchorElement>('a[href*="wa.me"]');
+  assert.ok(defaultShare,'supplied default copy enables WhatsApp for a saved contact');
+  assert.equal(new URL(defaultShare.href).searchParams.get('text'),defaultCopyMessage,
+    'approved default copy and referral link are prefilled without sending');
+
   console.log('partnerWhatsappReferral: normalization, URL, save authority, attribution isolation, manual send and pending copy passed');
 }finally{
   await act(async()=>root.unmount());
