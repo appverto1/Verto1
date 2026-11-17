@@ -66,6 +66,8 @@ function ProfessionalAccountIdentity({ user }: { user: any }) {
       ? 'Coordenador'
     : normalizedRole === 'receptionist'
       ? 'Recepcionista/Assistente'
+      : normalizedRole === 'supervisor'
+        ? 'Supervisor de casos'
       : normalizedRole === 'owner' || normalizedRole === 'admin'
         ? 'Administrador'
         : String(
@@ -75,6 +77,9 @@ function ProfessionalAccountIdentity({ user }: { user: any }) {
             user?.professionalProfile?.professional_title ||
             user?.professionalProfile?.metadata?.professionalTitle ||
             user?.professionalProfile?.metadata?.professional_title ||
+            user?.specialty ||
+            user?.professionalProfile?.specialty ||
+            user?.specialties ||
             'Profissional de atendimento'
           ).trim();
   const organizationName = String(
