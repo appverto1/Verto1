@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useState} from 'react';
 import { PartnerMarketplacePublisher } from './PartnerMarketplacePublisher';
+import { PartnerWhatsAppReferral } from './PartnerWhatsAppReferral';
 import { LogoVerto } from './Common';
 import {ArrowLeft, Check, Copy, Gift, Loader2, Medal, MessageSquare, RefreshCw, Store, UsersRound} from 'lucide-react';
 
@@ -236,6 +237,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
         <span><strong className="text-slate-900">{paid}</strong> com pagamento registrado</span>
         <span><strong className="text-slate-900">{referrals.length-paid}</strong> sem pagamento registrado</span>
       </div>
+      {approved && activeTab==='referrals' && <PartnerWhatsAppReferral mode={mode} partnerName={account.display_name} referralLink={referralLink}/>} 
       {referrals.length===0 ? <p className="text-sm text-slate-500">Nenhuma indicação vinculada até o momento.</p>
       : <ul className="divide-y divide-slate-100">
         {referrals.map(item=><li key={item.referral_id} className="flex flex-wrap items-center justify-between gap-2 py-3">

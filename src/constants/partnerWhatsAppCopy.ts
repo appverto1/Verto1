@@ -1,0 +1,2 @@
+// Texto comercial enviado manualmente pelo parceiro, sem link de indicação.
+export const PARTNER_WHATSAPP_COPY = "Oi, tudo bem?\nEu acabei de fazer uma reunião com o Mateus que me mostrou um sistema de gestão para clínicas muito interessante que eu recomendo pra você.\nEu particularmente gostei muito, é bem completo e vai te dar mais liberdade e tranquilidade no dia a dia clínico, por isso te indiquei.\nPor favor, se você não tiver interesse, me avisa aqui pro Mateus nem te incomodar tá bom? Se achar interessante me avisa aqui também.";

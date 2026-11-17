@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { sendPartnerApprovalEmail } from './partnerApprovalEmail';
 import { registerPartnerMarketplaceRoutes } from './marketplaceRoutes';
+import { registerPartnerWhatsappContactRoutes } from './partnerWhatsappContactRoutes';
 import { rateLimit } from 'express-rate-limit';
 
 const PARTNER_ACCOUNT_FIELDS = 'id,user_id,display_name,partner_kind,referral_code,referral_alias,status,compliance_approved,created_at';
@@ -463,4 +464,5 @@ export function registerPartnershipRoutes(app:any, deps:Deps) {
     }catch{return fail(res);}
   });
   registerPartnerMarketplaceRoutes(app,deps);
+  registerPartnerWhatsappContactRoutes(app,deps);
 }
