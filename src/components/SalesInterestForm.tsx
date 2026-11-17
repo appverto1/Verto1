@@ -17,12 +17,14 @@ const createIdempotencyKey = () => {
 type SalesInterestFormProps = {
   initialName?: string;
   initialAcquisitionChannel?: string;
+  lockedPartnerCode?: string;
   onSubmitted?: (lead: { name: string }) => void;
 };
 
 export const SalesInterestForm = ({
   initialName = "",
   initialAcquisitionChannel = "organic",
+  lockedPartnerCode,
   onSubmitted,
 }: SalesInterestFormProps) => {
   const startedAtRef = useRef(Date.now());
@@ -37,9 +39,10 @@ export const SalesInterestForm = ({
   const [submitted, setSubmitted] = useState(false);
   const [referralWarning, setReferralWarning] = useState('');
   // Shareable codes are untrusted; the server validates eligibility and attribution.
-  const [partnerCode,setPartnerCode]=useState(() => typeof window !== 'undefined'
+  const [editablePartnerCode,setEditablePartnerCode]=useState(() => typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('ref') || ''
     : '');
+  const partnerCode=lockedPartnerCode ?? editablePartnerCode;
   const normalizedReferralCode=partnerCode.toUpperCase();
   // Historical VERTO-* links remain usable; new coupons are compact alphanumeric only.
   const referralFormatError=partnerCode && !(/^[A-Z0-9]{4,24}$/.test(normalizedReferralCode)
@@ -170,7 +173,7 @@ export const SalesInterestForm = ({
 
       <div>
         <label className={labelClass} htmlFor="sales-referral-coupon">
-          Quem te indicou? <span className="text-slate-400">(opcional)</span>
+          {lockedPartnerCode ? 'Código do parceiro' : 'Quem te indicou?'} {!lockedPartnerCode && <span className="text-slate-400">(opcional)</span>}
         </label>
         <input
           id="sales-referral-coupon"
@@ -178,11 +181,13 @@ export const SalesInterestForm = ({
           maxLength={64}
           autoComplete="off"
           value={partnerCode}
-          onChange={event=>setPartnerCode(event.target.value)}
+          readOnly={Boolean(lockedPartnerCode)}
+          onChange={lockedPartnerCode ? undefined : event=>setEditablePartnerCode(event.target.value)}
           placeholder="Cupom de indicação, ex.: FRATELLI10"
           aria-invalid={!!referralFormatError}
-          aria-describedby={referralFormatError?'sales-referral-coupon-error':undefined}
+          aria-describedby={referralFormatError?'sales-referral-coupon-error':lockedPartnerCode?'sales-referral-coupon-locked':undefined}
         />
+        {lockedPartnerCode && <p id="sales-referral-coupon-locked" className="mt-1.5 text-xs text-slate-500">Este código veio do convite e não pode ser alterado neste formulário.</p>}
         {referralFormatError && <p id="sales-referral-coupon-error" role="alert" className="mt-1.5 text-xs text-rose-600">{referralFormatError}</p>}
       </div>
 
