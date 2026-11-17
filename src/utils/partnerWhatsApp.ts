@@ -6,14 +6,12 @@ export const normalizeBrazilWhatsApp=(raw:string):string|null=>{
 };
 
 export const preparePartnerWhatsAppMessage=(template:string,fields:{
-  partnerName:string;clinicName:string;referralLink:string;
+  partnerName:string;clinicName:string;
 }):string=>{
-  if(!template.trim()||!/^https:\/\/[^/]+\/interesse\?ref=/.test(fields.referralLink))return '';
-  const includesLink=template.includes('{{link}}');
-  const body=template.trim().replaceAll('{{parceiro}}',fields.partnerName.trim())
+  if(!template.trim())return '';
+  return template.trim().replaceAll('{{parceiro}}',fields.partnerName.trim())
     .replaceAll('{{clinica}}',fields.clinicName.trim())
-    .replaceAll('{{link}}',fields.referralLink);
-  return includesLink?body:body+'\n\n'+fields.referralLink;
+    .replaceAll('{{link}}','').trim();
 };
 
 export const buildPartnerWhatsAppUrl=(phone:string,message:string):string|null=>{
