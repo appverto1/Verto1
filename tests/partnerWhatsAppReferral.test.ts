@@ -39,12 +39,14 @@ const {PartnerWhatsAppReferral}=await import('../src/components/PartnerWhatsAppR
 const requests:Array<{path:string,body:any}>=[];
 const savedContact={id:'11111111-1111-4111-8111-111111111111',
   clinic_name:'Clínica Alfa',phone_e164:'5511999999999',created_at:'2026-11-17T10:00:00Z'};
+const secondContact={id:'22222222-2222-4222-8222-222222222222',
+  clinic_name:'Clínica Alfa',phone_e164:'5521988887777',created_at:'2026-11-17T10:00:00Z'};
 globalThis.fetch=(async(path:RequestInfo|URL,init?:RequestInit)=>{
   const url=String(path);
   requests.push({path:url,body:init?.body?JSON.parse(String(init.body)):null});
   assert.equal(url,'/api/partnerships/portal/whatsapp-contacts');
   if(init?.method==='POST'){
-    return {ok:true,json:async()=>({success:true,contact:savedContact})} as Response;
+    return {ok:true,json:async()=>({success:true,contacts:[savedContact,secondContact]})} as Response;
   }
   assert.equal(init?.method,undefined);
   return {ok:true,json:async()=>({success:true,contacts:[]})} as Response;
@@ -63,20 +65,37 @@ try{
   assert.equal(requests.length,1,'one on-demand list read per mount');
   assert.equal(document.querySelectorAll('a[href*="wa.me"]').length,0,
     'nothing is shared before explicit save');
-  await act(async()=>{update('#partner-whatsapp-clinic','Clínica Alfa');
-    update('#partner-whatsapp-phone','(11) 99999-9999');});
+  assert.match(document.body.textContent||'',/Cadastre aqui suas oportunidades/);
+  await act(async()=>{
+    update('#partner-whatsapp-clinic','Clínica Alfa');
+    update('#partner-whatsapp-phone','(11) 99999-9999');
+  });
+  await act(async()=>{
+    const add=Array.from(document.querySelectorAll('button'))
+      .find(button=>button.textContent?.includes('Adicionar outro número'));
+    assert.ok(add,'partner can add another phone');
+    add.click();
+  });
+  await act(async()=>update('#partner-whatsapp-phone-1','(21) 98888-7777'));
+  assert.equal(document.querySelectorAll('a[href*="wa.me"]').length,0,
+    'buttons are disabled until Save confirms persistence');
   await act(async()=>{
     document.querySelector('form')!.dispatchEvent(new window.Event('submit',{bubbles:true,cancelable:true}));
   });
   assert.equal(requests.length,2,'contact is written only after Save');
-  assert.deepEqual(requests[1].body,{clinicName:'Clínica Alfa',phone:'(11) 99999-9999'},
-    'client must not submit partner ID, leads, commission or status');
-  assert.match(document.querySelector('[role="status"]')?.textContent||'',/Contato salvo/);
+  assert.deepEqual(requests[1].body,{
+    clinicName:'Clínica Alfa',phones:['(11) 99999-9999','(21) 98888-7777']
+  },'one batch request with only the clinic and its numbers; no partner IDs or commission fields');
+  assert.match(document.querySelector('[role="status"]')?.textContent||'',/2 contatos salvos/);
   const links=Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href*="wa.me"]'));
-  assert.ok(links.length>=1,'share is enabled only after saved response');
-  assert.equal(new URL(links[0].href).searchParams.get('text'),message,
-    'message is prefilled; there is no auto-send');
-  assert.equal(links[0].getAttribute('target'),'_blank');
+  assert.equal(links.length,4,'each saved number has a button in its row and in saved contacts');
+  const destinations=links.map(link=>new URL(link.href).pathname);
+  assert.ok(destinations.includes('/5511999999999'));
+  assert.ok(destinations.includes('/5521988887777'));
+  assert.ok(links.every(link=>new URL(link.href).searchParams.get('text')===message),
+    'both numbers receive the same prefilled message without auto-send');
+  assert.ok(links.every(link=>link.getAttribute('target')==='_blank'));
+  assert.ok(links.every(link=>link.textContent?.includes('Enviar mensagem')));
 
   await act(async()=>update('#partner-whatsapp-phone','(11) 98888-1111'));
   assert.equal(document.querySelector('[role="status"]'),null,'editing invalidates saved state');
@@ -95,7 +114,7 @@ try{
   assert.equal(new URL(defaultShare.href).searchParams.get('text'),defaultCopyMessage,
     'approved default copy and referral link are prefilled without sending');
 
-  console.log('partnerWhatsappReferral: normalization, URL, save authority, attribution isolation, manual send and pending copy passed');
+  console.log('partnerWhatsappReferral: batch save, per-number WhatsApp, no auto-send, attribution isolation and default copy passed');
 }finally{
   await act(async()=>root.unmount());
   dom.window.close();
