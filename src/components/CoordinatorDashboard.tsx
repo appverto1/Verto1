@@ -11718,7 +11718,7 @@ export function CoordinatorDashboard({
             <div className="flex min-w-0 items-center gap-2 sm:gap-4">
               <button
                 onClick={goBackFromPatientRecord}
-                className={`shrink-0 rounded-full p-2 transition-all ${
+                className={`hidden lg:inline-flex shrink-0 rounded-full p-2 transition-all ${
                   theme === "dark"
                     ? "bg-slate-800 text-slate-300 hover:text-violet-300"
                     : "bg-slate-100 text-slate-500 hover:bg-violet-50 hover:text-[#7a32fc]"
