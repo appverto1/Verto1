@@ -37,7 +37,6 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState('');
-  const [copied,setCopied]=useState(false);
   const [couponDraft,setCouponDraft]=useState('');
   const [couponSaving,setCouponSaving]=useState(false);
   const [couponCopied,setCouponCopied]=useState(false);
@@ -69,14 +68,6 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
     finally{setSaving(false);}
   };
   const approved=account?.status==='approved'&&account?.compliance_approved===true;
-  const referralLink=approved && typeof window!=='undefined'
-    ? new URL('/?ref='+encodeURIComponent(account.referral_alias||account.referral_code),window.location.origin).toString()
-    : '';
-  const copy=async()=>{
-    if(!referralLink)return;
-    try{await navigator.clipboard.writeText(referralLink);setCopied(true);}
-    catch{window.prompt('Copie seu link:',referralLink);}
-  };
   const couponFormatError=(couponDraft || couponAttempted) && !/^[A-Z0-9]{4,24}$/.test(couponDraft.toUpperCase())
     ? 'Use de 4 a 24 letras ou números juntos, sem espaços, hífens ou símbolos. Ex.: FRATELLI10.' : '';
   const saveCoupon=async()=>{
@@ -211,12 +202,7 @@ export function PartnershipPanel({onBack,mode='professional'}:{onBack:()=>void;m
             {couponFeedback && <p role="status" className="text-xs font-medium text-emerald-700">{couponFeedback}</p>}
             <p className="text-xs text-slate-500">O cliente pode informar este cupom no campo “Quem te indicou?” do formulário de interesse.</p>
           </div>
-          <label className="block text-xs font-medium text-slate-500" htmlFor="partner-share-url">Seu link de indicação (opcional)</label>
-          <div className="flex flex-wrap gap-2">
-            <input id="partner-share-url" readOnly value={referralLink} className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700" />
-            <button type="button" onClick={copy} className="inline-flex items-center gap-2 rounded-xl bg-violet-700 px-4 py-2 text-sm font-semibold text-white">{copied?<Check size={16}/>:<Copy size={16}/>} {copied?'Copiado':'Copiar'}</button>
-          </div>
-        </> : <p className="text-sm text-slate-500">O link de divulgação será disponibilizado somente após aprovação. Nenhuma comissão ou repasse está autorizado nesta etapa.</p>}
+        </> : <p className="text-sm text-slate-500">O código de indicação será disponibilizado somente após aprovação. Nenhuma comissão ou repasse está autorizado nesta etapa.</p>}
       </div>}
       {error && <p role="alert" className="mt-3 text-sm text-red-700">{error}</p>}
     </div>
