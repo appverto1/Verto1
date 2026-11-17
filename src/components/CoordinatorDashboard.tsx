@@ -11602,7 +11602,7 @@ export function CoordinatorDashboard({
         </h3>
         <div className="mb-2 flex min-h-11 items-center justify-between px-3 text-sm font-medium text-slate-600">
           <span>Notificações clínicas</span>
-          <ClinicalMentionNotifications themeMode={theme} inMobileDrawer onOpenNotification={openClinicalMentionNotification} />
+          <ClinicalMentionNotifications themeMode={theme} inMobileDrawer onOpenNotification={(notification) => { setIsMobileMenuOpen(false); openClinicalMentionNotification(notification); }} />
         </div>
         <SettingsMenu
           inline
