@@ -258,6 +258,7 @@ jobs:
           node --import tsx tests/partnerWhatsAppReferral.test.ts
           node --import tsx tests/partnerPortalTabs.test.ts
           node tests/partnerReferralCrmReporting.regression.test.mjs
+          node tests/partnerKanbanAttribution.regression.test.mjs
           node --import tsx tests/partnerMarketplaceSecurity.test.ts
           node --import tsx tests/partnerMarketplaceImageUpload.test.ts
           node --import tsx tests/partnerApprovalFlow.test.ts
@@ -270,6 +271,7 @@ jobs:
       - name: Notification and scheduling regression tests
         run: |
           node tests/mobileClinicHeaderOnlyMenuBell.regression.test.mjs
+          node tests/mainMobileClinicalMenuPromotion.regression.test.mjs
           node tests/retiredDomainStatusChart.regression.test.mjs
           node tests/p0PatientSharedChartPortalPriority.regression.test.mjs
           node tests/patientPortalMenuClipping.regression.test.mjs
