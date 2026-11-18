@@ -30,6 +30,7 @@ import { canActivateSpecialtyPlanForCase } from './services/therapeuticSpecialis
 import { groupCalendarMetadata, groupCalendarMatchesProfessional, groupCalendarProfessionalFilter } from './services/groupSessions/groupSessionCalendar';
 import {loadCanonicalGroupScheduleSlots, canonicalSharedGroupSlot} from './services/groupSessions/groupSessionScheduleConflicts';
 import { createPatientProfessionalLinksReadHandler, createPatientFilesReadHandler, createPatientNotesReadHandler } from './services/patientChartReadHandlers';
+import { createClinicalNotificationMarkReadHandler } from './services/clinicalNotificationMarkReadHandler';
 import { createPatientSelfHistoryReadHandler, createPatientSelfAssignedTasksReadHandler } from './services/patientPortalRecordReadHandlers';
 import { createTherapeuticPlanReadHandler, createTherapeuticTemplatesReadHandler } from './services/therapeuticPlanReadHandlers';
 import { createClinicalOutcomesDashboardHandler } from './services/clinicalOutcomesDashboardHandler';
@@ -42514,25 +42515,7 @@ async function startServer() {
     }
   });
 
-  app.patch('/api/clinical-notifications/:notificationId/read', checkAuth, async (req: any, res) => {
-    const actorId = sanitizeString(req.session?.user?.id, 120);
-    const activeClinicId = sanitizeString(currentClinicId(req.session?.user), 120);
-    const notificationId = sanitizeString(req.params?.notificationId, 120);
-    const source = sanitizeString(req.body?.source || req.query?.source, 40);
-    if (!isUuid(actorId) || !isUuid(notificationId)) return res.status(400).json({ success: false, error: 'Notificação inválida.' });
-    try {
-      const now = new Date().toISOString();
-      const table = source === 'clinical_inbox' ? 'clinical_inbox_notifications' : 'clinical_note_mentions';
-      let updateQuery = supabase.from(table).update({ read_at: now, updated_at: now }).eq('id', notificationId).eq('recipient_user_id', actorId);
-      if (source === 'clinical_inbox' && isUuid(activeClinicId)) updateQuery = updateQuery.eq('clinic_id', activeClinicId);
-      const { data, error } = await updateQuery.select('id,read_at').maybeSingle();
-      if (error) throw error;
-      if (!data?.id) return res.status(404).json({ success: false, error: 'Notificação não encontrada.' });
-      return res.json({ success: true, data: { id: data.id, readAt: data.read_at } });
-    } catch (error: any) {
-      return sendRouteDbError(res, '/api/clinical-notifications/:notificationId/read [PATCH]', error, { actorId, notificationId, requestId: requestIdForLogs(req) });
-    }
-  });
+  app.patch('/api/clinical-notifications/:notificationId/read', checkAuth, createClinicalNotificationMarkReadHandler(() => ({ sanitizeString, currentClinicId, isUuid, supabase, sendRouteDbError, requestIdForLogs })));
 
   // Notes
   app.get('/api/notes/:patientId', checkAuth, requireClinicCapabilityOrPatientPortal('clinical.history.view'), checkPatientAccess, createPatientNotesReadHandler(() => ({ sanitizeString, isUuid, parseBoundedListLimit, requestIdForLogs, fetchNotesWithRoleFilter, filterNotesForActor, crypto, currentClinicId, supabase, loadClinicalNoteMentionUserIdsByNote, sendRouteDbError })));
