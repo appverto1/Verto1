@@ -1643,6 +1643,23 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                   </p>
                 </div>
 
+                <p className="mb-4 text-[11px] leading-5 text-gray-600">
+                  Consulte nossa{' '}
+                  <a href="/legal/politica-privacidade-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+                    className="font-semibold text-violet-700 underline underline-offset-2">Política de Privacidade</a>
+                  {loginType === 'patient' ? (
+                    <> e os{' '}
+                      <a href="/legal/termos-pacientes-responsaveis-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+                        className="font-semibold text-violet-700 underline underline-offset-2">Termos do Portal do Paciente</a>
+                    </>
+                  ) : loginType === 'professional' || loginType === 'coordinator' ? (
+                    <> e os{' '}
+                      <a href="/legal/termos-profissionais-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+                        className="font-semibold text-violet-700 underline underline-offset-2">Termos dos Profissionais</a>
+                    </>
+                  ) : null}. Documentos disponíveis para consulta em homologação.
+                </p>
+
                 <form
                   onSubmit={
                     showPasswordRecovery
@@ -2208,7 +2225,9 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
             <ul className="space-y-4 text-sm font-semibold text-[#bdb8ae]">
               <li className="hover:text-white cursor-pointer">Central de Ajuda</li>
               <li className="hover:text-white cursor-pointer">Contato</li>
-              <li className="hover:text-white cursor-pointer">Termos de Uso</li>
+              <li><a className="hover:text-white hover:underline focus-visible:underline" href="/legal/politica-privacidade-verto-v1.1.html" target="_blank" rel="noopener noreferrer">Política de Privacidade</a></li>
+              <li><a className="hover:text-white hover:underline focus-visible:underline" href="/legal/termos-profissionais-verto-v1.1.html" target="_blank" rel="noopener noreferrer">Termos dos Profissionais</a></li>
+              <li><a className="hover:text-white hover:underline focus-visible:underline" href="/legal/termos-pacientes-responsaveis-verto-v1.1.html" target="_blank" rel="noopener noreferrer">Termos dos Pacientes e Responsáveis</a></li>
             </ul>
           </div>
         </div>
