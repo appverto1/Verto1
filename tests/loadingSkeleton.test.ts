@@ -15,7 +15,7 @@ const scenarios = [
   { variant: 'finance', file: 'PatientFinanceWorkspace.tsx', blocks: 18 },
   { variant: 'schools', file: 'SchoolsManagement.tsx', blocks: 18 },
   { variant: 'expenses', file: 'ClinicExpenseManager.tsx', blocks: 18 },
-  { variant: 'external-partner', file: 'ExternalPartnershipPortal.tsx', blocks: 8 },
+  { variant: 'external-partner', file: 'ExternalPartnershipPortal.tsx', blocks: 7 },
   { variant: 'meeting', file: 'SchoolMeetingWorkspace.tsx', blocks: 16 },
 ] as const;
 
