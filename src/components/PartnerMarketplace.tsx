@@ -53,7 +53,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
   const [contact,setContact]=useState<{name:string;email:string;phone?:string|null}|null>(null);
   const [tab,setTab]=useState<'discover'|'mine'>('discover');
   const [search,setSearch]=useState('');
-  const [loading,setLoading]=useState(false);
+  const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
