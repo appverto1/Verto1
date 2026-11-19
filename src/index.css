@@ -1,5 +1,12 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600&display=swap');
 @import "tailwindcss";
+
+@font-face {
+  font-family: "Outfit";
+  src: url("./assets/fonts/outfit-variable.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400 900;
+  font-display: swap;
+}
 
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;

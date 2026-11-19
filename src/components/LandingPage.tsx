@@ -1035,6 +1035,7 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                         width={story.width}
                         height={story.height}
                         loading={index === 0 ? 'eager' : 'lazy'}
+                        fetchPriority={index === 0 ? 'high' : 'auto'}
                         decoding="async"
                         className={`absolute inset-y-0 max-w-none select-none transition-opacity duration-700 ${
                           story.variant === 'agenda-pan' ? 'landing-hero-agenda-shot' : 'landing-hero-chart-shot'
