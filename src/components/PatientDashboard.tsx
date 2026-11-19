@@ -1,3 +1,4 @@
+import { createScopedSingleFlight } from '../utils/scopedSingleFlight';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { countCanonicalFamilyStars } from '../utils/familyDiaryStars';
@@ -179,6 +180,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [portalAnamnesisState, setPortalAnamnesisState] = useState({ loading: false, saving: false, message: '', error: '' });
   const [expandedAnamnesisSections, setExpandedAnamnesisSections] = useState<Record<string, boolean>>({});
   const portalAppointmentsRequestRef = useRef(0);
+  const portalAppointmentsSingleFlightRef = useRef(createScopedSingleFlight<any>());
   const portalAppointmentsLastLoadedAtRef = useRef(0);
   const portalRescheduleAvailabilityRequestRef = useRef(0);
   const portalRescheduleAvailabilityLastRequestedAtRef = useRef(0);
@@ -576,7 +578,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     return Array.from(byAppointment.values());
   };
 
-  const loadPortalAppointments = async (range = portalDefaultAppointmentsRange) => {
+  const loadPortalAppointments = async (range = portalDefaultAppointmentsRange, force = false) => {
     if (!portalPatientId) {
       console.warn('[PatientPortal] skipped appointment fetch: missing resolvedPatientId');
       setPortalAppointments([]);
@@ -592,8 +594,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     const isCalendarMonth=portalSection === 'appointments' &&
       getPortalAppointmentsRangeKey(range)===getPortalAppointmentsRangeKey(getPortalCalendarMonthRange(portalCalendarMonth));
     const month=isCalendarMonth?`${portalCalendarMonth.getFullYear()}-${String(portalCalendarMonth.getMonth()+1).padStart(2,'0')}`:undefined;
-    const result = await dataService.getPortalAppointments({ from: range.from, to: range.to,
-      limit: range.limit,month,includeMonthlySummary:isCalendarMonth });
+    // Identical concurrent reads reuse one promise, scoped to this mounted portal.
+    // Force refresh after domain events/explicit user actions bypasses stale in-flight work.
+    const readScopeKey = JSON.stringify([String(user?.id || ''), String(user?.clinicId || ''),
+      portalPatientId, rangeKey, month || '', isCalendarMonth]);
+    const result = await portalAppointmentsSingleFlightRef.current.run(readScopeKey,
+      () => dataService.getPortalAppointments({ from: range.from, to: range.to,
+        limit: range.limit,month,includeMonthlySummary:isCalendarMonth }), force);
     if (requestId !== portalAppointmentsRequestRef.current) return;
     portalAppointmentsLastLoadedAtRef.current = Date.now();
     if (result?.success) {
@@ -619,6 +626,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
 
   useEffect(() => {
     portalAppointmentsRequestRef.current += 1;
+    portalAppointmentsSingleFlightRef.current.clear();
     setPortalAppointments([]);
     setPortalMonthlySummary(null);
     setPortalAppointmentsLoaded(false);
@@ -649,7 +657,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
       const range = portalSection === 'appointments'
         ? getPortalCalendarMonthRange(portalCalendarMonth)
         : portalDefaultAppointmentsRange;
-      void loadPortalAppointments(range);
+      void loadPortalAppointments(range, force);
     };
     const refreshAppointmentsWhenVisible = () => refreshAppointments(false);
     const refreshAppointmentsAfterDomainEvent = () => refreshAppointments(true);
@@ -3586,7 +3594,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
           <h2 className="text-lg font-black text-slate-900">Minhas sessões</h2>
           <p className="mt-1 text-xs font-semibold text-slate-500">Toque em um dia marcado para abrir a sessão.</p>
         </div>
-        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth))} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]" aria-label="Atualizar sessões">
+        <button type="button" onClick={() => void loadPortalAppointments(getPortalCalendarMonthRange(portalCalendarMonth), true)} className="rounded-2xl border border-purple-100 px-3 py-2 text-xs font-bold text-[#7a32fc]" aria-label="Atualizar sessões">
           Atualizar
         </button>
       </div>
