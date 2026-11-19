@@ -27,7 +27,12 @@ export function HelpTutorialArticle({article,contextKey,completed,onSaved,onCont
     <p className="text-xs font-medium text-violet-600">Passo {index+1} de {article.tutorialSteps!.length}</p>
     <h3 className="mt-2 font-semibold">{current.label}</h3><p className="mt-2 text-sm leading-6 text-slate-700">{current.instruction}</p>
     {!imageError?<div className="relative mt-4 overflow-hidden rounded-xl border border-slate-200">
-      <img key={current.mediaId} src={`/api/help/tutorial-media/${encodeURIComponent(current.mediaId)}`} width={1363} height={936} alt={current.label} decoding="async" onError={()=>setImageError(true)} className="block h-auto w-full"/>
+      <img key={current.mediaId}
+        src={`/api/help/tutorial-media/${encodeURIComponent(current.mediaId)}?w=1363`}
+        srcSet={`/api/help/tutorial-media/${encodeURIComponent(current.mediaId)}?w=640 640w, /api/help/tutorial-media/${encodeURIComponent(current.mediaId)}?w=1363 1363w`}
+        sizes="(max-width: 640px) 100vw, (max-width: 1363px) 90vw, 1363px"
+        width={1363} height={936} alt={current.label} decoding="async"
+        onError={()=>setImageError(true)} className="block h-auto w-full"/>
       <span aria-hidden="true" className="pointer-events-none absolute rounded-[50%] border-[3px] border-red-600" style={{left:`${current.rect[0]/1363*100}%`,top:`${current.rect[1]/936*100}%`,width:`${current.rect[2]/1363*100}%`,height:`${current.rect[3]/936*100}%`}}/>
     </div>:<p role="status" className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">O print não pôde ser carregado. Você pode seguir pela instrução acima.</p>}
     <div className="mt-4 flex flex-wrap items-center gap-2">

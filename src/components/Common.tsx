@@ -23,12 +23,26 @@ export const LogoVerto = ({ size = 64, className = "", showText = false, preserv
     className={`flex shrink-0 items-center ${className}`}
     style={{ width: showText ? Math.round(size * 3.5) : size, height: size }}
   >
-    <img
-      src={showText ? (preserveProfessionalSidebarBrand ? VERTO_BRAND_ASSETS.professionalSidebarHorizontalLogo : VERTO_BRAND_ASSETS.horizontalLogo) : VERTO_BRAND_ASSETS.symbol}
-      alt="Verto"
-      className="h-full w-full object-contain"
-      draggable={false}
-    />
+    <picture className="block h-full w-full">
+      {!showText && (
+        <source type="image/webp"
+          srcSet="/branding/verto/verto-symbol-128.webp 128w, /branding/verto/verto-symbol-256.webp 256w"
+          sizes={`${size}px`} />
+      )}
+      {showText && preserveProfessionalSidebarBrand && (
+        <source type="image/webp"
+          srcSet="/branding/verto/verto-logo-horizontal-512.webp 512w, /branding/verto/verto-logo-horizontal-1024.webp 1024w"
+          sizes={`${Math.round(size * 3.5)}px`} />
+      )}
+      <img
+        src={showText ? (preserveProfessionalSidebarBrand ? VERTO_BRAND_ASSETS.professionalSidebarHorizontalLogo : VERTO_BRAND_ASSETS.horizontalLogo) : VERTO_BRAND_ASSETS.symbol}
+        alt="Verto"
+        width={showText ? Math.round(size * 3.5) : size}
+        height={size}
+        className="h-full w-full object-contain"
+        draggable={false}
+      />
+    </picture>
   </div>
 );
 

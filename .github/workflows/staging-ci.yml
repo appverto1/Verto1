@@ -55,6 +55,9 @@ jobs:
       - name: Loading skeleton visual-structure regression
         run: node --import tsx tests/loadingSkeleton.test.ts
 
+      - name: Optimized WebP assets, sizes, and PNG/JPEG fallback
+        run: node tests/imageWebpAssets.regression.test.mjs
+
       - name: IA-03 privileged RPC execute grants regression
         run: node tests/ia03PrivilegedDirectRpcAcl.regression.test.mjs
 
