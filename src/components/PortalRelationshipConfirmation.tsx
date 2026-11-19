@@ -151,6 +151,13 @@ export function PortalRelationshipConfirmation({ onLogin }: { onLogin?: (user: a
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-violet-600">Portal seguro</p>
+            <p className="mt-1 text-xs text-slate-500">
+              <a href="/legal/termos-pacientes-responsaveis-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+                className="font-medium text-violet-700 underline underline-offset-2">Termos do Paciente e Responsável</a>
+              {' · '}
+              <a href="/legal/politica-privacidade-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+                className="font-medium text-violet-700 underline underline-offset-2">Privacidade</a>
+            </p>
             <h1 className="text-2xl font-black">Confirmar novo vínculo</h1>
           </div>
         </div>
