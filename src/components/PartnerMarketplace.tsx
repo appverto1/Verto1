@@ -1,5 +1,6 @@
 import React, {useCallback,useEffect,useRef,useState} from 'react';
-import {ArrowLeft, CheckCircle2, Loader2, Search, Star, X} from 'lucide-react';
+import {ArrowLeft, CheckCircle2, Search, Star, X} from 'lucide-react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 
 type Service={
   partner_id:string;service_name:string;category:string;description:string;logo_url:string|null;
@@ -52,7 +53,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
   const [contact,setContact]=useState<{name:string;email:string;phone?:string|null}|null>(null);
   const [tab,setTab]=useState<'discover'|'mine'>('discover');
   const [search,setSearch]=useState('');
-  const [loading,setLoading]=useState(false);
+  const [loading,setLoading]=useState(true);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
@@ -201,7 +202,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       </div>
       {error && <p role="alert" className="mt-3 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
       {notice && <p role="status" className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">{notice}</p>}
-      {loading && <p className="mt-5 flex items-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" size={17}/> Carregando...</p>}
+
       {!clinicId && <p className="mt-4 text-sm text-slate-600">Selecione uma clínica ativa para encontrar parceiros.</p>}
       {tab==='discover' && !!clinicId && <>
         <label className="mt-5 flex max-w-md items-center gap-2 rounded-xl border border-slate-200 bg-white px-3">
@@ -212,6 +213,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
         </label>
         {!loading&&filtered.length===0 && <p className="mt-6 text-sm text-slate-500">Nenhum serviço publicado para sua busca.</p>}
         <div className="mt-4 grid gap-4 md:grid-cols-2">
+          {loading && services.length === 0 && <LoadingSkeleton variant="partner" label="Carregando serviços de parceiros" />}
           {filtered.map(s=>{
             const lead=linked(s.partner_id);
             return <article key={s.partner_id} className="rounded-2xl border border-slate-200 bg-white p-5">
@@ -247,6 +249,7 @@ export function PartnerMarketplace({open,clinicId,onClose}:{
       </>}
       {tab==='mine' && !!clinicId && <div className="mt-4 grid gap-4 md:grid-cols-2">
         {!loading&&mine.length===0 && <p className="text-sm text-slate-500 md:col-span-2">Nenhum interesse registrado. Encontre serviços em Explorar serviços.</p>}
+        {loading && mine.length === 0 && <LoadingSkeleton variant="partner" label="Carregando meus parceiros" />}
         {mine.map(lead=>{
           const service=services.find(s=>s.partner_id===lead.partner_id);
           return <article key={lead.id} className="rounded-2xl border border-slate-200 bg-white p-5">

@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import {
   CalendarClock,
   CheckCircle2,
@@ -421,7 +422,7 @@ export function SchoolMeetingWorkspace({
           <button type="button" onClick={onClose} className="rounded-xl border border-slate-200 p-2" aria-label="Fechar"><X size={19} /></button>
         </header>
 
-        {loading ? <div className="p-16 text-center"><Loader2 className="mx-auto animate-spin text-violet-600" /></div> : error ? (
+        {loading ? <LoadingSkeleton variant="meeting" label="Carregando reunião escolar" /> : error ? (
           <div className="m-5 rounded-2xl bg-rose-50 p-4 text-rose-700">{error}</div>
         ) : (
           <div className="p-5">

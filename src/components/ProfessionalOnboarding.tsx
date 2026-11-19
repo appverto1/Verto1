@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SecureImage } from './SecureMedia';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import { formatProfessionalRegistry } from '../utils/professionalRegistry';
 import { WEEKDAYS, roleLabel, buildProfessionalOnboardingSchedule } from '../utils/professionalOnboardingPresentation';
 import {
@@ -389,14 +390,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   };
 
   if (contextLoading) {
-    return (
-      <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-50 p-6">
-        <div className="rounded-3xl border border-slate-100 bg-white px-8 py-10 text-center shadow-sm">
-          <Loader2 className="mx-auto animate-spin text-[#7a32fc]" size={32} />
-          <p className="mt-4 text-sm text-slate-500">Carregando seu vínculo com a clínica...</p>
-        </div>
-      </div>
-    );
+    return <LoadingSkeleton variant="onboarding" label="Carregando configuração profissional" />;
   }
 
   if (contextError || !context?.clinic?.id) {

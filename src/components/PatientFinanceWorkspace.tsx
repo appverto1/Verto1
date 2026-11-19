@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import {
   AlertCircle,
   Banknote,
@@ -845,11 +846,7 @@ export function PatientFinanceWorkspace({
   };
 
   if (loading) {
-    return (
-      <div className="flex min-h-48 items-center justify-center rounded-3xl border border-slate-100 bg-white p-8 text-sm text-slate-500">
-        <Loader2 size={18} className="mr-2 animate-spin text-violet-600" /> Carregando Financeiro
-      </div>
-    );
+    return <LoadingSkeleton variant="finance" label="Carregando financeiro de pacientes" />;
   }
 
   if (loadError) {

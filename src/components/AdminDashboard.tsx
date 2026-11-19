@@ -40,6 +40,7 @@ import {
 } from 'recharts';
 import { SafeResponsiveContainer } from './SafeResponsiveContainer';
 import { LogoVerto } from './Common';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import { SecureImage } from './SecureMedia';
 import { getSupabase } from '../lib/supabase';
 
@@ -249,12 +250,7 @@ export const AdminDashboard = ({ onLogout }: any) => {
   const dreChartData = Array.isArray(dreData?.history) ? dreData.history : [];
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-[#F4F7FE]">
-        <LogoVerto size={38} showText={true} />
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7a32fc]" aria-label="Carregando" />
-      </div>
-    );
+    return <LoadingSkeleton variant="admin" label="Carregando painel administrativo" />;
   }
 
   return (

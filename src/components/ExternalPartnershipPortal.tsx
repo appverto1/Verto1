@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import { ArrowLeft, Loader2, LogOut, Mail, ShieldCheck } from 'lucide-react';
 import { LogoVerto } from './Common';
 import { GoogleIcon } from './GoogleIcon';
@@ -221,8 +222,8 @@ export function ExternalPartnershipPortal() {
     finally { setBusy(false); }
   };
 
-  if (loading) return <main className="flex min-h-screen items-center justify-center bg-slate-50">
-    <Loader2 className="animate-spin text-violet-700" size={28} aria-label="Carregando"/>
+  if (loading) return <main className="min-h-screen bg-slate-50 px-4 py-8">
+    <LoadingSkeleton variant="external-partner" label="Carregando portal do parceiro" />
   </main>;
 
   if (loggedIn) return <main className="min-h-screen bg-slate-50 px-4 py-7">
