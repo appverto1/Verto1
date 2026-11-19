@@ -55,6 +55,9 @@ jobs:
       - name: External Google Calendar timeout and no-duplicate POST regression
         run: node --import tsx tests/externalRequestTimeout.test.ts
 
+      - name: First-paint Clarity, hero, and local WOFF2 regressions
+        run: node --import tsx tests/firstPaintAndFonts.test.ts
+
       - name: Patient portal single-flight request regression
         run: node --import tsx tests/scopedSingleFlight.test.ts
 
