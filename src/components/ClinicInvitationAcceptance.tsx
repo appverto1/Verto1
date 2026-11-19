@@ -184,6 +184,16 @@ export const ClinicInvitationAcceptance = ({
           </>
         )}
 
+        <p className="mt-5 text-xs leading-5 text-slate-500">
+          Antes de entrar na clínica, consulte os{' '}
+          <a href="/legal/termos-profissionais-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+            className="font-medium text-violet-700 underline underline-offset-2">Termos de Uso dos Profissionais</a>
+          {' '}e a{' '}
+          <a href="/legal/politica-privacidade-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+            className="font-medium text-violet-700 underline underline-offset-2">Política de Privacidade</a>.
+          Estes links são informativos e não alteram a validação do convite.
+        </p>
+
         {error ? (
           <p className="mt-5 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-sm leading-5 text-rose-700" role="alert">
             {error}
