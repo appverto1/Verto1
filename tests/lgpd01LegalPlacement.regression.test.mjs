@@ -10,16 +10,21 @@ const docs = [
   ['dpa-verto-v1.0-modelo.html', 'ACORDO DE TRATAMENTO DE DADOS PESSOAIS'],
 ];
 
-test('LGPD-01: revised source documents are available only as clearly identified staging drafts', () => {
+test('LGPD-02: páginas exibem o texto jurídico sem capas ou avisos de homologação', () => {
   for (const [file, heading] of docs) {
     const html = read(`public/legal/${file}`);
     assert.match(html, /<html lang="pt-BR">/);
     assert.match(html, /<meta name="robots" content="noindex,nofollow">/);
     assert.ok(html.includes(heading), file);
-    assert.ok(html.includes('Documento em homologação'), file);
-    assert.ok(html.includes('não registra aceite eletrônico'), file);
-    assert.doesNotMatch(html, /<script\b/i);
+    assert.match(html, /<body><main><pre>[\s\S]*<\/pre><\/main><\/body>/);
+    assert.doesNotMatch(html, /Documento em homologação|Disponível somente para homologação|Voltar à Verto|Verto · Documentação jurídica/i);
+    assert.doesNotMatch(html, /<script\b|<form\b/i);
   }
+  const privacy = read('public/legal/politica-privacidade-verto-v1.1.html');
+  assert.doesNotMatch(privacy, /\[(?:RAZÃO SOCIAL DA VERTO|E-MAIL\/CANAL|CANAL DE PRIVACIDADE|●)\]/);
+  assert.doesNotMatch(privacy, /25\.1\. Razão social:/);
+  assert.match(privacy, /23\. Canal de privacidade e encarregado/);
+  assert.match(privacy, /24\. Alterações/);
 });
 
 test('LGPD-01: landing and login publish privacy and audience-specific terms without granting consent by silence', () => {
@@ -30,6 +35,7 @@ test('LGPD-01: landing and login publish privacy and audience-specific terms wit
   assert.match(page, /loginType === 'patient'/);
   assert.match(page, /loginType === 'professional'/);
   assert.doesNotMatch(page, /aceito a LGPD/i);
+  assert.doesNotMatch(page, /Documentos disponíveis para consulta em homologação/i);
 });
 
 test('LGPD-01: invitation and patient relationship confirmation expose legal documents without altering authorization gates', () => {
