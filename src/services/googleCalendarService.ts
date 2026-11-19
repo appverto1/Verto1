@@ -1,5 +1,6 @@
 
 import { getSupabase } from '../lib/supabase';
+import { fetchExternalWithTimeout } from '../utils/externalRequestTimeout';
 
 export const googleCalendarService = {
   async connect() {
@@ -30,7 +31,7 @@ export const googleCalendarService = {
     }
 
     try {
-      const response = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      const response = await fetchExternalWithTimeout('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.provider_token}`,
@@ -49,7 +50,7 @@ export const googleCalendarService = {
           },
           location: event.location
         })
-      });
+      }, { timeoutMs: 8_000 });
 
       const data = await response.json();
       if (data.error) throw new Error(data.error.message);
