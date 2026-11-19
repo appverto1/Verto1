@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import {
   Ban,
   CalendarClock,
@@ -328,9 +329,7 @@ export default function ClinicExpenseManager({
       )}
 
       {loading ? (
-        <div className="flex min-h-[120px] items-center justify-center gap-2 rounded-2xl bg-slate-50 text-sm text-slate-500">
-          <Loader2 size={16} className="animate-spin" /> Carregando despesas…
-        </div>
+        <LoadingSkeleton variant="expenses" label="Carregando despesas" />
       ) : (
         <>
           <div className="grid gap-3 xl:grid-cols-2">
