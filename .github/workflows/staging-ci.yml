@@ -64,6 +64,9 @@ jobs:
       - name: Loading skeleton visual-structure regression
         run: node --import tsx tests/loadingSkeleton.test.ts
 
+      - name: Unused package dependency audit
+        run: node tests/unusedDependenciesAudit.regression.test.mjs
+
       - name: Optimized WebP assets, sizes, and PNG/JPEG fallback
         run: node tests/imageWebpAssets.regression.test.mjs
 

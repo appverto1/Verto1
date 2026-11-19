@@ -132,7 +132,6 @@
     "check:pre-main": "node scripts/pre-main-gate.mjs"
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
     "@supabase/supabase-js": "^2.101.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/connect-pg-simple": "^7.0.3",
@@ -142,10 +141,8 @@
     "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^5.0.4",
     "chart.js": "^4.5.1",
-    "clsx": "^2.1.1",
     "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.7",
-    "cookie-session": "^2.1.1",
     "dayjs": "^1.11.20",
     "dexie": "^4.4.2",
     "dotenv": "^17.2.3",
@@ -168,7 +165,6 @@
     "recharts": "^3.7.0",
     "resend": "^6.12.3",
     "stripe": "^21.0.1",
-    "tailwind-merge": "^3.5.0",
     "tsx": "^4.21.0",
     "vite": "^6.2.0",
     "web-push": "^3.6.7"
