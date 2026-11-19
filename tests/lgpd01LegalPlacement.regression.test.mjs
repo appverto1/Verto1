@@ -16,15 +16,15 @@ test('LGPD-02: páginas exibem o texto jurídico sem capas ou avisos de homologa
     assert.match(html, /<html lang="pt-BR">/);
     assert.match(html, /<meta name="robots" content="noindex,nofollow">/);
     assert.ok(html.includes(heading), file);
-    assert.match(html, /<body><main><pre>[\\s\\S]*<\\/pre><\\/main><\\/body>/);
+    assert.match(html, /<body><main><pre>[\s\S]*<\/pre><\/main><\/body>/);
     assert.doesNotMatch(html, /Documento em homologação|Disponível somente para homologação|Voltar à Verto|Verto · Documentação jurídica/i);
-    assert.doesNotMatch(html, /<script\\b|<form\\b/i);
+    assert.doesNotMatch(html, /<script\b|<form\b/i);
   }
   const privacy = read('public/legal/politica-privacidade-verto-v1.1.html');
-  assert.doesNotMatch(privacy, /\\[(?:RAZÃO SOCIAL DA VERTO|E-MAIL\\/CANAL|CANAL DE PRIVACIDADE|●)\\]/);
-  assert.doesNotMatch(privacy, /25\\.1\\. Razão social:/);
-  assert.match(privacy, /23\\. Canal de privacidade e encarregado/);
-  assert.match(privacy, /24\\. Alterações/);
+  assert.doesNotMatch(privacy, /\[(?:RAZÃO SOCIAL DA VERTO|E-MAIL\/CANAL|CANAL DE PRIVACIDADE|●)\]/);
+  assert.doesNotMatch(privacy, /25\.1\. Razão social:/);
+  assert.match(privacy, /23\. Canal de privacidade e encarregado/);
+  assert.match(privacy, /24\. Alterações/);
 });
 
 test('LGPD-01: landing and login publish privacy and audience-specific terms without granting consent by silence', () => {
