@@ -7,7 +7,7 @@ type LoadingSkeletonProps = {
   label: string;
 };
 
-const Block = ({ className = '' }: { className?: string }) => (
+const Block = ({ className = '' }: { className?: string; key?: React.Key }) => (
   <div aria-hidden="true" className={`animate-pulse motion-reduce:animate-none rounded-lg bg-slate-200/80 ${className}`} />
 );
 
