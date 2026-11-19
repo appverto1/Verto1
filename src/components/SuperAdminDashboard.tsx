@@ -1,4 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import {
   AlertCircle,
   BarChart3,
@@ -875,12 +876,7 @@ export const SuperAdminDashboard = ({ onLogout }: any) => {
   }, [allCustomers, searchTerm]);
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-5 bg-[#EEF6FF]">
-        <LogoVerto size={38} showText={true} />
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-violet-100 border-b-[#7357e8]" aria-label="Carregando" />
-      </div>
-    );
+    return <LoadingSkeleton variant="admin" label="Carregando Super Admin" />;
   }
 
   const updateSalesLeadStatus = async (lead: any, status: SalesLeadStatus) => {
