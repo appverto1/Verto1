@@ -86,7 +86,7 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
       return res.status(404).json({error:'HELP_MEDIA_NOT_FOUND'});
     // Keep the exact same authorization and no-store boundary for JPEG and WebP.
     // Only two fixed widths are permitted; untrusted query values never form paths.
-    const acceptsWebp = /(?:^|[,\\s])image\\/webp(?:$|[,;\\s])/i.test(String(req.headers?.accept || ''));
+    const acceptsWebp = String(req.headers?.accept || '').toLowerCase().includes('image/webp');
     const width = String(req.query?.w || '') === '640' ? 640 : 1363;
     const mediaFilename = acceptsWebp ? `${id}-${width}.webp` : `${id}.jpg`;
     res.setHeader('Cache-Control','private, no-store');
