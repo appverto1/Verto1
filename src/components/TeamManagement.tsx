@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import { 
   Users, 
   UserPlus, 
@@ -935,10 +936,7 @@ export function TeamManagement({
 
             <div className="divide-y divide-slate-50 overflow-visible">
               {loading ? (
-                <div className="p-12 text-center">
-                  <div className="w-8 h-8 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
-                  <p className="text-slate-400 text-sm">Carregando equipe...</p>
-                </div>
+                <LoadingSkeleton variant="team" label="Carregando equipe" />
               ) : (filteredMembers?.length || 0) === 0 ? (
                 <div className="p-12 text-center">
                   <div className="w-16 h-16 bg-slate-50 text-slate-300 rounded-3xl flex items-center justify-center mx-auto mb-4">

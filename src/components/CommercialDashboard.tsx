@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { LoadingSkeleton } from './ui/LoadingSkeleton';
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend, Line, LineChart,
   Pie, PieChart, Tooltip, XAxis, YAxis,
@@ -203,7 +204,7 @@ export const CommercialDashboard = () => {
         Mensagens não entram nos indicadores de quantidade e efetividade das ligações.
         Horários em Brasília. As métricas de atividade respeitam o período selecionado; totais de leads e estados são atuais. Oportunidades removidas do Kanban não entram nesses indicadores, mas os vínculos históricos de clientes e pagamentos são preservados.
       </div>
-      {loading&&<div role="status" className="rounded-xl bg-white p-5 text-sm text-slate-500">Atualizando inteligência comercial…</div>}
+      {loading && !data && <LoadingSkeleton variant="commercial" label="Carregando indicadores comerciais" />}
       {error&&<div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>}
       {data&&<div className="space-y-6">
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
