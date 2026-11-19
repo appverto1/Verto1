@@ -16,7 +16,7 @@ const scenarios = [
   { variant: 'schools', file: 'SchoolsManagement.tsx', blocks: 18 },
   { variant: 'expenses', file: 'ClinicExpenseManager.tsx', blocks: 18 },
   { variant: 'external-partner', file: 'ExternalPartnershipPortal.tsx', blocks: 8 },
-  { variant: 'meeting', file: 'SchoolMeetingWorkspace.tsx', blocks: 18 },
+  { variant: 'meeting', file: 'SchoolMeetingWorkspace.tsx', blocks: 16 },
 ] as const;
 
 for (const { variant, file, blocks } of scenarios) {
