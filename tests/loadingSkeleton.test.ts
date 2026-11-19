@@ -11,6 +11,12 @@ const scenarios = [
   { variant: 'onboarding', file: 'ProfessionalOnboarding.tsx', blocks: 10 },
   { variant: 'commercial', file: 'CommercialDashboard.tsx', blocks: 12 },
   { variant: 'external-timeline', file: 'ExternalEvolutionShare.tsx', blocks: 5 },
+  { variant: 'admin', file: 'SuperAdminDashboard.tsx', blocks: 12 },
+  { variant: 'finance', file: 'PatientFinanceWorkspace.tsx', blocks: 18 },
+  { variant: 'schools', file: 'SchoolsManagement.tsx', blocks: 18 },
+  { variant: 'expenses', file: 'ClinicExpenseManager.tsx', blocks: 18 },
+  { variant: 'external-partner', file: 'ExternalPartnershipPortal.tsx', blocks: 8 },
+  { variant: 'meeting', file: 'SchoolMeetingWorkspace.tsx', blocks: 18 },
 ] as const;
 
 for (const { variant, file, blocks } of scenarios) {
