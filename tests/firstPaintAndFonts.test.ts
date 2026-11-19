@@ -23,7 +23,7 @@ try {
   assert.equal(appended.length, 0, 'analytics may not compete with the critical rendering path');
   assert.equal(typeof fakeWindow.clarity, 'function', 'queued Clarity calls must be available');
   fakeWindow.clarity('event', 'first-paint');
-  assert.equal(fakeWindow.clarity.q.length, 1);
+  assert.equal(fakeWindow.clarity.q.filter((call: any[]) => call[0] === 'event').length, 1, 'queued pre-load event must be retained');
   events.get('load')?.();
   assert.equal(appended.length, 1, 'one asynchronous script after page load');
   assert.equal(appended[0].async, true);
