@@ -151,6 +151,16 @@ try{
   const a=contexts.get('a');a.capabilities.delete('calendar.attendance.confirm');assert.equal((await call('/api/help/support','a',body)).status,409,'permissions revalidated');a.capabilities.add('calendar.attendance.confirm');
   a.modules.delete('appointments_communication');assert.equal((await call('/api/help/support','a',body)).status,409,'module revalidated');a.modules.add('appointments_communication');
   const image=await call(`/api/help/tutorial-media/${topic.mediaIds[0]}`);assert.equal(image.status,200);assert.equal(image.headers.get('content-type'),'image/jpeg');assert.equal(image.headers.get('cache-control'),'private, no-store');
+  const imageWebp=await call(`/api/help/tutorial-media/${topic.mediaIds[0]}?w=640`,'a',undefined,{Accept:'image/avif,image/webp,image/*'});
+  assert.equal(imageWebp.status,200,'authorized WebP tutorial should load');
+  assert.equal(imageWebp.headers.get('content-type'),'image/webp');
+  assert.equal(imageWebp.headers.get('cache-control'),'private, no-store','clinical images may not enter shared caches');
+  assert.match(imageWebp.headers.get('vary')||'',/Accept/i);
+  const fullWebp=await call(`/api/help/tutorial-media/${topic.mediaIds[0]}?w=1363`,'a',undefined,{Accept:'image/webp'});
+  assert.equal(fullWebp.status,200,'full-size WebP tutorial should load');
+  assert.equal(fullWebp.headers.get('content-type'),'image/webp');
+  assert.equal((await call(`/api/help/tutorial-media/${topic.mediaIds[0]}?w=640`,'invalid',undefined,{Accept:'image/webp'})).status,401,'WebP does not bypass login');
+  assert.equal((await call(`/api/help/tutorial-media/${topic.mediaIds[0]}?w=640`,'other-clinic',undefined,{Accept:'image/webp'})).status===200,true,'authorized members may view clinic-neutral tutorial media');
   assert.equal((await call('/api/help/tutorial-media/..%2Fserver')).status,404);
   assert.equal((await call('/api/help/tutorial-media/verto-tutorial-99-unpublished')).status,404);
   console.log('helpTutorialSupport: PASS (topic/identity/tenant/revision/permission/module/origin/storage/media gates)');

@@ -84,10 +84,16 @@ export function registerHelpCenterRoutes(app: Express, deps: Deps) {
     if(!clinicId||!/^verto-tutorial-[a-z0-9-]{1,100}$/.test(id)||
       !projectArticles(audience,capabilities,modules).some(a=>a.tutorialSteps?.some(s=>s.mediaId===id)))
       return res.status(404).json({error:'HELP_MEDIA_NOT_FOUND'});
+    // Keep the exact same authorization and no-store boundary for JPEG and WebP.
+    // Only two fixed widths are permitted; untrusted query values never form paths.
+    const acceptsWebp = String(req.headers?.accept || '').toLowerCase().includes('image/webp');
+    const width = String(req.query?.w || '') === '640' ? 640 : 1363;
+    const mediaFilename = acceptsWebp ? `${id}-${width}.webp` : `${id}.jpg`;
     res.setHeader('Cache-Control','private, no-store');
     res.setHeader('X-Content-Type-Options','nosniff');
-    res.type('image/jpeg');
-    return res.sendFile(`${id}.jpg`,{root:fileURLToPath(new URL('./help-media/',import.meta.url))},(error:any)=>{
+    res.setHeader('Vary','Accept');
+    res.type(acceptsWebp ? 'image/webp' : 'image/jpeg');
+    return res.sendFile(mediaFilename,{root:fileURLToPath(new URL('./help-media/',import.meta.url))},(error:any)=>{
       if(error&&!res.headersSent)res.status(404).json({error:'HELP_MEDIA_UNAVAILABLE'});
     });
   });

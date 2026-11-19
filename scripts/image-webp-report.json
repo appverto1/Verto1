@@ -1,0 +1,1449 @@
+{
+  "version": 1,
+  "images": [
+    {
+      "source": "public/Gemini_Generated_Image_m804z0m804z0m804.jpg",
+      "originalBytes": 405489,
+      "originalWidth": 3060,
+      "originalHeight": 1177,
+      "derivatives": [
+        {
+          "file": "public/Gemini_Generated_Image_m804z0m804z0m804-480.webp",
+          "bytes": 10086,
+          "width": 480,
+          "height": 185
+        },
+        {
+          "file": "public/Gemini_Generated_Image_m804z0m804z0m804-960.webp",
+          "bytes": 25276,
+          "width": 960,
+          "height": 369
+        },
+        {
+          "file": "public/Gemini_Generated_Image_m804z0m804z0m804-1440.webp",
+          "bytes": 41970,
+          "width": 1440,
+          "height": 554
+        }
+      ]
+    },
+    {
+      "source": "public/Hero-Verto.png",
+      "originalBytes": 606714,
+      "originalWidth": 1080,
+      "originalHeight": 415,
+      "derivatives": [
+        {
+          "file": "public/Hero-Verto-480.webp",
+          "bytes": 9666,
+          "width": 480,
+          "height": 184
+        },
+        {
+          "file": "public/Hero-Verto-960.webp",
+          "bytes": 23668,
+          "width": 960,
+          "height": 369
+        },
+        {
+          "file": "public/Hero-Verto-1440.webp",
+          "bytes": 27926,
+          "width": 1080,
+          "height": 415
+        }
+      ]
+    },
+    {
+      "source": "public/hero-verto-family-diary.png",
+      "originalBytes": 1470227,
+      "originalWidth": 1536,
+      "originalHeight": 1024,
+      "derivatives": [
+        {
+          "file": "public/hero-verto-family-diary-480.webp",
+          "bytes": 10450,
+          "width": 480,
+          "height": 320
+        },
+        {
+          "file": "public/hero-verto-family-diary-960.webp",
+          "bytes": 28198,
+          "width": 960,
+          "height": 640
+        },
+        {
+          "file": "public/hero-verto-family-diary-1440.webp",
+          "bytes": 47624,
+          "width": 1440,
+          "height": 960
+        }
+      ]
+    },
+    {
+      "source": "public/hero_verto_photo.png",
+      "originalBytes": 3130351,
+      "originalWidth": 3060,
+      "originalHeight": 1177,
+      "derivatives": [
+        {
+          "file": "public/hero_verto_photo-480.webp",
+          "bytes": 10068,
+          "width": 480,
+          "height": 185
+        },
+        {
+          "file": "public/hero_verto_photo-960.webp",
+          "bytes": 25174,
+          "width": 960,
+          "height": 369
+        },
+        {
+          "file": "public/hero_verto_photo-1440.webp",
+          "bytes": 41944,
+          "width": 1440,
+          "height": 554
+        }
+      ]
+    },
+    {
+      "source": "public/branding/verto/verto-symbol.png",
+      "originalBytes": 257458,
+      "originalWidth": 1000,
+      "originalHeight": 1000,
+      "derivatives": [
+        {
+          "file": "public/branding/verto/verto-symbol-128.webp",
+          "bytes": 5774,
+          "width": 128,
+          "height": 128
+        },
+        {
+          "file": "public/branding/verto/verto-symbol-256.webp",
+          "bytes": 11722,
+          "width": 256,
+          "height": 256
+        }
+      ]
+    },
+    {
+      "source": "public/branding/verto/verto-logo-horizontal.png",
+      "originalBytes": 127528,
+      "originalWidth": 1000,
+      "originalHeight": 286,
+      "derivatives": [
+        {
+          "file": "public/branding/verto/verto-logo-horizontal-512.webp",
+          "bytes": 19016,
+          "width": 512,
+          "height": 146
+        },
+        {
+          "file": "public/branding/verto/verto-logo-horizontal-1024.webp",
+          "bytes": 29868,
+          "width": 1000,
+          "height": 286
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-04-menu-configuracoes.jpg",
+      "originalBytes": 81184,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-04-menu-configuracoes-640.webp",
+          "bytes": 16064,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-04-menu-configuracoes-1363.webp",
+          "bytes": 43828,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-05-clinica-identificacao.jpg",
+      "originalBytes": 82591,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-05-clinica-identificacao-640.webp",
+          "bytes": 13028,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-05-clinica-identificacao-1363.webp",
+          "bytes": 42322,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-06-clinica-contato.jpg",
+      "originalBytes": 69222,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-06-clinica-contato-640.webp",
+          "bytes": 9822,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-06-clinica-contato-1363.webp",
+          "bytes": 30540,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-07-clinica-preferencias.jpg",
+      "originalBytes": 97957,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-07-clinica-preferencias-640.webp",
+          "bytes": 15086,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-07-clinica-preferencias-1363.webp",
+          "bytes": 52248,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-08-clinica-faltas.jpg",
+      "originalBytes": 109133,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-08-clinica-faltas-640.webp",
+          "bytes": 17794,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-08-clinica-faltas-1363.webp",
+          "bytes": 60556,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-15-clinica-permissoes.jpg",
+      "originalBytes": 88856,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-15-clinica-permissoes-640.webp",
+          "bytes": 14680,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-15-clinica-permissoes-1363.webp",
+          "bytes": 48272,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-16-profissional-perfil.jpg",
+      "originalBytes": 84507,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-16-profissional-perfil-640.webp",
+          "bytes": 14142,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-16-profissional-perfil-1363.webp",
+          "bytes": 46020,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-17-profissional-identificacao.jpg",
+      "originalBytes": 92737,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-17-profissional-identificacao-640.webp",
+          "bytes": 14826,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-17-profissional-identificacao-1363.webp",
+          "bytes": 48304,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-18-profissional-registro-endereco.jpg",
+      "originalBytes": 71944,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-18-profissional-registro-endereco-640.webp",
+          "bytes": 9946,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-18-profissional-registro-endereco-1363.webp",
+          "bytes": 30246,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-19-profissional-curriculo.jpg",
+      "originalBytes": 71004,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-19-profissional-curriculo-640.webp",
+          "bytes": 10906,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-19-profissional-curriculo-1363.webp",
+          "bytes": 34198,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-20-equipe-visao.jpg",
+      "originalBytes": 88386,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-20-equipe-visao-640.webp",
+          "bytes": 15334,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-20-equipe-visao-1363.webp",
+          "bytes": 49524,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-21-equipe-convite.jpg",
+      "originalBytes": 76869,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-21-equipe-convite-640.webp",
+          "bytes": 13384,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-21-equipe-convite-1363.webp",
+          "bytes": 40546,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-22-equipe-acesso.jpg",
+      "originalBytes": 97077,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-22-equipe-acesso-640.webp",
+          "bytes": 17162,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-22-equipe-acesso-1363.webp",
+          "bytes": 54440,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-23-equipe-jornada.jpg",
+      "originalBytes": 94298,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-23-equipe-jornada-640.webp",
+          "bytes": 14750,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-23-equipe-jornada-1363.webp",
+          "bytes": 44942,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-24-equipe-dias.jpg",
+      "originalBytes": 74289,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-24-equipe-dias-640.webp",
+          "bytes": 11316,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-24-equipe-dias-1363.webp",
+          "bytes": 33496,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-25-equipe-supervisor.jpg",
+      "originalBytes": 98537,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-25-equipe-supervisor-640.webp",
+          "bytes": 17308,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-25-equipe-supervisor-1363.webp",
+          "bytes": 55430,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-26-equipe-permissoes.jpg",
+      "originalBytes": 85805,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-26-equipe-permissoes-640.webp",
+          "bytes": 13042,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-26-equipe-permissoes-1363.webp",
+          "bytes": 42668,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-27-salas.jpg",
+      "originalBytes": 48657,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-27-salas-640.webp",
+          "bytes": 7772,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-27-salas-1363.webp",
+          "bytes": 24462,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-29-paciente-dados.jpg",
+      "originalBytes": 71378,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-29-paciente-dados-640.webp",
+          "bytes": 11680,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-29-paciente-dados-1363.webp",
+          "bytes": 37282,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-30-paciente-portal.jpg",
+      "originalBytes": 66466,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-30-paciente-portal-640.webp",
+          "bytes": 10130,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-30-paciente-portal-1363.webp",
+          "bytes": 33150,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-31-responsavel.jpg",
+      "originalBytes": 68269,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-31-responsavel-640.webp",
+          "bytes": 10050,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-31-responsavel-1363.webp",
+          "bytes": 34430,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-32-pacientes-acesso.jpg",
+      "originalBytes": 69225,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-32-pacientes-acesso-640.webp",
+          "bytes": 12668,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-32-pacientes-acesso-1363.webp",
+          "bytes": 37930,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-33-paciente-menu.jpg",
+      "originalBytes": 74084,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-33-paciente-menu-640.webp",
+          "bytes": 13556,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-33-paciente-menu-1363.webp",
+          "bytes": 40498,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-34-plano-particular.jpg",
+      "originalBytes": 69709,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-34-plano-particular-640.webp",
+          "bytes": 10978,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-34-plano-particular-1363.webp",
+          "bytes": 35232,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-35-plano-particular-simples.jpg",
+      "originalBytes": 69910,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-35-plano-particular-simples-640.webp",
+          "bytes": 10996,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-35-plano-particular-simples-1363.webp",
+          "bytes": 35540,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-42-agendar-sessao.jpg",
+      "originalBytes": 63527,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-42-agendar-sessao-640.webp",
+          "bytes": 9148,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-42-agendar-sessao-1363.webp",
+          "bytes": 29882,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-43-agendar-conferencia.jpg",
+      "originalBytes": 74222,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-43-agendar-conferencia-640.webp",
+          "bytes": 10478,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-43-agendar-conferencia-1363.webp",
+          "bytes": 34000,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-44-agenda-acesso.jpg",
+      "originalBytes": 69513,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-44-agenda-acesso-640.webp",
+          "bytes": 10446,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-44-agenda-acesso-1363.webp",
+          "bytes": 31298,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-46-iniciar-sessao.jpg",
+      "originalBytes": 48800,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-46-iniciar-sessao-640.webp",
+          "bytes": 8082,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-46-iniciar-sessao-1363.webp",
+          "bytes": 22818,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-47-plano-terapeutico.jpg",
+      "originalBytes": 96280,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-47-plano-terapeutico-640.webp",
+          "bytes": 16146,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-47-plano-terapeutico-1363.webp",
+          "bytes": 52486,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-48-historico-sessoes.jpg",
+      "originalBytes": 91371,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-48-historico-sessoes-640.webp",
+          "bytes": 15498,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-48-historico-sessoes-1363.webp",
+          "bytes": 47504,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-49-relatorio-atendimento.jpg",
+      "originalBytes": 70993,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-49-relatorio-atendimento-640.webp",
+          "bytes": 9078,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-49-relatorio-atendimento-1363.webp",
+          "bytes": 28230,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-50-equipe-caso-carregada.jpg",
+      "originalBytes": 86390,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-50-equipe-caso-carregada-640.webp",
+          "bytes": 14036,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-50-equipe-caso-carregada-1363.webp",
+          "bytes": 45062,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-51-vincular-profissional.jpg",
+      "originalBytes": 104636,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-51-vincular-profissional-640.webp",
+          "bytes": 17704,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-51-vincular-profissional-1363.webp",
+          "bytes": 57500,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-52-acoes-agenda.jpg",
+      "originalBytes": 43406,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-52-acoes-agenda-640.webp",
+          "bytes": 6250,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-52-acoes-agenda-1363.webp",
+          "bytes": 17500,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-53-remarcar-sessao.jpg",
+      "originalBytes": 69036,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-53-remarcar-sessao-640.webp",
+          "bytes": 10192,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-53-remarcar-sessao-1363.webp",
+          "bytes": 31410,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-54-remarcar-salvar.jpg",
+      "originalBytes": 71277,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-54-remarcar-salvar-640.webp",
+          "bytes": 9720,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-54-remarcar-salvar-1363.webp",
+          "bytes": 31834,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-55-anotacoes.jpg",
+      "originalBytes": 81076,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-55-anotacoes-640.webp",
+          "bytes": 12512,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-55-anotacoes-1363.webp",
+          "bytes": 38428,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-56-anotacao-equipe.jpg",
+      "originalBytes": 91642,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-56-anotacao-equipe-640.webp",
+          "bytes": 13868,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-56-anotacao-equipe-1363.webp",
+          "bytes": 42492,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-57-encerramento-confirmado.jpg",
+      "originalBytes": 50968,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-57-encerramento-confirmado-640.webp",
+          "bytes": 7516,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-57-encerramento-confirmado-1363.webp",
+          "bytes": 22746,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-58-detalhes-agenda.jpg",
+      "originalBytes": 71694,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-58-detalhes-agenda-640.webp",
+          "bytes": 11420,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-58-detalhes-agenda-1363.webp",
+          "bytes": 35904,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-59-acesso-acoes-status.jpg",
+      "originalBytes": 75482,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-59-acesso-acoes-status-640.webp",
+          "bytes": 11548,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-59-acesso-acoes-status-1363.webp",
+          "bytes": 36264,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-61-acoes-financeiras.jpg",
+      "originalBytes": 113756,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-61-acoes-financeiras-640.webp",
+          "bytes": 20370,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-61-acoes-financeiras-1363.webp",
+          "bytes": 65280,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-62-criar-cobranca.jpg",
+      "originalBytes": 73733,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-62-criar-cobranca-640.webp",
+          "bytes": 11234,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-62-criar-cobranca-1363.webp",
+          "bytes": 35098,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-63-registrar-pagamento.jpg",
+      "originalBytes": 73527,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-63-registrar-pagamento-640.webp",
+          "bytes": 11206,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-63-registrar-pagamento-1363.webp",
+          "bytes": 34914,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-64-pagamento-parcial.jpg",
+      "originalBytes": 63715,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-64-pagamento-parcial-640.webp",
+          "bytes": 9666,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-64-pagamento-parcial-1363.webp",
+          "bytes": 28862,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-65-recebimentos.jpg",
+      "originalBytes": 105351,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-65-recebimentos-640.webp",
+          "bytes": 18776,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-65-recebimentos-1363.webp",
+          "bytes": 60274,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-66-pendencias-financeiras.jpg",
+      "originalBytes": 110225,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-66-pendencias-financeiras-640.webp",
+          "bytes": 19330,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-66-pendencias-financeiras-1363.webp",
+          "bytes": 62832,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-77-pagamento-exemplo.jpg",
+      "originalBytes": 70114,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-77-pagamento-exemplo-640.webp",
+          "bytes": 10370,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-77-pagamento-exemplo-1363.webp",
+          "bytes": 31404,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-78-graficos-evolucao.jpg",
+      "originalBytes": 98305,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-78-graficos-evolucao-640.webp",
+          "bytes": 15880,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-78-graficos-evolucao-1363.webp",
+          "bytes": 50968,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-79-filtros-graficos.jpg",
+      "originalBytes": 99827,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-79-filtros-graficos-640.webp",
+          "bytes": 15744,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-79-filtros-graficos-1363.webp",
+          "bytes": 52148,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-80-timeline-evolucao.jpg",
+      "originalBytes": 94034,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-80-timeline-evolucao-640.webp",
+          "bytes": 15618,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-80-timeline-evolucao-1363.webp",
+          "bytes": 50258,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-81-relatorio-progresso.jpg",
+      "originalBytes": 88119,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-81-relatorio-progresso-640.webp",
+          "bytes": 13900,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-81-relatorio-progresso-1363.webp",
+          "bytes": 45668,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-82-relatorio-observacoes.jpg",
+      "originalBytes": 52563,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-82-relatorio-observacoes-640.webp",
+          "bytes": 7998,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-82-relatorio-observacoes-1363.webp",
+          "bytes": 24006,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-86-revisao-agenda-dia.jpg",
+      "originalBytes": 72024,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-86-revisao-agenda-dia-640.webp",
+          "bytes": 10712,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-86-revisao-agenda-dia-1363.webp",
+          "bytes": 30120,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-87-planos-ciclo.jpg",
+      "originalBytes": 96252,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-87-planos-ciclo-640.webp",
+          "bytes": 16148,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-87-planos-ciclo-1363.webp",
+          "bytes": 52620,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-88-pts-revisao.jpg",
+      "originalBytes": 101815,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-88-pts-revisao-640.webp",
+          "bytes": 16760,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-88-pts-revisao-1363.webp",
+          "bytes": 53594,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-89-formulario-reavaliacao.jpg",
+      "originalBytes": 64815,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-89-formulario-reavaliacao-640.webp",
+          "bytes": 10550,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-89-formulario-reavaliacao-1363.webp",
+          "bytes": 31596,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-90-pts-historico.jpg",
+      "originalBytes": 66194,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-90-pts-historico-640.webp",
+          "bytes": 10620,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-90-pts-historico-1363.webp",
+          "bytes": 33228,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-91-plano-individual-revisao.jpg",
+      "originalBytes": 84690,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-91-plano-individual-revisao-640.webp",
+          "bytes": 13314,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-91-plano-individual-revisao-1363.webp",
+          "bytes": 43448,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-92-editar-plano.jpg",
+      "originalBytes": 79087,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-92-editar-plano-640.webp",
+          "bytes": 10782,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-92-editar-plano-1363.webp",
+          "bytes": 35046,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-93-acoes-programa.jpg",
+      "originalBytes": 82350,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-93-acoes-programa-640.webp",
+          "bytes": 13034,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-93-acoes-programa-1363.webp",
+          "bytes": 42882,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-94-edicao-programa.jpg",
+      "originalBytes": 85294,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-94-edicao-programa-640.webp",
+          "bytes": 14622,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-94-edicao-programa-1363.webp",
+          "bytes": 44352,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-95-registro-criterio-programa.jpg",
+      "originalBytes": 89866,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-95-registro-criterio-programa-640.webp",
+          "bytes": 15134,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-95-registro-criterio-programa-1363.webp",
+          "bytes": 48402,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    },
+    {
+      "source": "services/help-media/verto-tutorial-96-revisao-programa.jpg",
+      "originalBytes": 76017,
+      "originalWidth": 1363,
+      "originalHeight": 936,
+      "derivatives": [
+        {
+          "file": "services/help-media/verto-tutorial-96-revisao-programa-640.webp",
+          "bytes": 12850,
+          "width": 640,
+          "height": 440
+        },
+        {
+          "file": "services/help-media/verto-tutorial-96-revisao-programa-1363.webp",
+          "bytes": 40758,
+          "width": 1363,
+          "height": 936
+        }
+      ]
+    }
+  ]
+}
