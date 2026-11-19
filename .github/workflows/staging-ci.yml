@@ -52,6 +52,9 @@ jobs:
       - name: Install dependencies deterministically
         run: npm ci
 
+      - name: Patient portal single-flight request regression
+        run: node --import tsx tests/scopedSingleFlight.test.ts
+
       - name: Loading skeleton visual-structure regression
         run: node --import tsx tests/loadingSkeleton.test.ts
 
