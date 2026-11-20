@@ -84239,7 +84239,12 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
           return;
         }
         if (normalizedPath.includes('/assets/')) {
-          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable, no-transform');
+          // Let Railway's edge negotiate gzip/Brotli for immutable text assets.
+          // Keep no-transform for binary images, fonts and other nontext assets.
+          const compressibleText = /\.(?:js|mjs|css|json|svg|txt|xml)$/i.test(normalizedPath);
+          res.setHeader('Cache-Control', compressibleText
+            ? 'public, max-age=31536000, immutable'
+            : 'public, max-age=31536000, immutable, no-transform');
         }
       }
     }));
