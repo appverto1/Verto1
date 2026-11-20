@@ -1239,7 +1239,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                   return <article key={lead.id} draggable={!busyLead&&lead.status!=='converted'}
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
-                    style={{borderLeftColor:col.color}}>
+                    style={{borderLeftColor: col.color}}>
                     {bulkExistingMode&&<label className="mb-2 flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-50 px-2 py-1.5 text-xs font-bold text-indigo-900">
                       <input type="checkbox" aria-label={'Selecionar card '+(lead.name||lead.phone)}
                         disabled={bulkExistingBusy}
