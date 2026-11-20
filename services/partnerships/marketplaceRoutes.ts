@@ -280,7 +280,7 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
       ]);
       if(profile.error||inbox.error)throw profile.error||inbox.error;
       const savedProfile=profile.data||null;
-      const resolveImage=offset===0?await signedImages(savedProfile?[savedProfile.logo_url]:[]):()=>null;
+      const resolveImage=offset===0?await signedImages(savedProfile?[savedProfile.logo_url]:[]):(_value:string|null|undefined)=>null;
       const inboxRows=Array.isArray(inbox.data)?inbox.data:[];
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,profile:savedProfile?{...savedProfile,
