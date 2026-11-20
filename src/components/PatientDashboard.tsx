@@ -20,6 +20,7 @@ import { getDefaultAnamnesisTemplate, getProfileTemplate, normalizeAnamnesisTemp
 import { VERTO_BRAND_ASSETS, isVertoInstitutionalAsset } from '../constants/vertoBranding';
 import { hasOrganizationModule, type OrganizationModuleAccessMode, type OrganizationModuleKey } from '../constants/organizationModules';
 import { resolvePatientPortalKind } from '../utils/patientProfileType';
+import { derivePatientTaskVisibility } from '../utils/patientTaskVisibility';
 import {
   resolveAppointmentPatientDisplayStatus,
 } from '../utils/appointmentConfirmationState';
@@ -208,6 +209,7 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   const [celebrationKey, setCelebrationKey] = useState(0);
   const [milestoneCelebrationCount, setMilestoneCelebrationCount] = useState(0);
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const nextPatientTaskDueAtRef = useRef<number>(Number.POSITIVE_INFINITY);
   const [latestProtocolReference, setLatestProtocolReference] = useState<any>(null);
   const milestoneCelebrationRequestRef = useRef('');
   const milestoneCelebrationSessionKeyRef = useRef('');
@@ -329,7 +331,11 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
   }, [chartFiltersHydratedKey, chartFiltersStorageKey, selectedBaseDate, selectedCompareDate, selectedSnapshotDate]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setCurrentTime(new Date()), 5000);
+    // Check as often as before, but don't re-render the entire patient portal
+    // unless an upcoming task has actually reached its scheduled instant.
+    const timer = window.setInterval(() => {
+      if (Date.now() >= nextPatientTaskDueAtRef.current) setCurrentTime(new Date());
+    }, 5000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -1317,18 +1323,13 @@ export const PatientDashboard = ({ user, onLogout, onMoodCheckin, tasks, onCompl
     }
   };
 
-  const visiblePatientTasks = useMemo(() => {
-    const list = Array.isArray(tasks) ? tasks : [];
-    if (isKidsProfile) return list;
-    return list.filter((task: any) => {
-      if (task?.completed || String(task?.status || '').toLowerCase() === 'completed') return false;
-      const scheduledRaw = task?.scheduledAt || task?.scheduled_at;
-      if (!scheduledRaw) return false;
-      const scheduledAt = parseScheduledTaskDate(scheduledRaw);
-      if (!scheduledAt) return false;
-      return scheduledAt <= currentTime;
-    });
-  }, [tasks, isKidsProfile, currentTime]);
+  const { visibleTasks: visiblePatientTasks, nextDueAt: nextPatientTaskDueAt } = useMemo(
+    () => derivePatientTaskVisibility(tasks, isKidsProfile, currentTime, parseScheduledTaskDate),
+    [tasks, isKidsProfile, currentTime]
+  );
+  useEffect(() => {
+    nextPatientTaskDueAtRef.current = nextPatientTaskDueAt;
+  }, [nextPatientTaskDueAt]);
 
   const conventionalMoodTags = ADULT_CONVENTIONAL_TAGS;
   const moodInfluenceTags = isConventionalAdult ? conventionalMoodTags : (energyTags || []);
