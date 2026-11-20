@@ -104,11 +104,11 @@ export function WindowedKanbanCards<T extends Item>({items,columnTitle,renderCar
 
   return <div ref={nodeRef} role="list" aria-label={'Cards da coluna '+columnTitle}
     onDragStartCapture={()=>{draggingRef.current=true;}}>
+    {before>0&&<div aria-hidden="true" style={{height:before}}/>}
     {start>0&&<button type="button" className="mb-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-violet-700"
       onClick={()=>jumpTo(start-1)} aria-label={'Ver cards anteriores da coluna '+columnTitle}>
       Cards anteriores
     </button>}
-    {before>0&&<div aria-hidden="true" style={{height:before}}/>}
     {items.slice(start,end).map((item,index)=>{
       const absoluteIndex=start+index;
       return <MeasuredRow key={item.id} itemId={item.id} index={absoluteIndex}
@@ -116,11 +116,11 @@ export function WindowedKanbanCards<T extends Item>({items,columnTitle,renderCar
         {renderCard(item)}
       </MeasuredRow>;
     })}
-    {after>0&&<div aria-hidden="true" style={{height:after}}/>}
     {end<items.length&&<button type="button" className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-violet-700"
       onClick={()=>jumpTo(end)} aria-label={'Ver próximos cards da coluna '+columnTitle}>
       Próximos cards ({end} de {items.length})
     </button>}
+    {after>0&&<div aria-hidden="true" style={{height:after}}/>}
   </div>;
 }
 
