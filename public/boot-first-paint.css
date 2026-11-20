@@ -1,0 +1,27 @@
+/* Small static first paint while Vite/React boot. All rules scoped to the placeholder. */
+.verto-boot{box-sizing:border-box;min-height:100vh;background:#fff;color:#7020d5;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.verto-boot *{box-sizing:border-box}
+.verto-boot-header{height:80px;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 max(24px,calc((100vw - 1280px)/2));border-bottom:1px solid #f2f0f7}
+.verto-boot-logo{font-size:48px;font-weight:750;letter-spacing:-3px;line-height:1}
+.verto-boot-pill{display:block;width:142px;height:42px;border-radius:28px;background:#f0e9fc}
+.verto-boot-hero{display:grid;grid-template-columns:1fr 1fr;max-width:1280px;min-height:680px;margin:44px auto 0;overflow:hidden;border:1px solid #efe5fd;border-radius:38px;background:#fff}
+.verto-boot-copy{padding:56px;background:#f8f5ff}
+.verto-boot-chip{width:220px;max-width:76%;height:34px;border-radius:24px;background:#ede5fc;margin-bottom:40px}
+.verto-boot-line{height:25px;border-radius:9px;background:#e7dff5;margin-bottom:14px}
+.verto-boot-title{height:55px;max-width:95%}
+.verto-boot-title-short{height:55px;max-width:75%;margin-bottom:36px}
+.verto-boot-paragraph{height:17px;max-width:92%}
+.verto-boot-paragraph-short{height:17px;max-width:70%}
+.verto-boot-card{height:90px;margin-top:36px;border:1px solid #e9e0f7;border-radius:18px;background:#fff}
+.verto-boot-preview{padding:58px 20px;background:#fff}
+.verto-boot-preview-bar{height:8px;border-radius:8px;background:#ede5fc;margin-bottom:22px}
+.verto-boot-preview-body{height:320px;border-radius:20px;background:#f7f5fc;border:1px solid #efeafa}
+@media(max-width:767px){
+ .verto-boot-header{height:80px;padding:0 22px}
+ .verto-boot-logo{font-size:45px}
+ .verto-boot-pill{width:100px;height:40px}
+ .verto-boot-hero{display:block;min-height:700px;margin:28px 16px 0;border-radius:22px}
+ .verto-boot-copy{min-height:700px;padding:42px 30px}
+ .verto-boot-title,.verto-boot-title-short{height:42px}
+ .verto-boot-preview{display:none}
+}

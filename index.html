@@ -20,6 +20,7 @@
     <meta name="twitter:title" content="Verto" />
     <meta name="twitter:image" content="https://www.appverto.com.br/branding/verto/verto-logo-horizontal.png?v=20260826-1" />
     <title>Verto</title>
+    <link rel="stylesheet" href="/boot-first-paint.css?v=20261120" />
     <link rel="preload" as="font" type="font/woff2" href="/src/assets/fonts/outfit-variable.woff2" crossorigin>
     <link id="verto-manifest" rel="manifest" href="/manifest.webmanifest" />
     <script src="/pwa-manifest-bootstrap.js?v=20260821-1"></script>
@@ -29,7 +30,30 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/branding/verto/verto-apple-touch-icon.png?v=20260818-1" />
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Static first paint. React replaces this on its first commit.
+           Presentation only: no portal, clinic, user or session data. -->
+      <div class="verto-boot" role="status" aria-label="Carregando Verto" aria-busy="true">
+        <header class="verto-boot-header">
+          <span class="verto-boot-logo" aria-hidden="true">verto</span>
+          <span class="verto-boot-pill" aria-hidden="true"></span>
+        </header>
+        <main class="verto-boot-hero" aria-hidden="true">
+          <div class="verto-boot-copy">
+            <div class="verto-boot-chip"></div>
+            <div class="verto-boot-line verto-boot-title"></div>
+            <div class="verto-boot-line verto-boot-title-short"></div>
+            <div class="verto-boot-line verto-boot-paragraph"></div>
+            <div class="verto-boot-line verto-boot-paragraph-short"></div>
+            <div class="verto-boot-card"></div>
+          </div>
+          <div class="verto-boot-preview">
+            <div class="verto-boot-preview-bar"></div>
+            <div class="verto-boot-preview-body"></div>
+          </div>
+        </main>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

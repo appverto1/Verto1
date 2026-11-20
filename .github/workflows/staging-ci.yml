@@ -64,6 +64,9 @@ jobs:
           node --import tsx tests/legalProfessionalTermsRoutes.test.ts
           node --import tsx tests/clinicReinviteAccess.test.ts
 
+      - name: Static bootstrap first-paint skeleton regression
+        run: node tests/earlyFirstPaintBootstrap.regression.test.mjs
+
       - name: First-paint Clarity, hero, and local WOFF2 regressions
         run: node --import tsx tests/firstPaintAndFonts.test.ts
 
