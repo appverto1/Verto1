@@ -66,6 +66,8 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const [contextError, setContextError] = useState<string | null>(null);
   const [step, setStep] = useState(() => Math.max(1, Math.min(3, Number(localStorage.getItem(stepKey) || 1))));
   const [loading, setLoading] = useState(false);
+  const [previousTermsAcceptance, setPreviousTermsAcceptance] = useState(false);
+  const [acceptProfessionalTerms, setAcceptProfessionalTerms] = useState(false);
 
   const [fullName, setFullName] = useState(user?.name || '');
   const [phone, setPhone] = useState(formatPhone(user?.phone || ''));
@@ -138,9 +140,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       setContextLoading(true);
       setContextError(null);
       try {
-        const [contextResult, profileResult] = await Promise.all([
+        const [contextResult, profileResult, termsResult] = await Promise.all([
           dataService.getOnboardingContext(),
           dataService.getUserProfile(user.id),
+          dataService.getProfessionalTermsStatus(),
         ]);
         if (!active) return;
         if (!contextResult?.success || !contextResult?.data?.clinic?.id) {
@@ -154,6 +157,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
           throw new Error('Seu convite ainda não concluiu o vínculo com a clínica. Abra novamente o link recebido por e-mail.');
         }
         setContext(authoritativeContext);
+        setPreviousTermsAcceptance(termsResult?.success === true && termsResult?.accepted === true);
         const profile = profileResult?.data?.professional_profile;
         const metadata = profile?.metadata || {};
         const savedSchedule = metadata?.workSchedule || metadata?.work_schedule;
@@ -283,6 +287,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   };
 
   const finish = async () => {
+    if (!previousTermsAcceptance && !acceptProfessionalTerms) {
+      alert('Leia e aceite os Termos de Uso dos Profissionais para concluir o cadastro.');
+      return;
+    }
     if (!fullName.trim() || !phone.trim()) {
       alert('Preencha nome e telefone para continuar.');
       return;
@@ -302,6 +310,7 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
       ]);
 
       const memberPayload = {
+        acceptProfessionalTerms: !previousTermsAcceptance && acceptProfessionalTerms,
         fullName,
         birthDate: formatDateForApi(birthDate),
         gender,
@@ -409,6 +418,39 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
   const sidebarSteps = isManagedMember
     ? ['Dados pessoais e profissionais', 'Configurações clínicas individuais', 'Horários e vínculo']
     : ['Dados do usuário', 'Configurações da clínica'];
+
+  const professionalTermsSection = (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      {previousTermsAcceptance ? (
+        <p className="text-sm font-medium text-emerald-700">
+          Termos de Uso dos Profissionais já aceitos.
+          {' '}<a href="/api/legal/professional-terms" target="_blank" rel="noopener noreferrer"
+            className="underline underline-offset-2">Consultar termos</a>
+        </p>
+      ) : (
+        <label className="flex cursor-pointer items-start gap-3 text-sm leading-6 text-slate-700">
+          <input type="checkbox" checked={acceptProfessionalTerms}
+            onChange={(event) => setAcceptProfessionalTerms(event.target.checked)}
+            className="mt-1 h-5 w-5 shrink-0 accent-violet-600" />
+          <span>
+            Li e aceito os{' '}
+            <a href="/api/legal/professional-terms" target="_blank" rel="noopener noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              className="font-semibold text-violet-700 underline underline-offset-2">
+              Termos de Uso dos Profissionais
+            </a>.
+          </span>
+        </label>
+      )}
+      <p className="mt-2 text-xs leading-5 text-slate-500">
+        Consulte também a{' '}
+        <a href="/legal/politica-privacidade-verto-v1.1.html" target="_blank"
+          rel="noopener noreferrer" className="text-violet-700 underline underline-offset-2">
+          Política de Privacidade
+        </a>.
+      </p>
+    </div>
+  );
 
   return (
     <div className="fixed inset-0 z-[200] overflow-y-auto bg-slate-50 p-4 md:p-6">
@@ -622,9 +664,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       </button>
                     ))}
                   </div>
+                  {professionalTermsSection}
                   <div className="flex justify-between pt-2">
                     <button onClick={() => setStep(1)} className="rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700">Voltar</button>
-                    <button disabled={loading || !clinicName.trim()} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
+                    <button disabled={loading || !clinicName.trim() || (!previousTermsAcceptance && !acceptProfessionalTerms)} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
                       {loading
                         ? 'Salvando...'
                         : ownerAlreadyPaid
@@ -671,9 +714,10 @@ export function ProfessionalOnboarding({ user, onComplete, onClose }: Profession
                       <label className="text-xs font-medium text-slate-600">Fim<input type="time" value={workEnd} onChange={(event) => setWorkEnd(event.target.value)} className="mt-2 w-full rounded-xl bg-slate-50 px-4 py-3" /></label>
                     </div>
                   </div>
+                  {professionalTermsSection}
                   <div className="flex justify-between pt-2">
                     <button onClick={() => setStep(2)} className="rounded-xl bg-slate-100 px-6 py-3 font-semibold text-slate-700">Voltar</button>
-                    <button disabled={loading || selectedDays.length === 0 || workStart >= workEnd} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
+                    <button disabled={loading || selectedDays.length === 0 || workStart >= workEnd || (!previousTermsAcceptance && !acceptProfessionalTerms)} onClick={finish} className="rounded-xl bg-[#7a32fc] px-6 py-3 font-semibold text-white disabled:opacity-40">
                       {loading ? 'Salvando...' : 'Concluir configuração'}
                     </button>
                   </div>
