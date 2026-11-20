@@ -50209,7 +50209,9 @@ async function startServer() {
       .limit(patientIds.length);
   };
 
-  const canPortalUserAccessPatient = async (patientId: string, appointment: any, user: any) => {
+  const canPortalUserAccessPatient = async (
+    patientId: string, appointment: any, user: any, preResolvedPatientIds?: readonly string[]
+  ) => {
     const role = sanitizeString(user?.role, 40).toLowerCase();
     const appointmentScope = readPortalAppointmentPatientScope(appointment);
     const scopedPatientId = sanitizeString(patientId || appointmentScope.patientId, 120);
@@ -50225,7 +50227,9 @@ async function startServer() {
       (appointmentScope.patientEmail === userEmail || appointmentScope.responsibleEmail === userEmail)
     ) return true;
     if (!isUuid(scopedPatientId)) return false;
-    const patientIds = await getPortalPatientIdsForUser(user);
+    // List handlers already resolved these IDs for the same verified session.
+    // Reuse only within this request; other callers still resolve authorization themselves.
+    const patientIds = preResolvedPatientIds ?? await getPortalPatientIdsForUser(user);
     return patientIds.includes(scopedPatientId);
   };
 
