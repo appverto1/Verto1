@@ -87,8 +87,8 @@ await assert.rejects(async()=>invalidateExpiredPushSubscriptionsBatch({
 
 assert.equal(typeof deleteInvalidPushSubscription, 'function','single-endpoint export remains available');
 const source=readFileSync(new URL('../services/pushNotificationService.ts',import.meta.url),'utf8');
-assert.equal((source.match(/await invalidateExpiredPushSubscriptionsBatch\\(\\{/g)||[]).length,2,
+assert.equal(source.split('await invalidateExpiredPushSubscriptionsBatch({').length - 1, 2,
   'both notification dispatchers use batch invalidation');
-assert.match(source,/\.eq\\('deployment_env', deploymentEnv\\)\\s*\\.in\\('endpoint', endpoints\\)/);
+assert.ok(source.includes(".eq('deployment_env', deploymentEnv)") && source.includes(".in('endpoint', endpoints)"));
 assert.match(source,/export async function deleteInvalidPushSubscription/);
 console.log('pushSubscriptionBatchInvalidation: PASS (dedupe, batching, environment, fallback, deny, sender wiring)');
