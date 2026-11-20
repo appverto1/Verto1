@@ -1,4 +1,5 @@
 import { registerAbaBehaviorCatalogRoutes } from './services/abaBehaviorCatalogRoutes';
+import { registerProfessionalTermsRoutes, ensureProfessionalTermsAccepted, isProfessionalLegalSession, PROFESSIONAL_TERMS_VERSION, PROFESSIONAL_TERMS_SHA256 } from './services/legalProfessionalTermsRoutes';
 import { createAbaNextSessionPlanItemPatchHandler } from './services/abaNextSessionPlanItemMutationHandler';
 import { createAbaRecommendationsGenerateHandler, createAbaRecommendationAcceptHandler, createAbaRecommendationRejectHandler, createAbaRecommendationLinkTargetHandler, createAbaRecommendationEditHandler, createAbaRecommendationApplyToNextSessionHandler } from './services/abaRecommendationMutationHandlers';
 import { createAbaMaintenanceConfirmLinkHandler, createAbaMaintenanceAssignAppointmentHandler, createAbaMaintenanceRelinkTargetHandler, createAbaMaintenanceSkipLinkHandler } from './services/abaMaintenanceScheduleLinkHandlers';
@@ -1658,6 +1659,8 @@ function isBillingOnboardingAllowedPath(pathname: any): boolean {
     path === '/api/workspaces/select' ||
     path === '/api/access-contexts/select' ||
     path === '/api/clinic/accept-invite' ||
+    path === '/api/legal/professional-terms' ||
+    path === '/api/legal/professional-terms/status' ||
     path === '/api/supabase-config' ||
     path.startsWith('/api/profile/') ||
     path.startsWith('/api/stripe/') ||
@@ -1680,6 +1683,8 @@ function isAccessContextSelectionAllowedPath(pathname: any): boolean {
     path === '/api/workspaces/select' ||
     path === '/api/access-contexts/select' ||
     path === '/api/clinic/accept-invite' ||
+    path === '/api/legal/professional-terms' ||
+    path === '/api/legal/professional-terms/status' ||
     path === '/api/supabase-config'
   );
 }
@@ -16812,6 +16817,7 @@ async function acceptClinicInvitationAtomically(params: {
   invitationId: string;
   userId: string;
   verifiedEmail: string;
+  termsConfirmed?: boolean;
 }): Promise<AtomicClinicInvitationAcceptance> {
   const invitationId = sanitizeString(params.invitationId, 120);
   const userId = sanitizeString(params.userId, 120);
@@ -16819,11 +16825,20 @@ async function acceptClinicInvitationAtomically(params: {
   if (!isUuid(invitationId) || !isUuid(userId) || !verifiedEmail) {
     throw clinicInvitationAcceptanceError({ message: 'CLINIC_INVITATION_INVALID' });
   }
-  const { data, error } = await supabase.rpc('accept_clinic_invitation_v1', {
-    p_invitation_id: invitationId,
-    p_user_id: userId,
-    p_verified_email: verifiedEmail,
-  });
+  const { data, error } = await supabase.rpc(
+    params.termsConfirmed === true
+      ? 'accept_clinic_invitation_with_terms_v1'
+      : 'accept_clinic_invitation_v1',
+    {
+      p_invitation_id: invitationId,
+      p_user_id: userId,
+      p_verified_email: verifiedEmail,
+      ...(params.termsConfirmed === true ? {
+        p_document_version: PROFESSIONAL_TERMS_VERSION,
+        p_document_sha256: PROFESSIONAL_TERMS_SHA256,
+      } : {}),
+    },
+  );
   if (error) throw clinicInvitationAcceptanceError(error);
   const row = Array.isArray(data) ? data[0] : data;
   const clinicId = sanitizeString(row?.clinic_id, 120);
@@ -28242,6 +28257,13 @@ async function startServer() {
   app.post('/api/clinic/accept-invite', checkAuth, async (req: any, res) => {
     const invitationId = sanitizeString(req.body?.invitationId, 120);
     const user = req.session.user;
+    if (req.body?.acceptProfessionalTerms !== true) {
+      return res.status(428).json({
+        success: false,
+        error: 'PROFESSIONAL_TERMS_REQUIRED',
+        message: 'Leia e aceite os Termos de Uso dos Profissionais para confirmar o vínculo.',
+      });
+    }
     if (!isUuid(invitationId)) {
       return res.status(400).json({ error: 'Convite inválido.' });
     }
@@ -28263,6 +28285,7 @@ async function startServer() {
         invitationId,
         userId: user.id,
         verifiedEmail: user.email,
+        termsConfirmed: true,
       });
     } catch (error: any) {
       const code = sanitizeString(error?.code, 120) || 'CLINIC_INVITATION_ACCEPT_FAILED';
@@ -44047,6 +44070,27 @@ async function startServer() {
           code: 'ONBOARDING_MEMBERSHIP_REQUIRED',
           error: 'Seu convite ainda não concluiu o vínculo com a clínica. Abra novamente o link recebido por e-mail.'
         });
+      }
+      if (!isProfessionalLegalSession({ id: userId, role })) {
+        return res.status(403).json({ error: 'PROFESSIONAL_PORTAL_REQUIRED' });
+      }
+      try {
+        const termsAccepted = await ensureProfessionalTermsAccepted({
+          supabase,
+          userId,
+          explicitlyAccepted: req.body?.acceptProfessionalTerms === true,
+          contextKey: 'professional-onboarding',
+        });
+        if (!termsAccepted) {
+          return res.status(428).json({
+            success: false,
+            error: 'PROFESSIONAL_TERMS_REQUIRED',
+            message: 'Confirme os Termos de Uso para concluir o cadastro profissional.',
+          });
+        }
+      } catch (termsError: any) {
+        logRouteDbError('/api/profile/complete-onboarding [LEGAL_ACCEPTANCE]', termsError, { userId });
+        return res.status(503).json({ success: false, error: 'LEGAL_ACCEPTANCE_STATE_UNAVAILABLE' });
       }
       const fullName = sanitizeString(req.body?.fullName || req.body?.name, 180);
       const birthDate = sanitizeDate(req.body?.birthDate);
@@ -84147,6 +84191,7 @@ app.post('/api/professional-finance/receivables/:paymentId/record', portalAction
   // Commercial partners use a standalone, server-verified session and never inherit clinical roles.
   // Register after the global API CSRF guard, before the unknown-route catch-all.
   registerPartnershipRoutes(app, {supabase,checkAuth,checkPlatformAdmin});
+  registerProfessionalTermsRoutes(app, { supabase, checkAuth });
 
   // Catch-all for API routes that don't exist to prevent falling through to Vite/SPA fallback
   app.all('/api/*', (req, res) => {
