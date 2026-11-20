@@ -60,7 +60,7 @@ test('LGPD-01: landing and login publish privacy and audience-specific terms wit
   assert.doesNotMatch(page, /href="\/legal\/termos-profissionais-verto-v1\.1\.html"/);
   assert.match(page, /href="\/legal\/termos-pacientes-responsaveis-verto-v1\.1\.html"/);
   assert.match(page, /loginType === 'patient'/);
-  assert.match(page, /loginType === 'professional'/);
+  assert.match(page, /openAudienceEntry\('professional'\)/);
   assert.doesNotMatch(page, /aceito a LGPD/i);
   assert.doesNotMatch(page, /Documentos disponíveis para consulta em homologação/i);
 });
