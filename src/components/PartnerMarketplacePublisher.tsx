@@ -1,4 +1,4 @@
-import React,{useCallback,useEffect,useState} from 'react';
+import React,{useCallback,useEffect,useRef,useState} from 'react';
 import {CheckCircle2, Loader2, MessageSquare, Store} from 'lucide-react';
 
 type Profile={service_name:string;category:string;description:string;logo_url:string|null;photo_url:string|null;logo_preview_url?:string|null};
@@ -33,6 +33,11 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
   const [logoFile,setLogoFile]=useState<File|null>(null);
   const [imagePreview,setImagePreview]=useState({logo:''});
   const [inbox,setInbox]=useState<PartnerLead[]>([]);
+  const [inboxHasMore,setInboxHasMore]=useState(false);
+  const [inboxNextOffset,setInboxNextOffset]=useState(50);
+  const [inboxLoadingMore,setInboxLoadingMore]=useState(false);
+  const inboxMoreInFlight=useRef(false);
+  const inboxEpoch=useRef(0);
   const [loading,setLoading]=useState(true);
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState('');
@@ -40,9 +45,11 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
   const [confirming,setConfirming]=useState<string|null>(null);
   const [amount,setAmount]=useState('');
   const load=useCallback(async()=>{
+    const epoch=++inboxEpoch.current;
     setError('');
     try{
       const d=await req('/api/partnerships/marketplace/partner');
+      if(epoch!==inboxEpoch.current)return;
       const p:Profile|null=d.profile||null;
       setProfile({
         serviceName:p?.service_name||'',category:p?.category||'',
@@ -51,11 +58,33 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
       setImagePreview({logo:p?.logo_preview_url||''});
       const leads:PartnerLead[]=Array.isArray(d.inbox)?d.inbox:[];
       setInbox(leads);
+      setInboxHasMore(d.hasMoreInbox===true);
+      setInboxNextOffset(Number.isSafeInteger(d.nextInboxOffset)?d.nextInboxOffset:leads.length);
       onPendingInterestsChange?.(leads.filter(lead=>lead.status==='interested').length);
-    }catch(e:any){setError(e.message);onPendingInterestsChange?.(null);}
-    finally{setLoading(false);}
+    }catch(e:any){if(epoch===inboxEpoch.current){setError(e.message);onPendingInterestsChange?.(null);}}
+    finally{if(epoch===inboxEpoch.current)setLoading(false);}
   },[onPendingInterestsChange]);
   useEffect(()=>{void load();},[load]);
+
+  const loadMoreInbox=async()=>{
+    if(!inboxHasMore||inboxMoreInFlight.current||loading||saving)return;
+    inboxMoreInFlight.current=true;
+    const epoch=inboxEpoch.current;
+    const offset=inboxNextOffset;
+    setInboxLoadingMore(true);setError('');
+    try{
+      const d=await req('/api/partnerships/marketplace/partner?offset='+offset);
+      if(epoch!==inboxEpoch.current)return;
+      const page:PartnerLead[]=Array.isArray(d.inbox)?d.inbox:[];
+      const known=new Set(inbox.map(lead=>lead.id));
+      const merged=[...inbox,...page.filter(lead=>!known.has(lead.id))];
+      setInbox(merged);
+      setInboxHasMore(d.hasMoreInbox===true);
+      setInboxNextOffset(Number.isSafeInteger(d.nextInboxOffset)?d.nextInboxOffset:offset+page.length);
+      onPendingInterestsChange?.(merged.filter(lead=>lead.status==='interested').length);
+    }catch(e:any){if(epoch===inboxEpoch.current)setError(e.message||'Não foi possível carregar mais interesses.');}
+    finally{inboxMoreInFlight.current=false;setInboxLoadingMore(false);}
+  };
   const selectImage=(file:File|null)=>{
     if(file && (file.size>10*1024*1024 || !['image/jpeg','image/png','image/webp'].includes(file.type))){
       setError('Escolha uma imagem JPG, PNG ou WebP com no máximo 10 MB.');
@@ -178,6 +207,11 @@ export function PartnerMarketplacePublisher({activeSection='store',onPendingInte
               </div>
             </li>)}
           </ul>}
+        {inboxHasMore&&<button type="button" disabled={inboxLoadingMore||saving}
+          onClick={()=>void loadMoreInbox()}
+          className="mt-3 rounded-xl border border-violet-200 px-4 py-2 text-sm font-semibold text-violet-700 disabled:opacity-50">
+          {inboxLoadingMore?'Carregando mais...':'Carregar mais interesses'}
+        </button>}
         <p className="mt-3 text-xs text-slate-500">Comissões de indicação da Verto ao parceiro (proposta: 10% por 6 meses) dependem de contrato e comprovação de pagamentos. Não há repasse automático.</p>
       </div>}
     </>}
