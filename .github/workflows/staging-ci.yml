@@ -64,6 +64,9 @@ jobs:
           node --import tsx tests/legalProfessionalTermsRoutes.test.ts
           node --import tsx tests/clinicReinviteAccess.test.ts
 
+      - name: Static bootstrap first-paint skeleton regression
+        run: node tests/earlyFirstPaintBootstrap.regression.test.mjs
+
       - name: First-paint Clarity, hero, and local WOFF2 regressions
         run: node --import tsx tests/firstPaintAndFonts.test.ts
 
@@ -499,3 +502,23 @@ jobs:
           fi
 
           echo "::warning::Pre-main gate contains only failures already present on the staging baseline; no new regression failure was introduced."
+
+      # Explicit opt-in only. Never use credentials or production. Does not run on
+      # ordinary PRs or pushes, minimizing GitHub Actions minutes.
+      - name: Public Staging performance browser smoke (opt-in)
+        if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[perf-smoke]') }}
+        env:
+          VERTO_PERF_STAGING_URL: https://staging-staging-7cd6.up.railway.app/
+        run: |
+          node --check scripts/performance-staging-public-smoke.mjs
+          google-chrome --version
+          npm install --no-save --no-package-lock --ignore-scripts --no-audit --no-fund playwright-core@1.56.1
+          node scripts/performance-staging-public-smoke.mjs
+
+      - name: Upload public Staging performance evidence
+        if: ${{ always() && github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[perf-smoke]') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: verto-staging-public-perf-evidence
+          path: perf-staging-public-evidence/
+          if-no-files-found: warn
