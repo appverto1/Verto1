@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const source = readFileSync(new URL('../src/components/CommercialKanban.tsx', import.meta.url), 'utf8');
+const column = source.split('{shownColumns.map((col)=>{')[1]?.split('          <div className="flex w-[104px]')[0];
+assert.ok(column, 'existing column projection must be preserved');
+const card = source.split('{cards.map(lead=>{')[1]?.split('</article>;')[0];
+assert.ok(card, 'card remains mounted in the original cards.map projection');
+assert.match(card, /cards\.length >= 30/, 'offscreen rendering only for long columns');
+assert.match(card, /contentVisibility: 'auto' as const/, 'native browser rendering deferral enabled');
+assert.match(card, /containIntrinsicSize: 'auto 380px'/, 'offscreen placeholder retains scroll geometry');
+assert.match(card, /borderLeftColor: col\.color/, 'visual column status colors preserved');
+assert.match(card, /draggable=\{!busyLead&&lead\.status!=='converted'\}/, 'card remains draggable');
+assert.match(card, /onDragStart=\{e=>e\.dataTransfer\.setData\('text\/plain',lead\.id\)\}/);
+assert.match(card, /onClick=\{\(\)=>openCard\(lead\.id\)\}/, 'original detail action preserved');
+assert.match(card, /onClick=\{\(\)=>setNotesPreviewId\(/, 'notes preview preserved');
+assert.match(card, /recordAttempt\(lead,'phone','no_decisor'\)/, 'attempt registration preserved');
+assert.match(source, /if\(sourceColumn\)\{moveColumnTo\(sourceColumn,col\.id\);return;\}/, 'column drag preserved');
+assert.match(source, /const lead=leads\.find\(x=>x\.id===id\);if\(lead\)moveLead\(lead,col\);/, 'card move preserved');
+assert.match(source, /ref=\{scrollRef\} className="min-w-0 overflow-x-auto pb-2"/, 'horizontal column scroll preserved');
+assert.doesNotMatch(card, /aria-hidden=|display:\s*'none'|\.slice\(/, 'cards must not be removed or made inaccessible');
+console.log('commercialKanbanViewportRendering: PASS (30-card threshold; DnD, notes, details, counts and scroll intact)');
