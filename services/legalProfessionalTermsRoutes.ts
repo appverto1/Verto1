@@ -23,21 +23,35 @@ export function registerProfessionalTermsRoutes(
   app: any,
   deps: { checkAuth: any; supabase: any },
 ) {
-  const authorize = (req: any, res: any, next: any) => {
-    if (!isProfessionalLegalSession(req.session?.user)) {
-      return res.status(403).json({ success: false, error: 'PROFESSIONAL_PORTAL_REQUIRED' });
-    }
+  const deny = (res: any) =>
+    res.status(403).json({ success: false, error: 'PROFESSIONAL_PORTAL_REQUIRED' });
+  const authorizeProfessional = (req: any, res: any, next: any) =>
+    isProfessionalLegalSession(req.session?.user) ? next() : deny(res);
+
+  const authorizeDocument = async (req: any, res: any, next: any) => {
+    if (isProfessionalLegalSession(req.session?.user)) return next();
+    const invitationId = String(req.query?.invitation_id || '').trim();
+    const email = String(req.session?.user?.email || '').trim().toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(invitationId)
+      || !req.session?.user?.id || !email) return deny(res);
+    const result = await deps.supabase.from('invitations')
+      .select('email,status,expires_at').eq('id', invitationId).maybeSingle();
+    if (result.error) return res.status(503).json({ error: 'LEGAL_DOCUMENT_UNAVAILABLE' });
+    if (String(result.data?.email || '').trim().toLowerCase() !== email ||
+      result.data?.status !== 'pending' ||
+      (result.data?.expires_at && new Date(result.data.expires_at).getTime() <= Date.now())
+    ) return deny(res);
     return next();
   };
 
-  app.get('/api/legal/professional-terms', deps.checkAuth, authorize, (_req: any, res: any) => {
+  app.get('/api/legal/professional-terms', deps.checkAuth, authorizeDocument, (_req: any, res: any) => {
     res.setHeader('Cache-Control', 'private, no-store, max-age=0');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'");
     return res.status(200).type('html').send(professionalTermsHtml);
   });
 
-  app.get('/api/legal/professional-terms/status', deps.checkAuth, authorize, async (req: any, res: any) => {
+  app.get('/api/legal/professional-terms/status', deps.checkAuth, authorizeProfessional, async (req: any, res: any) => {
     const userId = String(req.session.user.id);
     const result = await deps.supabase
       .from('user_legal_acceptances')
