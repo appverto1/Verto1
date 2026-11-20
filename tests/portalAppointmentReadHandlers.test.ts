@@ -4,6 +4,15 @@ import { createPortalAppointmentsListHandler,createPortalAppointmentDetailHandle
 const manifest=JSON.parse(readFileSync('docs/backend-modularization/20261013-portal-appointment-read-manifest.json','utf8'));
 const server=readFileSync('server.ts','utf8');
 assert.equal(manifest.routes.length,3);
+const appointmentReads=readFileSync('services/portalAppointmentReadHandlers.ts','utf8');
+assert.match(appointmentReads,/await canPortalUserAccessPatient\(rowPatientId, row, req\.session\.user, patientIds\)/,
+  'list must pass its current-request authorized patient IDs to fallback checks');
+assert.match(server,/const patientIds = preResolvedPatientIds \?\? await getPortalPatientIdsForUser\(user\)/,
+  'detail requests keep their own authorization lookup, while list requests reuse it');
+assert.match(server,/appointmentScope\.patientEmail === userEmail/,
+  'patient/responsible email checks must remain intact');
+assert.match(server,/return canAccessPatientInCurrentClinic\(scopedPatientId, user\)/,
+  'non-responsible clinic access checks must remain intact');
 const factories=[createPortalAppointmentsListHandler,createPortalAppointmentDetailHandler,createPortalRescheduleSlotsHandler];
 for(let i=0;i<manifest.routes.length;i++){
   const r=manifest.routes[i];

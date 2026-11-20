@@ -213,7 +213,7 @@ export function createPortalAppointmentsListHandler(getDeps: () => any) {
         if (
           notificationScopedAppointmentIds.has(rowId) ||
           authorizedPatientIdSet.has(rowPatientId) ||
-          await canPortalUserAccessPatient(rowPatientId, row, req.session.user)
+          await canPortalUserAccessPatient(rowPatientId, row, req.session.user, patientIds)
         ) {
           visibleRows.push(row);
         }
