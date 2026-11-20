@@ -284,6 +284,7 @@ jobs:
           node --import tsx tests/partnerWhatsappContactRoutes.test.ts
           node --import tsx tests/partnerWhatsAppReferral.test.ts
           node --import tsx tests/partnerPortalTabs.test.ts
+          node --import tsx tests/partnerPublisherInboxPagination.test.ts
           node tests/partnerReferralCrmReporting.regression.test.mjs
           node tests/partnerKanbanAttribution.regression.test.mjs
           node --import tsx tests/partnerMarketplaceSecurity.test.ts

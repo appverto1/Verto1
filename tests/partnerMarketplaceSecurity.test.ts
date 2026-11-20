@@ -8,7 +8,7 @@ const partnerId='33333333-3333-4333-8333-333333333333';
 const leadId='44444444-4444-4444-8444-444444444444';
 const email='owner@example.test';
 
-function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean;summaryRows?:any[];reviewRows?:any[];leadRows?:any[];existingReviewRows?:any[];reviewSaveResult?:boolean}={}){
+function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:string|null;confirmedContract?:boolean;summaryRows?:any[];reviewRows?:any[];leadRows?:any[];partnerInboxRows?:any[];existingReviewRows?:any[];reviewSaveResult?:boolean}={}){
   const routes:Record<string,any[]>={};
   const calls:any[]=[];
   const app:any={};
@@ -24,9 +24,11 @@ function fixture(role='director', options:{partnerLogin?:boolean;requestResult?:
         order(){return q;},in(){return q;},not(){return q;},
         update(values:any){calls.push({type:'update',table,values});return q;},
         upsert(values:any){calls.push({type:'upsert',table,values});return q;},
-        range:async(start:number,end:number)=>({
-          data:table==='verto_partner_marketplace_reviews'?(options.reviewRows||[]).slice(start,end+1):[],error:null
-        }),
+        range:async(start:number,end:number)=>{
+          calls.push({type:'range',table,start,end,filters:{...filters}});
+          return {data:table==='verto_partner_marketplace_reviews'?(options.reviewRows||[]).slice(start,end+1)
+            :table==='verto_partner_marketplace_leads'?(options.partnerInboxRows||[]).slice(start,end+1):[],error:null};
+        },
         limit:async(value:number)=>{
           calls.push({type:'limit',table,value});
           return {
@@ -282,4 +284,54 @@ test('review comments are paginated in stable batches of twenty and offsets are 
   assert.equal(invalid.statusCode,400);
   const forbidden=fixture('');
   assert.equal((await forbidden.run('GET','/api/partnerships/marketplace/reviews/:partnerId',{},undefined,{clinicId})).statusCode,403);
+});
+
+test('partner inbox keeps initial 50 rows and serves next pages only on demand',async()=>{
+  const rows=Array.from({length:116},(_,i)=>({
+    id:'lead-'+i,partner_id:partnerId,created_at:new Date(Date.UTC(2026,10,20)-i*1000).toISOString(),
+    contact_name:'Contato '+i,contact_email:'lead'+i+'@example.test',status:'interested'
+  }));
+  const f=fixture('director',{partnerInboxRows:rows});
+  const first=await f.run('GET','/api/partnerships/marketplace/partner');
+  assert.equal(first.statusCode,200);
+  assert.equal(first.body.inbox.length,50);
+  assert.equal(first.body.hasMoreInbox,true);
+  assert.equal(first.body.nextInboxOffset,50);
+  assert.equal(first.body.profile,null,'fixture contains no saved profile');
+  assert.equal(first.headers['Cache-Control'],'private, no-store');
+
+  const second=await f.run('GET','/api/partnerships/marketplace/partner',{},undefined,{offset:'50',partnerId:clinicId});
+  assert.equal(second.statusCode,200);
+  assert.equal(second.body.inbox.length,50);
+  assert.equal(second.body.inbox[0].id,'lead-50');
+  assert.equal(second.body.hasMoreInbox,true);
+  assert.equal(second.body.nextInboxOffset,100);
+  assert.equal(second.body.profile,null);
+
+  const last=await f.run('GET','/api/partnerships/marketplace/partner',{},undefined,{offset:'100'});
+  assert.equal(last.body.inbox.length,16);
+  assert.equal(last.body.hasMoreInbox,false);
+  assert.equal(last.body.nextInboxOffset,116);
+  assert.equal(f.calls.filter(call=>call.table==='verto_partner_marketplace_services'&&call.type==='from').length,1,
+    'additional pages must not reread or re-sign the private storefront profile');
+
+  const queries=f.calls.filter(call=>call.type==='range'&&call.table==='verto_partner_marketplace_leads');
+  assert.deepEqual(queries.map(call=>[call.start,call.end]),[[0,50],[50,100],[100,150]]);
+  for(const call of queries){
+    assert.equal(call.filters.partner_id,partnerId,'untrusted partnerId cannot change canonical partner');
+    assert.equal(call.end-call.start,50,'at most one extra row for hasMore');
+  }
+});
+
+test('partner inbox validates offsets and checks identity before reading any private leads',async()=>{
+  const f=fixture('director',{partnerInboxRows:[]});
+  const unauthorized=await f.run('GET','/api/partnerships/marketplace/partner',{}, {},{offset:'50'});
+  assert.equal(unauthorized.statusCode,401);
+  for(const offset of ['-1','01','1.5','1e3','10001','999999999999','',[],['50'],{},null]){
+    const invalid=await f.run('GET','/api/partnerships/marketplace/partner',{},undefined,{offset});
+    assert.equal(invalid.statusCode,400,'invalid offset '+JSON.stringify(offset));
+    assert.equal(invalid.body.error,'INVALID_INBOX_OFFSET');
+  }
+  assert.equal(f.calls.filter(call=>call.type==='range'&&call.table==='verto_partner_marketplace_leads').length,0,
+    'invalid or unauthorized requests cannot read private leads');
 });
