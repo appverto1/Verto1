@@ -9314,6 +9314,19 @@ export const dataService = {
     return await safeJson(response);
   },
 
+  async getProfessionalTermsStatus() {
+    try {
+      const response = await fetch('/api/legal/professional-terms/status', {
+        headers: await getAuthHeaders(),
+        credentials: 'include',
+      });
+      if (!response.ok) return { success: false, accepted: false };
+      return await safeJson(response);
+    } catch {
+      return { success: false, accepted: false };
+    }
+  },
+
   async getOnboardingContext() {
     try {
       const response = await fetch('/api/onboarding/context', {
@@ -10010,13 +10023,13 @@ export const dataService = {
     }
   },
 
-  async acceptInvitation(invitationId: string) {
+  async acceptInvitation(invitationId: string, acceptProfessionalTerms: boolean) {
     try {
       const response = await fetch('/api/clinic/accept-invite', {
         method: 'POST',
         headers: await getAuthHeaders(),
         credentials: 'include',
-        body: JSON.stringify({ invitationId })
+        body: JSON.stringify({ invitationId, acceptProfessionalTerms })
       });
       if (response.ok) {
         return await response.json();

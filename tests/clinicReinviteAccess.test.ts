@@ -64,7 +64,7 @@ assert.match(activation, /isInvitationAcceptanceAction/);
 assert.match(activation, /auth_action: isRecoveryRoute[\s\S]*?'accept_invitation'/);
 assert.match(activation, /deferInvitationAcceptance: isInvitationAcceptanceAction/);
 assert.match(activation, /verto_pending_invitation_acceptance/);
-assert.match(invitationAcceptance, /dataService\.acceptInvitation\(invitationId\)/);
+assert.match(invitationAcceptance, /dataService\.acceptInvitation\(invitationId, acceptProfessionalTerms\)/);
 assert.match(invitationAcceptance, /onboardingContext: result\.onboardingContext \|\| \{\}/);
 assert.match(invitationAcceptance, /currentAcceptance\?\.onboardingContext\?\.clinic\?\.name/);
 assert.match(invitationAcceptance, /Entrar na clínica/);
@@ -72,7 +72,7 @@ assert.match(invitationAcceptance, /Continuar depois/);
 assert.match(invitationAcceptance, /\{!currentAcceptance \? \(/);
 assert.doesNotMatch(invitationAcceptance, /currentAcceptance \? 'Ver depois'/);
 assert.match(invitationAcceptance, /No clinic,[\s\S]*?role, name, or e-mail comes from the URL/);
-assert.match(dataService, /async acceptInvitation\(invitationId: string\)/);
+assert.match(dataService, /async acceptInvitation\(invitationId: string, acceptProfessionalTerms: boolean\)/);
 
 // Conta existente reutiliza Auth e não recebe nova senha/UUID.
 assert.match(inviteRoute, /const reusedExistingAuthAccess = Boolean\(authUserHadVerifiedEmail\)/);
@@ -131,8 +131,8 @@ assert.match(loginRoute, /activationFlow[\s\S]*?!deferInvitationAcceptance[\s\S]
 assert.doesNotMatch(loginRoute, /\.eq\('email', safeAuthEmail\)[\s\S]*?\.eq\('status', 'pending'\)[\s\S]*?invitationForWorkspace = pendingInvite/);
 assert.match(billingOnboardingPaths, /path === '\/api\/clinic\/accept-invite'/);
 assert.match(invitationBillingBypass, /=== '\/api\/clinic\/accept-invite'/);
-assert.match(server, /!isClinicInvitationAcceptancePath\(req\.path \|\| req\.originalUrl\) && await isBillingAccessBlocked/);
-assert.match(server, /supabase\.rpc\('accept_clinic_invitation_v1'/);
+assert.match(server, /!isClinicInvitationAcceptancePath\(req\.path \|\| req\.originalUrl\) &&[\s\S]*?await isBillingAccessBlocked\(req\.session\.user\)/);
+assert.match(server, /params\.termsConfirmed === true[\s\S]*?'accept_clinic_invitation_with_terms_v1'[\s\S]*?'accept_clinic_invitation_v1'/);
 assert.doesNotMatch(acceptRoute, /req\.body\?\.clinicId|req\.body\?\.clinic_id|req\.body\?\.role/);
 assert.match(loginRoute, /\.eq\('id', requestedInvitationId\)/);
 assert.match(loginRoute, /\.in\('status', \['pending', 'accepted'\]\)/);

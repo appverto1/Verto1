@@ -44,6 +44,7 @@ export const ClinicInvitationAcceptance = ({
 }: ClinicInvitationAcceptanceProps) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [acceptProfessionalTerms, setAcceptProfessionalTerms] = useState(false);
   const [accepted, setAccepted] = useState<{ invitationId: string; user: any; onboardingContext: any } | null>(null);
   const acceptanceGateRef = useRef(createClinicInvitationSubmissionGate());
   const activeInvitationIdRef = useRef(invitationId);
@@ -53,6 +54,7 @@ export const ClinicInvitationAcceptance = ({
     acceptanceGateRef.current.reset();
     setIsSubmitting(false);
     setError('');
+    setAcceptProfessionalTerms(false);
     setAccepted(null);
   }, [invitationId]);
 
@@ -78,6 +80,10 @@ export const ClinicInvitationAcceptance = ({
 
   const handleAccept = async () => {
     if (acceptanceGateRef.current.hasPending() || currentAcceptance) return;
+    if (!acceptProfessionalTerms) {
+      setError('Leia e aceite os Termos de Uso dos Profissionais antes de confirmar o vínculo.');
+      return;
+    }
     if (!isInvitationId(invitationId)) {
       setError('O link do convite é inválido. Solicite um novo convite à clínica.');
       return;
@@ -88,7 +94,7 @@ export const ClinicInvitationAcceptance = ({
     setIsSubmitting(true);
     setError('');
     try {
-      const result = await dataService.acceptInvitation(invitationId);
+      const result = await dataService.acceptInvitation(invitationId, acceptProfessionalTerms);
       if (!acceptanceGateRef.current.isCurrent(request, activeInvitationIdRef.current)) return;
       if (!result?.success || !result?.user) {
         throw result;
@@ -184,15 +190,29 @@ export const ClinicInvitationAcceptance = ({
           </>
         )}
 
-        <p className="mt-5 text-xs leading-5 text-slate-500">
-          Antes de entrar na clínica, consulte os{' '}
-          <a href="/legal/termos-profissionais-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
-            className="font-medium text-violet-700 underline underline-offset-2">Termos de Uso dos Profissionais</a>
-          {' '}e a{' '}
-          <a href="/legal/politica-privacidade-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
-            className="font-medium text-violet-700 underline underline-offset-2">Política de Privacidade</a>.
-          Estes links são informativos e não alteram a validação do convite.
-        </p>
+        {!currentAcceptance && (
+          <div className="mt-5 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <label className="flex cursor-pointer items-start gap-3 text-sm leading-6 text-slate-700">
+              <input
+                type="checkbox"
+                checked={acceptProfessionalTerms}
+                onChange={(event) => { setAcceptProfessionalTerms(event.target.checked); if (error) setError(''); }}
+                className="mt-1 h-5 w-5 shrink-0 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+              />
+              <span>
+                Li e aceito os{' '}
+                <a href={`/api/legal/professional-terms?invitation_id=${encodeURIComponent(invitationId)}`} target="_blank" rel="noopener noreferrer"
+                  className="font-semibold text-violet-700 underline underline-offset-2"
+                  onClick={(event) => event.stopPropagation()}>Termos de Uso dos Profissionais</a>.
+              </span>
+            </label>
+            <p className="text-xs leading-5 text-slate-500">
+              Consulte também a{' '}
+              <a href="/legal/politica-privacidade-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
+                className="font-medium text-violet-700 underline underline-offset-2">Política de Privacidade</a>.
+            </p>
+          </div>
+        )}
 
         {error ? (
           <p className="mt-5 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2.5 text-sm leading-5 text-rose-700" role="alert">
@@ -214,7 +234,7 @@ export const ClinicInvitationAcceptance = ({
           <button
             type="button"
             onClick={() => void (currentAcceptance ? handleEnterClinic() : handleAccept())}
-            disabled={isSubmitting}
+            disabled={isSubmitting || (!currentAcceptance && !acceptProfessionalTerms)}
             className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-[#7a32fc] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#6925e8] focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? 'Validando convite…' : currentAcceptance ? 'Entrar na clínica' : 'Aceitar vínculo'}

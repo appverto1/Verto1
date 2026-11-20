@@ -58,8 +58,11 @@ jobs:
       - name: Clarity privacy-safe Web Vitals segment tags regression
         run: node --import tsx tests/clarityVitalsSegmentation.test.ts
 
-      - name: LGPD-01 legal document links and immutable contract regression
-        run: node tests/lgpd01LegalPlacement.regression.test.mjs
+      - name: LGPD-04 legal documents and professional-access security regression
+        run: |
+          node tests/lgpd01LegalPlacement.regression.test.mjs
+          node --import tsx tests/legalProfessionalTermsRoutes.test.ts
+          node --import tsx tests/clinicReinviteAccess.test.ts
 
       - name: First-paint Clarity, hero, and local WOFF2 regressions
         run: node --import tsx tests/firstPaintAndFonts.test.ts

@@ -52,7 +52,8 @@ assert.match(acceptance, /acceptanceGateRef\.current\.end\(request\)/);
 assert.match(acceptance, /acceptanceGateRef\.current\.reset\(\)/);
 assert.match(acceptance, /accepted\?\.invitationId === invitationId \? accepted : null/);
 assert.match(acceptance, /if \(!currentAcceptance\?\.user \|\| acceptanceGateRef\.current\.hasPending\(\)\) return/);
-assert.match(acceptance, /await dataService\.acceptInvitation\(invitationId\)/);
+assert.match(acceptance, /await dataService\.acceptInvitation\(invitationId, acceptProfessionalTerms\)/);
+assert.match(acceptance, /if \(!acceptProfessionalTerms\) \{/);
 assert.match(acceptance, /await onAccepted\(currentAcceptance\.user\)/);
 assert.doesNotMatch(acceptance, /dataService\.acceptInvitation\(.*(?:clinicId|role|specialty)/);
 

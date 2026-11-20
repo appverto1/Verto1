@@ -333,6 +333,25 @@ export function SettingsMenu({
                 </button>
   ) : null;
 
+  const professionalTermsAction = (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={() => {
+        setIsOpen(false);
+        onAction?.();
+        window.open('/api/legal/professional-terms', '_blank', 'noopener,noreferrer');
+      }}
+      className="flex w-full items-center justify-between rounded-xl p-3 text-slate-600 transition-all hover:bg-slate-50"
+    >
+      <span className="flex items-center gap-3">
+        <BookOpenCheck size={18} className="text-slate-400" />
+        <span className="text-sm font-medium">Termos de Uso</span>
+      </span>
+      <ChevronRight size={14} className={inline ? "hidden" : "text-slate-300"} />
+    </button>
+  );
+
   const accountActions = (
     <>
             {showAccountIdentity && (
@@ -415,6 +434,7 @@ export function SettingsMenu({
               )}
 
               {!inline && billingSettingsAction}
+              {!inline && professionalTermsAction}
 
               <button
                 type="button"
@@ -468,6 +488,7 @@ export function SettingsMenu({
                   {clinicSettingsAction}
                   {teamSettingsAction}
                   {billingSettingsAction}
+                  {professionalTermsAction}
                   {onViewRooms && (
                     <button type="button" role="menuitem" onClick={() => { onAction?.(); onViewRooms(); }}
                       className="flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-medium text-slate-600 hover:bg-slate-50">

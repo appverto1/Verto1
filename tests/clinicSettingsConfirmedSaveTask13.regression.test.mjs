@@ -125,7 +125,7 @@ test('onboarding saves only when clicking Finish and restores the same confirmed
   assert.match(finish, /onComplete\(\{[\s\S]*?\.\.\.\(result\.user\?\.clinicSettings \|\| \{\}\)/);
   assert.match(onboarding, /metadata\?\.clinicOperationType \|\| user\?\.clinicSettings\?\.clinicOperationType/);
   assert.match(onboarding, /authoritativeContext\.onboardingMode === 'clinic_owner'/);
-  assert.match(onboarding, /disabled=\{loading \|\| !clinicName\.trim\(\)\} onClick=\{finish\}/);
+  assert.match(onboarding, /disabled=\{loading \|\| !clinicName\.trim\(\) \|\| \(!previousTermsAcceptance && !acceptProfessionalTerms\)\} onClick=\{finish\}/);
 });
 
 test('tenant and role authorization stay server-authoritative for clinic writes', () => {
