@@ -201,7 +201,7 @@ export const ClinicInvitationAcceptance = ({
               />
               <span>
                 Li e aceito os{' '}
-                <a href="/api/legal/professional-terms" target="_blank" rel="noopener noreferrer"
+                <a href={`/api/legal/professional-terms?invitation_id=${encodeURIComponent(invitationId)}`} target="_blank" rel="noopener noreferrer"
                   className="font-semibold text-violet-700 underline underline-offset-2"
                   onClick={(event) => event.stopPropagation()}>Termos de Uso dos Profissionais</a>.
               </span>
