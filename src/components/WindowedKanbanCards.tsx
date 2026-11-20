@@ -111,10 +111,12 @@ export function WindowedKanbanCards<T extends Item>({items,columnTitle,renderCar
     </button>}
     {items.slice(start,end).map((item,index)=>{
       const absoluteIndex=start+index;
-      return <MeasuredRow key={item.id} itemId={item.id} index={absoluteIndex}
-        count={items.length} onMeasure={measure}>
-        {renderCard(item)}
-      </MeasuredRow>;
+      return <React.Fragment key={item.id}>
+        <MeasuredRow itemId={item.id} index={absoluteIndex}
+          count={items.length} onMeasure={measure}>
+          {renderCard(item)}
+        </MeasuredRow>
+      </React.Fragment>;
     })}
     {end<items.length&&<button type="button" className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-xs text-violet-700"
       onClick={()=>jumpTo(end)} aria-label={'Ver próximos cards da coluna '+columnTitle}>
