@@ -62,6 +62,7 @@ jobs:
         run: |
           node tests/lgpd01LegalPlacement.regression.test.mjs
           node --import tsx tests/legalProfessionalTermsRoutes.test.ts
+          node --import tsx tests/clinicReinviteAccess.test.ts
 
       - name: First-paint Clarity, hero, and local WOFF2 regressions
         run: node --import tsx tests/firstPaintAndFonts.test.ts
