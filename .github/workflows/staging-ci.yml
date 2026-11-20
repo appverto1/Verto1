@@ -8,6 +8,12 @@ on:
     branches:
       - staging
   workflow_dispatch:
+    inputs:
+      public_performance_smoke:
+        description: 'Rodar smoke público de performance na Staging já implantada (sem login e sem escrita)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -508,7 +514,7 @@ jobs:
       # Explicit opt-in only. Never use credentials or production. Does not run on
       # ordinary PRs or pushes, minimizing GitHub Actions minutes.
       - name: Public Staging performance browser smoke (opt-in)
-        if: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[perf-smoke]') }}
+        if: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[perf-smoke]')) || (github.event_name == 'workflow_dispatch' && inputs.public_performance_smoke) }}
         env:
           VERTO_PERF_STAGING_URL: https://staging-staging-7cd6.up.railway.app/
         run: |
@@ -518,7 +524,7 @@ jobs:
           node scripts/performance-staging-public-smoke.mjs
 
       - name: Upload public Staging performance evidence
-        if: ${{ always() && github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[perf-smoke]') }}
+        if: ${{ always() && ((github.event_name == 'pull_request' && contains(github.event.pull_request.title, '[perf-smoke]')) || (github.event_name == 'workflow_dispatch' && inputs.public_performance_smoke)) }}
         uses: actions/upload-artifact@v4
         with:
           name: verto-staging-public-perf-evidence
