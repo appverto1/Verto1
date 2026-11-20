@@ -7,6 +7,7 @@ import { getSupabase } from '../lib/supabase';
 import type { CommercialAttempt } from './CommercialDashboard';
 import { CommercialScriptsPanel } from './CommercialScriptsPanel';
 import { CommercialAcquisitionPanel } from './CommercialAcquisitionPanel';
+import { WindowedKanbanCards } from './WindowedKanbanCards';
 import { nextSalesCadenceSlots } from '../utils/salesProspectingCadence';
 import { compareSiteInterestProspecting } from '../utils/siteInterestPriority.mjs';
 import { splitOpportunityPhones, previewOpportunityDuplicates, createManualOpportunities } from '../services/salesKanbanOpportunityCreation';
@@ -1228,9 +1229,9 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                 </label>
                 <p className="mt-1 text-[10px] text-slate-500">{cards.length} de {allCards.length} cards nesta coluna</p>
               </div>
-              <div className="flex-1 space-y-2 p-2">
+              <div className="flex-1 p-2">
                 {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">{allCards.length>0?'Nenhum card corresponde ao filtro':'Nenhum card nesta etapa'}</div>}
-                {cards.map(lead=>{
+                <WindowedKanbanCards items={cards} columnTitle={col.title} renderCard={lead=>{
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
                   const newLead=historyReady&&total===0&&!['converted','lost','archived'].includes(lead.status);
                   const dueToday=callDueToday(lead);
@@ -1238,15 +1239,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                   return <article key={lead.id} draggable={!busyLead&&lead.status!=='converted'}
                     onDragStart={e=>e.dataTransfer.setData('text/plain',lead.id)}
                     className="group rounded-lg border-l-4 bg-white p-3 shadow-sm ring-1 ring-slate-200 transition hover:shadow-md"
-                    style={{
-                      borderLeftColor: col.color,
-                      // In large columns, let the browser skip offscreen layout/paint.
-                      // Keep every card mounted for native DnD, keyboard focus and actions.
-                      ...(cards.length >= 30 ? {
-                        contentVisibility: 'auto' as const,
-                        containIntrinsicSize: 'auto 380px'
-                      } : {})
-                    }}>
+                    style={{borderLeftColor:col.color}}>
                     {bulkExistingMode&&<label className="mb-2 flex cursor-pointer items-center gap-2 rounded-lg bg-indigo-50 px-2 py-1.5 text-xs font-bold text-indigo-900">
                       <input type="checkbox" aria-label={'Selecionar card '+(lead.name||lead.phone)}
                         disabled={bulkExistingBusy}
@@ -1360,7 +1353,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                       <button onClick={()=>openCard(lead.id)} className="flex-1 rounded-md bg-slate-900 py-1.5 text-[10px] font-bold text-white">Detalhes</button>
                     </div>
                   </article>;
-                })}
+                }}/>
               </div>
             </div>;
           })}
