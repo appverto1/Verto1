@@ -1229,7 +1229,7 @@ export const CommercialKanban = ({ leads, onLeadPatch, onLeadsCreated, onPriorit
                 </label>
                 <p className="mt-1 text-[10px] text-slate-500">{cards.length} de {allCards.length} cards nesta coluna</p>
               </div>
-              <div className="flex-1 p-2">
+              <div className="flex-1 space-y-2 p-2">
                 {cards.length===0&&<div className="rounded-lg border border-dashed border-slate-300 bg-white/70 p-5 text-center text-xs text-slate-400">{allCards.length>0?'Nenhum card corresponde ao filtro':'Nenhum card nesta etapa'}</div>}
                 <WindowedKanbanCards items={cards} columnTitle={col.title} renderCard={lead=>{
                   const a=leadCounts(lead.id),total=a.phone+a.whatsapp;
