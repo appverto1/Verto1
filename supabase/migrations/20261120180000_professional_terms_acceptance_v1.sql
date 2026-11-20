@@ -5,7 +5,7 @@ begin;
 
 create table if not exists public.user_legal_acceptances (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references public.users(id) on delete restrict,
+  user_id uuid not null references public.users(id) on delete cascade,
   document_key text not null check (document_key = 'professional_terms'),
   document_version text not null check (char_length(document_version) between 1 and 24),
   document_sha256 text not null check (document_sha256 ~ '^[a-f0-9]{64}$'),
