@@ -1652,11 +1652,6 @@ export const LandingPage = ({ onLogin, setUser, accessOnly = false }: any) => {
                       <a href="/legal/termos-pacientes-responsaveis-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
                         className="font-semibold text-violet-700 underline underline-offset-2">Termos do Portal do Paciente</a>
                     </>
-                  ) : loginType === 'professional' || loginType === 'coordinator' ? (
-                    <> e os{' '}
-                      <a href="/legal/termos-profissionais-verto-v1.1.html" target="_blank" rel="noopener noreferrer"
-                        className="font-semibold text-violet-700 underline underline-offset-2">Termos dos Profissionais</a>
-                    </>
                   ) : null}.
                 </p>
 
