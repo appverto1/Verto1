@@ -22175,7 +22175,10 @@ async function startServer() {
       if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
         return res.status(402).json(billingAccessBlockedPayload(req.session.user));
       }
-      if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && await isBillingAccessBlocked(req.session.user)) {
+      if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) &&
+        req.path !== '/api/legal/professional-terms' &&
+        req.path !== '/api/legal/professional-terms/status' &&
+        await isBillingAccessBlocked(req.session.user)) {
         return res.status(402).json({
           error: 'BILLING_ACCESS_BLOCKED',
           message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
@@ -22310,7 +22313,10 @@ async function startServer() {
             if (!hasActiveClinicBillingAccess(req.session.user) && !isBillingOnboardingAllowedPath(req.path || req.originalUrl)) {
               return res.status(402).json(billingAccessBlockedPayload(req.session.user));
             }
-            if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) && await isBillingAccessBlocked(req.session.user)) {
+            if (!isClinicInvitationAcceptancePath(req.path || req.originalUrl) &&
+        req.path !== '/api/legal/professional-terms' &&
+        req.path !== '/api/legal/professional-terms/status' &&
+        await isBillingAccessBlocked(req.session.user)) {
               return res.status(402).json({
                 error: 'BILLING_ACCESS_BLOCKED',
                 message: 'Acesso bloqueado por inadimplência. Regularize o pagamento para continuar.'
