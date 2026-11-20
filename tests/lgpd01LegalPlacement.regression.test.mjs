@@ -27,6 +27,34 @@ test('LGPD-02: páginas exibem o texto jurídico sem capas ou avisos de homologa
   assert.match(privacy, /24\. Alterações/);
 });
 
+test('LGPD-03: remove visual-only versions and faux acceptance boxes without deleting substantive clauses', () => {
+  for (const [file] of docs) {
+    const html = read(`public/legal/${file}`);
+    const body = html.match(/<body><main><pre>([\s\S]*?)<\/pre><\/main><\/body>/)?.[1];
+    assert.ok(body, file);
+    assert.doesNotMatch(body, /(?:^|\n)Versão:\s*v\d+\.\d+/i, file);
+    assert.doesNotMatch(body, /☐|Li e aceito os Termos de Uso do Portal|Li e aceito os Termos de Uso dos Profissionais/i, file);
+  }
+
+  const professional = read('public/legal/termos-profissionais-verto-v1.1.html');
+  assert.match(professional, /11\. Automação e IA/);
+  assert.match(professional, /20\.2\. Quando novo aceite for juridicamente necessário/);
+  assert.doesNotMatch(professional, /21\. Aceite/);
+  const patient = read('public/legal/termos-pacientes-responsaveis-verto-v1.1.html');
+  assert.match(patient, /20\.2\. Estes Termos não impedem reclamação à clínica/);
+  assert.doesNotMatch(patient, /21\. Aceite/);
+});
+
+test('LGPD-03: homepage footer discloses only public privacy policy while login links are portal-specific', () => {
+  const page = read('src/components/LandingPage.tsx');
+  const footer = page.slice(page.indexOf('{/* Footer */}'));
+  assert.match(footer, /href="\/legal\/politica-privacidade-verto-v1\.1\.html"/);
+  assert.doesNotMatch(footer, /\/legal\/termos-(?:profissionais|pacientes)/);
+  const modal = page.slice(page.indexOf('{/* Login Modal */}'), page.indexOf('{/* Footer */}'));
+  assert.match(modal, /loginType === 'patient'[\s\S]*?termos-pacientes-responsaveis-verto-v1\.1\.html/);
+  assert.match(modal, /loginType === 'professional' \|\| loginType === 'coordinator'[\s\S]*?termos-profissionais-verto-v1\.1\.html/);
+});
+
 test('LGPD-01: landing and login publish privacy and audience-specific terms without granting consent by silence', () => {
   const page = read('src/components/LandingPage.tsx');
   assert.match(page, /href="\/legal\/politica-privacidade-verto-v1\.1\.html"/);
