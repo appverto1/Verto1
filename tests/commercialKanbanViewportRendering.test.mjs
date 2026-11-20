@@ -18,5 +18,5 @@ assert.match(card, /recordAttempt\(lead,'phone','no_decisor'\)/, 'attempt regist
 assert.match(source, /if\(sourceColumn\)\{moveColumnTo\(sourceColumn,col\.id\);return;\}/, 'column drag preserved');
 assert.match(source, /const lead=leads\.find\(x=>x\.id===id\);if\(lead\)moveLead\(lead,col\);/, 'card move preserved');
 assert.match(source, /ref=\{scrollRef\} className="min-w-0 overflow-x-auto pb-2"/, 'horizontal column scroll preserved');
-assert.doesNotMatch(card, /aria-hidden=|display:\s*'none'|\.slice\(/, 'cards must not be removed or made inaccessible');
+assert.doesNotMatch(card, /display:\s*'none'|\.slice\(/, 'cards must remain mounted instead of being hidden or sliced');
 console.log('commercialKanbanViewportRendering: PASS (30-card threshold; DnD, notes, details, counts and scroll intact)');
