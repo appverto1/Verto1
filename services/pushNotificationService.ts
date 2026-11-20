@@ -574,6 +574,72 @@ export async function deleteInvalidPushSubscription(params: {
   });
 }
 
+/**
+ * Coalesce invalid push endpoints into bounded, environment-scoped writes.
+ * This runs only after the push provider reports an endpoint as expired.
+ * The single-endpoint compatibility API above is intentionally unchanged.
+ */
+export async function invalidateExpiredPushSubscriptionsBatch(params: {
+  supabase: any;
+  deploymentEnv: VertoDeploymentEnvironment;
+  endpoints: Iterable<string>;
+  logger?: Logger;
+}) {
+  const deploymentEnv = requireDeploymentEnv(params.deploymentEnv);
+  const uniqueEndpoints = new Set<string>();
+  for (const raw of params.endpoints) {
+    const endpoint = sanitizeText(raw, 2000);
+    if (endpoint) uniqueEndpoints.add(endpoint);
+  }
+  if (!uniqueEndpoints.size) return;
+
+  // Bound both PostgREST IN-list size and URL length; don't generate one
+  // round-trip per invalid endpoint (and don't allow huge filter URLs).
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let filterChars = 0;
+  for (const endpoint of uniqueEndpoints) {
+    if (batch.length && (batch.length >= 12 || filterChars + endpoint.length + 1 > 3000)) {
+      batches.push(batch);
+      batch = [];
+      filterChars = 0;
+    }
+    batch.push(endpoint);
+    filterChars += endpoint.length + 1;
+  }
+  if (batch.length) batches.push(batch);
+
+  const invalidatedAt = new Date().toISOString();
+  for (const endpoints of batches) {
+    const mark = await params.supabase
+      .from('push_subscriptions')
+      .update({ invalidated_at: invalidatedAt, updated_at: invalidatedAt })
+      .eq('deployment_env', deploymentEnv)
+      .in('endpoint', endpoints);
+    if (!mark.error) continue;
+
+    // Pre-migration fallback: exactly the same legacy behavior as the
+    // existing single-endpoint method, only for the known missing column.
+    if (extractMissingColumnName(mark.error) === 'invalidated_at') {
+      const fallback = await params.supabase
+        .from('push_subscriptions')
+        .delete()
+        .eq('deployment_env', deploymentEnv)
+        .in('endpoint', endpoints);
+      if (!fallback.error) continue;
+      params.logger?.warn?.('[Push] Falha ao remover lote de subscriptions expiradas.', {
+        count: endpoints.length,
+        message: fallback.error.message
+      });
+      continue;
+    }
+    params.logger?.warn?.('[Push] Falha ao invalidar lote de subscriptions expiradas.', {
+      count: endpoints.length,
+      message: mark.error.message
+    });
+  }
+}
+
 export async function renewPatientPushSubscription(params: {
   supabase: any;
   deploymentEnv: VertoDeploymentEnvironment;
@@ -990,9 +1056,9 @@ export async function sendPatientPortalNotification(params: SendPatientPortalNot
     catch (error: any) { failed += 1; logger.warn('[Push] Falha ao enviar aviso da clínica.', { patientId: isUuid(patientId) ? patientId : null, clinicId: isUuid(clinicId) ? clinicId : null, endpoint: entry.subscription.endpoint.slice(0,80), statusCode: error?.statusCode ?? error?.status ?? null, message: error?.message || String(error) }); if (isGonePushError(error)) invalidEndpoints.add(entry.subscription.endpoint); }
   }
   if (invalidEndpoints.size > 0) {
-    await Promise.all(Array.from(invalidEndpoints).map((endpoint) =>
-      deleteInvalidPushSubscription({ supabase: params.supabase, deploymentEnv, endpoint, logger })
-    ));
+    await invalidateExpiredPushSubscriptionsBatch({
+      supabase: params.supabase, deploymentEnv, endpoints: invalidEndpoints, logger
+    });
   }
   return { sent, failed, subscriptions: rows.length };
 }
@@ -1122,9 +1188,9 @@ export async function sendAppointmentNotification(params: SendAppointmentNotific
   }
 
   if (invalidEndpoints.size > 0) {
-    await Promise.all(Array.from(invalidEndpoints).map((endpoint) =>
-      deleteInvalidPushSubscription({ supabase: params.supabase, deploymentEnv, endpoint, logger })
-    ));
+    await invalidateExpiredPushSubscriptionsBatch({
+      supabase: params.supabase, deploymentEnv, endpoints: invalidEndpoints, logger
+    });
   }
 
   return { sent, failed, subscriptions: rows.length };
