@@ -46,7 +46,7 @@ await invalidateExpiredPushSubscriptionsBatch({
 assert.equal(one.calls.length, 1, 'two endpoints share one UPDATE instead of N requests');
 assert.deepEqual(one.calls[0].filter, { deployment_env: 'staging', endpoint: ['https://push.example/a', 'https://push.example/b'] });
 assert.equal(one.calls[0].values.invalidated_at, one.calls[0].values.updated_at);
-assert.match(String(one.calls[0].values.invalidated_at), /^\\d{4}-/);
+assert.match(String(one.calls[0].values.invalidated_at), /^\d{4}-/);
 
 const many = fakeDatabase();
 const endpoints = Array.from({ length: 32 }, (_, i) => 'https://push.example/' + String(i).padStart(3,'0'));
