@@ -410,6 +410,9 @@ jobs:
       - name: Clinical notification read receipt extraction regressions
         run: node --import tsx tests/clinicalNotificationMarkReadHandler.test.ts
 
+      - name: Patient portal appointment authorization N+1 regression
+        run: node --import tsx tests/portalAppointmentReadHandlers.test.ts
+
       - name: Server readiness extraction regression tests
         run: |
           node --import tsx tests/serverReadyRouteHandler.test.ts
