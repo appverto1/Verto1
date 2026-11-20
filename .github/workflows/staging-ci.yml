@@ -299,8 +299,10 @@ jobs:
           node --test tests/mainPublicLandingEntry.regression.test.mjs
           node tests/partnerMainIntegration.regression.test.mjs
 
-      - name: Commercial Kanban offscreen rendering regression
-        run: node tests/commercialKanbanViewportRendering.test.mjs
+      - name: Commercial Kanban bounded DOM virtualization regression
+        run: |
+          node --import tsx tests/kanbanVirtualWindow.test.ts
+          node tests/commercialKanbanViewportRendering.test.mjs
 
       - name: Notification and scheduling regression tests
         run: |
