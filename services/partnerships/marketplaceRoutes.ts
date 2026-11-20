@@ -262,20 +262,31 @@ export function registerPartnerMarketplaceRoutes(app:any,{supabase,checkAuth,che
     try{
       const partner=await partnerAccount(req);
       if(!partner)return error(res,'PARTNER_LOGIN_REQUIRED',401);
+      // Keep the original 50-record initial page and its notification count.
+      // Subsequent pages are queried only when the partner explicitly requests them.
+      const rawOffset=req.query?.offset;
+      const offset=rawOffset===undefined?0:
+        typeof rawOffset==='string' && /^(?:0|[1-9][0-9]{0,4})$/.test(rawOffset)?Number(rawOffset):NaN;
+      if(!Number.isSafeInteger(offset)||offset<0||offset>10000)return error(res,'INVALID_INBOX_OFFSET');
       const [profile,inbox]=await Promise.all([
-        supabase.from('verto_partner_marketplace_services')
+        offset===0?supabase.from('verto_partner_marketplace_services')
           .select('service_name,category,description,logo_url,photo_url,is_published')
-          .eq('partner_id',partner.id).maybeSingle(),
+          .eq('partner_id',partner.id).maybeSingle():Promise.resolve({data:null,error:null}),
         supabase.from('verto_partner_marketplace_leads')
           .select('id,contact_name,contact_email,contact_phone,status,agreed_monthly_cents,created_at,clinic:clinics(name)')
-          .eq('partner_id',partner.id).order('created_at',{ascending:false}).limit(50)
+          .eq('partner_id',partner.id)
+          .order('created_at',{ascending:false}).order('id',{ascending:false})
+          .range(offset,offset+50)
       ]);
       if(profile.error||inbox.error)throw profile.error||inbox.error;
       const savedProfile=profile.data||null;
-      const resolveImage=await signedImages(savedProfile?[savedProfile.logo_url]:[]);
+      const resolveImage=offset===0?await signedImages(savedProfile?[savedProfile.logo_url]:[]):()=>null;
+      const inboxRows=Array.isArray(inbox.data)?inbox.data:[];
       res.setHeader('Cache-Control','private, no-store');
       return res.json({success:true,profile:savedProfile?{...savedProfile,
-        logo_preview_url:resolveImage(savedProfile.logo_url)}:null,inbox:inbox.data||[]});
+        logo_preview_url:resolveImage(savedProfile.logo_url)}:null,
+        inbox:inboxRows.slice(0,50),hasMoreInbox:inboxRows.length>50&&offset<10000,
+        nextInboxOffset:offset+Math.min(inboxRows.length,50)});
     }catch{return unavailable(res);}
   });
 
