@@ -9,6 +9,7 @@ const profileJs = ts.transpileModule(read('src/utils/patientProfileType.ts'), {
 }).outputText;
 const helpers = await import('data:text/javascript;base64,' + Buffer.from(profileJs).toString('base64'));
 const server = read('server.ts');
+const patientRegistryHandlers = read('services/patientRegistryHandlers.ts');
 const start = server.indexOf('function buildPatientProfileTypeFields(');
 const end = server.indexOf('function normalizePatientInsuranceTypeForPersistence(', start);
 assert.ok(start >= 0 && end > start, 'patient profile persistence function must exist exactly where expected');
@@ -33,6 +34,6 @@ assert.equal(result({}, false).patient_profile_type, 'ADULT', 'create defaults u
 assert.equal(result({ patientProfileType: 'ABA' }, false).patient_profile_type, 'ABA');
 assert.match(server, /function buildPatientIdentityPersistenceFields\(body: any, options: \{ partial\?: boolean \} = \{\}\)/);
 assert.match(server, /buildPatientProfileTypeFields\(body, options\.partial === true\)/);
-assert.match(server, /hasIdentityPersistencePatch \? buildPatientIdentityPersistenceFields\(patientIdentityPayload, \{ partial: true \}\)/);
-assert.match(server, /const identityPersistenceFields = buildPatientIdentityPersistenceFields\(req\.body\)/, 'POST still uses creation mode');
+assert.match(patientRegistryHandlers, /hasIdentityPersistencePatch \? buildPatientIdentityPersistenceFields\(patientIdentityPayload, \{ partial: true \}\)/);
+assert.match(patientRegistryHandlers, /const identityPersistenceFields = buildPatientIdentityPersistenceFields\(req\.body\)/, 'POST still uses creation mode');
 console.log('p000PatientProfilePartialPatch: PASS');

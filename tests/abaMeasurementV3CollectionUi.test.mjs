@@ -6,6 +6,8 @@ const migration = readFileSync(
   'utf8',
 );
 const server = readFileSync('server.ts', 'utf8');
+const abaWriteHandlers = readFileSync('services/abaSessionWriteHandlers.ts', 'utf8');
+const abaCollectionWriteHandlers = readFileSync('services/abaSessionCollectionWriteHandlers.ts', 'utf8');
 const sessionMode = readFileSync('src/components/SessionMode.tsx', 'utf8');
 const settings = readFileSync('src/components/ClinicGlobalSettingsPanel.tsx', 'utf8');
 const dataService = readFileSync('src/services/dataService.ts', 'utf8');
@@ -62,7 +64,7 @@ assert.match(server, /assertAbaV3Pr9bTargetReady\(organizationId, patientId, tar
 const legacyTrialRouteStart = server.indexOf("app.post('/api/aba/trials'");
 const legacyTrialRouteEnd = server.indexOf("app.get('/api/aba/trials/:patientId'", legacyTrialRouteStart);
 assert.ok(legacyTrialRouteStart >= 0 && legacyTrialRouteEnd > legacyTrialRouteStart, 'Legacy trial route block must exist');
-const legacyTrialRoute = server.slice(legacyTrialRouteStart, legacyTrialRouteEnd);
+const legacyTrialRoute = abaCollectionWriteHandlers.slice(abaCollectionWriteHandlers.indexOf('export function createAbaTrialWriteHandler'), abaCollectionWriteHandlers.indexOf('export function createAbaBehaviorEventWriteHandler'));
 assert.match(legacyTrialRoute, /get_aba_v3_session_collection_plan/);
 assert.match(legacyTrialRoute, /ABA_V3_LEGACY_WRITE_BLOCKED/);
 assert.match(legacyTrialRoute, /plannedModel === 'V3' \|\| plannedModel === 'V3_BLOCKED'/);
@@ -80,9 +82,9 @@ assert.match(trialRoute, /\.select\('id,key,name,category,intrusiveness_order,ac
 assert.doesNotMatch(trialRoute, /independence_score|response_score/);
 
 // The session completion path is hybrid only behind the collection gate.
-assert.match(server, /const useAbaV3Completion = isAbaV3CollectionApiEnabled\(\)/);
-assert.match(server, /useAbaV3Completion \? 'complete_aba_session_v3' : 'complete_aba_session_atomic_v1'/);
-assert.match(server, /p_legacy_v2_summary: summaryPayload/);
+assert.match(abaWriteHandlers, /const useAbaV3Completion = isAbaV3CollectionApiEnabled\(\)/);
+assert.match(abaWriteHandlers, /useAbaV3Completion \? 'complete_aba_session_v3' : 'complete_aba_session_atomic_v1'/);
+assert.match(abaWriteHandlers, /p_legacy_v2_summary: summaryPayload/);
 
 // Browser sends categorical intent, never weighted prompt mathematics.
 for (const key of ['INDEPENDENT_CORRECT', 'INDEPENDENT_INCORRECT', 'NO_RESPONSE', 'PROMPTED_CORRECT']) {
