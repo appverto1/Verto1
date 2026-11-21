@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { createAbaSessionPatchHandler } from '../services/abaSessionWriteHandlers';
-import { createPatientListHandler } from '../services/patientRegistryHandlers';
-import { createProfessionalOnboardingCompletionHandler } from '../services/professionalProfileWriteHandlers';
-import { createPatientFilePermissionsReadHandler, createPatientFilePermissionsWriteHandler } from '../services/patientFileOperationsHandlers';
+import { createAbaSessionStartHandler, createAbaSessionCompleteHandler, createAbaSessionPatchHandler } from '../services/abaSessionWriteHandlers';
+import { createPatientListHandler, createPatientRegistrationHandler, createPatientDemographicsWriteHandler } from '../services/patientRegistryHandlers';
+import { createProfessionalOnboardingCompletionHandler, createProfessionalProfileSaveHandler } from '../services/professionalProfileWriteHandlers';
+import { createPatientFilePermissionsReadHandler, createPatientFilePermissionsWriteHandler, createPatientFileAuditedAccessHandler, createPatientFileUploadHandler, createPatientFileDeleteHandler } from '../services/patientFileOperationsHandlers';
 
 function mockResponse() {
   const res: any = { code: 200, body: undefined };
@@ -38,5 +38,20 @@ const ident = (v: unknown) => String(v ?? '');
   await createAbaSessionPatchHandler(() => ({ enforcePayloadLimit: () => true, sanitizeString: ident, currentClinicId: () => 'clinic', normalizeAbaSessionStatus: () => 'completed' }))({ params: { sessionId: 'session' }, body: { status: 'completed' }, session: { user: { id: 'actor' } } }, res);
   assert.equal(res.code, 409, 'ABA PATCH must never bypass atomic completion');
   assert.equal(res.body.code, 'USE_ATOMIC_SESSION_COMPLETION');
+}
+{
+  const res = mockResponse();
+  await createProfessionalProfileSaveHandler(() => ({}))({ params: { userId: 'victim' }, session: { user: { id: 'attacker' } } }, res);
+  assert.equal(res.code, 403, 'Profile Save must reject another account');
+}
+{
+  const res = mockResponse();
+  await createPatientFileAuditedAccessHandler(() => ({ enforcePayloadLimit: () => true, sanitizeString: ident, currentClinicId: () => 'clinic', isUuid: () => false }))({ params: { patientId: 'bad', fileId: 'file' }, body: { action: 'VIEW' }, session: { user: { id: 'actor' } } }, res);
+  assert.equal(res.code, 400, 'Audited file access must validate patient ID');
+}
+{
+  const res = mockResponse();
+  await createPatientFileUploadHandler(() => ({ enforcePayloadLimit: () => false }))({ headers: {}, session: { user: {} } }, res);
+  assert.equal(res.body, undefined, 'Upload rejected by size gate must not call storage');
 }
 console.log('Clinical extraction safety checks PASS');
