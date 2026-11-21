@@ -8,6 +8,7 @@ const root = path.resolve(currentDir, '..');
 const read = (relativePath) => fs.readFileSync(path.join(root, relativePath), 'utf8');
 
 const server = read('server.ts');
+const abaSessionWriteHandlers = read('services/abaSessionWriteHandlers.ts');
 const sessionMode = read('src/components/SessionMode.tsx');
 const patientDetail = read('src/components/PatientDetailView.tsx');
 const settingsPanel = read('src/components/ClinicGlobalSettingsPanel.tsx');
@@ -22,16 +23,16 @@ assert.match(sessionMode, /&& !showSessionSummary/);
 assert.match(sessionMode, /Nenhuma meta trabalhada nesta sessão/);
 assert.match(sessionMode, /ATTENDED[\s\S]*LATE[\s\S]*PARTIAL[\s\S]*NO_SHOW/);
 assert.match(sessionMode, /endedAt,\s*createdAt: endedAt,/);
-assert.match(server, /createdAt: endedAt/);
+assert.match(abaSessionWriteHandlers, /createdAt: endedAt/);
 assert.doesNotMatch(patientDetail, /showSessionEndConfirm/);
 
 // Completion is atomic and the legacy PATCH route cannot independently mark a session completed.
 assert.match(server, /app\.post\('\/api\/aba\/sessions\/:sessionId\/complete'/);
-assert.match(server, /complete_aba_session_atomic_v1/);
-assert.match(server, /code: 'USE_ATOMIC_SESSION_COMPLETION'/);
-assert.match(server, /const attended = \['ATTENDED', 'LATE', 'PARTIAL'\]\.includes\(attendanceStatus\)/);
-assert.match(server, /if \(attended\) \{[\s\S]*runTissPipelineForAppointment/);
-assert.match(server, /\? 'NOT_BILLABLE'[\s\S]*: 'PENDING_REVIEW'/);
+assert.match(abaSessionWriteHandlers, /complete_aba_session_atomic_v1/);
+assert.match(abaSessionWriteHandlers, /code: 'USE_ATOMIC_SESSION_COMPLETION'/);
+assert.match(abaSessionWriteHandlers, /const attended = \['ATTENDED', 'LATE', 'PARTIAL'\]\.includes\(attendanceStatus\)/);
+assert.match(abaSessionWriteHandlers, /if \(attended\) \{[\s\S]*runTissPipelineForAppointment/);
+assert.match(abaSessionWriteHandlers, /\? 'NOT_BILLABLE'[\s\S]*: 'PENDING_REVIEW'/);
 
 // No-show policy is tenant configurable, bounded, server-side and race-safe.
 assert.match(settingsPanel, /Política de ausência e falta/);
