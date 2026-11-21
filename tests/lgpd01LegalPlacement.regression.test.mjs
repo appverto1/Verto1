@@ -96,8 +96,9 @@ test('LGPD-04: invitation acceptance and professional onboarding persist legal p
   assert.match(server, /req\.body\?\.acceptProfessionalTerms !== true/);
   assert.match(server, /termsConfirmed: true/);
   assert.match(server, /accept_clinic_invitation_with_terms_v1/);
-  assert.match(server, /ensureProfessionalTermsAccepted\(/);
-  assert.match(server, /error: 'PROFESSIONAL_TERMS_REQUIRED'/);
+  const professionalOnboardingHandler = read('services/professionalProfileWriteHandlers.ts');
+  assert.match(professionalOnboardingHandler, /ensureProfessionalTermsAccepted\(/);
+  assert.match(professionalOnboardingHandler, /error: 'PROFESSIONAL_TERMS_REQUIRED'/);
   assert.match(onboarding, /dataService\.getProfessionalTermsStatus\(\)/);
   assert.match(onboarding, /acceptProfessionalTerms: !previousTermsAcceptance && acceptProfessionalTerms/);
   assert.match(invite, /checked=\{acceptProfessionalTerms\}/);
