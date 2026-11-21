@@ -35,5 +35,6 @@ assert.equal(result({ patientProfileType: 'ABA' }, false).patient_profile_type, 
 assert.match(server, /function buildPatientIdentityPersistenceFields\(body: any, options: \{ partial\?: boolean \} = \{\}\)/);
 assert.match(server, /buildPatientProfileTypeFields\(body, options\.partial === true\)/);
 assert.match(patientRegistryHandlers, /hasIdentityPersistencePatch \? buildPatientIdentityPersistenceFields\(patientIdentityPayload, \{ partial: true \}\)/);
-assert.match(patientRegistryHandlers, /const identityPersistenceFields = buildPatientIdentityPersistenceFields\(req\.body\)/, 'POST still uses creation mode');
+assert.match(patientRegistryHandlers, /const identityPayload = \{\s*\.\.\.\(req\.body \|\| \{\}\),/, 'POST creation identity must inherit the request payload');
+assert.match(patientRegistryHandlers, /\.\.\.buildPatientIdentityPersistenceFields\(identityPayload\)/, 'POST still uses creation mode without partial updates');
 console.log('p000PatientProfilePartialPatch: PASS');
