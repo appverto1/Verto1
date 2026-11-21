@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = readPatientPlanServerSource();
+const patientRegistryHandlers = fs.readFileSync('services/patientRegistryHandlers.ts', 'utf8');
 const panel = fs.readFileSync('src/components/PatientProfessionalLinksPanel.tsx', 'utf8');
 
 assert.match(
@@ -40,7 +41,7 @@ assert.match(
   'status de users deve ser espelho opcional; patients permanece fonte canônica',
 );
 assert.match(
-  server,
+  patientRegistryHandlers,
   /const userMirrorResult = await updatePatientPortalUserMirrorWithSchemaFallback\(/,
   'PATCH de paciente deve usar espelho tolerante a schema legado',
 );

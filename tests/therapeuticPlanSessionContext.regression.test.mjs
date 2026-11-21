@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = readPatientPlanServerSource();
+const abaSessionWriteHandlers = fs.readFileSync('services/abaSessionWriteHandlers.ts', 'utf8');
 const patientDetail = fs.readFileSync('src/components/PatientDetailView.tsx', 'utf8');
 const sessionMode = fs.readFileSync('src/components/SessionMode.tsx', 'utf8');
 const dataService = fs.readFileSync('src/services/dataService.ts', 'utf8');
@@ -50,12 +51,12 @@ assert.match(
   'a API deve validar o plano por especialidade e seus vínculos antes de iniciar a sessão',
 );
 assert.match(
-  server,
+  abaSessionWriteHandlers,
   /criticalColumns: sessionTherapeuticPlanId \? \['therapeutic_plan_id'\] : \[\]/,
   'schema fallback não pode remover silenciosamente o binding crítico da sessão',
 );
 assert.match(
-  server,
+  abaSessionWriteHandlers,
   /SESSION_THERAPEUTIC_PLAN_CONTEXT_IMMUTABLE/,
   'reuso de sessão não pode reinterpretar o plano depois da abertura',
 );

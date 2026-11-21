@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const professionalWriteHandlers = fs.readFileSync(new URL('../services/professionalProfileWriteHandlers.ts', import.meta.url), 'utf8');
 const coordinator = fs.readFileSync(new URL('../src/components/CoordinatorDashboard.tsx', import.meta.url), 'utf8');
 const settings = fs.readFileSync(new URL('../src/components/ClinicGlobalSettingsPanel.tsx', import.meta.url), 'utf8');
 const ptsEditor = fs.readFileSync(new URL('../src/components/PtsWorkspaceEditor.tsx', import.meta.url), 'utf8');
@@ -10,7 +11,7 @@ const migration = fs.readFileSync(new URL('../supabase/migrations/20260826174500
 
 assert.match(server, /clinicTimeZone:\s*context\.clinic\?\.timeZone/, 'session must expose authoritative clinic timezone');
 assert.match(server, /clinicTimeZone:\s*resolveClinicTimeZone/, 'session payload must normalize clinic timezone');
-assert.match(server, /timezone:\s*clinicTimeZone/, 'clinic settings save must persist canonical timezone');
+assert.match(professionalWriteHandlers, /timezone:\s*clinicTimeZone/, 'clinic settings save must persist canonical timezone');
 assert.match(settings, /Fuso horário da clínica/, 'clinic settings must expose the canonical timezone');
 assert.match(settings, /BRAZIL_CLINIC_TIME_ZONE_OPTIONS/, 'timezone selector must use curated IANA options');
 assert.match(coordinator, /clinicTimeZone:\s*cleanClinicTimeZone/, 'coordinator save payload must include clinic timezone');

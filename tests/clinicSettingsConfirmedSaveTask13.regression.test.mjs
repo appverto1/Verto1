@@ -8,6 +8,7 @@ const app = readFileSync('src/App.tsx', 'utf8');
 const dashboard = readFileSync('src/components/CoordinatorDashboard.tsx', 'utf8');
 const onboarding = readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 const server = readFileSync('server.ts', 'utf8');
+const professionalWriteHandlers = readFileSync('services/professionalProfileWriteHandlers.ts', 'utf8');
 const confirmedSaveModule = readFileSync('src/services/confirmedClinicSettingsSave.ts', 'utf8');
 const transpiledConfirmedSave = ts.transpileModule(confirmedSaveModule, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
@@ -129,9 +130,9 @@ test('onboarding saves only when clicking Finish and restores the same confirmed
 });
 
 test('tenant and role authorization stay server-authoritative for clinic writes', () => {
-  const start = server.indexOf("app.post('/api/profile/:userId', checkAuth");
-  const end = server.indexOf("app.get('/api/tasks/:patientId'", start);
-  const route = server.slice(start, end);
+  const start = professionalWriteHandlers.indexOf('export function createProfessionalProfileSaveHandler');
+  const end = professionalWriteHandlers.length;
+  const route = professionalWriteHandlers.slice(start, end);
   assert.ok(start >= 0 && end > start);
   assert.match(route, /req\.session\.user\.id !== req\.params\.userId/);
   assert.match(route, /resolveClinicCapabilityContext\(req\.session\.user\)/);

@@ -12,11 +12,12 @@ const stripeDiscountSource = readItem09Source('services/salesSubscriptionDiscoun
 const stripeEntitlementsSource = readItem09Source('services/salesSubscriptionEntitlementTransitions.ts','utf8');
 
 const server = fs.readFileSync('server.ts', 'utf8');
+const professionalWriteHandlers = fs.readFileSync('services/professionalProfileWriteHandlers.ts', 'utf8');
 const onboarding = fs.readFileSync('src/components/ProfessionalOnboarding.tsx', 'utf8');
 
 const resolver = server.match(/async function resolveOnboardingContextForUser[\s\S]*?async function persistSpecialtyFromOnboardingContext/)?.[0] || '';
 const finalize = item10ProvisioningSource.match(/async function finalizeSalesActivationForUser[\s\S]*?ITEM10_SOURCE_END/)?.[0] || '';
-const completeRoute = server.match(/'\/api\/profile\/:userId\/complete-onboarding'[\s\S]*?app\.get\('\/api\/profile\/:userId'/)?.[0] || '';
+const completeRoute = professionalWriteHandlers.slice(professionalWriteHandlers.indexOf('export function createProfessionalOnboardingCompletionHandler'), professionalWriteHandlers.indexOf('export function createProfessionalProfileSaveHandler'));
 
 assert.match(resolver, /requiresPayment: onboardingMode === 'clinic_owner' \? !canAccessDashboard : false/);
 assert.match(finalize, /patchTableSafely\("clinics"[\s\S]*?subscription_status: clinicSubscriptionStatus/);

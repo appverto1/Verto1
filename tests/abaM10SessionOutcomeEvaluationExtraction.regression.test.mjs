@@ -8,6 +8,7 @@ import ts from 'typescript';
 const before = execFileSync('git', ['cat-file', 'blob', '6de204c2c780c0c0d655e3e40ab615c1526fde25'], { encoding: 'utf8', maxBuffer: 8_000_000 });
 const server = readFileSync('server.ts', 'utf8');
 const moduleSource = readFileSync('services/abaSessionOutcomeEvaluators.ts', 'utf8');
+const sessionFlowSources = [server, readFileSync('services/abaSessionWriteHandlers.ts', 'utf8'), readFileSync('services/abaSessionCollectionWriteHandlers.ts', 'utf8')].join('\n');
 const start = '  const evaluateAndPersistSessionMastery = async (params: {';
 const oldEnd = '\n  const resolveAbaSessionReadScope = async';
 const moduleEnd = '\n  return { evaluateAndPersistSessionMastery, evaluateAndPersistSessionMaintenance };';
@@ -23,7 +24,7 @@ assert.ok(server.indexOf(register) < server.indexOf('const resolveAbaSessionRead
 assert.ok(!server.includes(start), 'old inline evaluation must be removed');
 assert.ok(!moduleSource.includes("from '../server'"), 'no import cycle');
 for (const call of ['await evaluateAndPersistSessionMastery({', 'await evaluateAndPersistSessionMaintenance({']) {
-  assert.equal(server.split(call).length, 3, 'both original session flows must still use the evaluator: ' + call);
+  assert.equal(sessionFlowSources.split(call).length, 3, 'both original session flows must still use the evaluator: ' + call);
 }
 for (const clause of [
   ".eq('session_id', sessionId)", ".eq('patient_id', patientId)", ".eq('clinic_id', clinicId)",

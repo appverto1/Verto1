@@ -171,6 +171,9 @@ jobs:
           PGDATABASE: verto_group_regression
         run: node tests/ia06LegacyClinicRevocation.regression.test.mjs
 
+      - name: Surgical clinical extraction authorization regressions
+        run: node --import tsx tests/extractedClinicalHandlers.test.ts
+
       - name: Patient Drive free tier regression tests
         run: |
           node tests/patientFileStorageQuota.test.mjs

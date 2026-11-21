@@ -5,6 +5,7 @@ import fs from 'node:fs';
 const panel = fs.readFileSync('src/components/TherapeuticPlanPanel.tsx', 'utf8');
 const access = fs.readFileSync('src/utils/therapeuticPlanAccess.ts', 'utf8');
 const server = readPatientPlanServerSource();
+const abaSessionWriteHandlers = fs.readFileSync('services/abaSessionWriteHandlers.ts', 'utf8');
 const ptsHandlers = fs.readFileSync('services/ptsVersionWriteHandlers.ts', 'utf8');
 const migration = fs.readFileSync('supabase/migrations/20260826152500_therapeutic_plan_rebac_hierarchy_v1.sql', 'utf8');
 
@@ -83,12 +84,12 @@ assert.match(
 );
 
 assert.match(
-  server,
+  abaSessionWriteHandlers,
   /SESSION_SPECIALTY_PLAN_REQUIRED/,
   'a API de início de sessão deve rejeitar o PTS como se fosse plano operacional de especialidade',
 );
 assert.match(
-  server,
+  abaSessionWriteHandlers,
   /SESSION_THERAPEUTIC_PLAN_ACCESS_DENIED/,
   'o servidor precisa manter a autorização mesmo que a UI seja forjada',
 );
