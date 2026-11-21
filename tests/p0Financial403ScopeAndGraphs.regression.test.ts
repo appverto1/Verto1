@@ -8,6 +8,7 @@ import { serializePatientFinancialPlanForGenericFinancialPayload } from '../src/
 
 const app = fs.readFileSync('src/App.tsx','utf8');
 const server = fs.readFileSync('server.ts','utf8');
+const patientRegistryHandlers = fs.readFileSync('services/patientRegistryHandlers.ts', 'utf8');
 const coordinator = fs.readFileSync('src/components/CoordinatorDashboard.tsx','utf8');
 const contaminated = {
   financialPlans: [{ id:'aa', serviceType:'SPEECH_THERAPY', billingMode:'PRIVATE', amountCents:10000 }],
@@ -42,8 +43,8 @@ assert.equal(Object.prototype.hasOwnProperty.call(generic,'authorizationCode'),f
 assert.match(app,/hasExplicitPatientTissOperationalPatch\(updatedData\)/);
 assert.match(app,/if \(!hasExplicitTissOperationalPatch\) \{[\s\S]{0,180}omitImplicitPatientTissOperationalFields/);
 assert.match(coordinator,/serializePatientFinancialPlanForGenericFinancialPayload/);
-assert.match(server,/PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED/);
-assert.match(server,/patientPayloadRequestsInsuranceOperationalOutsideFinancialPlans\(req\.body\)/);
+assert.match(patientRegistryHandlers,/PATIENT_INSURANCE_EDIT_CAPABILITY_REQUIRED/);
+assert.match(patientRegistryHandlers,/patientPayloadRequestsInsuranceOperationalOutsideFinancialPlans\(req\.body\)/);
 // P0 29 and 30 canonical graph contracts must remain unchanged.
 const pts=fs.readFileSync('tests/planPtsSessionGraphIntegrationP0.regression.test.mjs','utf8');
 const graph=fs.readFileSync('tests/clinicalGraphRoleScopeP0.regression.test.ts','utf8');
