@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 const server = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+const fileHandlers = fs.readFileSync(new URL('../services/patientFileOperationsHandlers.ts', import.meta.url), 'utf8');
 const dataService = fs.readFileSync(new URL('../src/services/dataService.ts', import.meta.url), 'utf8');
 const patientDetail = fs.readFileSync(new URL('../src/components/PatientDetailView.tsx', import.meta.url), 'utf8');
 const migration = fs.readFileSync(new URL('../supabase/migrations/20260817012000_patient_file_storage_quota.sql', import.meta.url), 'utf8');
@@ -12,10 +13,10 @@ assert.ok(!uploadBlock.includes('fetch(prepared.dataUrl)'), 'image compression m
 
 assert.ok(server.includes('PATIENT_FILE_STORAGE_LIMIT_BYTES = 1024 * 1024 * 1024'), 'server must keep the 1 GiB patient quota');
 assert.ok(server.includes("rpc('get_patient_file_storage_usage_v1'"), 'server must read quota with one aggregate RPC');
-assert.ok(server.includes("code: 'PATIENT_FILE_QUOTA_UNAVAILABLE'"), 'uploads must fail closed when authoritative quota cannot be checked');
-assert.ok(server.includes("code: 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED'"), 'quota overflow must have a stable API code');
-assert.ok(server.includes('isPatientFileQuotaError(insertError)'), 'database race rejection must not fall through to legacy fallback');
-assert.match(server, /remove\(\[storagePath\]\)[\s\S]*sendPatientFileQuotaExceeded/, 'storage object must be cleaned if the atomic database quota rejects it');
+assert.ok(fileHandlers.includes("code: 'PATIENT_FILE_QUOTA_UNAVAILABLE'"), 'uploads must fail closed when authoritative quota cannot be checked');
+assert.ok(fileHandlers.includes("code: 'PATIENT_FILE_STORAGE_QUOTA_EXCEEDED'"), 'quota overflow must have a stable API code');
+assert.ok(fileHandlers.includes('isPatientFileQuotaError(insertError)'), 'database race rejection must not fall through to legacy fallback');
+assert.match(fileHandlers, /remove\(\[storagePath\]\)[\s\S]*sendPatientFileQuotaExceeded/, 'storage object must be cleaned if the atomic database quota rejects it');
 
 assert.ok(migration.includes('1073741824'), 'database quota must be exactly 1 GiB');
 assert.ok(migration.includes('10485760'), 'database must preserve the 10 MiB per-file limit');
