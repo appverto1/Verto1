@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createAbaSessionStartHandler, createAbaSessionCompleteHandler, createAbaSessionPatchHandler } from '../services/abaSessionWriteHandlers';
 import { createPatientListHandler, createPatientRegistrationHandler, createPatientDemographicsWriteHandler } from '../services/patientRegistryHandlers';
+import { createPatientAccountProvisioningHandler } from '../services/patientAccountProvisioningHandlers';
 import { createProfessionalOnboardingCompletionHandler, createProfessionalProfileSaveHandler } from '../services/professionalProfileWriteHandlers';
 import { createPatientFilePermissionsReadHandler, createPatientFilePermissionsWriteHandler, createPatientFileAuditedAccessHandler, createPatientFileUploadHandler, createPatientFileDeleteHandler } from '../services/patientFileOperationsHandlers';
 
@@ -53,5 +54,32 @@ const ident = (v: unknown) => String(v ?? '');
   const res = mockResponse();
   await createPatientFileUploadHandler(() => ({ enforcePayloadLimit: () => false }))({ headers: {}, session: { user: {} } }, res);
   assert.equal(res.body, undefined, 'Upload rejected by size gate must not call storage');
+}
+{
+  const res = mockResponse();
+  await createPatientAccountProvisioningHandler(() => ({}))({ body: {}, session: { user: {} } }, res);
+  assert.equal(res.code, 400, 'Patient account creation must require an email before persistence');
+}
+{
+  const res = mockResponse();
+  const deps = {
+    sanitizeEmail: (value: unknown) => String(value ?? '').trim().toLowerCase(),
+    sanitizeString: ident,
+    normalizePatientProfileType: () => 'KIDS',
+    mapPatientProfileTypeToLegacyPortalType: () => 'kids_tea',
+    normalizeCpf: () => '',
+    normalizeBrazilMobilePhone: () => '',
+    buildPatientIdentityPersistenceFields: () => ({}),
+    requestIdForLogs: () => 'test-request',
+    derivePatientSpecialtyKeysFromPayload: () => [],
+    patientPayloadRequestsGenericPayerCapability: () => true,
+    patientPayloadRequestsInsuranceCreateCapability: () => false,
+  };
+  await createPatientAccountProvisioningHandler(() => deps)(
+    { body: { email: 'patient@example.com' }, session: { user: { id: 'actor', clinicId: 'clinic' } }, authorizationContext: { capabilities: new Set<string>() } },
+    res,
+  );
+  assert.equal(res.code, 403, 'Patient account provisioning must reject unauthorized payer writes before database access');
+  assert.equal(res.body.error, 'PATIENT_PAYER_CONTEXT_CAPABILITY_REQUIRED');
 }
 console.log('Clinical extraction safety checks PASS');

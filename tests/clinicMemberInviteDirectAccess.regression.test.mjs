@@ -16,7 +16,8 @@ const billingRoleGate = section(server, 'function roleRequiresClinicBillingAcces
 const memberAccessResolver = section(server, 'async function resolveClinicManagedMemberDashboardAccess', 'function hasActiveClinicBillingAccess');
 const onboardingResolver = section(server, 'async function resolveOnboardingContextForUser', 'async function persistSpecialtyFromOnboardingContext');
 const loginHandler = section(app, 'const handleLoginSuccess = async', 'const [therapistNotes');
-const patientCreateRoute = section(server, "app.post('/api/patients/create-user'", "app.post('/api/storage/create-bucket'");
+const patientCreateRoute = fs.readFileSync('services/patientAccountProvisioningHandlers.ts', 'utf8');
+assert.match(server, /app\.post\('\/api\/patients\/create-user'[\s\S]*?createPatientAccountProvisioningHandler\(/, 'a criação de paciente deve manter seu registro protegido no servidor');
 
 // O mesmo contrato de acesso vale para todos os papeis geridos pela clinica.
 for (const role of ['director', 'coordinator', 'supervisor', 'therapist', 'receptionist', 'biller', 'admin']) {

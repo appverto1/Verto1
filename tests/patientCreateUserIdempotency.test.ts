@@ -46,7 +46,8 @@ const routeStart = server.indexOf("app.post('/api/patients/create-user'");
 const routeEnd = server.indexOf("app.post('/api/storage/create-bucket'", routeStart);
 assert.notEqual(routeStart, -1, 'rota de criação de paciente ausente');
 assert.notEqual(routeEnd, -1, 'fim da rota de criação de paciente ausente');
-const route = server.slice(routeStart, routeEnd);
+const route = fs.readFileSync('services/patientAccountProvisioningHandlers.ts', 'utf8');
+assert.match(server, /app\.post\('\/api\/patients\/create-user'[\s\S]*?patientCreateLimiter, checkAuth, requireClinicCapability\('patient\.create'\), createPatientAccountProvisioningHandler\(/, 'a rota deve preservar o mesmo middleware e registrar o handler extraído');
 const portabilityMigration = fs.readFileSync(
   'supabase/migrations/20260529170000_patient_portability_foundation.sql',
   'utf8',
